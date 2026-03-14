@@ -70,6 +70,7 @@ class ApiKeyService:
                 "status": k.status,
                 "total_requests": k.total_requests,
                 "total_tokens": k.total_tokens,
+                "total_cost": float(k.total_cost) if k.total_cost else 0.0,
                 "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
                 "expires_at": k.expires_at.isoformat() if k.expires_at else None,
                 "created_at": k.created_at.isoformat() if k.created_at else None,

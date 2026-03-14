@@ -311,7 +311,7 @@ INSERT INTO `channel` (`id`, `name`, `base_url`, `api_key`, `protocol_type`, `pr
 (6, 'pay.kxaug.xyz-Claude', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - Claude模型'),
 (7, 'pay.kxaug.xyz-GPT', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - GPT/Codex模型'),
 (8, 'mmaqq.top', 'https://mmaqq.top/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 4, 1, '保底渠道 - 全模型'),
-(9, '167.88.186.145-Claude', 'http://167.88.186.145:8080/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 1, 1, '自建渠道，支持 claude-haiku-4.5, claude-sonnet-4.5, claude-sonnet-4');
+(9, '43.156.153.12-Claude', 'http://43.156.153.12:8080/v1', 'sk-qeBTyXmKefPLsYPBbX9Xk1hmW94EemEp', 'openai', 1, 1, '自建渠道，支持 claude-haiku-4.5, claude-sonnet-4.5, claude-sonnet-4');
 
 -- ============================================================
 -- 预置统一模型配置

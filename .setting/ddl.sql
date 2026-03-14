@@ -1,2 +1,4 @@
 # 2026-03-13 20:39:53
 ALTER TABLE user_api_key ADD COLUMN key_full VARCHAR(128) NULL COMMENT '完整API Key明文' AFTER key_hash;
+# 2026-03-14 12:12:11
+ALTER TABLE user_api_key ADD COLUMN total_cost DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '总消费金额(USD)' AFTER total_tokens;

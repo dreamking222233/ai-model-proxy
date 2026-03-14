@@ -15,6 +15,7 @@
       :pagination="false"
       rowKey="id"
       size="middle"
+      :scroll="{ x: 1300 }"
     >
       <template slot="key_prefix" slot-scope="text, record">
         <div class="key-cell">
@@ -40,6 +41,32 @@
               <a-icon type="eye-invisible" />
             </a-button>
           </a-tooltip>
+        </div>
+      </template>
+
+      <template slot="usage_stats" slot-scope="text, record">
+        <div class="usage-stats-cell">
+          <div class="usage-stat-item">
+            <span class="usage-stat-icon usage-stat-icon--requests">
+              <a-icon type="api" />
+            </span>
+            <span class="usage-stat-label">请求</span>
+            <span class="usage-stat-value">{{ formatNumber(record.total_requests || 0) }}</span>
+          </div>
+          <div class="usage-stat-item">
+            <span class="usage-stat-icon usage-stat-icon--tokens">
+              <a-icon type="code" />
+            </span>
+            <span class="usage-stat-label">Token</span>
+            <span class="usage-stat-value">{{ formatNumber(record.total_tokens || 0) }}</span>
+          </div>
+          <div class="usage-stat-item">
+            <span class="usage-stat-icon usage-stat-icon--cost">
+              <a-icon type="dollar" />
+            </span>
+            <span class="usage-stat-label">消费</span>
+            <span class="usage-stat-value usage-stat-value--cost">${{ (record.total_cost || 0).toFixed(4) }}</span>
+          </div>
         </div>
       </template>
 
@@ -173,13 +200,14 @@ export default {
         {
           title: '名称',
           dataIndex: 'name',
-          key: 'name'
+          key: 'name',
+          width: 150
         },
         {
           title: '密钥',
           dataIndex: 'key_prefix',
           key: 'key_prefix',
-          width: 320,
+          width: 280,
           scopedSlots: { customRender: 'key_prefix' }
         },
         {
@@ -190,18 +218,10 @@ export default {
           scopedSlots: { customRender: 'status' }
         },
         {
-          title: '总请求数',
-          dataIndex: 'total_requests',
-          key: 'total_requests',
-          width: 120,
-          scopedSlots: { customRender: 'total_requests' }
-        },
-        {
-          title: '总 Token',
-          dataIndex: 'total_tokens',
-          key: 'total_tokens',
-          width: 120,
-          scopedSlots: { customRender: 'total_tokens' }
+          title: '用量统计',
+          key: 'usage_stats',
+          width: 280,
+          scopedSlots: { customRender: 'usage_stats' }
         },
         {
           title: '最后使用',
@@ -221,6 +241,7 @@ export default {
           title: '操作',
           key: 'action',
           width: 180,
+          fixed: 'right',
           scopedSlots: { customRender: 'action' }
         }
       ]
@@ -464,6 +485,62 @@ export default {
     .key-input {
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       font-size: 13px;
+    }
+  }
+
+  .usage-stats-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .usage-stat-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .usage-stat-icon {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+
+    &--requests {
+      background: rgba(24, 144, 255, 0.1);
+      color: #1890ff;
+    }
+
+    &--tokens {
+      background: rgba(102, 126, 234, 0.1);
+      color: #667eea;
+    }
+
+    &--cost {
+      background: rgba(250, 140, 22, 0.1);
+      color: #fa8c16;
+    }
+  }
+
+  .usage-stat-label {
+    color: #8c8c8c;
+    min-width: 40px;
+  }
+
+  .usage-stat-value {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    color: #595959;
+    font-weight: 500;
+
+    &--cost {
+      color: #fa8c16;
+      font-weight: 600;
     }
   }
 }

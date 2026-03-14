@@ -924,6 +924,7 @@ class ProxyService:
             # Update API key stats
             api_key_record.total_requests += 1
             api_key_record.total_tokens += total_tokens
+            api_key_record.total_cost += Decimal(str(total_cost))
             api_key_record.last_used_at = datetime.utcnow()
 
             db.commit()

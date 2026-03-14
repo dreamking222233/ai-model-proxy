@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 背景圆形 -->
+  <circle cx="32" cy="32" r="30" fill="url(#grad)"/>
+
+  <!-- AI 芯片图标 -->
+  <rect x="18" y="18" width="28" height="28" rx="3" fill="none" stroke="white" stroke-width="2.5"/>
+
+  <!-- 中心点 -->
+  <circle cx="32" cy="32" r="4" fill="white"/>
+
+  <!-- 四个角的连接点 -->
+  <circle cx="22" cy="22" r="2" fill="white"/>
+  <circle cx="42" cy="22" r="2" fill="white"/>
+  <circle cx="22" cy="42" r="2" fill="white"/>
+  <circle cx="42" cy="42" r="2" fill="white"/>
+
+  <!-- 连接线 -->
+  <line x1="22" y1="22" x2="28" y2="28" stroke="white" stroke-width="1.5"/>
+  <line x1="42" y1="22" x2="36" y2="28" stroke="white" stroke-width="1.5"/>
+  <line x1="22" y1="42" x2="28" y2="36" stroke="white" stroke-width="1.5"/>
+  <line x1="42" y1="42" x2="36" y2="36" stroke="white" stroke-width="1.5"/>
+
+  <!-- 外部扩展线 -->
+  <line x1="18" y1="32" x2="12" y2="32" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="46" y1="32" x2="52" y2="32" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="32" y1="18" x2="32" y2="12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="32" y1="46" x2="32" y2="52" stroke="white" stroke-width="2" stroke-linecap="round"/>
+</svg>

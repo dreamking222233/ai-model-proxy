@@ -1,0 +1,433 @@
+<template>
+  <div class="user-manage-page">
+    <!-- Summary Cards -->
+    <a-row :gutter="16" class="stat-row">
+      <a-col :span="6">
+        <a-card class="stat-card">
+          <a-statistic title="用户总数" :value="pagination.total || 0">
+            <template slot="prefix"><a-icon type="team" /></template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card class="stat-card">
+          <a-statistic title="正常用户" :value="activeCount" :value-style="{ color: '#52c41a' }">
+            <template slot="prefix"><a-icon type="check-circle" /></template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card class="stat-card">
+          <a-statistic title="管理员" :value="adminCount" :value-style="{ color: '#667eea' }">
+            <template slot="prefix"><a-icon type="safety-certificate" /></template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card class="stat-card">
+          <a-statistic title="余额总计 ($)" :value="totalBalance" :precision="2" :value-style="{ color: '#fa8c16' }">
+            <template slot="prefix"><a-icon type="dollar" /></template>
+          </a-statistic>
+        </a-card>
+      </a-col>
+    </a-row>
+
+    <!-- Table Card -->
+    <a-card class="table-card" :bordered="false">
+      <div class="table-toolbar">
+        <div class="toolbar-title">用户列表</div>
+        <a-input-search
+          v-model="searchKeyword"
+          placeholder="搜索用户名或邮箱..."
+          style="width: 280px"
+          @search="handleSearch"
+          allowClear
+        />
+      </div>
+
+      <a-table
+        :columns="columns"
+        :data-source="userList"
+        :loading="loading"
+        :pagination="pagination"
+        row-key="id"
+        @change="handleTableChange"
+      >
+        <template slot="username" slot-scope="text, record">
+          <div class="user-info">
+            <a-avatar size="small" :style="{ background: record.role === 'admin' ? '#667eea' : '#87d068' }">
+              {{ (text || '?').charAt(0).toUpperCase() }}
+            </a-avatar>
+            <span class="user-name">{{ text }}</span>
+          </div>
+        </template>
+
+        <template slot="role" slot-scope="text">
+          <a-tag :color="text === 'admin' ? 'purple' : 'blue'">
+            {{ text === 'admin' ? '管理员' : '用户' }}
+          </a-tag>
+        </template>
+
+        <template slot="status" slot-scope="text">
+          <a-badge :status="text === 1 ? 'success' : 'error'" :text="text === 1 ? '正常' : '已禁用'" />
+        </template>
+
+        <template slot="balance" slot-scope="text">
+          <span class="balance-text">$ {{ text != null ? parseFloat(text).toFixed(4) : '0.0000' }}</span>
+        </template>
+
+        <template slot="lastLogin" slot-scope="text">
+          <span v-if="text" class="time-text">{{ formatDate(text) }}</span>
+          <span v-else class="time-text muted">从未登录</span>
+        </template>
+
+        <template slot="action" slot-scope="text, record">
+          <a-space>
+            <a-tooltip title="编辑">
+              <a-button type="link" size="small" @click="handleEdit(record)">
+                <a-icon type="edit" />
+              </a-button>
+            </a-tooltip>
+            <a-tooltip title="充值">
+              <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record)">
+                <a-icon type="dollar" />
+              </a-button>
+            </a-tooltip>
+            <a-tooltip :title="record.status === 1 ? '禁用' : '启用'">
+              <a-popconfirm
+                :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="handleToggleStatus(record)"
+              >
+                <a-button
+                  type="link"
+                  size="small"
+                  :style="{ color: record.status === 1 ? '#f5222d' : '#52c41a' }"
+                >
+                  <a-icon :type="record.status === 1 ? 'stop' : 'check-circle'" />
+                </a-button>
+              </a-popconfirm>
+            </a-tooltip>
+          </a-space>
+        </template>
+      </a-table>
+    </a-card>
+
+    <!-- Edit User Modal -->
+    <a-modal
+      title="编辑用户"
+      :visible="editModalVisible"
+      :confirm-loading="editModalLoading"
+      @ok="handleEditOk"
+      @cancel="editModalVisible = false"
+      :width="480"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="用户名">
+          <a-input :value="editForm.username" disabled />
+        </a-form-item>
+        <a-form-item label="邮箱">
+          <a-input :value="editForm.email" disabled />
+        </a-form-item>
+        <a-form-item label="角色">
+          <a-select v-model="editForm.role">
+            <a-select-option value="user">用户</a-select-option>
+            <a-select-option value="admin">管理员</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="状态">
+          <a-select v-model="editForm.status">
+            <a-select-option :value="1">正常</a-select-option>
+            <a-select-option :value="0">禁用</a-select-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- Recharge Modal -->
+    <a-modal
+      title="余额充值"
+      :visible="rechargeModalVisible"
+      :confirm-loading="rechargeModalLoading"
+      @ok="handleRechargeOk"
+      @cancel="rechargeModalVisible = false"
+      :width="420"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="用户">
+          <a-input :value="rechargeForm.username" disabled />
+        </a-form-item>
+        <a-form-item label="当前余额">
+          <a-input :value="'$ ' + rechargeForm.currentBalance" disabled />
+        </a-form-item>
+        <a-form-item label="充值金额 ($)">
+          <a-input-number
+            v-model="rechargeForm.amount"
+            :min="0"
+            :step="1"
+            :precision="4"
+            style="width: 100%;"
+            placeholder="请输入充值金额"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+  </div>
+</template>
+
+<script>
+import { listUsers, updateUser, toggleUserStatus, rechargeBalance } from '@/api/user'
+import { formatDate } from '@/utils'
+
+export default {
+  name: 'UserManage',
+  data() {
+    return {
+      loading: false,
+      userList: [],
+      searchKeyword: '',
+      pagination: {
+        current: 1,
+        pageSize: 10,
+        total: 0,
+        showSizeChanger: true,
+        showTotal: total => `共 ${total} 条`
+      },
+      columns: [
+        { title: '用户名', dataIndex: 'username', key: 'username', scopedSlots: { customRender: 'username' } },
+        { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
+        { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },
+        { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
+        { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, scopedSlots: { customRender: 'balance' } },
+        { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, scopedSlots: { customRender: 'lastLogin' } },
+        { title: '操作', key: 'action', width: 140, align: 'center', scopedSlots: { customRender: 'action' } }
+      ],
+      // Edit Modal
+      editModalVisible: false,
+      editModalLoading: false,
+      editUserId: null,
+      editForm: {
+        username: '',
+        email: '',
+        role: 'user',
+        status: 1
+      },
+      // Recharge Modal
+      rechargeModalVisible: false,
+      rechargeModalLoading: false,
+      rechargeForm: {
+        userId: null,
+        username: '',
+        currentBalance: '',
+        amount: 0
+      }
+    }
+  },
+  computed: {
+    activeCount() {
+      return this.userList.filter(u => u.status === 1).length
+    },
+    adminCount() {
+      return this.userList.filter(u => u.role === 'admin').length
+    },
+    totalBalance() {
+      return this.userList.reduce((sum, u) => sum + (parseFloat(u.balance) || 0), 0)
+    }
+  },
+  mounted() {
+    this.fetchList()
+  },
+  methods: {
+    formatDate,
+    async fetchList() {
+      this.loading = true
+      try {
+        const params = {
+          page: this.pagination.current,
+          page_size: this.pagination.pageSize
+        }
+        if (this.searchKeyword) {
+          params.keyword = this.searchKeyword
+        }
+        const res = await listUsers(params)
+        const data = res.data || {}
+        this.userList = data.list || []
+        this.pagination.total = data.total || 0
+      } catch (err) {
+        console.error('Failed to fetch users:', err)
+      } finally {
+        this.loading = false
+      }
+    },
+    handleSearch() {
+      this.pagination.current = 1
+      this.fetchList()
+    },
+    handleTableChange(pagination) {
+      this.pagination.current = pagination.current
+      this.pagination.pageSize = pagination.pageSize
+      this.fetchList()
+    },
+    handleEdit(record) {
+      this.editUserId = record.id
+      this.editForm = {
+        username: record.username,
+        email: record.email || '',
+        role: record.role || 'user',
+        status: record.status != null ? record.status : 1
+      }
+      this.editModalVisible = true
+    },
+    async handleEditOk() {
+      this.editModalLoading = true
+      try {
+        await updateUser(this.editUserId, {
+          role: this.editForm.role,
+          status: this.editForm.status
+        })
+        this.$message.success('用户更新成功')
+        this.editModalVisible = false
+        this.fetchList()
+      } catch (err) {
+        console.error('Failed to update user:', err)
+      } finally {
+        this.editModalLoading = false
+      }
+    },
+    async handleToggleStatus(record) {
+      try {
+        await toggleUserStatus(record.id)
+        this.$message.success('用户状态切换成功')
+        this.fetchList()
+      } catch (err) {
+        console.error('Failed to toggle user status:', err)
+      }
+    },
+    handleRecharge(record) {
+      this.rechargeForm = {
+        userId: record.id,
+        username: record.username,
+        currentBalance: record.balance != null ? parseFloat(record.balance).toFixed(4) : '0.0000',
+        amount: 0
+      }
+      this.rechargeModalVisible = true
+    },
+    async handleRechargeOk() {
+      if (!this.rechargeForm.amount || this.rechargeForm.amount <= 0) {
+        this.$message.warning('请输入有效的充值金额')
+        return
+      }
+      this.rechargeModalLoading = true
+      try {
+        await rechargeBalance({
+          user_id: this.rechargeForm.userId,
+          amount: this.rechargeForm.amount
+        })
+        this.$message.success('余额充值成功')
+        this.rechargeModalVisible = false
+        this.fetchList()
+      } catch (err) {
+        console.error('Failed to recharge balance:', err)
+      } finally {
+        this.rechargeModalLoading = false
+      }
+    }
+  }
+}
+</script>
+
+<style lang="less" scoped>
+.user-manage-page {
+  .stat-row {
+    margin-bottom: 20px;
+
+    .stat-card {
+      border-radius: 12px;
+      border: none;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+
+      &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 3px;
+        width: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      }
+
+      &:hover {
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15);
+        transform: translateY(-4px);
+      }
+
+      /deep/ .ant-statistic-title {
+        color: #8c8c8c;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+
+      /deep/ .ant-statistic-content {
+        font-weight: 600;
+      }
+    }
+  }
+
+  .table-card {
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+    .table-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+
+      .toolbar-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #1a1a2e;
+      }
+    }
+  }
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    .user-name {
+      font-weight: 500;
+    }
+  }
+
+  .balance-text {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-weight: 500;
+    color: #fa8c16;
+  }
+
+  .time-text {
+    font-size: 13px;
+    color: #595959;
+
+    &.muted {
+      color: #bfbfbf;
+    }
+  }
+
+  /deep/ .ant-table {
+    .ant-table-tbody > tr {
+      transition: background-color 0.2s;
+
+      &:hover > td {
+        background: rgba(102, 126, 234, 0.04) !important;
+      }
+    }
+  }
+}
+</style>

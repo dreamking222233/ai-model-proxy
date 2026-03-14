@@ -1,0 +1,2 @@
+# 2026-03-13 20:39:53
+ALTER TABLE user_api_key ADD COLUMN key_full VARCHAR(128) NULL COMMENT '完整API Key明文' AFTER key_hash;

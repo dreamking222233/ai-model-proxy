@@ -6,6 +6,29 @@
       <p class="welcome-subtitle">以下是您的账户和使用概览。</p>
     </div>
 
+    <!-- Redemption Code Section -->
+    <a-card class="redemption-card">
+      <div class="redemption-content">
+        <div class="redemption-icon">
+          <a-icon type="gift" style="font-size: 24px; color: #667eea" />
+        </div>
+        <div class="redemption-input-area">
+          <a-input
+            v-model="redemptionCode"
+            placeholder="输入兑换码充值余额"
+            size="large"
+            style="max-width: 300px"
+            @pressEnter="handleRedeem"
+          >
+            <a-icon slot="prefix" type="barcode" />
+          </a-input>
+          <a-button type="primary" size="large" @click="handleRedeem" :loading="redeemLoading">
+            兑换
+          </a-button>
+        </div>
+      </div>
+    </a-card>
+
     <!-- Balance Cards -->
     <a-spin :spinning="balanceLoading">
       <a-row :gutter="24" class="stat-row">
@@ -107,6 +130,7 @@
 
 <script>
 import { getBalance, getUsageLogs, getProfile } from '@/api/user'
+import { redeemCode } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
 
 export default {
@@ -119,7 +143,9 @@ export default {
       usageSummary: {
         todayRequests: 0,
         totalTokens: 0
-      }
+      },
+      redemptionCode: '',
+      redeemLoading: false
     }
   },
   computed: {
@@ -169,6 +195,23 @@ export default {
         // error already handled by interceptor
       } finally {
         this.usageLoading = false
+      }
+    },
+    async handleRedeem() {
+      if (!this.redemptionCode || !this.redemptionCode.trim()) {
+        this.$message.warning('请输入兑换码')
+        return
+      }
+      this.redeemLoading = true
+      try {
+        const res = await redeemCode({ code: this.redemptionCode.trim() })
+        this.$message.success(res.message || '兑换成功')
+        this.redemptionCode = ''
+        this.fetchBalance()
+      } catch (e) {
+        // error handled by interceptor
+      } finally {
+        this.redeemLoading = false
       }
     }
   }
@@ -235,6 +278,37 @@ export default {
   .balance-card {
     &::before {
       background: linear-gradient(90deg, #667eea 0%, #667eea 100%);
+    }
+  }
+
+  .redemption-card {
+    margin-bottom: 24px;
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+
+    .redemption-content {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+
+      .redemption-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .redemption-input-area {
+        flex: 1;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
     }
   }
 

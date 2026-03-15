@@ -281,6 +281,28 @@ CREATE TABLE `consumption_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ============================================================
+-- 13. redemption_code - 兑换码表
+-- ============================================================
+CREATE TABLE `redemption_code` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `code` VARCHAR(32) NOT NULL COMMENT '兑换码',
+    `amount` DECIMAL(12, 6) NOT NULL COMMENT '兑换金额(美元)',
+    `status` ENUM('unused', 'used', 'expired') NOT NULL DEFAULT 'unused' COMMENT '状态',
+    `created_by` BIGINT UNSIGNED NOT NULL COMMENT '创建者(管理员ID)',
+    `used_by` BIGINT UNSIGNED DEFAULT NULL COMMENT '使用者(用户ID)',
+    `used_at` DATETIME DEFAULT NULL COMMENT '使用时间',
+    `expires_at` DATETIME DEFAULT NULL COMMENT '过期时间',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_code` (`code`),
+    KEY `idx_status` (`status`),
+    KEY `idx_created_by` (`created_by`),
+    KEY `idx_used_by` (`used_by`),
+    KEY `idx_expires_at` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='兑换码表';
+
+-- ============================================================
 -- 预置数据
 -- ============================================================
 

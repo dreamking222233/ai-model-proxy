@@ -69,6 +69,12 @@ const routes = [
         meta: { title: '系统配置' }
       },
       {
+        path: 'redemption',
+        name: 'RedemptionManage',
+        component: () => import('@/views/admin/RedemptionManage.vue'),
+        meta: { title: '兑换码管理' }
+      },
+      {
         path: 'profile',
         name: 'AdminProfile',
         component: () => import('@/views/user/Profile.vue'),

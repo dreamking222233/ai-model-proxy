@@ -367,3 +367,20 @@ INSERT INTO `model_channel_mapping` (`id`, `unified_model_id`, `channel_id`, `ac
 (16, 12, 7, 'gpt-5.4', 1),
 -- Gemini 2.5 Flash 映射
 (17, 13, 8, 'gemini-2.5-flash', 1);
+
+-- ============================================================
+-- 预置模型覆盖规则配置
+-- ============================================================
+INSERT INTO `model_override_rule` (`name`, `rule_type`, `source_pattern`, `target_unified_model_id`, `enabled`, `priority`) VALUES
+('claude-sonnet-4.5 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4.5', 4, 1, 1),
+('haiku-20251001 → haiku-4-5', 'redirect_specific', 'claude-haiku-4-5-20251001', 5, 1, 2),
+('sonnet-4-5-20250929 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-5-20250929', 4, 1, 3),
+('sonnet-4-6 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-6', 4, 1, 4),
+('sonnet-4 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4', 4, 1, 5),
+('sonnet-4-20250514 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-20250514', 4, 1, 6),
+('claude-3.5-sonnet → sonnet-4-5', 'redirect_specific', 'claude-3.5-sonnet', 4, 1, 7),
+('claude-3-5-sonnet → sonnet-4-5', 'redirect_specific', 'claude-3-5-sonnet', 4, 1, 8),
+('claude-3-5-sonnet-* → sonnet-4-5', 'redirect_specific', 'claude-3-5-sonnet-*', 4, 1, 9),
+('claude-3-5-haiku → haiku-4-5', 'redirect_specific', 'claude-3-5-haiku', 5, 1, 10),
+('claude-3-5-haiku-* → haiku-4-5', 'redirect_specific', 'claude-3-5-haiku-*', 5, 1, 11),
+('claude-3.5-haiku → haiku-4-5', 'redirect_specific', 'claude-3.5-haiku', 5, 1, 12);

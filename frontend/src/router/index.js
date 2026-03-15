@@ -134,6 +134,12 @@ const routes = [
         meta: { title: '快速开始' }
       },
       {
+        path: 'redemption',
+        name: 'Redemption',
+        component: () => import('@/views/user/Redemption.vue'),
+        meta: { title: '兑换码充值' }
+      },
+      {
         path: 'profile',
         name: 'UserProfile',
         component: () => import('@/views/user/Profile.vue'),

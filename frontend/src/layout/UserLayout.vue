@@ -33,6 +33,10 @@
             <a-icon type="dollar" />
             <span>余额与账单</span>
           </a-menu-item>
+          <a-menu-item key="/user/redemption">
+            <a-icon type="gift" />
+            <span>兑换码充值</span>
+          </a-menu-item>
           <a-menu-item key="/user/usage">
             <a-icon type="bar-chart" />
             <span>使用记录</span>

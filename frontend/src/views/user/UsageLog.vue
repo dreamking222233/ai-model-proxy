@@ -202,37 +202,27 @@ export default {
         if (this.dateRange && this.dateRange.length === 2) {
           params.start_date = this.dateRange[0].format('YYYY-MM-DD')
           params.end_date = this.dateRange[1].format('YYYY-MM-DD')
+        } else {
+          // Default to today if no date range selected
+          const today = new Date().toISOString().slice(0, 10)
+          params.start_date = today
         }
         const res = await getUsageLogs(params)
         const data = res.data || {}
         this.logs = data.list || []
         this.pagination.total = data.total || 0
-        this.computeSummary()
+
+        // Use summary from backend instead of computing locally
+        if (data.summary) {
+          this.summaryStats.todayRequests = data.summary.todayRequests || 0
+          this.summaryStats.todayTokens = data.summary.todayTokens || 0
+          this.summaryStats.successRate = data.summary.successRate || 100
+        }
       } catch (e) {
         // error handled by interceptor
       } finally {
         this.loading = false
       }
-    },
-    computeSummary() {
-      const today = new Date().toISOString().slice(0, 10)
-      let todayReqs = 0
-      let todayTokens = 0
-      let totalSuccess = 0
-      const list = this.logs || []
-      list.forEach(log => {
-        const logDate = (log.created_at || '').slice(0, 10)
-        if (logDate === today) {
-          todayReqs++
-          todayTokens += (log.total_tokens || 0)
-        }
-        if (log.status === 'success' || log.status === 200) {
-          totalSuccess++
-        }
-      })
-      this.summaryStats.todayRequests = todayReqs
-      this.summaryStats.todayTokens = todayTokens
-      this.summaryStats.successRate = list.length > 0 ? (totalSuccess / list.length) * 100 : 100
     },
     handleTableChange(pagination) {
       this.pagination.current = pagination.current

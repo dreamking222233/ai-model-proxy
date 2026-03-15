@@ -118,12 +118,20 @@ class AuthService:
         Raises:
             ServiceException: if user not found.
         """
+        from app.models.log import RequestLog
+        from sqlalchemy import func
+
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
         # Fetch balance
         balance = db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+
+        # Calculate total tokens from request logs
+        total_tokens = db.query(
+            func.coalesce(func.sum(RequestLog.total_tokens), 0)
+        ).filter(RequestLog.user_id == user_id).scalar() or 0
 
         return {
             "id": user.id,
@@ -137,6 +145,7 @@ class AuthService:
             "balance": float(balance.balance) if balance else 0,
             "total_consumed": float(balance.total_consumed) if balance else 0,
             "total_recharged": float(balance.total_recharged) if balance else 0,
+            "total_tokens": int(total_tokens),
         }
 
     @staticmethod

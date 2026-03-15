@@ -285,12 +285,14 @@ class LogService:
         total_tokens = sum(m["total_tokens"] for m in by_model)
         total_success = sum(m["success_count"] for m in by_model)
 
-        # Get total cost from consumption records
+        # Get total cost from consumption records (only positive costs, exclude recharge records)
         cost_row = (
             db.query(func.coalesce(func.sum(ConsumptionRecord.total_cost), 0))
             .filter(
                 ConsumptionRecord.user_id == user_id,
                 ConsumptionRecord.created_at >= since,
+                ConsumptionRecord.total_cost > 0,  # Only count actual consumption
+                ConsumptionRecord.model_name.isnot(None),  # Exclude recharge records
             )
             .scalar()
         )
@@ -330,3 +332,50 @@ class LogService:
             for r in records
         ]
         return result, total
+
+    @staticmethod
+    def get_usage_summary(
+        db: Session,
+        user_id: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        """
+        Get usage summary statistics for a user within a date range.
+
+        Returns:
+            Dict with todayRequests, todayTokens, successRate.
+        """
+        query = db.query(RequestLog).filter(RequestLog.user_id == user_id)
+
+        if start_date:
+            try:
+                dt = datetime.strptime(start_date, "%Y-%m-%d")
+                query = query.filter(RequestLog.created_at >= dt)
+            except ValueError:
+                pass
+
+        if end_date:
+            try:
+                dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(RequestLog.created_at < dt)
+            except ValueError:
+                pass
+
+        # Get aggregated statistics
+        stats = query.with_entities(
+            func.count(RequestLog.id).label("total_requests"),
+            func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+            func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+        ).first()
+
+        total_requests = int(stats.total_requests or 0)
+        total_tokens = int(stats.total_tokens or 0)
+        success_count = int(stats.success_count or 0)
+        success_rate = (success_count / total_requests * 100) if total_requests > 0 else 100
+
+        return {
+            "todayRequests": total_requests,
+            "todayTokens": total_tokens,
+            "successRate": round(success_rate, 1),
+        }

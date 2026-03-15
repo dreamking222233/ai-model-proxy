@@ -36,11 +36,28 @@ def change_password(
 def get_usage_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    items, total = LogService.list_request_logs(db, page, page_size, user_id=current_user.id)
-    return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+    items, total = LogService.list_request_logs(
+        db, page, page_size, user_id=current_user.id,
+        start_date=start_date, end_date=end_date
+    )
+
+    # Calculate summary statistics for the filtered date range
+    summary = LogService.get_usage_summary(
+        db, current_user.id, start_date=start_date, end_date=end_date
+    )
+
+    return ResponseModel(data={
+        "list": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary
+    })
 
 
 @router.get("/site-config", response_model=ResponseModel)

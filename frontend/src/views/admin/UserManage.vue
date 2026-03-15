@@ -58,7 +58,7 @@
             <a-avatar size="small" :style="{ background: record.role === 'admin' ? '#667eea' : '#87d068' }">
               {{ (text || '?').charAt(0).toUpperCase() }}
             </a-avatar>
-            <span class="user-name">{{ text }}</span>
+            <a class="user-name user-name-link" @click="viewUserLogs(record)">{{ text }}</a>
           </div>
         </template>
 
@@ -333,6 +333,12 @@ export default {
       } finally {
         this.rechargeModalLoading = false
       }
+    },
+    viewUserLogs(record) {
+      this.$router.push({
+        path: '/admin/logs',
+        query: { user_id: record.id }
+      })
     }
   }
 }
@@ -403,6 +409,17 @@ export default {
 
     .user-name {
       font-weight: 500;
+
+      &-link {
+        color: #667eea;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover {
+          color: #764ba2;
+          text-decoration: underline;
+        }
+      }
     }
   }
 

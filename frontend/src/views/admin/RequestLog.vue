@@ -257,6 +257,10 @@ export default {
     }
   },
   mounted() {
+    // Check if user_id is passed from route query
+    if (this.$route.query.user_id) {
+      this.filters.user_id = this.$route.query.user_id
+    }
     this.fetchList()
   },
   methods: {

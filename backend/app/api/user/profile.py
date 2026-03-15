@@ -70,3 +70,17 @@ def get_site_config(
     configs = db.query(SystemConfig).filter(SystemConfig.config_key.in_(keys)).all()
     result = {c.config_key: c.config_value for c in configs}
     return ResponseModel(data=result)
+
+
+@router.get("/per-minute-stats", response_model=ResponseModel)
+def get_per_minute_stats(
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    """Get per-minute request and token statistics."""
+    stats = LogService.get_per_minute_stats(
+        db, current_user.id, start_date=start_date, end_date=end_date
+    )
+    return ResponseModel(data=stats)

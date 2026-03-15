@@ -379,3 +379,64 @@ class LogService:
             "todayTokens": total_tokens,
             "successRate": round(success_rate, 1),
         }
+
+    @staticmethod
+    def get_per_minute_stats(
+        db: Session,
+        user_id: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """
+        Get per-minute request and token statistics for a user.
+
+        Args:
+            user_id: The user to query for.
+            start_date: Start date (YYYY-MM-DD), defaults to today.
+            end_date: End date (YYYY-MM-DD), defaults to today.
+
+        Returns:
+            List of dicts with keys: minute, request_count, total_tokens, success_count.
+        """
+        query = db.query(RequestLog).filter(RequestLog.user_id == user_id)
+
+        if start_date:
+            try:
+                dt = datetime.strptime(start_date, "%Y-%m-%d")
+                query = query.filter(RequestLog.created_at >= dt)
+            except ValueError:
+                pass
+        else:
+            # Default to today
+            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.filter(RequestLog.created_at >= today)
+
+        if end_date:
+            try:
+                dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                query = query.filter(RequestLog.created_at < dt)
+            except ValueError:
+                pass
+
+        # Group by minute: DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:00')
+        rows = (
+            query.with_entities(
+                func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00').label("minute"),
+                func.count(RequestLog.id).label("request_count"),
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+            )
+            .group_by(func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00'))
+            .order_by(func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00').asc())
+            .all()
+        )
+
+        return [
+            {
+                "minute": row.minute,
+                "request_count": int(row.request_count),
+                "total_tokens": int(row.total_tokens),
+                "success_count": int(row.success_count or 0),
+            }
+            for row in rows
+        ]

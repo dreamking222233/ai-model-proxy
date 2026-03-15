@@ -143,3 +143,11 @@ export function getUsageLogs(params) {
     params
   })
 }
+
+export function getPerMinuteStats(params) {
+  return request({
+    url: '/api/user/profile/per-minute-stats',
+    method: 'get',
+    params
+  })
+}

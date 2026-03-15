@@ -61,6 +61,41 @@
       </a-col>
     </a-row>
 
+    <!-- Per-Minute Statistics Chart -->
+    <a-card class="chart-card" title="每分钟统计" v-if="perMinuteStats.length > 0">
+      <div class="chart-container">
+        <div class="chart-legend">
+          <div class="legend-item">
+            <span class="legend-dot legend-dot--requests"></span>
+            <span class="legend-label">请求数</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot legend-dot--tokens"></span>
+            <span class="legend-label">Token 数</span>
+          </div>
+        </div>
+        <div class="chart-scroll">
+          <div class="chart-bars" :style="{ width: chartWidth }">
+            <div
+              v-for="(stat, index) in perMinuteStats"
+              :key="index"
+              class="chart-bar-group"
+            >
+              <div class="chart-bars-container">
+                <div class="chart-bar chart-bar--requests" :style="{ height: getBarHeight(stat.request_count, maxRequests) }">
+                  <span class="chart-bar-value" v-if="stat.request_count > 0">{{ stat.request_count }}</span>
+                </div>
+                <div class="chart-bar chart-bar--tokens" :style="{ height: getBarHeight(stat.total_tokens, maxTokens) }">
+                  <span class="chart-bar-value" v-if="stat.total_tokens > 0">{{ formatNumber(stat.total_tokens) }}</span>
+                </div>
+              </div>
+              <div class="chart-label">{{ formatMinuteLabel(stat.minute) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a-card>
+
     <!-- Table Section -->
     <h3 class="section-title">调用明细</h3>
     <a-table
@@ -125,7 +160,7 @@
 </template>
 
 <script>
-import { getUsageLogs } from '@/api/user'
+import { getUsageLogs, getPerMinuteStats } from '@/api/user'
 
 export default {
   name: 'UsageLog',
@@ -134,6 +169,7 @@ export default {
       loading: false,
       logs: [],
       dateRange: [],
+      perMinuteStats: [],
       summaryStats: {
         todayRequests: 0,
         todayTokens: 0,
@@ -190,6 +226,22 @@ export default {
   },
   created() {
     this.fetchLogs()
+    this.fetchPerMinuteStats()
+  },
+  computed: {
+    maxRequests() {
+      if (this.perMinuteStats.length === 0) return 1
+      return Math.max(...this.perMinuteStats.map(s => s.request_count), 1)
+    },
+    maxTokens() {
+      if (this.perMinuteStats.length === 0) return 1
+      return Math.max(...this.perMinuteStats.map(s => s.total_tokens), 1)
+    },
+    chartWidth() {
+      // Each bar group is 80px wide, minimum 100% width
+      const minWidth = this.perMinuteStats.length * 80
+      return minWidth > 0 ? `${minWidth}px` : '100%'
+    }
   },
   methods: {
     async fetchLogs() {
@@ -224,6 +276,19 @@ export default {
         this.loading = false
       }
     },
+    async fetchPerMinuteStats() {
+      try {
+        const params = {}
+        if (this.dateRange && this.dateRange.length === 2) {
+          params.start_date = this.dateRange[0].format('YYYY-MM-DD')
+          params.end_date = this.dateRange[1].format('YYYY-MM-DD')
+        }
+        const res = await getPerMinuteStats(params)
+        this.perMinuteStats = res.data || []
+      } catch (e) {
+        // error handled by interceptor
+      }
+    },
     handleTableChange(pagination) {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
@@ -232,6 +297,7 @@ export default {
     handleDateChange() {
       this.pagination.current = 1
       this.fetchLogs()
+      this.fetchPerMinuteStats()
     },
     getResponseTimeClass(ms) {
       if (ms <= 1000) return 'response-time--fast'
@@ -256,6 +322,21 @@ export default {
         String(d.getHours()).padStart(2, '0') + ':' +
         String(d.getMinutes()).padStart(2, '0') + ':' +
         String(d.getSeconds()).padStart(2, '0')
+    },
+    getBarHeight(value, max) {
+      if (!max || !value) return '0%'
+      const percent = (value / max) * 100
+      return Math.max(percent, 2) + '%'
+    },
+    formatMinuteLabel(minute) {
+      if (!minute) return ''
+      // Format: "2024-03-15 14:30:00" -> "14:30"
+      const parts = minute.split(' ')
+      if (parts.length === 2) {
+        const time = parts[1].substring(0, 5) // Get HH:mm
+        return time
+      }
+      return minute
     }
   }
 }
@@ -499,6 +580,149 @@ export default {
 
   .text-muted {
     color: #bfbfbf;
+  }
+
+  // Chart Card
+  .chart-card {
+    margin-bottom: 24px;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+    /deep/ .ant-card-head {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+      border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+    }
+
+    /deep/ .ant-card-head-title {
+      font-weight: 600;
+      color: #667eea;
+    }
+
+    .chart-container {
+      padding: 10px 0;
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 20px;
+      padding: 0 10px;
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .legend-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+
+        &--requests {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        &--tokens {
+          background: linear-gradient(135deg, #1890ff 0%, #36cfc9 100%);
+        }
+      }
+
+      .legend-label {
+        font-size: 13px;
+        color: #595959;
+        font-weight: 500;
+      }
+    }
+
+    .chart-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 10px;
+
+      &::-webkit-scrollbar {
+        height: 8px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: #f0f0f0;
+        border-radius: 4px;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: #d9d9d9;
+        border-radius: 4px;
+
+        &:hover {
+          background: #bfbfbf;
+        }
+      }
+    }
+
+    .chart-bars {
+      display: flex;
+      gap: 16px;
+      min-width: 100%;
+      padding: 10px 0;
+    }
+
+    .chart-bar-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 64px;
+    }
+
+    .chart-bars-container {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+      height: 180px;
+      margin-bottom: 8px;
+    }
+
+    .chart-bar {
+      width: 28px;
+      min-height: 2px;
+      border-radius: 4px 4px 0 0;
+      position: relative;
+      transition: all 0.3s;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 4px;
+
+      &--requests {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+      }
+
+      &--tokens {
+        background: linear-gradient(180deg, #1890ff 0%, #36cfc9 100%);
+      }
+
+      &:hover {
+        opacity: 0.8;
+        transform: translateY(-2px);
+      }
+    }
+
+    .chart-bar-value {
+      font-size: 10px;
+      color: #fff;
+      font-weight: 600;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      white-space: nowrap;
+    }
+
+    .chart-label {
+      font-size: 11px;
+      color: #8c8c8c;
+      text-align: center;
+      white-space: nowrap;
+      transform: rotate(-45deg);
+      transform-origin: center;
+      margin-top: 20px;
+    }
   }
 }
 </style>

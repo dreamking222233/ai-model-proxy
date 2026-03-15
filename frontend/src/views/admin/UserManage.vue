@@ -195,6 +195,7 @@ export default {
         showTotal: total => `共 ${total} 条`
       },
       columns: [
+        { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
         { title: '用户名', dataIndex: 'username', key: 'username', scopedSlots: { customRender: 'username' } },
         { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
         { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },

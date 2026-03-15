@@ -81,7 +81,7 @@ class ProxyService:
         # 1. Check user balance
         balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
         if not balance or balance.balance <= 0:
-            raise ServiceException(402, "Insufficient balance", "INSUFFICIENT_BALANCE")
+            raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
 
         # 2. Resolve model (apply override rules)
         unified_model = ModelService.resolve_model(db, requested_model)
@@ -155,7 +155,7 @@ class ProxyService:
         # 1. Check user balance
         balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
         if not balance or balance.balance <= 0:
-            raise ServiceException(402, "Insufficient balance", "INSUFFICIENT_BALANCE")
+            raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
 
         # 2. Resolve model
         unified_model = ModelService.resolve_model(db, requested_model)

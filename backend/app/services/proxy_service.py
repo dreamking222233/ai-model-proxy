@@ -62,9 +62,10 @@ class ProxyService:
 
         Workflow:
             1. Validate user balance.
-            2. Resolve model (apply override rules).
-            3. Get available channels sorted by priority.
-            4. Attempt each channel in order (failover).
+            2. Validate request content length.
+            3. Resolve model (apply override rules).
+            4. Get available channels sorted by priority.
+            5. Attempt each channel in order (failover).
 
         Returns:
             ``StreamingResponse`` for stream=true, or ``JSONResponse`` for
@@ -82,6 +83,9 @@ class ProxyService:
         balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
         if not balance or balance.balance <= 0:
             raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+
+        # 2. Validate request content length
+        ProxyService._validate_request_length(db, request_data)
 
         # 2. Resolve model (apply override rules)
         unified_model = ModelService.resolve_model(db, requested_model)
@@ -156,6 +160,9 @@ class ProxyService:
         balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
         if not balance or balance.balance <= 0:
             raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+
+        # 2. Validate request content length
+        ProxyService._validate_request_length(db, request_data)
 
         # 2. Resolve model
         unified_model = ModelService.resolve_model(db, requested_model)
@@ -971,3 +978,69 @@ class ProxyService:
         except Exception as e:
             logger.error("Failed to log error request: %s", e)
             db.rollback()
+
+    # ===================================================================
+    # Helper: validate request content length
+    # ===================================================================
+
+    @staticmethod
+    def _validate_request_length(db: Session, request_data: dict) -> None:
+        """
+        Validate request content length to prevent upstream quota exhaustion.
+
+        Checks:
+        1. Total message content length (characters)
+        2. Estimated token count based on character length
+
+        Raises:
+            ServiceException: if content exceeds configured limits
+        """
+        try:
+            # Get configuration limits
+            max_message_length = get_system_config(db, "max_message_length", 500000)
+            max_context_tokens = get_system_config(db, "max_context_tokens", 200000)
+
+            # Extract messages from request
+            messages = request_data.get("messages", [])
+            if not messages:
+                return
+
+            # Calculate total content length
+            total_length = 0
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    total_length += len(content)
+                elif isinstance(content, list):
+                    # Handle multi-part content (text + images)
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            total_length += len(part.get("text", ""))
+
+            # Check character length limit
+            if total_length > max_message_length:
+                raise ServiceException(
+                    400,
+                    f"请求内容过长，当前 {total_length:,} 字符，超过限制 {max_message_length:,} 字符。"
+                    f"请减少上下文长度或分批处理。",
+                    "CONTENT_TOO_LONG"
+                )
+
+            # Estimate token count (rough estimate: 1 token ≈ 4 characters for English, 1.5 for Chinese)
+            # Use conservative estimate of 2.5 characters per token
+            estimated_tokens = int(total_length / 2.5)
+
+            if estimated_tokens > max_context_tokens:
+                raise ServiceException(
+                    400,
+                    f"预估 Token 数量过多（约 {estimated_tokens:,} tokens），超过限制 {max_context_tokens:,} tokens。"
+                    f"请减少上下文长度或分批处理。",
+                    "TOKENS_TOO_MANY"
+                )
+
+        except ServiceException:
+            raise  # Re-raise validation errors
+        except Exception as e:
+            logger.warning("Failed to validate request length: %s", e)
+            # Don't block request if validation fails
+

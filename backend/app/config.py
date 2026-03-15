@@ -22,7 +22,12 @@ class Settings(BaseSettings):
     SERVER_PORT: int = 8085
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:8080", "http://localhost:8081"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "https://www.xiaoleai.team",
+        "https://api.xiaoleai.team"
+    ]
 
     class Config:
         env_file = ".env"

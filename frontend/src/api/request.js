@@ -4,7 +4,7 @@ import { getToken, removeToken, removeUser } from '@/utils/auth'
 import router from '@/router'
 
 const service = axios.create({
-  baseURL: '',
+  baseURL: process.env.NODE_ENV === 'production' ? 'https://api.xiaoleai.team' : '',
   timeout: 30000
 })
 

@@ -870,9 +870,10 @@ class ProxyService:
         try:
             total_tokens = input_tokens + output_tokens
 
-            # Calculate cost
-            input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million)
-            output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million)
+            # Calculate cost with price multiplier
+            price_multiplier = get_system_config(db, "price_multiplier", 1.0)
+            input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
+            output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
             total_cost = input_cost + output_cost
 
             # Deduct balance (with row lock)

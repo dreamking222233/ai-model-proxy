@@ -3,7 +3,7 @@
     <!-- Health Check Config Card -->
     <a-card class="health-check-card" title="健康检查配置">
       <a-row :gutter="24">
-        <a-col :span="12">
+        <a-col :span="8">
           <a-form-item label="检查间隔">
             <a-input-number
               v-model="healthCheckInterval"
@@ -17,7 +17,7 @@
             <div class="config-hint">建议: 300秒（5分钟）</div>
           </a-form-item>
         </a-col>
-        <a-col :span="12">
+        <a-col :span="8">
           <a-form-item label="测试消息">
             <a-input
               v-model="healthCheckMessage"
@@ -25,6 +25,22 @@
               @blur="handleHealthConfigChange('health_check_test_message', healthCheckMessage)"
             />
             <div class="config-hint">用于测试模型响应的消息内容</div>
+          </a-form-item>
+        </a-col>
+        <a-col :span="8">
+          <a-form-item label="价格倍率">
+            <a-input-number
+              v-model="priceMultiplier"
+              :min="0.1"
+              :max="10"
+              :step="0.1"
+              :precision="1"
+              style="width: 100%"
+              @change="handleHealthConfigChange('price_multiplier', priceMultiplier)"
+            >
+              <template slot="addonAfter">倍</template>
+            </a-input-number>
+            <div class="config-hint">1.0=原价，2.0=2倍价格</div>
           </a-form-item>
         </a-col>
       </a-row>
@@ -158,6 +174,7 @@ export default {
       configList: [],
       healthCheckInterval: 300,
       healthCheckMessage: '你好',
+      priceMultiplier: 1.0,
       circuitBreakerThreshold: 5,
       circuitBreakerRecovery: 600,
       triggeringHealthCheck: false,
@@ -219,6 +236,8 @@ export default {
             this.healthCheckInterval = Number(config.config_value) || 300
           } else if (config.config_key === 'health_check_test_message') {
             this.healthCheckMessage = config.config_value || '你好'
+          } else if (config.config_key === 'price_multiplier') {
+            this.priceMultiplier = Number(config.config_value) || 1.0
           } else if (config.config_key === 'circuit_breaker_threshold') {
             this.circuitBreakerThreshold = Number(config.config_value) || 5
           } else if (config.config_key === 'circuit_breaker_recovery') {

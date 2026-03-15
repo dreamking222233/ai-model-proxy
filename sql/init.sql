@@ -324,7 +324,8 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('max_retry_count', '3', 'number', '最大重试次数'),
 ('api_base_url', 'https://your-domain.com', 'string', 'API基础地址，用于快速开始页面展示给用户的接入地址'),
 ('max_context_tokens', '200000', 'number', '最大上下文Token数量限制'),
-('max_message_length', '500000', 'number', '单条消息最大字符数限制');
+('max_message_length', '500000', 'number', '单条消息最大字符数限制'),
+('price_multiplier', '1.0', 'number', '价格倍率（1.0=原价，2.0=2倍价格）');
 
 -- ============================================================
 -- 预置渠道配置

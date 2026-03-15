@@ -37,6 +37,10 @@
             <a-icon type="team" />
             <span>用户管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/redemption">
+            <a-icon type="gift" />
+            <span>兑换码管理</span>
+          </a-menu-item>
           <a-menu-item key="/admin/health">
             <a-icon type="heart" />
             <span>健康监控</span>

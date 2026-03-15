@@ -1,5 +1,70 @@
 <template>
   <div class="system-config-page">
+    <!-- Health Check Config Card -->
+    <a-card class="health-check-card" title="健康检查配置">
+      <a-row :gutter="24">
+        <a-col :span="12">
+          <a-form-item label="检查间隔">
+            <a-input-number
+              v-model="healthCheckInterval"
+              :min="60"
+              :max="3600"
+              style="width: 100%"
+              @change="handleHealthConfigChange('health_check_interval', healthCheckInterval)"
+            >
+              <template slot="addonAfter">秒</template>
+            </a-input-number>
+            <div class="config-hint">建议: 300秒（5分钟）</div>
+          </a-form-item>
+        </a-col>
+        <a-col :span="12">
+          <a-form-item label="测试消息">
+            <a-input
+              v-model="healthCheckMessage"
+              placeholder="健康检查时发送的测试消息"
+              @blur="handleHealthConfigChange('health_check_test_message', healthCheckMessage)"
+            />
+            <div class="config-hint">用于测试模型响应的消息内容</div>
+          </a-form-item>
+        </a-col>
+      </a-row>
+      <a-row :gutter="24">
+        <a-col :span="12">
+          <a-form-item label="熔断阈值">
+            <a-input-number
+              v-model="circuitBreakerThreshold"
+              :min="1"
+              :max="20"
+              style="width: 100%"
+              @change="handleHealthConfigChange('circuit_breaker_threshold', circuitBreakerThreshold)"
+            >
+              <template slot="addonAfter">次</template>
+            </a-input-number>
+            <div class="config-hint">连续失败多少次后触发熔断</div>
+          </a-form-item>
+        </a-col>
+        <a-col :span="12">
+          <a-form-item label="熔断恢复时间">
+            <a-input-number
+              v-model="circuitBreakerRecovery"
+              :min="60"
+              :max="3600"
+              style="width: 100%"
+              @change="handleHealthConfigChange('circuit_breaker_recovery', circuitBreakerRecovery)"
+            >
+              <template slot="addonAfter">秒</template>
+            </a-input-number>
+            <div class="config-hint">熔断后多久尝试恢复</div>
+          </a-form-item>
+        </a-col>
+      </a-row>
+      <a-button type="primary" @click="triggerHealthCheck" :loading="triggeringHealthCheck">
+        <a-icon type="thunderbolt" />
+        立即执行健康检查
+      </a-button>
+    </a-card>
+
+    <!-- System Config Table -->
     <div class="table-toolbar">
       <h3 style="margin: 0;">系统配置</h3>
       <a-button @click="fetchList" :loading="loading">
@@ -83,7 +148,7 @@
 </template>
 
 <script>
-import { listConfigs, updateConfig } from '@/api/system'
+import { listConfigs, updateConfig, triggerHealthCheck } from '@/api/system'
 
 export default {
   name: 'SystemConfig',
@@ -91,6 +156,11 @@ export default {
     return {
       loading: false,
       configList: [],
+      healthCheckInterval: 300,
+      healthCheckMessage: '你好',
+      circuitBreakerThreshold: 5,
+      circuitBreakerRecovery: 600,
+      triggeringHealthCheck: false,
       columns: [
         {
           title: '配置项',
@@ -142,10 +212,45 @@ export default {
       try {
         const res = await listConfigs()
         this.configList = res.data || []
+
+        // Load health check configs
+        this.configList.forEach(config => {
+          if (config.config_key === 'health_check_interval') {
+            this.healthCheckInterval = Number(config.config_value) || 300
+          } else if (config.config_key === 'health_check_test_message') {
+            this.healthCheckMessage = config.config_value || '你好'
+          } else if (config.config_key === 'circuit_breaker_threshold') {
+            this.circuitBreakerThreshold = Number(config.config_value) || 5
+          } else if (config.config_key === 'circuit_breaker_recovery') {
+            this.circuitBreakerRecovery = Number(config.config_value) || 600
+          }
+        })
       } catch (err) {
         console.error('Failed to fetch configs:', err)
       } finally {
         this.loading = false
+      }
+    },
+    async handleHealthConfigChange(key, value) {
+      try {
+        const config = this.configList.find(c => c.config_key === key)
+        if (config) {
+          await updateConfig(config.id, { config_value: String(value) })
+          this.$message.success('配置已更新')
+        }
+      } catch (err) {
+        console.error('Failed to update config:', err)
+      }
+    },
+    async triggerHealthCheck() {
+      this.triggeringHealthCheck = true
+      try {
+        await triggerHealthCheck()
+        this.$message.success('健康检查已触发，请稍后查看健康监控页面')
+      } catch (err) {
+        console.error('Failed to trigger health check:', err)
+      } finally {
+        this.triggeringHealthCheck = false
       }
     },
     handleEdit(record) {
@@ -184,6 +289,28 @@ export default {
 
 <style lang="less" scoped>
 .system-config-page {
+  .health-check-card {
+    margin-bottom: 24px;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+    /deep/ .ant-card-head {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+      border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+    }
+
+    /deep/ .ant-card-head-title {
+      font-weight: 600;
+      color: #667eea;
+    }
+
+    .config-hint {
+      font-size: 12px;
+      color: #8c8c8c;
+      margin-top: 4px;
+    }
+  }
+
   .table-toolbar {
     display: flex;
     justify-content: space-between;

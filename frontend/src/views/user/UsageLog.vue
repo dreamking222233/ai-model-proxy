@@ -3,14 +3,33 @@
     <!-- Page Header -->
     <div class="page-header">
       <h2 class="page-title">使用记录</h2>
-      <a-range-picker
-        v-model="dateRange"
-        :placeholder="['开始日期', '结束日期']"
-        format="YYYY-MM-DD"
-        @change="handleDateChange"
-        allowClear
-        style="width: 280px"
-      />
+      <div class="header-filters">
+        <a-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          allowClear
+          style="width: 120px; margin-right: 12px;"
+          @change="handleFilterChange"
+        >
+          <a-select-option value="success">
+            <a-badge status="success" text="成功" />
+          </a-select-option>
+          <a-select-option value="error">
+            <a-badge status="error" text="失败" />
+          </a-select-option>
+          <a-select-option value="timeout">
+            <a-badge status="warning" text="超时" />
+          </a-select-option>
+        </a-select>
+        <a-range-picker
+          v-model="dateRange"
+          :placeholder="['开始日期', '结束日期']"
+          format="YYYY-MM-DD"
+          @change="handleDateChange"
+          allowClear
+          style="width: 280px"
+        />
+      </div>
     </div>
 
     <!-- Summary Stat Cards -->
@@ -137,12 +156,14 @@
         </div>
       </template>
 
-      <template slot="status" slot-scope="text">
-        <a-badge v-if="text === 'success' || text === 200" status="success" text="成功" />
-        <a-badge v-else-if="text === 'failed' || text === 'error'" status="error" text="失败" />
-        <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
-        <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
-        <a-badge v-else status="default" :text="String(text)" />
+      <template slot="status" slot-scope="text, record">
+        <div style="cursor: pointer;" @click="handleStatusClick(record)">
+          <a-badge v-if="text === 'success' || text === 200" status="success" text="成功" />
+          <a-badge v-else-if="text === 'failed' || text === 'error'" status="error" text="失败" />
+          <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
+          <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
+          <a-badge v-else status="default" :text="String(text)" />
+        </div>
       </template>
 
       <template slot="response_time_ms" slot-scope="text">
@@ -156,6 +177,66 @@
         <span class="time-text">{{ formatTime(text) }}</span>
       </template>
     </a-table>
+
+    <!-- Error Detail Modal -->
+    <a-modal
+      v-model="errorModalVisible"
+      :title="errorModalTitle"
+      :width="700"
+      :footer="null"
+    >
+      <div class="error-detail-container">
+        <a-descriptions :column="1" bordered size="small">
+          <a-descriptions-item label="请求 ID">
+            <code class="request-id-code">{{ selectedRecord.request_id }}</code>
+          </a-descriptions-item>
+          <a-descriptions-item label="请求模型">
+            <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-badge v-if="selectedRecord.status === 'success'" status="success" text="成功" />
+            <a-badge v-else-if="selectedRecord.status === 'error' || selectedRecord.status === 'failed'" status="error" text="失败" />
+            <a-badge v-else-if="selectedRecord.status === 'timeout'" status="warning" text="超时" />
+            <a-badge v-else status="default" :text="String(selectedRecord.status || '-')" />
+          </a-descriptions-item>
+          <a-descriptions-item label="响应时间">
+            <span v-if="selectedRecord.response_time_ms != null" class="response-time" :class="getResponseTimeClass(selectedRecord.response_time_ms)">
+              {{ selectedRecord.response_time_ms }} <span class="response-time-unit">ms</span>
+            </span>
+            <span v-else class="text-muted">-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="Token 用量">
+            <div style="display: flex; gap: 12px;">
+              <span>输入: {{ formatNumber(selectedRecord.input_tokens || 0) }}</span>
+              <span>输出: {{ formatNumber(selectedRecord.output_tokens || 0) }}</span>
+              <span style="font-weight: 600;">合计: {{ formatNumber(selectedRecord.total_tokens || 0) }}</span>
+            </div>
+          </a-descriptions-item>
+          <a-descriptions-item label="请求时间">
+            {{ selectedRecord.created_at ? formatTime(selectedRecord.created_at) : '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+
+        <div v-if="selectedRecord.error_message" class="error-message-section">
+          <div class="error-message-header">
+            <a-icon type="exclamation-circle" style="color: #f5222d; margin-right: 8px;" />
+            <span style="font-weight: 600; color: #1a1a2e;">错误详情</span>
+          </div>
+          <div class="error-message-content">
+            <pre>{{ selectedRecord.error_message }}</pre>
+          </div>
+          <a-button size="small" @click="copyErrorMessage" style="margin-top: 8px;">
+            <a-icon type="copy" />
+            复制错误信息
+          </a-button>
+        </div>
+
+        <div v-else class="no-error-message">
+          <a-icon type="check-circle" style="color: #52c41a; margin-right: 8px;" />
+          <span>该请求没有错误信息</span>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -169,6 +250,9 @@ export default {
       loading: false,
       logs: [],
       dateRange: [],
+      statusFilter: undefined,
+      errorModalVisible: false,
+      selectedRecord: {},
       perMinuteStats: [],
       summaryStats: {
         todayRequests: 0,
@@ -229,6 +313,17 @@ export default {
     this.fetchPerMinuteStats()
   },
   computed: {
+    errorModalTitle() {
+      if (!this.selectedRecord.status) return '请求详情'
+      const statusMap = {
+        'success': '请求详情 - 成功',
+        'error': '请求详情 - 失败',
+        'failed': '请求详情 - 失败',
+        'timeout': '请求详情 - 超时',
+        'pending': '请求详情 - 处理中'
+      }
+      return statusMap[this.selectedRecord.status] || '请求详情'
+    },
     maxRequests() {
       if (this.perMinuteStats.length === 0) return 1
       return Math.max(...this.perMinuteStats.map(s => s.request_count), 1)
@@ -250,6 +345,9 @@ export default {
         const params = {
           page: this.pagination.current,
           page_size: this.pagination.pageSize
+        }
+        if (this.statusFilter) {
+          params.status = this.statusFilter
         }
         if (this.dateRange && this.dateRange.length === 2) {
           params.start_date = this.dateRange[0].format('YYYY-MM-DD')
@@ -298,6 +396,23 @@ export default {
       this.pagination.current = 1
       this.fetchLogs()
       this.fetchPerMinuteStats()
+    },
+    handleFilterChange() {
+      this.pagination.current = 1
+      this.fetchLogs()
+    },
+    handleStatusClick(record) {
+      this.selectedRecord = { ...record }
+      this.errorModalVisible = true
+    },
+    copyErrorMessage() {
+      if (this.selectedRecord.error_message) {
+        navigator.clipboard.writeText(this.selectedRecord.error_message).then(() => {
+          this.$message.success('错误信息已复制到剪贴板')
+        }).catch(() => {
+          this.$message.error('复制失败')
+        })
+      }
     },
     getResponseTimeClass(ms) {
       if (ms <= 1000) return 'response-time--fast'
@@ -360,6 +475,11 @@ export default {
       font-weight: 600;
       color: #1a1a2e;
       margin: 0;
+    }
+
+    .header-filters {
+      display: flex;
+      align-items: center;
     }
   }
 
@@ -580,6 +700,65 @@ export default {
 
   .text-muted {
     color: #bfbfbf;
+  }
+
+  // Request ID Code
+  .request-id-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    color: #8c8c8c;
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  // Error Detail Modal
+  .error-detail-container {
+    .error-message-section {
+      margin-top: 20px;
+      padding: 16px;
+      background: #fff2f0;
+      border: 1px solid #ffccc7;
+      border-radius: 8px;
+
+      .error-message-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+        font-size: 14px;
+      }
+
+      .error-message-content {
+        background: #fff;
+        border: 1px solid #ffa39e;
+        border-radius: 4px;
+        padding: 12px;
+        max-height: 300px;
+        overflow-y: auto;
+
+        pre {
+          margin: 0;
+          font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+          font-size: 12px;
+          line-height: 1.6;
+          color: #d32029;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+      }
+    }
+
+    .no-error-message {
+      margin-top: 20px;
+      padding: 16px;
+      background: #f6ffed;
+      border: 1px solid #b7eb8f;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      color: #52c41a;
+    }
   }
 
   // Chart Card

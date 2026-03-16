@@ -41,6 +41,10 @@
             <a-icon type="gift" />
             <span>兑换码管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/subscription">
+            <a-icon type="crown" />
+            <span>套餐管理</span>
+          </a-menu-item>
           <a-menu-item key="/admin/health">
             <a-icon type="heart" />
             <span>健康监控</span>

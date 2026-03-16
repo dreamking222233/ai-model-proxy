@@ -29,7 +29,37 @@
       </div>
     </a-card>
 
-    <!-- Balance Cards -->
+    <!-- Subscription Status Card (for unlimited plan users) -->
+    <a-spin :spinning="profileLoading">
+      <a-card v-if="userProfile.subscription_type === 'unlimited'" class="subscription-status-card">
+        <div class="subscription-content">
+          <div class="subscription-icon">
+            <a-icon type="crown" style="font-size: 48px; color: #722ed1" />
+          </div>
+          <div class="subscription-info">
+            <h3 class="subscription-title">
+              <a-icon type="check-circle" style="color: #52c41a" />
+              时间套餐已激活
+            </h3>
+            <p class="subscription-desc">您当前使用时间套餐模式，可在有效期内无限使用</p>
+            <div class="subscription-expiry">
+              <a-icon type="clock-circle" />
+              <span v-if="subscriptionStatus.isExpired" style="color: #f5222d">
+                套餐已过期，请联系管理员续费
+              </span>
+              <span v-else-if="subscriptionStatus.daysRemaining <= 7" style="color: #fa8c16">
+                剩余 {{ subscriptionStatus.daysRemaining }} 天到期
+              </span>
+              <span v-else style="color: #52c41a">
+                有效期至 {{ formatDate(userProfile.subscription_expires_at) }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </a-card>
+    </a-spin>
+
+    <!-- Balance Cards (for balance mode users or as additional info) -->
     <a-spin :spinning="balanceLoading">
       <a-row :gutter="24" class="stat-row">
         <a-col :xs="24" :sm="8">
@@ -132,6 +162,7 @@
 import { getBalance, getUsageLogs, getProfile } from '@/api/user'
 import { redeemCode } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'UserDashboard',
@@ -139,7 +170,9 @@ export default {
     return {
       balanceLoading: false,
       usageLoading: false,
+      profileLoading: false,
       balance: {},
+      userProfile: {},
       usageSummary: {
         todayRequests: 0,
         totalTokens: 0
@@ -152,13 +185,39 @@ export default {
     username() {
       const user = getUser()
       return user ? user.username : '用户'
+    },
+    subscriptionStatus() {
+      if (!this.userProfile.subscription_expires_at) {
+        return { isExpired: true, daysRemaining: 0 }
+      }
+      const expireDate = new Date(this.userProfile.subscription_expires_at)
+      const now = new Date()
+      const diffMs = expireDate - now
+      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+      return {
+        isExpired: diffDays < 0,
+        daysRemaining: diffDays > 0 ? diffDays : 0
+      }
     }
   },
   created() {
+    this.fetchProfile()
     this.fetchBalance()
     this.fetchUsageSummary()
   },
   methods: {
+    formatDate,
+    async fetchProfile() {
+      this.profileLoading = true
+      try {
+        const res = await getProfile()
+        this.userProfile = res.data || {}
+      } catch (e) {
+        // error already handled by interceptor
+      } finally {
+        this.profileLoading = false
+      }
+    },
     async fetchBalance() {
       this.balanceLoading = true
       try {
@@ -278,6 +337,61 @@ export default {
   .balance-card {
     &::before {
       background: linear-gradient(90deg, #667eea 0%, #667eea 100%);
+    }
+  }
+
+  .subscription-status-card {
+    margin-bottom: 24px;
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 4px 20px rgba(114, 46, 209, 0.15);
+    background: linear-gradient(135deg, rgba(114, 46, 209, 0.05) 0%, rgba(102, 126, 234, 0.05) 100%);
+    border: 2px solid rgba(114, 46, 209, 0.2);
+
+    .subscription-content {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+
+      .subscription-icon {
+        width: 80px;
+        height: 80px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(114, 46, 209, 0.1) 0%, rgba(102, 126, 234, 0.1) 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .subscription-info {
+        flex: 1;
+
+        .subscription-title {
+          font-size: 20px;
+          font-weight: 600;
+          color: #1a1a2e;
+          margin: 0 0 8px 0;
+
+          .anticon {
+            margin-right: 8px;
+          }
+        }
+
+        .subscription-desc {
+          font-size: 14px;
+          color: #8c8c8c;
+          margin: 0 0 12px 0;
+        }
+
+        .subscription-expiry {
+          font-size: 14px;
+          font-weight: 500;
+
+          .anticon {
+            margin-right: 6px;
+          }
+        }
+      }
     }
   }
 

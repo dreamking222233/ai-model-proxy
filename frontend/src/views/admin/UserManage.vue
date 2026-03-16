@@ -76,6 +76,22 @@
           <span class="balance-text">$ {{ text != null ? parseFloat(text).toFixed(4) : '0.0000' }}</span>
         </template>
 
+        <template slot="subscription" slot-scope="text, record">
+          <div v-if="record.subscription_type === 'unlimited'" style="font-size: 12px">
+            <a-tag color="purple">
+              <a-icon type="crown" />
+              时间套餐
+            </a-tag>
+            <div v-if="record.subscription_expires_at" style="margin-top: 4px; color: #8c8c8c">
+              {{ getSubscriptionStatus(record.subscription_expires_at) }}
+            </div>
+          </div>
+          <a-tag v-else color="blue">
+            <a-icon type="dollar" />
+            按量计费
+          </a-tag>
+        </template>
+
         <template slot="lastLogin" slot-scope="text">
           <span v-if="text" class="time-text">{{ formatDate(text) }}</span>
           <span v-else class="time-text muted">从未登录</span>
@@ -88,9 +104,14 @@
                 <a-icon type="edit" />
               </a-button>
             </a-tooltip>
-            <a-tooltip title="充值">
+            <a-tooltip v-if="record.subscription_type === 'balance'" title="充值">
               <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record)">
                 <a-icon type="dollar" />
+              </a-button>
+            </a-tooltip>
+            <a-tooltip v-else title="套餐管理">
+              <a-button type="link" size="small" style="color: #722ed1" @click="goToSubscription(record)">
+                <a-icon type="crown" />
               </a-button>
             </a-tooltip>
             <a-tooltip :title="record.status === 1 ? '禁用' : '启用'">
@@ -200,9 +221,10 @@ export default {
         { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
         { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
+        { title: '计费模式', key: 'subscription', width: 140, scopedSlots: { customRender: 'subscription' } },
         { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, scopedSlots: { customRender: 'balance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, scopedSlots: { customRender: 'lastLogin' } },
-        { title: '操作', key: 'action', width: 140, align: 'center', scopedSlots: { customRender: 'action' } }
+        { title: '操作', key: 'action', width: 160, align: 'center', scopedSlots: { customRender: 'action' } }
       ],
       // Edit Modal
       editModalVisible: false,
@@ -339,6 +361,27 @@ export default {
         path: '/admin/logs',
         query: { user_id: record.id }
       })
+    },
+    goToSubscription(record) {
+      this.$router.push({
+        path: '/admin/subscription',
+        query: { user_id: record.id }
+      })
+    },
+    getSubscriptionStatus(expiresAt) {
+      const expireDate = new Date(expiresAt)
+      const now = new Date()
+      const diffDays = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24))
+
+      if (diffDays < 0) {
+        return '已过期'
+      } else if (diffDays === 0) {
+        return '今天到期'
+      } else if (diffDays <= 7) {
+        return `剩余 ${diffDays} 天`
+      } else {
+        return `到期：${formatDate(expiresAt).split(' ')[0]}`
+      }
     }
   }
 }

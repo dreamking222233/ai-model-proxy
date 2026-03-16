@@ -75,6 +75,12 @@ const routes = [
         meta: { title: '兑换码管理' }
       },
       {
+        path: 'subscription',
+        name: 'SubscriptionManage',
+        component: () => import('@/views/admin/SubscriptionManage.vue'),
+        meta: { title: '套餐管理' }
+      },
+      {
         path: 'profile',
         name: 'AdminProfile',
         component: () => import('@/views/user/Profile.vue'),

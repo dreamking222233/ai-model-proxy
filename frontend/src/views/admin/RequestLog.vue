@@ -150,12 +150,14 @@
           </div>
         </template>
 
-        <template slot="status" slot-scope="text">
-          <a-badge v-if="text === 'success'" status="success" text="成功" />
-          <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
-          <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
-          <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
-          <a-badge v-else status="default" :text="String(text || '-')" />
+        <template slot="status" slot-scope="text, record">
+          <div style="cursor: pointer;" @click="handleStatusClick(record)">
+            <a-badge v-if="text === 'success'" status="success" text="成功" />
+            <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
+            <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
+            <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
+            <a-badge v-else status="default" :text="String(text || '-')" />
+          </div>
         </template>
 
         <template slot="responseTime" slot-scope="text">
@@ -175,6 +177,73 @@
         </template>
       </a-table>
     </div>
+
+    <!-- Error Detail Modal -->
+    <a-modal
+      v-model="errorModalVisible"
+      :title="errorModalTitle"
+      :width="700"
+      :footer="null"
+    >
+      <div class="error-detail-container">
+        <a-descriptions :column="1" bordered size="small">
+          <a-descriptions-item label="请求 ID">
+            <code class="request-id-code">{{ selectedRecord.request_id }}</code>
+          </a-descriptions-item>
+          <a-descriptions-item label="用户">
+            <span style="font-weight: 500;">{{ selectedRecord.username || '-' }}</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="请求模型">
+            <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="实际模型">
+            <a-tag v-if="selectedRecord.actual_model" class="actual-model-tag">{{ selectedRecord.actual_model }}</a-tag>
+            <span v-else class="text-muted">-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="渠道">
+            {{ selectedRecord.channel_name || '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-badge v-if="selectedRecord.status === 'success'" status="success" text="成功" />
+            <a-badge v-else-if="selectedRecord.status === 'error' || selectedRecord.status === 'failed'" status="error" text="失败" />
+            <a-badge v-else-if="selectedRecord.status === 'timeout'" status="warning" text="超时" />
+            <a-badge v-else status="default" :text="String(selectedRecord.status || '-')" />
+          </a-descriptions-item>
+          <a-descriptions-item label="响应时间">
+            <span v-if="selectedRecord.response_time_ms != null" class="response-time" :class="getResponseTimeClass(selectedRecord.response_time_ms)">
+              {{ selectedRecord.response_time_ms }} <span class="response-time-unit">ms</span>
+            </span>
+            <span v-else class="text-muted">-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="客户端 IP">
+            <code v-if="selectedRecord.client_ip" class="ip-code">{{ selectedRecord.client_ip }}</code>
+            <span v-else class="text-muted">-</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="请求时间">
+            {{ selectedRecord.created_at ? formatDate(selectedRecord.created_at) : '-' }}
+          </a-descriptions-item>
+        </a-descriptions>
+
+        <div v-if="selectedRecord.error_message" class="error-message-section">
+          <div class="error-message-header">
+            <a-icon type="exclamation-circle" style="color: #f5222d; margin-right: 8px;" />
+            <span style="font-weight: 600; color: #1a1a2e;">错误详情</span>
+          </div>
+          <div class="error-message-content">
+            <pre>{{ selectedRecord.error_message }}</pre>
+          </div>
+          <a-button size="small" @click="copyErrorMessage" style="margin-top: 8px;">
+            <a-icon type="copy" />
+            复制错误信息
+          </a-button>
+        </div>
+
+        <div v-else class="no-error-message">
+          <a-icon type="check-circle" style="color: #52c41a; margin-right: 8px;" />
+          <span>该请求没有错误信息</span>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -194,6 +263,8 @@ export default {
         dateRange: [],
         user_id: ''
       },
+      errorModalVisible: false,
+      selectedRecord: {},
       pagination: {
         current: 1,
         pageSize: 20,
@@ -293,6 +364,19 @@ export default {
       ]
     }
   },
+  computed: {
+    errorModalTitle() {
+      if (!this.selectedRecord.status) return '请求详情'
+      const statusMap = {
+        'success': '请求详情 - 成功',
+        'error': '请求详情 - 失败',
+        'failed': '请求详情 - 失败',
+        'timeout': '请求详情 - 超时',
+        'pending': '请求详情 - 处理中'
+      }
+      return statusMap[this.selectedRecord.status] || '请求详情'
+    }
+  },
   mounted() {
     // Check if user_id is passed from route query
     if (this.$route.query.user_id) {
@@ -371,6 +455,19 @@ export default {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
       this.fetchList()
+    },
+    handleStatusClick(record) {
+      this.selectedRecord = { ...record }
+      this.errorModalVisible = true
+    },
+    copyErrorMessage() {
+      if (this.selectedRecord.error_message) {
+        navigator.clipboard.writeText(this.selectedRecord.error_message).then(() => {
+          this.$message.success('错误信息已复制到剪贴板')
+        }).catch(() => {
+          this.$message.error('复制失败')
+        })
+      }
     }
   }
 }
@@ -723,6 +820,55 @@ export default {
 
   .text-muted {
     color: #bfbfbf;
+  }
+
+  /* ===== Error Detail Modal ===== */
+  .error-detail-container {
+    .error-message-section {
+      margin-top: 20px;
+      padding: 16px;
+      background: #fff2f0;
+      border: 1px solid #ffccc7;
+      border-radius: 8px;
+
+      .error-message-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+        font-size: 14px;
+      }
+
+      .error-message-content {
+        background: #fff;
+        border: 1px solid #ffa39e;
+        border-radius: 4px;
+        padding: 12px;
+        max-height: 300px;
+        overflow-y: auto;
+
+        pre {
+          margin: 0;
+          font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+          font-size: 12px;
+          line-height: 1.6;
+          color: #d32029;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+      }
+    }
+
+    .no-error-message {
+      margin-top: 20px;
+      padding: 16px;
+      background: #f6ffed;
+      border: 1px solid #b7eb8f;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      font-size: 14px;
+      color: #52c41a;
+    }
   }
 
   /* ===== Pagination ===== */

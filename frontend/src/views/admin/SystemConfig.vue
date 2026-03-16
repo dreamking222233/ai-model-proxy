@@ -3,31 +3,29 @@
     <!-- Health Check Config Card -->
     <a-card class="health-check-card" title="健康检查配置">
       <a-row :gutter="24">
-        <a-col :span="8">
+        <a-col :span="6">
           <a-form-item label="检查间隔">
             <a-input-number
               v-model="healthCheckInterval"
               :min="60"
               :max="3600"
               style="width: 100%"
-              @change="handleHealthConfigChange('health_check_interval', healthCheckInterval)"
             >
               <template slot="addonAfter">秒</template>
             </a-input-number>
             <div class="config-hint">建议: 300秒（5分钟）</div>
           </a-form-item>
         </a-col>
-        <a-col :span="8">
+        <a-col :span="6">
           <a-form-item label="测试消息">
             <a-input
               v-model="healthCheckMessage"
               placeholder="健康检查时发送的测试消息"
-              @blur="handleHealthConfigChange('health_check_test_message', healthCheckMessage)"
             />
             <div class="config-hint">用于测试模型响应的消息内容</div>
           </a-form-item>
         </a-col>
-        <a-col :span="8">
+        <a-col :span="6">
           <a-form-item label="价格倍率">
             <a-input-number
               v-model="priceMultiplier"
@@ -36,11 +34,25 @@
               :step="0.1"
               :precision="1"
               style="width: 100%"
-              @change="handleHealthConfigChange('price_multiplier', priceMultiplier)"
             >
               <template slot="addonAfter">倍</template>
             </a-input-number>
             <div class="config-hint">1.0=原价，2.0=2倍价格</div>
+          </a-form-item>
+        </a-col>
+        <a-col :span="6">
+          <a-form-item label="Token倍率">
+            <a-input-number
+              v-model="tokenMultiplier"
+              :min="0.1"
+              :max="10"
+              :step="0.1"
+              :precision="1"
+              style="width: 100%"
+            >
+              <template slot="addonAfter">倍</template>
+            </a-input-number>
+            <div class="config-hint">1.0=原始Token，2.0=2倍Token</div>
           </a-form-item>
         </a-col>
       </a-row>
@@ -52,7 +64,6 @@
               :min="1"
               :max="20"
               style="width: 100%"
-              @change="handleHealthConfigChange('circuit_breaker_threshold', circuitBreakerThreshold)"
             >
               <template slot="addonAfter">次</template>
             </a-input-number>
@@ -66,7 +77,6 @@
               :min="60"
               :max="3600"
               style="width: 100%"
-              @change="handleHealthConfigChange('circuit_breaker_recovery', circuitBreakerRecovery)"
             >
               <template slot="addonAfter">秒</template>
             </a-input-number>
@@ -74,10 +84,16 @@
           </a-form-item>
         </a-col>
       </a-row>
-      <a-button type="primary" @click="triggerHealthCheck" :loading="triggeringHealthCheck">
-        <a-icon type="thunderbolt" />
-        立即执行健康检查
-      </a-button>
+      <div style="display: flex; gap: 12px;">
+        <a-button type="primary" @click="saveHealthConfig" :loading="savingConfig">
+          <a-icon type="save" />
+          保存配置
+        </a-button>
+        <a-button @click="triggerHealthCheck" :loading="triggeringHealthCheck">
+          <a-icon type="thunderbolt" />
+          立即执行健康检查
+        </a-button>
+      </div>
     </a-card>
 
     <!-- System Config Table -->
@@ -97,6 +113,10 @@
       row-key="id"
       size="middle"
     >
+      <template slot="configName" slot-scope="text, record">
+        <span style="font-weight: 500; color: #1a1a2e;">{{ configKeyMap[record.config_key] || record.config_key }}</span>
+      </template>
+
       <template slot="configKey" slot-scope="text">
         <code>{{ text }}</code>
       </template>
@@ -175,10 +195,28 @@ export default {
       healthCheckInterval: 300,
       healthCheckMessage: '你好',
       priceMultiplier: 1.0,
+      tokenMultiplier: 1.0,
       circuitBreakerThreshold: 5,
       circuitBreakerRecovery: 600,
       triggeringHealthCheck: false,
+      savingConfig: false,
+      configKeyMap: {
+        'health_check_interval': '健康检查间隔',
+        'circuit_breaker_threshold': '熔断阈值',
+        'circuit_breaker_recovery': '熔断恢复时间',
+        'health_check_test_message': '测试消息',
+        'price_multiplier': '价格倍率',
+        'token_multiplier': 'Token倍率',
+        'max_message_length': '最大消息长度',
+        'max_context_tokens': '最大上下文Token数'
+      },
       columns: [
+        {
+          title: '配置名称',
+          key: 'configName',
+          width: 180,
+          scopedSlots: { customRender: 'configName' }
+        },
         {
           title: '配置项',
           dataIndex: 'config_key',
@@ -238,6 +276,8 @@ export default {
             this.healthCheckMessage = config.config_value || '你好'
           } else if (config.config_key === 'price_multiplier') {
             this.priceMultiplier = Number(config.config_value) || 1.0
+          } else if (config.config_key === 'token_multiplier') {
+            this.tokenMultiplier = Number(config.config_value) || 1.0
           } else if (config.config_key === 'circuit_breaker_threshold') {
             this.circuitBreakerThreshold = Number(config.config_value) || 5
           } else if (config.config_key === 'circuit_breaker_recovery') {
@@ -250,15 +290,31 @@ export default {
         this.loading = false
       }
     },
-    async handleHealthConfigChange(key, value) {
+    async saveHealthConfig() {
+      this.savingConfig = true
       try {
-        const config = this.configList.find(c => c.config_key === key)
-        if (config) {
-          await updateConfig(config.id, { config_value: String(value) })
-          this.$message.success('配置已更新')
+        const updates = [
+          { key: 'health_check_interval', value: this.healthCheckInterval },
+          { key: 'health_check_test_message', value: this.healthCheckMessage },
+          { key: 'price_multiplier', value: this.priceMultiplier },
+          { key: 'token_multiplier', value: this.tokenMultiplier },
+          { key: 'circuit_breaker_threshold', value: this.circuitBreakerThreshold },
+          { key: 'circuit_breaker_recovery', value: this.circuitBreakerRecovery }
+        ]
+
+        for (const update of updates) {
+          const config = this.configList.find(c => c.config_key === update.key)
+          if (config) {
+            await updateConfig(config.id, { config_value: String(update.value) })
+          }
         }
+
+        this.$message.success('配置保存成功')
+        this.fetchList()
       } catch (err) {
-        console.error('Failed to update config:', err)
+        console.error('Failed to save config:', err)
+      } finally {
+        this.savingConfig = false
       }
     },
     async triggerHealthCheck() {

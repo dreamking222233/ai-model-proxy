@@ -249,6 +249,7 @@ class HealthService:
                 .order_by(HealthCheckLog.checked_at.desc())
                 .first()
             )
+            last_check_time = ch.last_health_check_at.isoformat() if ch.last_health_check_at else None
             result.append({
                 "channel_id": ch.id,
                 "channel_name": ch.name,
@@ -259,9 +260,8 @@ class HealthService:
                 "circuit_breaker_until": (
                     ch.circuit_breaker_until.isoformat() if ch.circuit_breaker_until else None
                 ),
-                "last_health_check_at": (
-                    ch.last_health_check_at.isoformat() if ch.last_health_check_at else None
-                ),
+                "last_health_check_at": last_check_time,
+                "last_check_time": last_check_time,  # Alias for frontend compatibility
                 "last_success_at": (
                     ch.last_success_at.isoformat() if ch.last_success_at else None
                 ),
@@ -304,9 +304,11 @@ class HealthService:
                 "id": log.id,
                 "channel_id": log.channel_id,
                 "channel_name": log.channel_name,
+                "model": log.model_name,  # Alias for frontend compatibility
                 "model_name": log.model_name,
                 "status": log.status,
                 "response_time_ms": log.response_time_ms,
+                "response_time": log.response_time_ms,  # Alias for frontend compatibility
                 "error_message": log.error_message,
                 "checked_at": log.checked_at.isoformat() if log.checked_at else None,
             }

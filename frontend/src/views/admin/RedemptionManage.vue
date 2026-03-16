@@ -69,6 +69,12 @@
         <span v-else>-</span>
       </template>
 
+      <template slot="username" slot-scope="text, record">
+        <span v-if="text" style="color: #667eea; font-weight: 500;">{{ text }}</span>
+        <span v-else-if="record.used_by" style="color: #8c8c8c;">ID: {{ record.used_by }}</span>
+        <span v-else style="color: #bfbfbf;">-</span>
+      </template>
+
       <template slot="action" slot-scope="text, record">
         <a-popconfirm
           v-if="record.status === 'unused'"
@@ -196,7 +202,7 @@ export default {
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
         { title: '过期时间', dataIndex: 'expires_at', key: 'expires_at', width: 180, scopedSlots: { customRender: 'expires_at' } },
         { title: '使用时间', dataIndex: 'used_at', key: 'used_at', width: 180, scopedSlots: { customRender: 'used_at' } },
-        { title: '使用者ID', dataIndex: 'used_by', key: 'used_by', width: 100 },
+        { title: '使用者', dataIndex: 'username', key: 'username', width: 120, scopedSlots: { customRender: 'username' } },
         { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
         { title: '操作', key: 'action', width: 100, fixed: 'right', scopedSlots: { customRender: 'action' } }
       ],

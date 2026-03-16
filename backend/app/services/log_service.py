@@ -34,8 +34,14 @@ class LogService:
         Returns:
             Tuple of (list of log dicts, total count).
         """
-        query = db.query(RequestLog, SysUser.username).outerjoin(
+        query = db.query(
+            RequestLog,
+            SysUser.username,
+            ConsumptionRecord.total_cost
+        ).outerjoin(
             SysUser, RequestLog.user_id == SysUser.id
+        ).outerjoin(
+            ConsumptionRecord, RequestLog.request_id == ConsumptionRecord.request_id
         )
 
         if user_id is not None:
@@ -85,9 +91,10 @@ class LogService:
                 "status": log.status,
                 "error_message": log.error_message,
                 "client_ip": log.client_ip,
+                "total_cost": float(total_cost) if total_cost else 0.0,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
-            for log, username in rows
+            for log, username, total_cost in rows
         ]
         return result, total
 

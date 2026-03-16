@@ -189,6 +189,8 @@ class RedemptionService:
         Returns:
             Tuple of (list of codes, total count).
         """
+        from app.models.user import SysUser
+
         query = db.query(RedemptionCode)
 
         if status:
@@ -204,20 +206,28 @@ class RedemptionService:
             .all()
         )
 
-        result = [
-            {
+        result = []
+        for c in codes:
+            # Get username if code was used
+            username = None
+            if c.used_by:
+                user = db.query(SysUser).filter(SysUser.id == c.used_by).first()
+                if user:
+                    username = user.username
+
+            result.append({
                 "id": c.id,
                 "code": c.code,
                 "amount": float(c.amount),
                 "status": c.status,
                 "created_by": c.created_by,
                 "used_by": c.used_by,
+                "username": username,
                 "used_at": c.used_at.isoformat() if c.used_at else None,
                 "expires_at": c.expires_at.isoformat() if c.expires_at else None,
                 "created_at": c.created_at.isoformat(),
-            }
-            for c in codes
-        ]
+            })
+
         return result, total
 
     @staticmethod

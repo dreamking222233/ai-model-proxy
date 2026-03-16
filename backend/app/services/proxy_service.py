@@ -872,6 +872,10 @@ class ProxyService:
         write request log and consumption record, and update API key usage stats.
         """
         try:
+            # Apply token multiplier
+            token_multiplier = get_system_config(db, "token_multiplier", 1.0)
+            input_tokens = int(input_tokens * token_multiplier)
+            output_tokens = int(output_tokens * token_multiplier)
             total_tokens = input_tokens + output_tokens
 
             # Calculate cost with price multiplier

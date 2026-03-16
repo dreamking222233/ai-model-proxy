@@ -106,8 +106,23 @@
           <a-tag class="model-tag">{{ text || '-' }}</a-tag>
         </template>
 
+        <template slot="actual_model" slot-scope="text">
+          <a-tag v-if="text" class="actual-model-tag">{{ text }}</a-tag>
+          <span v-else class="text-muted">-</span>
+        </template>
+
         <template slot="channel_name" slot-scope="text">
           <span class="channel-cell">{{ text || '-' }}</span>
+        </template>
+
+        <template slot="total_cost" slot-scope="text">
+          <span v-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
+          <span v-else class="text-muted">$0.00</span>
+        </template>
+
+        <template slot="client_ip" slot-scope="text">
+          <code v-if="text" class="ip-code">{{ text }}</code>
+          <span v-else class="text-muted">-</span>
         </template>
 
         <template slot="tokens" slot-scope="text, record">
@@ -203,11 +218,18 @@ export default {
           scopedSlots: { customRender: 'username' }
         },
         {
-          title: '模型',
+          title: '请求模型',
           dataIndex: 'requested_model',
           key: 'requested_model',
-          width: 170,
+          width: 150,
           scopedSlots: { customRender: 'requested_model' }
+        },
+        {
+          title: '实际模型',
+          dataIndex: 'actual_model',
+          key: 'actual_model',
+          width: 150,
+          scopedSlots: { customRender: 'actual_model' }
         },
         {
           title: '渠道',
@@ -237,6 +259,21 @@ export default {
           width: 110,
           align: 'right',
           scopedSlots: { customRender: 'responseTime' }
+        },
+        {
+          title: '花费',
+          dataIndex: 'total_cost',
+          key: 'total_cost',
+          width: 100,
+          align: 'right',
+          scopedSlots: { customRender: 'total_cost' }
+        },
+        {
+          title: 'IP地址',
+          dataIndex: 'client_ip',
+          key: 'client_ip',
+          width: 130,
+          scopedSlots: { customRender: 'client_ip' }
         },
         {
           title: '流式',
@@ -532,10 +569,37 @@ export default {
     padding: 1px 8px;
   }
 
+  .actual-model-tag {
+    background: linear-gradient(135deg, rgba(82, 196, 26, 0.1), rgba(82, 196, 26, 0.05));
+    border-color: rgba(82, 196, 26, 0.3);
+    color: #52c41a;
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 1px 8px;
+  }
+
   /* ===== Channel Cell ===== */
   .channel-cell {
     font-size: 13px;
     color: #595959;
+  }
+
+  /* ===== Cost Text ===== */
+  .cost-text {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    color: #fa8c16;
+    font-weight: 500;
+  }
+
+  /* ===== IP Code ===== */
+  .ip-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    color: #595959;
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
   }
 
   /* ===== Token Cell ===== */

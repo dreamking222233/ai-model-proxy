@@ -22,6 +22,7 @@ from app.api.admin.log import router as admin_log_router
 from app.api.admin.health import router as admin_health_router
 from app.api.admin.system import router as admin_system_router
 from app.api.admin.redemption import router as admin_redemption_router
+from app.api.admin.subscription import router as admin_subscription_router
 from app.api.user.api_key import router as user_api_key_router
 from app.api.user.balance import router as user_balance_router
 from app.api.user.profile import router as user_profile_router
@@ -108,6 +109,7 @@ app.include_router(admin_log_router)
 app.include_router(admin_health_router)
 app.include_router(admin_system_router)
 app.include_router(admin_redemption_router)
+app.include_router(admin_subscription_router)
 
 # Register routers - User
 app.include_router(user_api_key_router)

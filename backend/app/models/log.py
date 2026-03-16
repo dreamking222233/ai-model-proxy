@@ -109,3 +109,20 @@ class ConsumptionRecord(Base):
     balance_before = Column(DECIMAL(12, 6), nullable=False, default=0)
     balance_after = Column(DECIMAL(12, 6), nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class UserSubscription(Base):
+    """User subscription record."""
+
+    __tablename__ = "user_subscription"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    plan_name = Column(String(64), nullable=False, comment="套餐名称")
+    plan_type = Column(String(20), nullable=False, comment="套餐类型: monthly/quarterly/yearly/custom")
+    start_time = Column(DateTime, nullable=False, comment="开始时间")
+    end_time = Column(DateTime, nullable=False, comment="结束时间")
+    status = Column(String(10), nullable=False, default="active", comment="状态: active/expired/cancelled")
+    created_by = Column(BigInteger, nullable=True, comment="创建者（管理员ID）")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

@@ -79,10 +79,12 @@ class ProxyService:
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
 
-        # 1. Check user balance
-        balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-        if not balance or balance.balance <= 0:
-            raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        # 1. Check user balance (only for balance mode users)
+        if user.subscription_type == "balance":
+            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+            if not balance or balance.balance <= 0:
+                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        # For unlimited mode users, subscription expiration is already checked in verify_api_key
 
         # 2. Validate request content length
         ProxyService._validate_request_length(db, request_data)
@@ -156,10 +158,12 @@ class ProxyService:
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
 
-        # 1. Check user balance
-        balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-        if not balance or balance.balance <= 0:
-            raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        # 1. Check user balance (only for balance mode users)
+        if user.subscription_type == "balance":
+            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+            if not balance or balance.balance <= 0:
+                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        # For unlimited mode users, subscription expiration is already checked in verify_api_key
 
         # 2. Validate request content length
         ProxyService._validate_request_length(db, request_data)
@@ -864,8 +868,8 @@ class ProxyService:
         is_stream: bool,
     ) -> None:
         """
-        Calculate cost, deduct from user balance, write request log and
-        consumption record, and update API key usage stats.
+        Calculate cost, deduct from user balance (for balance mode) or just record usage (for unlimited mode),
+        write request log and consumption record, and update API key usage stats.
         """
         try:
             total_tokens = input_tokens + output_tokens
@@ -876,23 +880,34 @@ class ProxyService:
             output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
             total_cost = input_cost + output_cost
 
-            # Deduct balance (with row lock)
-            balance = (
-                db.query(UserBalance)
-                .filter(UserBalance.user_id == user.id)
-                .with_for_update()
-                .first()
-            )
-            if balance:
-                balance_before = float(balance.balance)
-                balance.balance -= Decimal(str(total_cost))
-                balance.total_consumed += Decimal(str(total_cost))
-                balance_after = float(balance.balance)
+            # Handle balance deduction based on subscription type
+            if user.subscription_type == "balance":
+                # Balance mode: deduct from user balance (with row lock)
+                balance = (
+                    db.query(UserBalance)
+                    .filter(UserBalance.user_id == user.id)
+                    .with_for_update()
+                    .first()
+                )
+                if balance:
+                    balance_before = float(balance.balance)
+                    balance.balance -= Decimal(str(total_cost))
+                    balance.total_consumed += Decimal(str(total_cost))
+                    balance_after = float(balance.balance)
+                else:
+                    balance_before = 0.0
+                    balance_after = 0.0
             else:
-                balance_before = 0.0
-                balance_after = 0.0
+                # Unlimited mode: no balance deduction, just record usage
+                balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+                if balance:
+                    balance_before = float(balance.balance)
+                    balance_after = float(balance.balance)
+                else:
+                    balance_before = 0.0
+                    balance_after = 0.0
 
-            # Write consumption record
+            # Write consumption record (for both modes)
             consumption = ConsumptionRecord(
                 user_id=user.id,
                 request_id=request_id,

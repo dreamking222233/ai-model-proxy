@@ -6,6 +6,30 @@
       <p class="welcome-subtitle">以下是您的账户和使用概览。</p>
     </div>
 
+    <!-- Recharge Contact Card -->
+    <a-card class="recharge-contact-card">
+      <div class="recharge-contact-content">
+        <div class="recharge-icon">
+          <a-icon type="customer-service" style="font-size: 32px; color: #667eea" />
+        </div>
+        <div class="recharge-info">
+          <h3 class="recharge-title">充值请联系</h3>
+          <div class="contact-methods">
+            <div class="contact-item">
+              <a-icon type="wechat" style="color: #07c160; font-size: 18px" />
+              <span class="contact-label">微信：</span>
+              <span class="contact-value">Q-Free-M</span>
+            </div>
+            <div class="contact-item">
+              <a-icon type="qq" style="color: #12b7f5; font-size: 18px" />
+              <span class="contact-label">QQ：</span>
+              <span class="contact-value">2222006406</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a-card>
+
     <!-- Redemption Code Section -->
     <a-card class="redemption-card">
       <div class="redemption-content">
@@ -205,8 +229,104 @@ export default {
     this.fetchBalance()
     this.fetchUsageSummary()
   },
+  mounted() {
+    this.showAnnouncementModal()
+  },
   methods: {
     formatDate,
+    showAnnouncementModal() {
+      // 检查是否已经显示过公告（本次会话）
+      const hasShownAnnouncement = sessionStorage.getItem('hasShownAnnouncement')
+      if (hasShownAnnouncement) {
+        return
+      }
+
+      // 显示公告弹窗
+      this.$info({
+        title: '平台公告',
+        width: 600,
+        content: (h) => {
+          return h('div', {
+            style: {
+              fontSize: '15px',
+              lineHeight: '1.8',
+              color: '#595959'
+            }
+          }, [
+            h('p', {
+              style: {
+                marginBottom: '16px',
+                fontSize: '16px',
+                fontWeight: '500',
+                color: '#1a1a2e'
+              }
+            }, '欢迎使用 AI 模型中转平台！'),
+            h('div', {
+              style: {
+                background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%)',
+                padding: '16px',
+                borderRadius: '8px',
+                border: '1px solid rgba(102, 126, 234, 0.2)',
+                marginBottom: '16px'
+              }
+            }, [
+              h('p', { style: { margin: '0 0 12px 0' } }, '本平台为中转站，支持 Claude 和 GPT 系列模型'),
+              h('p', { style: { margin: '0 0 12px 0', color: '#52c41a', fontWeight: '600' } }, '新用户注册赠送 100 美元额度'),
+              h('p', { style: { margin: '0', fontWeight: '500' } }, '联系站长进行充值：')
+            ]),
+            h('div', {
+              style: {
+                display: 'flex',
+                gap: '24px',
+                padding: '12px 16px',
+                background: '#fafafa',
+                borderRadius: '6px'
+              }
+            }, [
+              h('div', {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }
+              }, [
+                h('span', { style: { color: '#07c160', fontSize: '18px' } }, '💬'),
+                h('span', { style: { color: '#595959' } }, '微信：'),
+                h('span', {
+                  style: {
+                    color: '#667eea',
+                    fontWeight: '600',
+                    fontFamily: 'SFMono-Regular, Consolas, monospace'
+                  }
+                }, 'Q-Free-M')
+              ]),
+              h('div', {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }
+              }, [
+                h('span', { style: { color: '#12b7f5', fontSize: '18px' } }, '🐧'),
+                h('span', { style: { color: '#595959' } }, 'QQ：'),
+                h('span', {
+                  style: {
+                    color: '#667eea',
+                    fontWeight: '600',
+                    fontFamily: 'SFMono-Regular, Consolas, monospace'
+                  }
+                }, '2222006406')
+              ])
+            ])
+          ])
+        },
+        okText: '我知道了',
+        onOk: () => {
+          // 标记已显示公告（本次会话）
+          sessionStorage.setItem('hasShownAnnouncement', 'true')
+        }
+      })
+    },
     async fetchProfile() {
       this.profileLoading = true
       try {
@@ -389,6 +509,71 @@ export default {
 
           .anticon {
             margin-right: 6px;
+          }
+        }
+      }
+    }
+  }
+
+  .recharge-contact-card {
+    margin-bottom: 24px;
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.15);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
+    border: 2px solid rgba(102, 126, 234, 0.2);
+
+    /deep/ .ant-card-body {
+      padding: 20px 24px;
+    }
+
+    .recharge-contact-content {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+
+      .recharge-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .recharge-info {
+        flex: 1;
+
+        .recharge-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: #1a1a2e;
+          margin: 0 0 12px 0;
+        }
+
+        .contact-methods {
+          display: flex;
+          gap: 32px;
+          flex-wrap: wrap;
+        }
+
+        .contact-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 15px;
+
+          .contact-label {
+            color: #595959;
+            font-weight: 500;
+          }
+
+          .contact-value {
+            color: #667eea;
+            font-weight: 600;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
           }
         }
       }

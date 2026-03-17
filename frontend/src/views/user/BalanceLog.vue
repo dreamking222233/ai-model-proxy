@@ -10,6 +10,30 @@
       </div>
     </div>
 
+    <!-- Recharge Contact Card -->
+    <a-card class="recharge-contact-card">
+      <div class="recharge-contact-content">
+        <div class="recharge-icon">
+          <a-icon type="customer-service" style="font-size: 32px; color: #667eea" />
+        </div>
+        <div class="recharge-info">
+          <h3 class="recharge-title">充值请联系</h3>
+          <div class="contact-methods">
+            <div class="contact-item">
+              <a-icon type="wechat" style="color: #07c160; font-size: 18px" />
+              <span class="contact-label">微信：</span>
+              <span class="contact-value">Q-Free-M</span>
+            </div>
+            <div class="contact-item">
+              <a-icon type="qq" style="color: #12b7f5; font-size: 18px" />
+              <span class="contact-label">QQ：</span>
+              <span class="contact-value">2222006406</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a-card>
+
     <!-- Balance Info Cards -->
     <a-spin :spinning="balanceLoading">
       <a-row :gutter="24" class="balance-row">
@@ -282,6 +306,72 @@ export default {
       font-weight: 600;
       color: #1a1a2e;
       margin: 0;
+    }
+  }
+
+  /* ===== Recharge Contact Card ===== */
+  .recharge-contact-card {
+    margin-bottom: 20px;
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.15);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
+    border: 2px solid rgba(102, 126, 234, 0.2);
+
+    /deep/ .ant-card-body {
+      padding: 20px 24px;
+    }
+
+    .recharge-contact-content {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+
+      .recharge-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .recharge-info {
+        flex: 1;
+
+        .recharge-title {
+          font-size: 18px;
+          font-weight: 600;
+          color: #1a1a2e;
+          margin: 0 0 12px 0;
+        }
+
+        .contact-methods {
+          display: flex;
+          gap: 32px;
+          flex-wrap: wrap;
+        }
+
+        .contact-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 15px;
+
+          .contact-label {
+            color: #595959;
+            font-weight: 500;
+          }
+
+          .contact-value {
+            color: #667eea;
+            font-weight: 600;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+          }
+        }
+      }
     }
   }
 

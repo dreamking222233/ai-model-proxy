@@ -270,15 +270,26 @@ class ProxyService:
 
                         async for line in response.aiter_lines():
                             if not line:
-                                # Empty line is the SSE record separator
-                                yield "\n"
+                                # Empty line is the SSE record separator - skip it
+                                # The upstream already sends proper SSE format with \n\n
                                 continue
 
                             if line.startswith("data: "):
                                 data_str = line[6:]
 
                                 if data_str.strip() == "[DONE]":
+                                    # Send standard [DONE] for OpenAI clients
                                     yield "data: [DONE]\n\n"
+                                    # Send response.completed event for Codex CLI compatibility
+                                    completion_event = json.dumps({
+                                        "type": "response.completed",
+                                        "usage": {
+                                            "input_tokens": input_tokens,
+                                            "output_tokens": output_tokens,
+                                            "total_tokens": input_tokens + output_tokens
+                                        }
+                                    })
+                                    yield f"data: {completion_event}\n\n"
                                     break
 
                                 # Try to extract usage from this chunk

@@ -46,6 +46,276 @@ class ProxyService:
     """Stateless proxy that forwards LLM requests through managed channels."""
 
     # -------------------------------------------------------------------
+    # OpenAI Responses API entry point (for Codex CLI)
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    async def handle_responses_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_data: dict,
+        client_ip: str,
+    ):
+        """
+        Handle OpenAI Responses API format request (/v1/responses).
+
+        This endpoint is used by Codex CLI and expects a different format:
+        - Request: {"model": "...", "input": "..."}
+        - Response: Responses API format with events like response.output_text.delta
+        """
+        # Convert Responses API request to Chat Completions format
+        model = request_data.get("model", "")
+        input_text = request_data.get("input", "")
+
+        # Convert to Chat Completions format
+        chat_request = {
+            "model": model,
+            "messages": [{"role": "user", "content": input_text}],
+            "stream": request_data.get("stream", True)
+        }
+
+        # Get the Chat Completions response
+        request_id = str(uuid.uuid4())
+        requested_model = chat_request.get("model", "")
+        is_stream = chat_request.get("stream", False)
+
+        # Validate and resolve model
+        if user.subscription_type == "balance":
+            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+            if not balance or balance.balance <= 0:
+                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+
+        ProxyService._validate_request_length(db, chat_request)
+        unified_model = ModelService.resolve_model(db, requested_model)
+        if not unified_model:
+            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+
+        channels = ModelService.get_available_channels(db, unified_model.id)
+        if not channels:
+            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+
+        # Try each channel (channels is a list of (Channel, actual_model_name) tuples)
+        last_error = None
+        for channel, actual_model_name in channels:
+            try:
+                chat_request["model"] = actual_model_name
+
+                if is_stream:
+                    return await ProxyService._stream_responses_request(
+                        db, user, api_key_record, channel, unified_model,
+                        chat_request, request_id, requested_model, client_ip
+                    )
+                else:
+                    return await ProxyService._non_stream_responses_request(
+                        db, user, api_key_record, channel, unified_model,
+                        chat_request, request_id, requested_model, client_ip
+                    )
+            except Exception as e:
+                last_error = e
+                logger.warning("Channel %s failed: %s", channel.name, e)
+                ProxyService._record_channel_failure(db, channel)
+                continue
+
+        error_detail = str(last_error) if last_error else "Unknown error"
+        ProxyService._log_failed_request(
+            db, user, api_key_record, request_id, requested_model,
+            client_ip, is_stream, error_detail,
+        )
+        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+
+    @staticmethod
+    async def _stream_responses_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+    ) -> StreamingResponse:
+        """Convert Chat Completions stream to Responses API format."""
+        start_time = time.time()
+        base_url = channel.base_url.rstrip("/")
+        url = f"{base_url}/chat/completions"
+        headers = ProxyService._build_headers(channel, "openai")
+
+        request_data["stream"] = True
+        if "stream_options" not in request_data:
+            request_data["stream_options"] = {"include_usage": True}
+
+        async def event_generator():
+            input_tokens = 0
+            output_tokens = 0
+            stream_error = None
+            response_id = f"resp_{uuid.uuid4().hex}"
+            message_id = f"msg_{uuid.uuid4().hex}"
+            created_at = int(time.time())
+
+            try:
+                # Send response.created event
+                yield f"event: response.created\n"
+                yield f"data: {json.dumps({'type': 'response.created', 'response': {'id': response_id, 'object': 'response', 'created_at': created_at, 'model': requested_model}})}\n\n"
+
+                # Send response.output_item.added event
+                yield f"event: response.output_item.added\n"
+                yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': {'id': message_id, 'type': 'message', 'role': 'assistant'}})}\n\n"
+
+                timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, json=request_data, headers=headers) as response:
+                        if response.status_code != 200:
+                            body = await response.aread()
+                            raise Exception(f"Upstream returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}")
+
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data: "):
+                                continue
+
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+
+                            try:
+                                chunk = json.loads(data_str)
+                                usage = chunk.get("usage")
+                                if usage:
+                                    input_tokens = usage.get("prompt_tokens", 0)
+                                    output_tokens = usage.get("completion_tokens", 0)
+
+                                # Extract content delta
+                                choices = chunk.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        # Send response.output_text.delta event
+                                        yield f"event: response.output_text.delta\n"
+                                        yield f"data: {json.dumps({'type': 'response.output_text.delta', 'delta': content})}\n\n"
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                # Send response.completed event
+                yield f"event: response.completed\n"
+                yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': response_id, 'usage': {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': input_tokens + output_tokens}}})}\n\n"
+
+            except Exception as e:
+                stream_error = e
+                logger.error("Responses API stream error: %s", e)
+                yield f"event: error\n"
+                yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e)}})}\n\n"
+            finally:
+                response_time_ms = int((time.time() - start_time) * 1000)
+                try:
+                    if stream_error:
+                        ProxyService._record_channel_failure(db, channel)
+                        ProxyService._log_failed_request(
+                            db, user, api_key_record, request_id, requested_model,
+                            client_ip, True, str(stream_error), channel=channel,
+                            response_time_ms=response_time_ms,
+                        )
+                    else:
+                        ProxyService._record_success(db, channel)
+                        ProxyService._deduct_balance_and_log(
+                            db, user, api_key_record, unified_model, request_id,
+                            requested_model, input_tokens, output_tokens, channel,
+                            client_ip, response_time_ms, is_stream=True,
+                        )
+                except Exception as accounting_err:
+                    logger.error("Post-stream accounting error: %s", accounting_err)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Request-ID": request_id,
+            },
+        )
+
+    @staticmethod
+    async def _non_stream_responses_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+    ) -> JSONResponse:
+        """Convert Chat Completions response to Responses API format."""
+        start_time = time.time()
+        base_url = channel.base_url.rstrip("/")
+        url = f"{base_url}/chat/completions"
+        headers = ProxyService._build_headers(channel, "openai")
+
+        request_data["stream"] = False
+
+        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=request_data, headers=headers)
+
+            if response.status_code != 200:
+                raise Exception(f"Upstream returned HTTP {response.status_code}: {response.text[:500]}")
+
+            data = response.json()
+
+            # Extract tokens and content
+            usage = data.get("usage", {})
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+
+            choices = data.get("choices", [])
+            content = ""
+            if choices:
+                message = choices[0].get("message", {})
+                content = message.get("content", "")
+
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Record success
+            ProxyService._record_success(db, channel)
+            ProxyService._deduct_balance_and_log(
+                db, user, api_key_record, unified_model, request_id,
+                requested_model, input_tokens, output_tokens, channel,
+                client_ip, response_time_ms, is_stream=False,
+            )
+
+            # Return Responses API format
+            response_id = f"resp_{uuid.uuid4().hex}"
+            message_id = f"msg_{uuid.uuid4().hex}"
+
+            return JSONResponse({
+                "id": response_id,
+                "object": "response",
+                "created_at": int(time.time()),
+                "model": requested_model,
+                "output": [
+                    {
+                        "type": "message",
+                        "id": message_id,
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": content
+                            }
+                        ]
+                    }
+                ],
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens
+                }
+            })
+
+    # -------------------------------------------------------------------
     # OpenAI protocol entry point
     # -------------------------------------------------------------------
 

@@ -115,16 +115,24 @@ async def codex_responses_v1(
     db: Session = Depends(get_db),
 ):
     """
-    Codex CLI /v1/responses endpoint compatibility.
+    OpenAI Responses API endpoint for Codex CLI compatibility.
 
-    This endpoint handles Codex CLI requests that use /v1/responses
-    instead of the standard /v1/chat/completions path.
+    This endpoint handles Codex CLI requests using the Responses API format:
+    - Request: {"model": "...", "input": "..."}
+    - Response: Responses API format with events like response.output_text.delta
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     user, api_key_record = await verify_api_key(request, db)
     body = await request.json()
     client_ip = request.client.host if request.client else None
 
-    return await ProxyService.handle_openai_request(
+    # Log the request body for debugging
+    logger.info(f"Codex request body: {body}")
+    logger.info(f"Codex request headers: {dict(request.headers)}")
+
+    return await ProxyService.handle_responses_request(
         db, user, api_key_record, body, client_ip
     )
 
@@ -134,11 +142,11 @@ async def codex_responses_root(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Codex CLI /responses endpoint compatibility without /v1 prefix"""
+    """OpenAI Responses API endpoint without /v1 prefix"""
     user, api_key_record = await verify_api_key(request, db)
     body = await request.json()
     client_ip = request.client.host if request.client else None
 
-    return await ProxyService.handle_openai_request(
+    return await ProxyService.handle_responses_request(
         db, user, api_key_record, body, client_ip
     )

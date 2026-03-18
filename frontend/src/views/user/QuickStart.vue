@@ -110,12 +110,12 @@
             </div>
           </a-tab-pane>
 
-          <!-- Cursor -->
-          <a-tab-pane key="cursor" tab="Cursor">
+          <!-- Codex -->
+          <a-tab-pane key="codex" tab="Codex">
             <div class="tool-header">
               <div class="tool-info">
-                <h3>Cursor IDE</h3>
-                <p>AI 驱动的代码编辑器，支持自定义 OpenAI 兼容端点</p>
+                <h3>Codex CLI</h3>
+                <p>强大的 AI 编程助手命令行工具</p>
               </div>
             </div>
             <div class="code-section">
@@ -123,34 +123,38 @@
               <div class="step-list">
                 <div class="step-list-item">
                   <div class="step-list-num">1</div>
-                  <span>打开 Cursor 设置 → <strong>Models</strong> 选项卡</span>
+                  <span>打开 Codex 配置文件（通常在 <code>~/.codex/config.json</code>）</span>
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">2</div>
-                  <span>点击 <strong>Override OpenAI Base URL</strong></span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">3</div>
-                  <span>填入基础地址：<code>{{ apiBase }}/v1</code></span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">4</div>
-                  <span>填入 API Key：<code>sk-xxxx</code>（你的密钥）</span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">5</div>
-                  <span>选择你需要的模型并开始使用</span>
+                  <span>配置 API 基础地址和密钥</span>
                 </div>
               </div>
             </div>
+            <div class="code-section" style="margin-top: 16px;">
+              <div class="code-title">
+                <span>配置示例</span>
+                <a-button type="link" size="small" icon="copy" @click="copyText(codexConfig)">复制</a-button>
+              </div>
+              <pre class="code-block"><code>{{ codexConfig }}</code></pre>
+            </div>
+            <a-alert
+              type="info"
+              show-icon
+              style="margin-top: 12px;"
+            >
+              <template slot="message">
+                <span>配置后运行 <code>codex</code> 命令即可使用。支持所有 GPT 和 Claude 系列模型。</span>
+              </template>
+            </a-alert>
           </a-tab-pane>
 
-          <!-- ChatBox -->
-          <a-tab-pane key="chatbox" tab="ChatBox">
+          <!-- OpenClaw -->
+          <a-tab-pane key="openclaw" tab="OpenClaw">
             <div class="tool-header">
               <div class="tool-info">
-                <h3>ChatBox</h3>
-                <p>跨平台 AI 桌面客户端，支持多种模型服务</p>
+                <h3>OpenClaw</h3>
+                <p>开源 AI 编程助手，支持多种 AI 模型</p>
               </div>
             </div>
             <div class="code-section">
@@ -158,15 +162,15 @@
               <div class="step-list">
                 <div class="step-list-item">
                   <div class="step-list-num">1</div>
-                  <span>打开 ChatBox → 设置 → <strong>AI 模型提供方</strong></span>
+                  <span>打开 OpenClaw 设置 → <strong>API 配置</strong></span>
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">2</div>
-                  <span>选择 <strong>OpenAI API</strong></span>
+                  <span>选择 API 类型：<strong>anthropic-messages</strong> 或 <strong>openai-completions</strong></span>
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">3</div>
-                  <span>API 域名填入：<code>{{ apiBase }}</code></span>
+                  <span>Base URL 填入：<code>{{ apiBase }}</code>（不要加 /v1）</span>
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">4</div>
@@ -174,58 +178,33 @@
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">5</div>
-                  <span>模型名称填入平台支持的模型（如 <code>claude-4-sonnet</code>）</span>
+                  <span>选择模型并开始使用</span>
                 </div>
               </div>
             </div>
-          </a-tab-pane>
-
-          <!-- Python SDK -->
-          <a-tab-pane key="python" tab="Python SDK">
-            <div class="tool-header">
-              <div class="tool-info">
-                <h3>Python SDK</h3>
-                <p>使用 OpenAI 或 Anthropic Python 库直接调用</p>
-              </div>
-            </div>
-            <div class="code-section">
+            <div class="code-section" style="margin-top: 16px;">
               <div class="code-title">
-                <span>OpenAI Python SDK</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(pythonOpenai)">复制</a-button>
+                <span>配置示例（Anthropic 协议）</span>
+                <a-button type="link" size="small" icon="copy" @click="copyText(openclawAnthropicConfig)">复制</a-button>
               </div>
-              <pre class="code-block"><code>{{ pythonOpenai }}</code></pre>
+              <pre class="code-block"><code>{{ openclawAnthropicConfig }}</code></pre>
             </div>
             <div class="code-section" style="margin-top: 16px;">
               <div class="code-title">
-                <span>Anthropic Python SDK</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(pythonAnthropic)">复制</a-button>
+                <span>配置示例（OpenAI 协议）</span>
+                <a-button type="link" size="small" icon="copy" @click="copyText(openclawOpenaiConfig)">复制</a-button>
               </div>
-              <pre class="code-block"><code>{{ pythonAnthropic }}</code></pre>
+              <pre class="code-block"><code>{{ openclawOpenaiConfig }}</code></pre>
             </div>
-          </a-tab-pane>
-
-          <!-- cURL -->
-          <a-tab-pane key="curl" tab="cURL">
-            <div class="tool-header">
-              <div class="tool-info">
-                <h3>cURL 命令行</h3>
-                <p>直接通过 HTTP 请求调用 API</p>
-              </div>
-            </div>
-            <div class="code-section">
-              <div class="code-title">
-                <span>OpenAI 协议</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(curlOpenai)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ curlOpenai }}</code></pre>
-            </div>
-            <div class="code-section" style="margin-top: 16px;">
-              <div class="code-title">
-                <span>Anthropic 协议</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(curlAnthropic)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ curlAnthropic }}</code></pre>
-            </div>
+            <a-alert
+              type="warning"
+              show-icon
+              style="margin-top: 12px;"
+            >
+              <template slot="message">
+                <span><strong>重要：</strong>Base URL 不要添加 <code>/v1</code> 后缀，OpenClaw 会自动处理路径。</span>
+              </template>
+            </a-alert>
           </a-tab-pane>
         </a-tabs>
       </div>
@@ -332,64 +311,29 @@ echo 'export ANTHROPIC_API_KEY="sk-你的密钥"' >> ~/.zshrc
 # 重新加载配置
 source ~/.zshrc`
     },
-    pythonOpenai() {
-      return `from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-你的密钥",
-    base_url="${this.apiBase}/v1"
-)
-
-response = client.chat.completions.create(
-    model="claude-4-sonnet",
-    messages=[
-        {"role": "user", "content": "你好"}
-    ]
-)
-
-print(response.choices[0].message.content)`
+    codexConfig() {
+      return `{
+  "baseUrl": "${this.apiBase}/v1",
+  "apiKey": "sk-你的密钥",
+  "model": "gpt-5.4",
+  "temperature": 0.7
+}`
     },
-    pythonAnthropic() {
-      return `import anthropic
-
-client = anthropic.Anthropic(
-    api_key="sk-你的密钥",
-    base_url="${this.apiBase}"
-)
-
-message = client.messages.create(
-    model="claude-4-sonnet",
-    max_tokens=1024,
-    messages=[
-        {"role": "user", "content": "你好"}
-    ]
-)
-
-print(message.content[0].text)`
+    openclawAnthropicConfig() {
+      return `{
+  "api": "anthropic-messages",
+  "baseUrl": "${this.apiBase}",
+  "apiKey": "sk-你的密钥",
+  "model": "claude-sonnet-4-5"
+}`
     },
-    curlOpenai() {
-      return `curl ${this.apiBase}/v1/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -d '{
-    "model": "claude-4-sonnet",
-    "messages": [
-      {"role": "user", "content": "你好"}
-    ]
-  }'`
-    },
-    curlAnthropic() {
-      return `curl ${this.apiBase}/v1/messages \\
-  -H "Content-Type: application/json" \\
-  -H "x-api-key: sk-你的密钥" \\
-  -H "anthropic-version: 2023-06-01" \\
-  -d '{
-    "model": "claude-4-sonnet",
-    "max_tokens": 1024,
-    "messages": [
-      {"role": "user", "content": "你好"}
-    ]
-  }'`
+    openclawOpenaiConfig() {
+      return `{
+  "api": "openai-completions",
+  "baseUrl": "${this.apiBase}",
+  "apiKey": "sk-你的密钥",
+  "model": "gpt-5.4"
+}`
     },
     curlModels() {
       return `curl ${this.apiBase}/v1/models \\

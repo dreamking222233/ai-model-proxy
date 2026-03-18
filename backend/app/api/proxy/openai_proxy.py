@@ -107,3 +107,38 @@ async def list_models_root(
         "object": "list",
         "data": model_list,
     }
+
+
+@router.post("/v1/responses")
+async def codex_responses_v1(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Codex CLI /v1/responses endpoint compatibility.
+
+    This endpoint handles Codex CLI requests that use /v1/responses
+    instead of the standard /v1/chat/completions path.
+    """
+    user, api_key_record = await verify_api_key(request, db)
+    body = await request.json()
+    client_ip = request.client.host if request.client else None
+
+    return await ProxyService.handle_openai_request(
+        db, user, api_key_record, body, client_ip
+    )
+
+
+@router.post("/responses")
+async def codex_responses_root(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Codex CLI /responses endpoint compatibility without /v1 prefix"""
+    user, api_key_record = await verify_api_key(request, db)
+    body = await request.json()
+    client_ip = request.client.host if request.client else None
+
+    return await ProxyService.handle_openai_request(
+        db, user, api_key_record, body, client_ip
+    )

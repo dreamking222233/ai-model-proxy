@@ -110,7 +110,7 @@
 
 <script>
 import { activateSubscription, cancelSubscription, listAllSubscriptions } from '@/api/subscription'
-import { formatDate } from '@/utils/date'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'SubscriptionManage',

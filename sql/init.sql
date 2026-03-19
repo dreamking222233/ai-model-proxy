@@ -84,6 +84,7 @@ CREATE TABLE `channel` (
     `base_url` VARCHAR(512) NOT NULL,
     `api_key` TEXT NOT NULL COMMENT '加密存储的API Key',
     `protocol_type` ENUM('openai', 'anthropic') NOT NULL DEFAULT 'openai',
+    `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT 'Auth header type: x-api-key, anthropic-api-key, authorization',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `is_healthy` TINYINT NOT NULL DEFAULT 1,

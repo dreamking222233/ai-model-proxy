@@ -65,7 +65,8 @@
 **关键配置说明**：
 - `baseUrl`: **不要**包含 `/v1`，只写域名
 - `api`: 必须是 `anthropic-messages`（严格枚举）
-- `headers.User-Agent`: 自定义 UA 避免被 WAF 拦截
+- `headers.User-Agent`: 建议显式设置，便于穿透某些上游 WAF
+- OpenClaw 自定义 Anthropic 校验默认更接近 `x-api-key` + `anthropic-version`
 
 ### 方案二：OpenAI 协议
 
@@ -102,21 +103,29 @@
 ```
 
 **关键配置说明**：
-- `baseUrl`: 包含 `/v1` 路径
+- `baseUrl`: 推荐包含 `/v1` 路径；本平台也兼容不带 `/v1` 的写法
 - `api`: 必须是 `openai-completions`（严格枚举）
 
 ## 🚨 常见问题排查
 
 ### 问题 1：403 错误 "Your request was blocked"
 
-**原因**：OpenAI/Anthropic SDK 的官方 User-Agent 被拦截
+**常见原因**：
+- 上游要求的认证 header 与实际发送的不一致
+- OpenClaw / curl / 中转之间的请求头存在差异
+- 某些上游或 WAF 会额外检查 `User-Agent`
 
-**解决**：
+**排查建议**：
 ```json
 "headers": {
   "User-Agent": "Mozilla/5.0"
 }
 ```
+
+并同时核对：
+- Anthropic 协议时，客户端更常见的是 `X-API-Key` + `anthropic-version`
+- OpenAI 协议时，通常是 `Authorization: Bearer ...`
+- 如果上游要求特殊认证头，请在中转后台按上游要求配置
 
 ### 问题 2：404 错误（路径变成 /v1/v1/messages）
 
@@ -182,7 +191,21 @@ openclaw models list --provider your-relay
 ```bash
 curl https://your-domain.com/messages \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
+  -H "X-API-Key: sk-your-api-key" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 100
+  }'
+```
+
+也可以测试入口对兼容头的支持：
+
+```bash
+curl https://your-domain.com/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-api-key: sk-your-api-key" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
     "model": "claude-sonnet-4",
@@ -288,7 +311,9 @@ tail -f /tmp/openclaw/openclaw-$(date +%F).log
 2. **对比 curl 和 OpenClaw 请求差异**
    - User-Agent
    - URL 路径
+   - 认证 header（Authorization / X-API-Key / anthropic-api-key）
    - API 协议格式
+   - 是否存在 `/models` 探测请求
 
 3. **校验 api 字段值**
    - 必须是严格枚举值
@@ -327,7 +352,12 @@ tail -f /tmp/openclaw/openclaw-$(date +%F).log
    openclaw models status
    ```
 
-5. **查看日志定位问题**
+5. **OpenAI 协议优先使用带 `/v1` 的 baseUrl**
+   ```json
+   "baseUrl": "https://your-domain.com/v1"
+   ```
+
+6. **查看日志定位问题**
    ```bash
    tail -f /tmp/openclaw/openclaw-$(date +%F).log
    ```

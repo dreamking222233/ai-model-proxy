@@ -22,7 +22,8 @@ async def anthropic_messages_v1(
 
     # Delegate to proxy service
     return await ProxyService.handle_anthropic_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )
 
 
@@ -52,5 +53,6 @@ async def anthropic_messages_root(
 
     # Delegate to proxy service
     return await ProxyService.handle_anthropic_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )

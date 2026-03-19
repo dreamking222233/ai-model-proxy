@@ -18,19 +18,18 @@
 - 如果客户端自动添加 `/v1`：baseUrl 不要包含 `/v1`
 - 如果客户端不添加 `/v1`：baseUrl 需要包含 `/v1`
 
-### 2. User-Agent 兼容性
+### 2. Header 兼容性
 
-本平台**不会拦截**任何 User-Agent，包括：
-- ✅ `Anthropic/JS x.x.x`
-- ✅ `OpenAI/Python x.x.x`
-- ✅ `axios/x.x.x`
-- ✅ 任何自定义 User-Agent
+本平台入口同时兼容多种常见认证头：
+- ✅ `Authorization: Bearer sk-...`
+- ✅ `X-API-Key: sk-...`
+- ✅ `anthropic-api-key: sk-...`
 
-**无需担心 403 错误**，但如果遇到问题，可以尝试自定义 User-Agent。
+另外，平台会向上游透传有限白名单头（如 `User-Agent`、`anthropic-version`、`anthropic-beta`、`OpenAI-Organization`、`OpenAI-Project`），便于兼容 OpenClaw 与部分上游网关。
 
 ### 3. 认证方式
 
-支持两种 API Key 认证方式：
+支持三种常见 API Key 认证方式：
 
 ```bash
 # 方式 1：Authorization Bearer
@@ -38,6 +37,9 @@ Authorization: Bearer sk-your-api-key
 
 # 方式 2：X-API-Key
 X-API-Key: sk-your-api-key
+
+# 方式 3：Anthropic 兼容头
+anthropic-api-key: sk-your-api-key
 ```
 
 ## 📱 客户端配置示例
@@ -57,6 +59,11 @@ X-API-Key: sk-your-api-key
   }
 }
 ```
+
+说明：
+- `anthropic-messages` 推荐 `baseUrl` 不带 `/v1`
+- `openai-completions` 推荐 `baseUrl` 带 `/v1`
+- OpenClaw 的 Anthropic 自定义校验更接近 `X-API-Key` + `anthropic-version`
 
 ### Cursor
 
@@ -168,7 +175,7 @@ curl https://your-domain.com/v1/chat/completions \
 # 测试 Anthropic 协议
 curl https://your-domain.com/messages \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
+  -H "X-API-Key: sk-your-api-key" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
     "model": "claude-sonnet-4",
@@ -208,10 +215,12 @@ curl https://your-domain.com/v1/models \
 **可能原因**：
 1. 时间套餐已过期
 2. 用户账户被禁用
+3. 上游兼容网关要求的认证 header 或 `User-Agent` 不匹配
 
 **解决方法**：
 1. 检查套餐有效期
 2. 充值余额或续费套餐
+3. 核对客户端发往中转的 header 以及中转后台的上游认证配置
 
 ### 404 Not Found
 

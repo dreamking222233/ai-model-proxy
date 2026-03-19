@@ -17,7 +17,7 @@ class ChannelCreate(BaseModel):
     base_url: str = Field(..., min_length=1, max_length=512)
     api_key: str = Field(..., min_length=1)
     protocol_type: str = Field(default="openai", max_length=20)
-    auth_header_type: str = Field(default="x-api-key", max_length=32)
+    auth_header_type: Optional[str] = Field(None, max_length=32)
     priority: int = Field(default=10, ge=1)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None

@@ -6,13 +6,15 @@
 
 ## 🎯 解决的问题
 
-### 1. 403 错误：User-Agent 被拦截
-**问题**：某些中转站会拦截 OpenAI/Anthropic SDK 的官方 User-Agent（如 `Anthropic/JS x.x.x`）
+### 1. 403 错误：认证头或上游拦截不兼容
+**问题**：OpenClaw、curl、中转和上游之间的认证 header / `User-Agent` 可能不一致，部分上游或 WAF 会直接返回 403。
 
 **我们的方案**：
 - ✅ 本平台**不拦截**任何 User-Agent
 - ✅ 中间件不检查 User-Agent
-- ✅ 完全兼容所有 SDK 和客户端
+- ✅ 入口同时兼容 `Authorization`、`X-API-Key`、`anthropic-api-key`
+- ✅ 向上游透传 `User-Agent`、Anthropic/OpenAI 常见附加头
+- ✅ Anthropic 上游始终补齐 `anthropic-version`
 
 ### 2. 404 错误：路径重复
 **问题**：客户端配置 `baseUrl: https://xxx.com/v1`，SDK 又自动拼接 `/v1/messages`，导致 `/v1/v1/messages`
@@ -92,7 +94,7 @@ async def openai_chat_completions_root(...):
 **文件**：`backend/app/core/dependencies.py`
 - ✅ 只验证 API Key 有效性
 - ✅ 不检查 User-Agent
-- ✅ 支持两种认证方式（Authorization Bearer 和 X-API-Key）
+- ✅ 支持三种常见认证方式（Authorization Bearer、X-API-Key、anthropic-api-key）
 
 ## 📚 文档
 
@@ -126,14 +128,14 @@ async def openai_chat_completions_root(...):
 # 测试标准端点
 curl https://your-domain.com/v1/messages \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
+  -H "X-API-Key: sk-your-api-key" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}'
 
 # 测试兼容端点
 curl https://your-domain.com/messages \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
+  -H "X-API-Key: sk-your-api-key" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}'
 ```
@@ -193,7 +195,7 @@ curl https://your-domain.com/models \
 - ✅ 详细的接入文档和示例
 - ✅ 完全兼容 OpenClaw 等主流客户端
 - ✅ 不拦截任何 User-Agent
-- ✅ 支持两种认证方式
+- ✅ 支持多种认证头并透传关键附加头
 
 ## 🔄 向后兼容性
 

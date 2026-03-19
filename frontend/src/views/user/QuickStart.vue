@@ -45,15 +45,15 @@
         <div class="info-box" style="margin-top: 16px;">
           <div class="info-row">
             <span class="info-label">API 基础地址</span>
-            <div class="info-value copyable" @click="copyText(apiBase)">
-              <code>{{ apiBase }}</code>
+            <div class="info-value copyable" @click="copyText(relayBase)">
+              <code>{{ relayBase }}</code>
               <a-icon type="copy" class="copy-icon" />
             </div>
           </div>
           <div class="info-row">
             <span class="info-label">认证方式</span>
             <div class="info-value">
-              <code>Authorization: Bearer sk-xxxx</code>
+              <code>Authorization: Bearer sk-xxxx</code> / <code>X-API-Key: sk-xxxx</code>
             </div>
           </div>
           <div class="info-row">
@@ -170,7 +170,7 @@
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">3</div>
-                  <span>Base URL 填入：<code>{{ apiBase }}</code>（不要加 /v1）</span>
+                  <span>Anthropic 填入：<code>{{ relayBase }}</code>；OpenAI 优先填入：<code>{{ relayOpenaiBase }}</code></span>
                 </div>
                 <div class="step-list-item">
                   <div class="step-list-num">4</div>
@@ -202,7 +202,7 @@
               style="margin-top: 12px;"
             >
               <template slot="message">
-                <span><strong>重要：</strong>Base URL 不要添加 <code>/v1</code> 后缀，OpenClaw 会自动处理路径。</span>
+                <span><strong>重要：</strong>Anthropic 协议推荐不带 <code>/v1</code>；OpenAI 协议优先使用带 <code>/v1</code> 的地址。本平台同时兼容两种路径写法。</span>
               </template>
             </a-alert>
           </a-tab-pane>
@@ -295,9 +295,15 @@ export default {
     this.fetchSiteConfig()
   },
   computed: {
+    relayBase() {
+      return (this.apiBase || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '')
+    },
+    relayOpenaiBase() {
+      return this.relayBase ? `${this.relayBase}/v1` : ''
+    },
     claudeCodeEnv() {
       return `# 设置 API 基础地址和密钥
-export ANTHROPIC_BASE_URL="${this.apiBase}"
+export ANTHROPIC_BASE_URL="${this.relayBase}"
 export ANTHROPIC_API_KEY="sk-你的密钥"
 
 # 启动 Claude Code
@@ -305,7 +311,7 @@ claude`
     },
     claudeCodePersist() {
       return `# 写入 ~/.bashrc 或 ~/.zshrc
-echo 'export ANTHROPIC_BASE_URL="${this.apiBase}"' >> ~/.zshrc
+echo 'export ANTHROPIC_BASE_URL="${this.relayBase}"' >> ~/.zshrc
 echo 'export ANTHROPIC_API_KEY="sk-你的密钥"' >> ~/.zshrc
 
 # 重新加载配置
@@ -313,7 +319,7 @@ source ~/.zshrc`
     },
     codexConfig() {
       return `{
-  "baseUrl": "${this.apiBase}/v1",
+  "baseUrl": "${this.relayOpenaiBase}",
   "apiKey": "sk-你的密钥",
   "model": "gpt-5.4",
   "temperature": 0.7
@@ -322,25 +328,31 @@ source ~/.zshrc`
     openclawAnthropicConfig() {
       return `{
   "api": "anthropic-messages",
-  "baseUrl": "${this.apiBase}",
+  "baseUrl": "${this.relayBase}",
   "apiKey": "sk-你的密钥",
+  "headers": {
+    "User-Agent": "Mozilla/5.0"
+  },
   "model": "claude-sonnet-4-5"
 }`
     },
     openclawOpenaiConfig() {
       return `{
   "api": "openai-completions",
-  "baseUrl": "${this.apiBase}",
+  "baseUrl": "${this.relayOpenaiBase}",
   "apiKey": "sk-你的密钥",
+  "headers": {
+    "User-Agent": "Mozilla/5.0"
+  },
   "model": "gpt-5.4"
 }`
     },
     curlModels() {
-      return `curl ${this.apiBase}/v1/models \\
+      return `curl ${this.relayOpenaiBase}/models \\
   -H "Authorization: Bearer sk-你的密钥"`
     },
     curlTest() {
-      return `curl ${this.apiBase}/v1/chat/completions \\
+      return `curl ${this.relayOpenaiBase}/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{"model":"claude-4-sonnet","messages":[{"role":"user","content":"说你好"}]}'`

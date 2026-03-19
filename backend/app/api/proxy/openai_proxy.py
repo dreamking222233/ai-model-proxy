@@ -24,7 +24,8 @@ async def openai_chat_completions_v1(
 
     # Delegate to proxy service
     return await ProxyService.handle_openai_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )
 
 
@@ -54,7 +55,8 @@ async def openai_chat_completions_root(
 
     # Delegate to proxy service
     return await ProxyService.handle_openai_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )
 
 
@@ -127,7 +129,8 @@ async def codex_responses_v1(
     client_ip = request.client.host if request.client else None
 
     return await ProxyService.handle_responses_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )
 
 
@@ -142,7 +145,8 @@ async def codex_responses_root(
     client_ip = request.client.host if request.client else None
 
     return await ProxyService.handle_responses_request(
-        db, user, api_key_record, body, client_ip
+        db, user, api_key_record, body, client_ip,
+        request_headers=dict(request.headers.items()),
     )
 
 
@@ -162,7 +166,8 @@ async def _handle_codex_responses_websocket(websocket: WebSocket, db: Session):
     await websocket.accept()
     client_ip = websocket.client.host if websocket.client else None
     await ProxyService.handle_responses_websocket(
-        db, user, api_key_record, websocket, client_ip
+        db, user, api_key_record, websocket, client_ip,
+        request_headers=dict(websocket.headers.items()),
     )
 
 

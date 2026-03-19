@@ -17,6 +17,7 @@ from app.models.log import HealthCheckLog, SystemConfig
 from app.core.exceptions import ServiceException
 
 logger = logging.getLogger(__name__)
+_UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 
 
 def get_system_config(db: Session, key: str, default=None):
@@ -209,17 +210,25 @@ class HealthService:
         if not auth_header_type:
             auth_header_type = "authorization" if protocol == "openai" else "x-api-key"
 
-        headers: dict = {"Content-Type": "application/json"}
+        headers: dict = {
+            "Content-Type": "application/json",
+            "User-Agent": _UPSTREAM_DEFAULT_USER_AGENT,
+        }
+        if protocol == "anthropic":
+            headers["anthropic-version"] = "2023-06-01"
+
         if auth_header_type == "authorization":
             headers["Authorization"] = f"Bearer {channel.api_key}"
+        elif protocol == "openai" and auth_header_type == "x-api-key":
+            headers["x-api-key"] = channel.api_key
+            headers["Authorization"] = f"Bearer {channel.api_key}"
+        elif protocol == "anthropic" and auth_header_type in {"x-api-key", "anthropic-api-key"}:
+            headers["x-api-key"] = channel.api_key
+            headers["anthropic-api-key"] = channel.api_key
         elif auth_header_type == "anthropic-api-key":
             headers["anthropic-api-key"] = channel.api_key
-            if protocol == "anthropic":
-                headers["anthropic-version"] = "2023-06-01"
         else:  # x-api-key
             headers["x-api-key"] = channel.api_key
-            if protocol == "anthropic":
-                headers["anthropic-version"] = "2023-06-01"
 
         start = time.time()
         try:

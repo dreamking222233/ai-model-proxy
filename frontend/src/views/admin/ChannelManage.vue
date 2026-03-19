@@ -75,19 +75,19 @@
           <a-input-password v-model="form.api_key" placeholder="请输入 API 密钥" />
         </a-form-item>
         <a-form-item label="协议类型">
-          <a-select v-model="form.protocol_type" placeholder="选择协议">
+          <a-select v-model="form.protocol_type" placeholder="选择协议" @change="handleProtocolTypeChange">
             <a-select-option value="openai">OpenAI</a-select-option>
             <a-select-option value="anthropic">Anthropic</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item label="认证 Header 类型">
-          <a-select v-model="form.auth_header_type" placeholder="选择认证方式">
-            <a-select-option value="authorization">Authorization: Bearer（OpenAI 标准）</a-select-option>
-            <a-select-option value="x-api-key">x-api-key（兼容格式）</a-select-option>
-            <a-select-option value="anthropic-api-key">anthropic-api-key（Anthropic 标准）</a-select-option>
+        <a-form-item label="上游认证 Header 类型">
+          <a-select v-model="form.auth_header_type" placeholder="选择认证方式" @change="handleAuthHeaderTypeChange">
+            <a-select-option value="authorization">Authorization: Bearer（OpenAI / Bearer Token）</a-select-option>
+            <a-select-option value="x-api-key">x-api-key（Anthropic 官方 / 常见兼容网关）</a-select-option>
+            <a-select-option value="anthropic-api-key">anthropic-api-key（少数 Anthropic 兼容网关）</a-select-option>
           </a-select>
           <div style="color: #8c8c8c; font-size: 12px; margin-top: 4px;">
-            不同上游服务可能使用不同的认证方式，如 OpenClaw 使用 anthropic-api-key
+            这是“中转访问上游”时使用的认证头。推荐：OpenAI 选 Authorization，Anthropic 选 x-api-key。系统会自动补发兼容头以提高 OpenClaw 兼容性。
           </div>
         </a-form-item>
         <a-form-item label="优先级">
@@ -160,6 +160,7 @@ export default {
       modalLoading: false,
       isEdit: false,
       editId: null,
+      authHeaderTouched: false,
       form: {
         name: '',
         base_url: '',
@@ -181,6 +182,18 @@ export default {
     this.fetchList()
   },
   methods: {
+    handleProtocolTypeChange(value) {
+      if (this.authHeaderTouched) {
+        return
+      }
+      const recommended = value === 'anthropic' ? 'x-api-key' : 'authorization'
+      if (this.form.auth_header_type !== recommended) {
+        this.form.auth_header_type = recommended
+      }
+    },
+    handleAuthHeaderTypeChange() {
+      this.authHeaderTouched = true
+    },
     async fetchList() {
       this.loading = true
       try {
@@ -224,11 +237,12 @@ export default {
         base_url: record.base_url,
         api_key: '',
         protocol_type: record.protocol_type,
-        auth_header_type: record.auth_header_type || 'authorization',
+        auth_header_type: record.auth_header_type || (record.protocol_type === 'anthropic' ? 'x-api-key' : 'authorization'),
         priority: record.priority,
         enabled: record.enabled,
         description: record.description || ''
       }
+      this.authHeaderTouched = true
       this.modalVisible = true
     },
     async handleDelete(id) {
@@ -281,6 +295,7 @@ export default {
       this.modalVisible = false
     },
     resetForm() {
+      this.authHeaderTouched = false
       this.form = {
         name: '',
         base_url: '',

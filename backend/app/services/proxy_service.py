@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 _UPSTREAM_TIMEOUT = 120.0
 # Timeout for upstream connection establishment
 _UPSTREAM_CONNECT_TIMEOUT = 15.0
+# Some upstream gateways block generic client defaults like ``python-httpx``.
+_UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 
 
 class ResponsesTurnError(Exception):
@@ -69,6 +71,7 @@ class ProxyService:
         api_key_record: UserApiKey,
         request_data: dict,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ):
         """
         Handle OpenAI Responses API format request (/v1/responses).
@@ -100,10 +103,12 @@ class ProxyService:
                     return await ProxyService._stream_responses_request(
                         db, user, api_key_record, channel, unified_model,
                         channel_request, request_id, requested_model, client_ip,
+                        request_headers=request_headers,
                     )
                 return await ProxyService._non_stream_responses_request(
                     db, user, api_key_record, channel, unified_model,
                     channel_request, request_id, requested_model, client_ip,
+                    request_headers=request_headers,
                 )
             except Exception as exc:
                 last_error = exc
@@ -128,6 +133,7 @@ class ProxyService:
         api_key_record: UserApiKey,
         websocket: WebSocket,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> None:
         """Serve a Codex-compatible websocket session on ``GET /v1/responses``."""
         last_request: dict | None = None
@@ -213,6 +219,7 @@ class ProxyService:
                             channel,
                             channel_request,
                             requested_model,
+                            request_headers=request_headers,
                         )
                     )
                     response_time_ms = int((time.time() - started_at) * 1000)
@@ -496,6 +503,7 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
         """Forward a streaming Responses request to upstream ``/responses``."""
         start_time = time.time()
@@ -512,6 +520,7 @@ class ProxyService:
                     channel,
                     request_data,
                     requested_model,
+                    request_headers=request_headers,
                 ):
                     payload_type = str(payload.get("type", "") or "")
                     if payload_type == "response.completed":
@@ -583,6 +592,7 @@ class ProxyService:
         channel: Channel,
         request_data: dict,
         requested_model: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> tuple[list, int, int]:
         """Forward one websocket turn to upstream ``/responses`` SSE."""
         completed_output: list = []
@@ -598,6 +608,7 @@ class ProxyService:
                 channel,
                 request_data,
                 requested_model,
+                request_headers=request_headers,
             ):
                 sent_any_payload = True
                 payload_type = str(payload.get("type", "") or "")
@@ -643,11 +654,12 @@ class ProxyService:
         channel: Channel,
         request_data: dict,
         requested_model: str,
+        request_headers: Optional[dict[str, str]] = None,
     ):
         """Yield parsed Responses payload dicts from upstream SSE or JSON."""
         start_url = channel.base_url.rstrip("/")
         url = f"{start_url}/responses"
-        headers = ProxyService._build_headers(channel, "openai")
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -801,12 +813,13 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         """Forward a non-streaming Responses request to upstream ``/responses``."""
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/responses"
-        headers = ProxyService._build_headers(channel, "openai")
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
 
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -845,6 +858,7 @@ class ProxyService:
         api_key_record: UserApiKey,
         request_data: dict,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ):
         """
         Handle an OpenAI-format ``/v1/chat/completions`` request.
@@ -900,11 +914,13 @@ class ProxyService:
                     return await ProxyService._stream_openai_request(
                         db, user, api_key_record, channel, unified_model,
                         request_data_copy, request_id, requested_model, client_ip,
+                        request_headers=request_headers,
                     )
                 else:
                     return await ProxyService._non_stream_openai_request(
                         db, user, api_key_record, channel, unified_model,
                         request_data_copy, request_id, requested_model, client_ip,
+                        request_headers=request_headers,
                     )
             except ServiceException:
                 raise  # Re-raise business exceptions immediately
@@ -937,6 +953,7 @@ class ProxyService:
         api_key_record: UserApiKey,
         request_data: dict,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ):
         """
         Handle an Anthropic-format ``/v1/messages`` request.
@@ -978,11 +995,13 @@ class ProxyService:
                     return await ProxyService._stream_anthropic_request(
                         db, user, api_key_record, channel, unified_model,
                         request_data_copy, request_id, requested_model, client_ip,
+                        request_headers=request_headers,
                     )
                 else:
                     return await ProxyService._non_stream_anthropic_request(
                         db, user, api_key_record, channel, unified_model,
                         request_data_copy, request_id, requested_model, client_ip,
+                        request_headers=request_headers,
                     )
             except ServiceException:
                 raise
@@ -1017,6 +1036,7 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
         """
         SSE streaming forward for the OpenAI chat completions protocol.
@@ -1028,7 +1048,7 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
-        headers = ProxyService._build_headers(channel, "openai")
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
 
         # Ensure stream flag is set
         request_data["stream"] = True
@@ -1155,6 +1175,7 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         """
         Non-streaming forward for the OpenAI chat completions protocol.
@@ -1165,7 +1186,7 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
-        headers = ProxyService._build_headers(channel, "openai")
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
 
         request_data["stream"] = False
 
@@ -1225,6 +1246,7 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
         """
         SSE streaming forward for the Anthropic messages protocol.
@@ -1248,7 +1270,7 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
-        headers = ProxyService._build_headers(channel, "anthropic")
+        headers = ProxyService._build_headers(channel, "anthropic", request_headers=request_headers)
 
         request_data["stream"] = True
 
@@ -1373,6 +1395,7 @@ class ProxyService:
         request_id: str,
         requested_model: str,
         client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         """
         Non-streaming forward for the Anthropic messages protocol.
@@ -1383,7 +1406,7 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
-        headers = ProxyService._build_headers(channel, "anthropic")
+        headers = ProxyService._build_headers(channel, "anthropic", request_headers=request_headers)
 
         request_data["stream"] = False
 
@@ -1582,9 +1605,57 @@ class ProxyService:
     # ===================================================================
 
     @staticmethod
-    def _build_headers(channel: Channel, protocol_type: str) -> dict[str, str]:
+    def _extract_forward_headers(
+        request_headers: Optional[dict[str, str]],
+        protocol_type: str,
+    ) -> dict[str, str]:
+        """Allowlist a few safe client headers that some upstreams require."""
+        if not request_headers:
+            return {}
+
+        source = {
+            str(key).lower(): value
+            for key, value in request_headers.items()
+            if isinstance(value, str) and value.strip()
+        }
+        headers: dict[str, str] = {}
+
+        user_agent = source.get("user-agent")
+        if user_agent:
+            headers["User-Agent"] = user_agent
+
+        if protocol_type == "anthropic":
+            anthropic_version = source.get("anthropic-version")
+            anthropic_beta = source.get("anthropic-beta")
+            if anthropic_version:
+                headers["anthropic-version"] = anthropic_version
+            if anthropic_beta:
+                headers["anthropic-beta"] = anthropic_beta
+        else:
+            openai_org = source.get("openai-organization")
+            openai_project = source.get("openai-project")
+            openai_beta = source.get("openai-beta")
+            if openai_org:
+                headers["OpenAI-Organization"] = openai_org
+            if openai_project:
+                headers["OpenAI-Project"] = openai_project
+            if openai_beta:
+                headers["OpenAI-Beta"] = openai_beta
+
+        return headers
+
+    @staticmethod
+    def _build_headers(
+        channel: Channel,
+        protocol_type: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, str]:
         """Build upstream request headers based on protocol type and channel auth config."""
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _UPSTREAM_DEFAULT_USER_AGENT,
+        }
+        headers.update(ProxyService._extract_forward_headers(request_headers, protocol_type))
 
         # Determine auth header type (default to protocol-specific behavior for backward compatibility)
         auth_header_type = getattr(channel, "auth_header_type", None)
@@ -1592,19 +1663,26 @@ class ProxyService:
             # Backward compatibility: use protocol-specific default
             auth_header_type = "authorization" if protocol_type == "openai" else "x-api-key"
 
+        if protocol_type == "anthropic":
+            headers.setdefault("anthropic-version", "2023-06-01")
+
         # Set authentication header based on channel configuration
         if auth_header_type == "authorization":
             headers["Authorization"] = f"Bearer {channel.api_key}"
+        elif protocol_type == "openai" and auth_header_type == "x-api-key":
+            # Existing records may still hold the migration default ``x-api-key``.
+            # Emit both formats so OpenAI-compatible upstreams continue to work.
+            headers["x-api-key"] = channel.api_key
+            headers["Authorization"] = f"Bearer {channel.api_key}"
+        elif protocol_type == "anthropic" and auth_header_type in {"x-api-key", "anthropic-api-key"}:
+            # OpenClaw verification and Anthropic-compatible gateways are split
+            # between these two header names. Mirror both for compatibility.
+            headers["x-api-key"] = channel.api_key
+            headers["anthropic-api-key"] = channel.api_key
         elif auth_header_type == "anthropic-api-key":
             headers["anthropic-api-key"] = channel.api_key
-            # Add Anthropic version header if protocol is anthropic
-            if protocol_type == "anthropic":
-                headers["anthropic-version"] = "2023-06-01"
         else:  # x-api-key (default)
             headers["x-api-key"] = channel.api_key
-            # Add Anthropic version header if protocol is anthropic
-            if protocol_type == "anthropic":
-                headers["anthropic-version"] = "2023-06-01"
 
         return headers
 

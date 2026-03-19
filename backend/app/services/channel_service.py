@@ -17,6 +17,11 @@ class ChannelService:
     """CRUD and health summary for channels."""
 
     @staticmethod
+    def _resolve_default_auth_header_type(protocol_type: Optional[str]) -> str:
+        """Choose the recommended upstream auth header for a protocol."""
+        return "authorization" if (protocol_type or "openai") == "openai" else "x-api-key"
+
+    @staticmethod
     def _channel_to_dict(channel: Channel) -> dict:
         """Convert a Channel ORM instance to a serializable dict."""
         api_key = channel.api_key or ""
@@ -27,7 +32,10 @@ class ChannelService:
             "base_url": channel.base_url,
             "api_key_display": masked_key,
             "protocol_type": channel.protocol_type,
-            "auth_header_type": getattr(channel, "auth_header_type", "x-api-key") or "x-api-key",
+            "auth_header_type": (
+                getattr(channel, "auth_header_type", None)
+                or ChannelService._resolve_default_auth_header_type(channel.protocol_type)
+            ),
             "priority": channel.priority,
             "enabled": channel.enabled,
             "is_healthy": bool(channel.is_healthy),
@@ -59,7 +67,10 @@ class ChannelService:
             base_url=d["base_url"].rstrip("/"),
             api_key=d["api_key"],
             protocol_type=d.get("protocol_type", "openai"),
-            auth_header_type=d.get("auth_header_type", "x-api-key"),
+            auth_header_type=(
+                d.get("auth_header_type")
+                or ChannelService._resolve_default_auth_header_type(d.get("protocol_type"))
+            ),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
             description=d.get("description"),
@@ -88,6 +99,7 @@ class ChannelService:
             raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
 
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
+        protocol_value = d.get("protocol_type", channel.protocol_type)
         updatable_fields = [
             "name", "base_url", "api_key", "protocol_type", "auth_header_type",
             "priority", "enabled", "description",
@@ -98,6 +110,9 @@ class ChannelService:
                 if field == "base_url":
                     value = value.rstrip("/")
                 setattr(channel, field, value)
+
+        if "protocol_type" in d and "auth_header_type" not in d:
+            channel.auth_header_type = ChannelService._resolve_default_auth_header_type(protocol_value)
 
         db.commit()
         db.refresh(channel)

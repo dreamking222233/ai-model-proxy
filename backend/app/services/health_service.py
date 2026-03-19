@@ -1,6 +1,8 @@
 """Channel health check service."""
 from __future__ import annotations
 
+from typing import Optional
+
 import asyncio
 import logging
 import time
@@ -112,7 +114,7 @@ class HealthService:
 
     @staticmethod
     async def _check_and_record(
-        db: Session, channel: Channel, actual_model_name: str | None
+        db: Session, channel: Channel, actual_model_name: Optional[str]
     ) -> dict:
         """
         Perform the actual health check, update the channel, and log the result.
@@ -174,7 +176,7 @@ class HealthService:
     @staticmethod
     async def _do_health_check(
         channel: Channel, actual_model_name: str
-    ) -> tuple[bool, int | None, str | None]:
+    ) -> tuple:
         """
         Send a small test request to a channel.
 
@@ -277,7 +279,7 @@ class HealthService:
     @staticmethod
     def get_health_logs(
         db: Session,
-        channel_id: int | None = None,
+        channel_id: Optional[int] = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:

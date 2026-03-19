@@ -1,6 +1,8 @@
 """Redemption code service for generating and redeeming codes."""
 from __future__ import annotations
 
+from typing import Optional
+
 import secrets
 import string
 from datetime import datetime, timedelta
@@ -30,7 +32,7 @@ class RedemptionService:
         db: Session,
         admin_id: int,
         amount: float,
-        expires_days: int | None = None,
+        expires_days: Optional[int] = None,
     ) -> dict:
         """
         Create a single redemption code.
@@ -74,7 +76,7 @@ class RedemptionService:
         admin_id: int,
         amount: float,
         count: int,
-        expires_days: int | None = None,
+        expires_days: Optional[int] = None,
     ) -> list[dict]:
         """
         Batch create multiple redemption codes.
@@ -180,8 +182,8 @@ class RedemptionService:
         db: Session,
         page: int = 1,
         page_size: int = 20,
-        status: str | None = None,
-        created_by: int | None = None,
+        status: Optional[str] = None,
+        created_by: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         """
         List redemption codes with pagination.

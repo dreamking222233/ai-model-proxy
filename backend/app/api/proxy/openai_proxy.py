@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, WebSocket
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.core.dependencies import verify_api_key
+from app.core.dependencies import verify_api_key, verify_api_key_from_headers
+from app.core.exceptions import ServiceException
 from app.models.user import SysUser, UserApiKey
 from app.services.proxy_service import ProxyService
 
@@ -121,16 +122,9 @@ async def codex_responses_v1(
     - Request: {"model": "...", "input": "..."}
     - Response: Responses API format with events like response.output_text.delta
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     user, api_key_record = await verify_api_key(request, db)
     body = await request.json()
     client_ip = request.client.host if request.client else None
-
-    # Log the request body for debugging
-    logger.info(f"Codex request body: {body}")
-    logger.info(f"Codex request headers: {dict(request.headers)}")
 
     return await ProxyService.handle_responses_request(
         db, user, api_key_record, body, client_ip
@@ -150,3 +144,40 @@ async def codex_responses_root(
     return await ProxyService.handle_responses_request(
         db, user, api_key_record, body, client_ip
     )
+
+
+async def _handle_codex_responses_websocket(websocket: WebSocket, db: Session):
+    """Shared websocket entry for Codex CLI Responses API."""
+    try:
+        user, api_key_record = verify_api_key_from_headers(
+            db,
+            authorization=websocket.headers.get("Authorization"),
+            x_api_key=websocket.headers.get("X-API-Key"),
+        )
+    except ServiceException as exc:
+        await websocket.close(code=1008, reason=exc.detail[:120])
+        return
+
+    await websocket.accept()
+    client_ip = websocket.client.host if websocket.client else None
+    await ProxyService.handle_responses_websocket(
+        db, user, api_key_record, websocket, client_ip
+    )
+
+
+@router.websocket("/v1/responses")
+async def codex_responses_v1_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db),
+):
+    """Websocket Responses API endpoint for Codex CLI compatibility."""
+    await _handle_codex_responses_websocket(websocket, db)
+
+
+@router.websocket("/responses")
+async def codex_responses_root_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db),
+):
+    """Websocket Responses API endpoint without /v1 prefix."""
+    await _handle_codex_responses_websocket(websocket, db)

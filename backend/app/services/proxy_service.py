@@ -10,14 +10,18 @@ Handles OpenAI and Anthropic protocol forwarding with:
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
 import uuid
+from typing import Optional
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 import httpx
+from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
@@ -42,6 +46,14 @@ _UPSTREAM_TIMEOUT = 120.0
 _UPSTREAM_CONNECT_TIMEOUT = 15.0
 
 
+class ResponsesTurnError(Exception):
+    """Internal error used to decide whether a websocket turn can retry."""
+
+    def __init__(self, message: str, can_retry: bool):
+        self.can_retry = can_retry
+        super().__init__(message)
+
+
 class ProxyService:
     """Stateless proxy that forwards LLM requests through managed channels."""
 
@@ -60,60 +72,44 @@ class ProxyService:
         """
         Handle OpenAI Responses API format request (/v1/responses).
 
-        This endpoint is used by Codex CLI and expects a different format:
-        - Request: {"model": "...", "input": "..."}
-        - Response: Responses API format with events like response.output_text.delta
+        This endpoint is used by Codex CLI and forwards to the upstream
+        ``/responses`` endpoint.
         """
-        # Convert Responses API request to Chat Completions format
-        model = request_data.get("model", "")
-        input_text = request_data.get("input", "")
-
-        # Convert to Chat Completions format
-        chat_request = {
-            "model": model,
-            "messages": [{"role": "user", "content": input_text}],
-            "stream": request_data.get("stream", True)
-        }
-
-        # Get the Chat Completions response
         request_id = str(uuid.uuid4())
-        requested_model = chat_request.get("model", "")
-        is_stream = chat_request.get("stream", False)
+        client_request = copy.deepcopy(request_data)
+        requested_model = str(client_request.get("model", "") or "")
+        is_stream = bool(client_request.get("stream", True))
+        client_request["stream"] = is_stream
 
-        # Validate and resolve model
-        if user.subscription_type == "balance":
-            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-            if not balance or balance.balance <= 0:
-                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        unified_model, channels = ProxyService._prepare_responses_request_context(
+            db, user, requested_model
+        )
 
-        ProxyService._validate_request_length(db, chat_request)
-        unified_model = ModelService.resolve_model(db, requested_model)
-        if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
-
-        channels = ModelService.get_available_channels(db, unified_model.id)
-        if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
-
-        # Try each channel (channels is a list of (Channel, actual_model_name) tuples)
-        last_error = None
+        last_error: Exception | None = None
         for channel, actual_model_name in channels:
             try:
-                chat_request["model"] = actual_model_name
+                channel_request = copy.deepcopy(client_request)
+                channel_request["model"] = actual_model_name
+                channel_request = ProxyService._prepare_responses_request_body(
+                    actual_model_name,
+                    channel_request,
+                )
 
                 if is_stream:
                     return await ProxyService._stream_responses_request(
                         db, user, api_key_record, channel, unified_model,
-                        chat_request, request_id, requested_model, client_ip
+                        channel_request, request_id, requested_model, client_ip,
                     )
-                else:
-                    return await ProxyService._non_stream_responses_request(
-                        db, user, api_key_record, channel, unified_model,
-                        chat_request, request_id, requested_model, client_ip
-                    )
-            except Exception as e:
-                last_error = e
-                logger.warning("Channel %s failed: %s", channel.name, e)
+                return await ProxyService._non_stream_responses_request(
+                    db, user, api_key_record, channel, unified_model,
+                    channel_request, request_id, requested_model, client_ip,
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Responses channel %s (%d) failed for model %s: %s",
+                    channel.name, channel.id, actual_model_name, exc,
+                )
                 ProxyService._record_channel_failure(db, channel)
                 continue
 
@@ -123,6 +119,370 @@ class ProxyService:
             client_ip, is_stream, error_detail,
         )
         raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+
+    @staticmethod
+    async def handle_responses_websocket(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        websocket: WebSocket,
+        client_ip: str,
+    ) -> None:
+        """Serve a Codex-compatible websocket session on ``GET /v1/responses``."""
+        last_request: dict | None = None
+        last_response_output: list = []
+
+        while True:
+            try:
+                raw_message = await websocket.receive_text()
+            except WebSocketDisconnect:
+                return
+
+            request_id = str(uuid.uuid4())
+            try:
+                incoming_request = json.loads(raw_message)
+            except json.JSONDecodeError:
+                await websocket.send_text(json.dumps(
+                    ProxyService._build_responses_error_payload(
+                        "websocket request must be valid JSON",
+                        status_code=400,
+                        error_type="invalid_request_error",
+                    ),
+                    ensure_ascii=False,
+                ))
+                continue
+
+            try:
+                normalized_request, state_request, is_prewarm = (
+                    ProxyService._normalize_responses_websocket_request(
+                        incoming_request,
+                        last_request,
+                        last_response_output,
+                    )
+                )
+            except ServiceException as exc:
+                await websocket.send_text(json.dumps(
+                    ProxyService._build_responses_error_payload(
+                        exc.detail,
+                        status_code=exc.status_code,
+                        error_type="invalid_request_error",
+                    ),
+                    ensure_ascii=False,
+                ))
+                continue
+
+            last_request = copy.deepcopy(state_request)
+            last_response_output = []
+
+            if is_prewarm:
+                for payload in ProxyService._build_responses_prewarm_payloads(state_request):
+                    await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+                continue
+
+            requested_model = str(state_request.get("model", "") or "")
+            try:
+                unified_model, channels = ProxyService._prepare_responses_request_context(
+                    db, user, requested_model
+                )
+            except ServiceException as exc:
+                await websocket.send_text(json.dumps(
+                    ProxyService._build_responses_error_payload(
+                        exc.detail,
+                        status_code=exc.status_code,
+                        error_type="invalid_request_error",
+                    ),
+                    ensure_ascii=False,
+                ))
+                return
+
+            turn_completed = False
+            last_error: Exception | None = None
+            for channel, actual_model_name in channels:
+                channel_request = copy.deepcopy(normalized_request)
+                channel_request["model"] = actual_model_name
+                channel_request = ProxyService._prepare_responses_request_body(
+                    actual_model_name,
+                    channel_request,
+                )
+                started_at = time.time()
+                try:
+                    completed_output, input_tokens, output_tokens = (
+                        await ProxyService._forward_responses_websocket_turn(
+                            websocket,
+                            channel,
+                            channel_request,
+                            requested_model,
+                        )
+                    )
+                    response_time_ms = int((time.time() - started_at) * 1000)
+                    ProxyService._record_success(db, channel)
+                    ProxyService._deduct_balance_and_log(
+                        db, user, api_key_record, unified_model, request_id,
+                        requested_model, input_tokens, output_tokens, channel,
+                        client_ip, response_time_ms, is_stream=True,
+                    )
+                    last_response_output = completed_output
+                    turn_completed = True
+                    break
+                except ResponsesTurnError as exc:
+                    response_time_ms = int((time.time() - started_at) * 1000)
+                    last_error = exc
+                    logger.warning(
+                        "Responses websocket channel %s (%d) failed for model %s: %s",
+                        channel.name, channel.id, actual_model_name, exc,
+                    )
+                    ProxyService._record_channel_failure(db, channel)
+                    if not exc.can_retry:
+                        ProxyService._log_failed_request(
+                            db, user, api_key_record, request_id, requested_model,
+                            client_ip, True, str(exc), channel=channel,
+                            response_time_ms=response_time_ms,
+                        )
+                        return
+                    continue
+                except Exception as exc:
+                    response_time_ms = int((time.time() - started_at) * 1000)
+                    last_error = exc
+                    logger.warning(
+                        "Responses websocket channel %s (%d) failed for model %s: %s",
+                        channel.name, channel.id, actual_model_name, exc,
+                    )
+                    ProxyService._record_channel_failure(db, channel)
+                    ProxyService._log_failed_request(
+                        db, user, api_key_record, request_id, requested_model,
+                        client_ip, True, str(exc), channel=channel,
+                        response_time_ms=response_time_ms,
+                    )
+                    return
+
+            if turn_completed:
+                continue
+
+            error_detail = str(last_error) if last_error else "Unknown error"
+            ProxyService._log_failed_request(
+                db, user, api_key_record, request_id, requested_model,
+                client_ip, True, error_detail,
+            )
+            await websocket.send_text(json.dumps(
+                ProxyService._build_responses_error_payload(
+                    f"All channels failed: {error_detail}",
+                    status_code=503,
+                ),
+                ensure_ascii=False,
+            ))
+            return
+
+    @staticmethod
+    def _prepare_responses_request_context(
+        db: Session,
+        user: SysUser,
+        requested_model: str,
+    ) -> tuple[UnifiedModel, list[tuple[Channel, str]]]:
+        """Resolve a Responses request into a model plus channel candidates."""
+        if user.subscription_type == "balance":
+            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+            if not balance or balance.balance <= 0:
+                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+
+        unified_model = ModelService.resolve_model(db, requested_model)
+        if not unified_model:
+            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+
+        channels = ModelService.get_available_channels(db, unified_model.id)
+        if not channels:
+            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+        return unified_model, channels
+
+    @staticmethod
+    def _normalize_responses_input(input_data) -> list:
+        """Normalize Responses ``input`` into an item array."""
+        if isinstance(input_data, str):
+            return [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_data}],
+                }
+            ]
+        if input_data is None:
+            return []
+        if isinstance(input_data, dict):
+            input_data = [input_data]
+        if not isinstance(input_data, list):
+            return [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": str(input_data)}],
+                }
+            ]
+
+        normalized_items = []
+        for raw_item in input_data:
+            if not isinstance(raw_item, dict):
+                normalized_items.append({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": str(raw_item)}],
+                })
+                continue
+
+            item = copy.deepcopy(raw_item)
+            if item.get("type") == "message":
+                content = item.get("content")
+                if isinstance(content, str):
+                    item["content"] = [{"type": "input_text", "text": content}]
+                elif content is None:
+                    item["content"] = []
+                elif not isinstance(content, list):
+                    item["content"] = [{"type": "input_text", "text": str(content)}]
+            normalized_items.append(item)
+        return normalized_items
+
+    @staticmethod
+    def _prepare_responses_request_body(model_name: str, request_data: dict) -> dict:
+        """Apply compatibility normalization before forwarding to upstream ``/responses``."""
+        prepared = copy.deepcopy(request_data)
+        prepared["input"] = ProxyService._normalize_responses_input(prepared.get("input"))
+        prepared.setdefault("store", False)
+        prepared.setdefault("parallel_tool_calls", True)
+        if "stream" not in prepared:
+            prepared["stream"] = True
+
+        model_name_lower = model_name.lower()
+        if "codex" in model_name_lower:
+            prepared.setdefault("include", ["reasoning.encrypted_content"])
+
+            for field in (
+                "max_output_tokens",
+                "max_completion_tokens",
+                "temperature",
+                "top_p",
+                "truncation",
+                "user",
+                "context_management",
+            ):
+                prepared.pop(field, None)
+
+            service_tier = prepared.get("service_tier")
+            if service_tier and service_tier != "priority":
+                prepared.pop("service_tier", None)
+
+            for item in prepared["input"]:
+                if isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "system":
+                    item["role"] = "developer"
+
+        return prepared
+
+    @staticmethod
+    def _normalize_responses_websocket_request(
+        request_data: dict,
+        last_request: dict | None,
+        last_response_output: list,
+    ) -> tuple[dict, dict, bool]:
+        """Normalize websocket ``response.create`` / ``response.append`` payloads."""
+        request_type = str(request_data.get("type", "") or "").strip()
+        if request_type == "response.create":
+            if not last_request:
+                normalized = copy.deepcopy(request_data)
+                normalized.pop("type", None)
+                normalized["input"] = ProxyService._normalize_responses_input(
+                    normalized.get("input")
+                )
+                if not normalized.get("model"):
+                    raise ServiceException(400, "missing model in response.create request", "INVALID_REQUEST")
+                normalized["stream"] = True
+                is_prewarm = bool(normalized.pop("generate", True) is False)
+                return normalized, copy.deepcopy(normalized), is_prewarm
+
+            return ProxyService._normalize_followup_responses_websocket_request(
+                request_data,
+                last_request,
+                last_response_output,
+            )
+
+        if request_type == "response.append":
+            return ProxyService._normalize_followup_responses_websocket_request(
+                request_data,
+                last_request,
+                last_response_output,
+            )
+
+        raise ServiceException(400, f"unsupported websocket request type: {request_type}", "INVALID_REQUEST")
+
+    @staticmethod
+    def _normalize_followup_responses_websocket_request(
+        request_data: dict,
+        last_request: dict | None,
+        last_response_output: list,
+    ) -> tuple[dict, dict, bool]:
+        """Merge follow-up websocket input with prior request/response state."""
+        if not last_request:
+            raise ServiceException(400, "websocket request received before response.create", "INVALID_REQUEST")
+
+        next_input = request_data.get("input")
+        if next_input is None:
+            raise ServiceException(400, "websocket request requires field: input", "INVALID_REQUEST")
+
+        merged_input = []
+        merged_input.extend(ProxyService._normalize_responses_input(last_request.get("input")))
+        merged_input.extend(copy.deepcopy(last_response_output or []))
+        merged_input.extend(ProxyService._normalize_responses_input(next_input))
+
+        normalized = copy.deepcopy(request_data)
+        normalized.pop("type", None)
+        normalized.pop("previous_response_id", None)
+        normalized["input"] = merged_input
+        normalized["stream"] = True
+
+        if not normalized.get("model"):
+            normalized["model"] = last_request.get("model")
+        if "instructions" not in normalized and "instructions" in last_request:
+            normalized["instructions"] = copy.deepcopy(last_request.get("instructions"))
+
+        return normalized, copy.deepcopy(normalized), False
+
+    @staticmethod
+    def _build_responses_prewarm_payloads(request_data: dict) -> list[dict]:
+        """Return a synthetic empty turn for Codex websocket prewarm requests."""
+        response_id = f"resp_prewarm_{uuid.uuid4().hex[:24]}"
+        created_at = int(time.time())
+        model_name = str(request_data.get("model", "") or "")
+        return [
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "created_at": created_at,
+                    "status": "in_progress",
+                    "background": False,
+                    "error": None,
+                    "model": model_name,
+                    "output": [],
+                },
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "created_at": created_at,
+                    "status": "completed",
+                    "background": False,
+                    "error": None,
+                    "model": model_name,
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                },
+            },
+        ]
 
     @staticmethod
     async def _stream_responses_request(
@@ -136,76 +496,56 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
     ) -> StreamingResponse:
-        """Convert Chat Completions stream to Responses API format."""
+        """Forward a streaming Responses request to upstream ``/responses``."""
         start_time = time.time()
-        base_url = channel.base_url.rstrip("/")
-        url = f"{base_url}/chat/completions"
-        headers = ProxyService._build_headers(channel, "openai")
-
-        request_data["stream"] = True
-        if "stream_options" not in request_data:
-            request_data["stream_options"] = {"include_usage": True}
-
         async def event_generator():
             input_tokens = 0
             output_tokens = 0
-            stream_error = None
-            response_id = f"resp_{uuid.uuid4().hex}"
-            message_id = f"msg_{uuid.uuid4().hex}"
-            created_at = int(time.time())
+            completed = False
+            saw_error = False
+            error_message = ""
+            stream_error: Exception | None = None
 
             try:
-                # Send response.created event
-                yield f"event: response.created\n"
-                yield f"data: {json.dumps({'type': 'response.created', 'response': {'id': response_id, 'object': 'response', 'created_at': created_at, 'model': requested_model}})}\n\n"
+                async for payload in ProxyService._iter_responses_upstream_payloads(
+                    channel,
+                    request_data,
+                    requested_model,
+                ):
+                    payload_type = str(payload.get("type", "") or "")
+                    if payload_type == "response.completed":
+                        completed = True
+                        input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                    elif payload_type == "error":
+                        saw_error = True
+                        error_message = (
+                            payload.get("error", {}).get("message")
+                            or "Upstream responses error"
+                        )
+                    yield ProxyService._payload_to_sse(payload)
 
-                # Send response.output_item.added event
-                yield f"event: response.output_item.added\n"
-                yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': {'id': message_id, 'type': 'message', 'role': 'assistant'}})}\n\n"
-
-                timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream("POST", url, json=request_data, headers=headers) as response:
-                        if response.status_code != 200:
-                            body = await response.aread()
-                            raise Exception(f"Upstream returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}")
-
-                        async for line in response.aiter_lines():
-                            if not line or not line.startswith("data: "):
-                                continue
-
-                            data_str = line[6:]
-                            if data_str.strip() == "[DONE]":
-                                break
-
-                            try:
-                                chunk = json.loads(data_str)
-                                usage = chunk.get("usage")
-                                if usage:
-                                    input_tokens = usage.get("prompt_tokens", 0)
-                                    output_tokens = usage.get("completion_tokens", 0)
-
-                                # Extract content delta
-                                choices = chunk.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        # Send response.output_text.delta event
-                                        yield f"event: response.output_text.delta\n"
-                                        yield f"data: {json.dumps({'type': 'response.output_text.delta', 'delta': content})}\n\n"
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-
-                # Send response.completed event
-                yield f"event: response.completed\n"
-                yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': response_id, 'usage': {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': input_tokens + output_tokens}}})}\n\n"
-
-            except Exception as e:
-                stream_error = e
-                logger.error("Responses API stream error: %s", e)
-                yield f"event: error\n"
-                yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e)}})}\n\n"
+                if completed:
+                    yield "data: [DONE]\n\n"
+                else:
+                    if saw_error:
+                        stream_error = Exception(error_message or "Upstream responses error")
+                    else:
+                        stream_error = Exception("stream closed before response.completed")
+                        yield ProxyService._payload_to_sse(
+                            ProxyService._build_responses_error_payload(
+                                str(stream_error),
+                                status_code=408,
+                            )
+                        )
+            except Exception as exc:
+                stream_error = exc
+                logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
+                yield ProxyService._payload_to_sse(
+                    ProxyService._build_responses_error_payload(
+                        str(exc),
+                        status_code=502,
+                    )
+                )
             finally:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
@@ -237,6 +577,219 @@ class ProxyService:
         )
 
     @staticmethod
+    async def _forward_responses_websocket_turn(
+        websocket: WebSocket,
+        channel: Channel,
+        request_data: dict,
+        requested_model: str,
+    ) -> tuple[list, int, int]:
+        """Forward one websocket turn to upstream ``/responses`` SSE."""
+        completed_output: list = []
+        input_tokens = 0
+        output_tokens = 0
+        completed = False
+        sent_any_payload = False
+        saw_error = False
+        error_message = ""
+
+        try:
+            async for payload in ProxyService._iter_responses_upstream_payloads(
+                channel,
+                request_data,
+                requested_model,
+            ):
+                sent_any_payload = True
+                payload_type = str(payload.get("type", "") or "")
+                if payload_type == "response.completed":
+                    completed = True
+                    completed_output = ProxyService._extract_responses_output(payload)
+                    input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                elif payload_type == "error":
+                    saw_error = True
+                    error_message = (
+                        payload.get("error", {}).get("message")
+                        or "Upstream responses error"
+                    )
+                await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:
+            if sent_any_payload:
+                error_payload = ProxyService._build_responses_error_payload(
+                    str(exc),
+                    status_code=502,
+                )
+                await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
+                raise ResponsesTurnError(str(exc), can_retry=False) from exc
+            raise ResponsesTurnError(str(exc), can_retry=True) from exc
+
+        if completed:
+            return completed_output, input_tokens, output_tokens
+
+        if saw_error:
+            raise ResponsesTurnError(error_message or "Upstream responses error", can_retry=not sent_any_payload)
+
+        if sent_any_payload:
+            error_payload = ProxyService._build_responses_error_payload(
+                "stream closed before response.completed",
+                status_code=408,
+            )
+            await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
+            raise ResponsesTurnError("stream closed before response.completed", can_retry=False)
+
+        raise ResponsesTurnError("stream closed before response.completed", can_retry=True)
+
+    @staticmethod
+    async def _iter_responses_upstream_payloads(
+        channel: Channel,
+        request_data: dict,
+        requested_model: str,
+    ):
+        """Yield parsed Responses payload dicts from upstream SSE or JSON."""
+        start_url = channel.base_url.rstrip("/")
+        url = f"{start_url}/responses"
+        headers = ProxyService._build_headers(channel, "openai")
+        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", url, json=request_data, headers=headers) as response:
+                if response.status_code != 200:
+                    body = await response.aread()
+                    raise Exception(
+                        f"Upstream returned HTTP {response.status_code}: "
+                        f"{body.decode('utf-8', errors='replace')[:500]}"
+                    )
+
+                content_type = response.headers.get("content-type", "")
+                if "text/event-stream" not in content_type:
+                    body = await response.aread()
+                    body_text = body.decode("utf-8", errors="replace").strip()
+                    if not body_text:
+                        return
+                    payload = ProxyService._parse_non_stream_responses_payload(body_text)
+                    if payload is None:
+                        raise Exception(f"Invalid upstream /responses body: {body_text[:500]}")
+                    yield ProxyService._rewrite_response_model(payload, requested_model)
+                    return
+
+                async for line in response.aiter_lines():
+                    payload = ProxyService._parse_responses_payload_line(line)
+                    if payload is None:
+                        continue
+                    yield ProxyService._rewrite_response_model(payload, requested_model)
+
+    @staticmethod
+    def _parse_non_stream_responses_payload(raw_text: str) -> dict | None:
+        """Parse a non-stream upstream response into a standard payload wrapper."""
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("type") == "response.completed":
+            return payload
+        if payload.get("object") == "response":
+            return {"type": "response.completed", "response": payload}
+        return payload
+
+    @staticmethod
+    def _parse_responses_payload_line(line: str) -> dict | None:
+        """Parse one SSE line into a Responses payload dict."""
+        stripped = line.strip()
+        if not stripped or stripped.startswith("event:"):
+            return None
+        if stripped.startswith("data:"):
+            stripped = stripped[5:].strip()
+        if not stripped or stripped == "[DONE]":
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+
+    @staticmethod
+    def _rewrite_response_model(payload: dict, requested_model: str) -> dict:
+        """Rewrite upstream model fields back to the client-requested model alias."""
+        rewritten = copy.deepcopy(payload)
+        if not requested_model:
+            return rewritten
+        if isinstance(rewritten.get("response"), dict):
+            rewritten["response"]["model"] = requested_model
+        elif rewritten.get("object") == "response":
+            rewritten["model"] = requested_model
+        return rewritten
+
+    @staticmethod
+    def _build_responses_error_payload(
+        message: str,
+        status_code: int = 500,
+        error_type: str = "server_error",
+    ) -> dict:
+        """Build a websocket/SSE compatible Responses error event."""
+        return {
+            "type": "error",
+            "status": status_code,
+            "error": {
+                "type": error_type,
+                "message": message,
+            },
+        }
+
+    @staticmethod
+    def _payload_to_sse(payload: dict) -> str:
+        """Render a Responses payload dict as an SSE event."""
+        event_type = str(payload.get("type", "message") or "message")
+        return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    @staticmethod
+    def _extract_responses_usage(payload: dict) -> tuple[int, int]:
+        """Extract input/output token usage from a Responses payload."""
+        usage = {}
+        if payload.get("type") == "response.completed":
+            usage = payload.get("response", {}).get("usage", {}) or {}
+        elif payload.get("object") == "response":
+            usage = payload.get("usage", {}) or {}
+        return (
+            int(usage.get("input_tokens") or 0),
+            int(usage.get("output_tokens") or 0),
+        )
+
+    @staticmethod
+    def _extract_responses_output(payload: dict) -> list:
+        """Extract ``response.output`` from a completed Responses payload."""
+        if payload.get("type") == "response.completed":
+            output = payload.get("response", {}).get("output", [])
+            if isinstance(output, list):
+                return copy.deepcopy(output)
+        return []
+
+    @staticmethod
+    def _parse_non_stream_responses_body(raw_text: str) -> tuple[dict, int, int]:
+        """Convert an SSE or wrapped Responses payload body into a response object."""
+        response_body: dict | None = None
+
+        for line in raw_text.splitlines():
+            payload = ProxyService._parse_responses_payload_line(line)
+            if payload and payload.get("type") == "response.completed":
+                response_body = payload.get("response", {})
+
+        if response_body is None:
+            payload = ProxyService._parse_non_stream_responses_payload(raw_text)
+            if payload and payload.get("type") == "response.completed":
+                response_body = payload.get("response", {})
+            elif payload and payload.get("object") == "response":
+                response_body = payload
+
+        if response_body is None:
+            raise Exception(f"Invalid upstream /responses body: {raw_text[:500]}")
+
+        input_tokens = int(response_body.get("usage", {}).get("input_tokens") or 0)
+        output_tokens = int(response_body.get("usage", {}).get("output_tokens") or 0)
+        return response_body, input_tokens, output_tokens
+
+    @staticmethod
     async def _non_stream_responses_request(
         db: Session,
         user: SysUser,
@@ -248,72 +801,37 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
     ) -> JSONResponse:
-        """Convert Chat Completions response to Responses API format."""
+        """Forward a non-streaming Responses request to upstream ``/responses``."""
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
-        url = f"{base_url}/chat/completions"
+        url = f"{base_url}/responses"
         headers = ProxyService._build_headers(channel, "openai")
-
-        request_data["stream"] = False
 
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=request_data, headers=headers)
 
-            if response.status_code != 200:
-                raise Exception(f"Upstream returned HTTP {response.status_code}: {response.text[:500]}")
+        response_time_ms = int((time.time() - start_time) * 1000)
 
-            data = response.json()
+        if response.status_code != 200:
+            raise Exception(f"Upstream returned HTTP {response.status_code}: {response.text[:500]}")
 
-            # Extract tokens and content
-            usage = data.get("usage", {})
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
+        response_body, input_tokens, output_tokens = ProxyService._parse_non_stream_responses_body(
+            response.text
+        )
+        response_body = ProxyService._rewrite_response_model(response_body, requested_model)
 
-            choices = data.get("choices", [])
-            content = ""
-            if choices:
-                message = choices[0].get("message", {})
-                content = message.get("content", "")
+        ProxyService._record_success(db, channel)
+        ProxyService._deduct_balance_and_log(
+            db, user, api_key_record, unified_model, request_id,
+            requested_model, input_tokens, output_tokens, channel,
+            client_ip, response_time_ms, is_stream=False,
+        )
 
-            response_time_ms = int((time.time() - start_time) * 1000)
-
-            # Record success
-            ProxyService._record_success(db, channel)
-            ProxyService._deduct_balance_and_log(
-                db, user, api_key_record, unified_model, request_id,
-                requested_model, input_tokens, output_tokens, channel,
-                client_ip, response_time_ms, is_stream=False,
-            )
-
-            # Return Responses API format
-            response_id = f"resp_{uuid.uuid4().hex}"
-            message_id = f"msg_{uuid.uuid4().hex}"
-
-            return JSONResponse({
-                "id": response_id,
-                "object": "response",
-                "created_at": int(time.time()),
-                "model": requested_model,
-                "output": [
-                    {
-                        "type": "message",
-                        "id": message_id,
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": content
-                            }
-                        ]
-                    }
-                ],
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens
-                }
-            })
+        return JSONResponse(
+            content=response_body,
+            headers={"X-Request-ID": request_id},
+        )
 
     # -------------------------------------------------------------------
     # OpenAI protocol entry point
@@ -1252,7 +1770,7 @@ class ProxyService:
         is_stream: bool,
         error_message: str,
         channel: Channel | None = None,
-        response_time_ms: int | None = None,
+        response_time_ms: Optional[int] = None,
     ) -> None:
         """Log a failed request without deducting balance."""
         try:
@@ -1344,4 +1862,3 @@ class ProxyService:
         except Exception as e:
             logger.warning("Failed to validate request length: %s", e)
             # Don't block request if validation fails
-

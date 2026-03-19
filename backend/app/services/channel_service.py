@@ -1,6 +1,8 @@
 """Channel management service."""
 from __future__ import annotations
 
+from typing import Optional
+
 from datetime import datetime, timezone
 
 from sqlalchemy import or_
@@ -132,7 +134,7 @@ class ChannelService:
         db: Session,
         page: int = 1,
         page_size: int = 20,
-        keyword: str | None = None,
+        keyword: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """
         List channels with pagination and optional keyword search.

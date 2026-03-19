@@ -1,6 +1,8 @@
 """Authentication service: register, login, current user info."""
 from __future__ import annotations
 
+from typing import Optional
+
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -71,7 +73,7 @@ class AuthService:
         }
 
     @staticmethod
-    def login(db: Session, username: str, password: str, client_ip: str | None = None) -> dict:
+    def login(db: Session, username: str, password: str, client_ip: Optional[str] = None) -> dict:
         """
         Authenticate a user by username and password.
 

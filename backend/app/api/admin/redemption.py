@@ -1,4 +1,5 @@
 """Admin API for managing redemption codes."""
+from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -12,13 +13,13 @@ from pydantic import BaseModel, Field
 
 class CreateCodeRequest(BaseModel):
     amount: float = Field(..., gt=0, description="兑换金额")
-    expires_days: int | None = Field(None, ge=1, le=365, description="有效期天数")
+    expires_days: Optional[int] = Field(None, ge=1, le=365, description="有效期天数")
 
 
 class BatchCreateCodeRequest(BaseModel):
     amount: float = Field(..., gt=0, description="兑换金额")
     count: int = Field(..., ge=1, le=1000, description="生成数量")
-    expires_days: int | None = Field(None, ge=1, le=365, description="有效期天数")
+    expires_days: Optional[int] = Field(None, ge=1, le=365, description="有效期天数")
 
 
 router = APIRouter(prefix="/api/admin/redemption", tags=["管理员-兑换码"])

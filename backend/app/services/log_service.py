@@ -1,6 +1,8 @@
 """Request log, operation log, and statistics service."""
 from __future__ import annotations
 
+from typing import Optional
+
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, and_
@@ -19,11 +21,11 @@ class LogService:
         db: Session,
         page: int = 1,
         page_size: int = 20,
-        user_id: int | None = None,
-        model: str | None = None,
-        status: str | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        user_id: Optional[int] = None,
+        model: Optional[str] = None,
+        status: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """
         List request logs with pagination and optional filters.
@@ -183,13 +185,13 @@ class LogService:
     @staticmethod
     def create_operation_log(
         db: Session,
-        user_id: int | None,
-        username: str | None,
+        user_id: Optional[int],
+        username: Optional[str],
         action: str,
-        target_type: str | None = None,
-        target_id: int | None = None,
-        description: str | None = None,
-        ip: str | None = None,
+        target_type: Optional[str] = None,
+        target_id: Optional[int] = None,
+        description: Optional[str] = None,
+        ip: Optional[str] = None,
     ) -> OperationLog:
         """
         Create an operation audit log entry.
@@ -344,8 +346,8 @@ class LogService:
     def get_usage_summary(
         db: Session,
         user_id: int,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> dict:
         """
         Get usage summary statistics for a user within a date range.
@@ -391,8 +393,8 @@ class LogService:
     def get_per_minute_stats(
         db: Session,
         user_id: int,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> list[dict]:
         """
         Get per-minute request and token statistics for a user.

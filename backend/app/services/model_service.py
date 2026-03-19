@@ -1,6 +1,8 @@
 """Unified model, channel mapping, and override rule service."""
 from __future__ import annotations
 
+from typing import Optional
+
 import fnmatch
 from datetime import datetime
 
@@ -141,7 +143,7 @@ class ModelService:
         db: Session,
         page: int = 1,
         page_size: int = 20,
-        keyword: str | None = None,
+        keyword: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """List unified models with pagination and optional keyword search."""
         query = db.query(UnifiedModel)
@@ -270,7 +272,7 @@ class ModelService:
         db.commit()
 
     @staticmethod
-    def list_mappings(db: Session, unified_model_id: int | None = None) -> list[dict]:
+    def list_mappings(db: Session, unified_model_id: Optional[int] = None) -> list[dict]:
         """List mappings, optionally filtered by unified_model_id."""
         query = db.query(ModelChannelMapping)
         if unified_model_id is not None:

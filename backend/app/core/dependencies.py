@@ -1,6 +1,8 @@
 """FastAPI dependencies for authentication and authorization."""
 from __future__ import annotations
 
+from typing import Optional
+
 import hashlib
 from datetime import datetime
 
@@ -60,29 +62,43 @@ def require_admin(
     return current_user
 
 
-async def verify_api_key(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> tuple[SysUser, UserApiKey]:
-    """
-    Verify an API key from request headers.
-    Checks both "Authorization: Bearer sk-xxx" and "X-API-Key: sk-xxx" headers.
-    Returns the owning SysUser and the UserApiKey record.
-    """
-    api_key_value: str | None = None
+def _extract_api_key_value(
+    authorization: Optional[str],
+    x_api_key: Optional[str],
+) -> Optional[str]:
+    """Extract an ``sk-`` API key from supported header values."""
+    api_key_value: Optional[str] = None
 
     # Check X-API-Key header first
-    x_api_key = request.headers.get("X-API-Key")
     if x_api_key and x_api_key.startswith("sk-"):
         api_key_value = x_api_key
 
     # Fallback to Authorization: Bearer sk-xxx
     if not api_key_value:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer sk-"):
-            api_key_value = auth_header[7:]
+        if authorization and authorization.startswith("Bearer sk-"):
+            api_key_value = authorization[7:]
+
+    return api_key_value
+
+
+def verify_api_key_from_headers(
+    db: Session,
+    authorization: Optional[str] = None,
+    x_api_key: Optional[str] = None,
+) -> tuple[SysUser, UserApiKey]:
+    """
+    Verify an API key from header values.
+
+    Checks both ``Authorization: Bearer sk-xxx`` and ``X-API-Key: sk-xxx``
+    headers and returns the owning user plus the API key record.
+    """
+    api_key_value = _extract_api_key_value(authorization, x_api_key)
 
     if not api_key_value:
+        import logging
+        _log = logging.getLogger(__name__)
+        _log.warning("verify_api_key: no sk- key found. Authorization=%r X-API-Key=%r",
+                     authorization or "", x_api_key or "")
         raise ServiceException(status_code=401, detail="Missing API key", error_code="UNAUTHORIZED")
 
     # Look up by SHA256 hash
@@ -113,3 +129,19 @@ async def verify_api_key(
             raise ServiceException(status_code=403, detail="套餐已过期，请续费或充值余额", error_code="SUBSCRIPTION_EXPIRED")
 
     return user, api_key_record
+
+
+async def verify_api_key(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> tuple[SysUser, UserApiKey]:
+    """
+    Verify an API key from request headers.
+    Checks both "Authorization: Bearer sk-xxx" and "X-API-Key: sk-xxx" headers.
+    Returns the owning SysUser and the UserApiKey record.
+    """
+    return verify_api_key_from_headers(
+        db,
+        authorization=request.headers.get("Authorization"),
+        x_api_key=request.headers.get("X-API-Key"),
+    )

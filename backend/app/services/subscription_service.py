@@ -1,6 +1,8 @@
 """Subscription management service."""
 from __future__ import annotations
 
+from typing import Optional
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -169,7 +171,7 @@ class SubscriptionService:
     @staticmethod
     def list_all_subscriptions(
         db: Session,
-        status: str | None = None,
+        status: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:

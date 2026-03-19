@@ -17,6 +17,12 @@ class Channel(Base):
     base_url = Column(String(512), nullable=False)
     api_key = Column(Text, nullable=False, comment="Encrypted API key")
     protocol_type = Column(String(20), nullable=False, default="openai")
+    auth_header_type = Column(
+        String(32),
+        nullable=False,
+        default="x-api-key",
+        comment="Auth header type: x-api-key, anthropic-api-key, authorization"
+    )
     priority = Column(Integer, nullable=False, default=10, comment="Priority, 1=highest")
     enabled = Column(SmallInteger, nullable=False, default=1)
     is_healthy = Column(SmallInteger, nullable=False, default=1)

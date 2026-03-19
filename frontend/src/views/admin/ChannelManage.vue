@@ -80,6 +80,16 @@
             <a-select-option value="anthropic">Anthropic</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item label="认证 Header 类型">
+          <a-select v-model="form.auth_header_type" placeholder="选择认证方式">
+            <a-select-option value="authorization">Authorization: Bearer（OpenAI 标准）</a-select-option>
+            <a-select-option value="x-api-key">x-api-key（兼容格式）</a-select-option>
+            <a-select-option value="anthropic-api-key">anthropic-api-key（Anthropic 标准）</a-select-option>
+          </a-select>
+          <div style="color: #8c8c8c; font-size: 12px; margin-top: 4px;">
+            不同上游服务可能使用不同的认证方式，如 OpenClaw 使用 anthropic-api-key
+          </div>
+        </a-form-item>
         <a-form-item label="优先级">
           <a-input-number v-model="form.priority" :min="0" :max="100" style="width: 100%;" />
         </a-form-item>
@@ -155,6 +165,7 @@ export default {
         base_url: '',
         api_key: '',
         protocol_type: 'openai',
+        auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
         description: ''
@@ -213,6 +224,7 @@ export default {
         base_url: record.base_url,
         api_key: '',
         protocol_type: record.protocol_type,
+        auth_header_type: record.auth_header_type || 'authorization',
         priority: record.priority,
         enabled: record.enabled,
         description: record.description || ''
@@ -274,6 +286,7 @@ export default {
         base_url: '',
         api_key: '',
         protocol_type: 'openai',
+        auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
         description: ''

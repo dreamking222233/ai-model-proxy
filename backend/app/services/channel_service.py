@@ -27,6 +27,7 @@ class ChannelService:
             "base_url": channel.base_url,
             "api_key_display": masked_key,
             "protocol_type": channel.protocol_type,
+            "auth_header_type": getattr(channel, "auth_header_type", "x-api-key") or "x-api-key",
             "priority": channel.priority,
             "enabled": channel.enabled,
             "is_healthy": bool(channel.is_healthy),
@@ -58,6 +59,7 @@ class ChannelService:
             base_url=d["base_url"].rstrip("/"),
             api_key=d["api_key"],
             protocol_type=d.get("protocol_type", "openai"),
+            auth_header_type=d.get("auth_header_type", "x-api-key"),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
             description=d.get("description"),
@@ -87,7 +89,7 @@ class ChannelService:
 
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         updatable_fields = [
-            "name", "base_url", "api_key", "protocol_type",
+            "name", "base_url", "api_key", "protocol_type", "auth_header_type",
             "priority", "enabled", "description",
         ]
         for field in updatable_fields:

@@ -1583,18 +1583,30 @@ class ProxyService:
 
     @staticmethod
     def _build_headers(channel: Channel, protocol_type: str) -> dict[str, str]:
-        """Build upstream request headers based on protocol type."""
-        if protocol_type == "openai":
-            return {
-                "Authorization": f"Bearer {channel.api_key}",
-                "Content-Type": "application/json",
-            }
-        else:  # anthropic
-            return {
-                "x-api-key": channel.api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            }
+        """Build upstream request headers based on protocol type and channel auth config."""
+        headers = {"Content-Type": "application/json"}
+
+        # Determine auth header type (default to protocol-specific behavior for backward compatibility)
+        auth_header_type = getattr(channel, "auth_header_type", None)
+        if not auth_header_type:
+            # Backward compatibility: use protocol-specific default
+            auth_header_type = "authorization" if protocol_type == "openai" else "x-api-key"
+
+        # Set authentication header based on channel configuration
+        if auth_header_type == "authorization":
+            headers["Authorization"] = f"Bearer {channel.api_key}"
+        elif auth_header_type == "anthropic-api-key":
+            headers["anthropic-api-key"] = channel.api_key
+            # Add Anthropic version header if protocol is anthropic
+            if protocol_type == "anthropic":
+                headers["anthropic-version"] = "2023-06-01"
+        else:  # x-api-key (default)
+            headers["x-api-key"] = channel.api_key
+            # Add Anthropic version header if protocol is anthropic
+            if protocol_type == "anthropic":
+                headers["anthropic-version"] = "2023-06-01"
+
+        return headers
 
     # ===================================================================
     # Helper: channel health tracking

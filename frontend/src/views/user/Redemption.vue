@@ -68,8 +68,8 @@
         <div class="instruction-item">
           <div class="instruction-number">4</div>
           <div class="instruction-content">
-            <h4>查看余额</h4>
-            <p>前往"余额记录"页面查看充值记录和当前余额</p>
+            <h4>查看账单</h4>
+            <p>前往"账单与使用"页面查看充值记录、当前余额和消费明细</p>
           </div>
         </div>
       </div>
@@ -100,7 +100,6 @@ export default {
         const res = await redeemCode({ code: this.code.trim() })
         this.$message.success(res.message || '兑换成功')
         this.code = ''
-        // Optionally redirect to balance page
         setTimeout(() => {
           this.$router.push('/user/balance')
         }, 1500)

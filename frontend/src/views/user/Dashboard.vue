@@ -168,12 +168,12 @@
         </a-card>
       </a-col>
       <a-col :xs="24" :sm="12">
-        <a-card hoverable class="quick-link-card" @click="$router.push('/user/usage')">
+        <a-card hoverable class="quick-link-card" @click="$router.push('/user/balance?tab=usage')">
           <div class="quick-link-content">
             <a-icon type="bar-chart" class="quick-link-icon" style="color: #52c41a" />
             <div>
-              <h3 class="quick-link-title">查看使用记录</h3>
-              <p class="quick-link-desc">查看您的请求历史和 Token 消耗。</p>
+              <h3 class="quick-link-title">查看账单与使用</h3>
+              <p class="quick-link-desc">统一查看请求历史、Token 消耗和消费账单。</p>
             </div>
           </div>
         </a-card>

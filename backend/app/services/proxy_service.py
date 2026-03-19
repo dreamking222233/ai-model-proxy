@@ -33,6 +33,7 @@ from app.models.log import (
     UserBalance,
     ConsumptionRecord,
     SystemConfig,
+    UserSubscription,
 )
 from app.services.model_service import ModelService
 from app.services.health_service import get_system_config
@@ -1671,6 +1672,8 @@ class ProxyService:
         write request log and consumption record, and update API key usage stats.
         """
         try:
+            usage_now = datetime.utcnow()
+
             # Apply token multiplier
             token_multiplier = get_system_config(db, "token_multiplier", 1.0)
             input_tokens = int(input_tokens * token_multiplier)
@@ -1684,6 +1687,8 @@ class ProxyService:
             total_cost = input_cost + output_cost
 
             # Handle balance deduction based on subscription type
+            billing_mode = "balance"
+            subscription_id: int | None = None
             if user.subscription_type == "balance":
                 # Balance mode: deduct from user balance (with row lock)
                 balance = (
@@ -1701,7 +1706,21 @@ class ProxyService:
                     balance_before = 0.0
                     balance_after = 0.0
             else:
-                # Unlimited mode: no balance deduction, just record usage
+                # Unlimited mode: no balance deduction, just record usage.
+                billing_mode = "subscription"
+                active_subscription = (
+                    db.query(UserSubscription)
+                    .filter(
+                        UserSubscription.user_id == user.id,
+                        UserSubscription.status == "active",
+                        UserSubscription.start_time <= usage_now,
+                        UserSubscription.end_time >= usage_now,
+                    )
+                    .order_by(UserSubscription.id.desc())
+                    .first()
+                )
+                subscription_id = active_subscription.id if active_subscription else None
+
                 balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
                 if balance:
                     balance_before = float(balance.balance)
@@ -1723,6 +1742,8 @@ class ProxyService:
                 total_cost=Decimal(str(total_cost)),
                 balance_before=Decimal(str(balance_before)),
                 balance_after=Decimal(str(balance_after)),
+                billing_mode=billing_mode,
+                subscription_id=subscription_id,
             )
             db.add(consumption)
 

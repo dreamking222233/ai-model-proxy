@@ -108,6 +108,8 @@ class ConsumptionRecord(Base):
     total_cost = Column(DECIMAL(12, 6), nullable=False, default=0)
     balance_before = Column(DECIMAL(12, 6), nullable=False, default=0)
     balance_after = Column(DECIMAL(12, 6), nullable=False, default=0)
+    billing_mode = Column(String(20), nullable=True, index=True, comment="balance=按量计费, subscription=套餐计费")
+    subscription_id = Column(BigInteger, nullable=True, index=True, comment="关联套餐ID")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

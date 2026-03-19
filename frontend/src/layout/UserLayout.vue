@@ -31,15 +31,11 @@
           </a-menu-item>
           <a-menu-item key="/user/balance">
             <a-icon type="dollar" />
-            <span>余额与账单</span>
+            <span>账单与使用</span>
           </a-menu-item>
           <a-menu-item key="/user/redemption">
             <a-icon type="gift" />
             <span>兑换码充值</span>
-          </a-menu-item>
-          <a-menu-item key="/user/usage">
-            <a-icon type="bar-chart" />
-            <span>使用记录</span>
           </a-menu-item>
           <a-menu-item key="/user/models">
             <a-icon type="appstore" />

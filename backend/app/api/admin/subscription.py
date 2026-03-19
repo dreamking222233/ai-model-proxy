@@ -7,7 +7,7 @@ from app.database import get_db
 from app.core.dependencies import require_admin
 from app.models.user import SysUser
 from app.services.subscription_service import SubscriptionService
-from app.schemas.common import ResponseModel, PageResponse
+from app.schemas.common import ResponseModel
 
 
 class ActivateSubscriptionRequest(BaseModel):
@@ -18,6 +18,16 @@ class ActivateSubscriptionRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/admin/subscription", tags=["管理员-套餐管理"])
+
+
+def _build_page_payload(items: list[dict], total: int, page: int, page_size: int) -> dict:
+    return {
+        "items": items,
+        "list": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.post("/activate", response_model=ResponseModel)
@@ -59,14 +69,7 @@ def get_user_subscriptions(
 ):
     """查询指定用户的套餐记录"""
     records, total = SubscriptionService.get_user_subscriptions(db, user_id, page, page_size)
-    return ResponseModel(
-        data=PageResponse(
-            items=records,
-            total=total,
-            page=page,
-            page_size=page_size,
-        )
-    )
+    return ResponseModel(data=_build_page_payload(records, total, page, page_size))
 
 
 @router.get("/list", response_model=ResponseModel)
@@ -79,14 +82,25 @@ def list_all_subscriptions(
 ):
     """查询所有用户的套餐记录"""
     records, total = SubscriptionService.list_all_subscriptions(db, status, page, page_size)
-    return ResponseModel(
-        data=PageResponse(
-            items=records,
-            total=total,
-            page=page,
-            page_size=page_size,
-        )
+    return ResponseModel(data=_build_page_payload(records, total, page, page_size))
+
+
+@router.get("/{subscription_id}/usage", response_model=ResponseModel)
+def get_subscription_usage_detail(
+    subscription_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    """查询单条套餐记录对应的使用明细"""
+    result = SubscriptionService.get_subscription_usage_detail(
+        db,
+        subscription_id=subscription_id,
+        page=page,
+        page_size=page_size,
     )
+    return ResponseModel(data=result)
 
 
 @router.post("/check-expired", response_model=ResponseModel)

@@ -273,10 +273,14 @@ CREATE TABLE `consumption_record` (
     `total_cost` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `balance_before` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `balance_after` DECIMAL(12, 6) NOT NULL DEFAULT 0,
+    `billing_mode` VARCHAR(20) DEFAULT NULL COMMENT 'balance=按量计费, subscription=套餐计费',
+    `subscription_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '关联套餐ID',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
     KEY `idx_request_id` (`request_id`),
+    KEY `idx_billing_mode` (`billing_mode`),
+    KEY `idx_subscription_id` (`subscription_id`),
     KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 

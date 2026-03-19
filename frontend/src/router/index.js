@@ -113,13 +113,14 @@ const routes = [
         path: 'balance',
         name: 'BalanceLog',
         component: () => import('@/views/user/BalanceLog.vue'),
-        meta: { title: '余额记录' }
+        meta: { title: '账单与使用' }
       },
       {
         path: 'usage',
-        name: 'UsageLog',
-        component: () => import('@/views/user/UsageLog.vue'),
-        meta: { title: '使用记录' }
+        redirect: {
+          path: '/user/balance',
+          query: { tab: 'usage' }
+        }
       },
       {
         path: 'models',

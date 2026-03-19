@@ -236,7 +236,7 @@
           type="success"
           show-icon
           message="如果收到正常的 AI 回复，说明配置成功！"
-          description="你可以在「使用记录」页面查看所有请求日志，在「余额与账单」页面查看消费明细。"
+          description="你可以在「账单与使用」页面统一查看请求日志、消费明细和余额变化。"
           style="margin-top: 16px;"
         />
       </div>
@@ -267,11 +267,11 @@
               <li>检查 API 密钥是否正确且处于启用状态</li>
               <li>检查账户余额是否充足</li>
               <li>确认模型名称拼写正确（通过 <code>/v1/models</code> 确认）</li>
-              <li>查看「使用记录」页面中的错误信息</li>
+              <li>查看「账单与使用」页面中的请求详情和错误信息</li>
             </ol>
           </a-collapse-panel>
           <a-collapse-panel key="4" header="如何控制费用？">
-            <p>每次 API 调用会根据输入/输出的 Token 数量和模型定价计费。你可以在「余额与账单」页面查看详细的消费记录。建议选择合适的模型以控制成本。</p>
+            <p>每次 API 调用会根据输入/输出的 Token 数量和模型定价计费。你可以在「账单与使用」页面查看详细的消费记录与请求明细。建议选择合适的模型以控制成本。</p>
           </a-collapse-panel>
         </a-collapse>
       </div>

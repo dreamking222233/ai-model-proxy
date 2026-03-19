@@ -33,6 +33,14 @@ export function listAllSubscriptions(params) {
   })
 }
 
+export function getSubscriptionUsageDetail(subscriptionId, params) {
+  return request({
+    url: `/api/admin/subscription/${subscriptionId}/usage`,
+    method: 'get',
+    params
+  })
+}
+
 export function checkExpiredSubscriptions() {
   return request({
     url: '/api/admin/subscription/check-expired',

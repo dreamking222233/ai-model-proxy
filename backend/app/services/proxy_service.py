@@ -203,6 +203,170 @@ class ProxyService:
             )
         return prepared
 
+    @staticmethod
+    def _sanitize_anthropic_content_for_kiro(content):
+        """Remove Anthropic blocks that Kiro/AmazonQ cannot replay safely."""
+        if content is None or isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return str(content)
+
+        sanitized = []
+        for raw_block in content:
+            if isinstance(raw_block, str):
+                sanitized.append({"type": "text", "text": raw_block})
+                continue
+            if not isinstance(raw_block, dict):
+                sanitized.append({"type": "text", "text": str(raw_block)})
+                continue
+
+            block = copy.deepcopy(raw_block)
+            block_type = str(block.get("type", "") or "")
+
+            # Kiro/AmazonQ rejects historical thinking blocks/signatures.
+            if block_type in {"thinking", "redacted_thinking"}:
+                continue
+
+            block.pop("signature", None)
+            block.pop("cache_control", None)
+
+            if "content" in block:
+                nested = block.get("content")
+                if isinstance(nested, list):
+                    block["content"] = ProxyService._sanitize_anthropic_content_for_kiro(nested)
+                elif nested is not None and not isinstance(nested, str):
+                    block["content"] = json.dumps(nested, ensure_ascii=False)
+
+            sanitized.append(block)
+
+        return sanitized
+
+    @staticmethod
+    def _prepare_anthropic_request_for_channel(
+        channel: Channel,
+        request_data: dict,
+    ) -> dict:
+        """Apply Kiro/AmazonQ compatibility rewrites for Anthropic requests."""
+        prepared = copy.deepcopy(request_data)
+        if not ProxyService._is_kiro_amazonq_channel(channel, prepared.get("model")):
+            return prepared
+
+        for field in ("thinking", "context_management", "output_config", "metadata", "betas"):
+            prepared.pop(field, None)
+
+        messages = prepared.get("messages")
+        if isinstance(messages, list):
+            sanitized_messages = []
+            for raw_message in messages:
+                if not isinstance(raw_message, dict):
+                    sanitized_messages.append({
+                        "role": "user",
+                        "content": str(raw_message),
+                    })
+                    continue
+
+                message = copy.deepcopy(raw_message)
+                message["content"] = ProxyService._sanitize_anthropic_content_for_kiro(
+                    message.get("content")
+                )
+                sanitized_messages.append(message)
+
+            prepared["messages"] = sanitized_messages
+
+        return prepared
+
+    @staticmethod
+    def _extract_upstream_error_message(error_detail: str) -> str:
+        """Unwrap nested upstream JSON error bodies into a short readable string."""
+        message = str(error_detail or "").strip()
+        if ": " in message and message.lower().startswith("upstream returned http"):
+            message = message.split(": ", 1)[1].strip()
+
+        for _ in range(3):
+            try:
+                parsed = json.loads(message)
+            except (TypeError, ValueError):
+                break
+
+            if isinstance(parsed, dict):
+                nested_error = parsed.get("error")
+                if isinstance(nested_error, dict):
+                    nested_message = nested_error.get("message")
+                    if isinstance(nested_message, str) and nested_message.strip():
+                        message = nested_message.strip()
+                        continue
+
+                nested_message = parsed.get("message")
+                if isinstance(nested_message, str) and nested_message.strip():
+                    message = nested_message.strip()
+                    continue
+            break
+
+        return message
+
+    @staticmethod
+    def _map_upstream_request_error(exc: Exception) -> Optional[ServiceException]:
+        """
+        Map upstream 4xx request-format failures to user-facing 400 errors.
+
+        These should not count as channel health failures or be wrapped as 503.
+        """
+        if isinstance(exc, ServiceException):
+            if 400 <= exc.status_code < 500:
+                return exc
+            return None
+
+        error_detail = str(exc or "").strip()
+        lowered = error_detail.lower()
+        if not any(
+            marker in lowered
+            for marker in (
+                "http 400",
+                "http 413",
+                "http 422",
+                "improperly formed request",
+                "invalid beta flag",
+                "invalid signature in thinking block",
+                "payload too large",
+                "context length",
+                "context window",
+                "too many tokens",
+                "maximum context length",
+                "token limit",
+            )
+        ):
+            return None
+
+        upstream_message = ProxyService._extract_upstream_error_message(error_detail)
+
+        if "invalid beta flag" in lowered:
+            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+
+        if "invalid signature in thinking block" in lowered:
+            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+
+        if any(
+            marker in lowered
+            for marker in (
+                "http 413",
+                "payload too large",
+                "request too large",
+                "context length",
+                "context window",
+                "too many tokens",
+            )
+        ):
+            return ServiceException(400, upstream_message, "CONTENT_TOO_LONG")
+
+        if "improperly formed request" in lowered:
+            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+
+        return ServiceException(
+            400,
+            upstream_message,
+            "UPSTREAM_INVALID_REQUEST",
+        )
+
     # -------------------------------------------------------------------
     # OpenAI Responses API entry point (for Codex CLI)
     # -------------------------------------------------------------------
@@ -233,6 +397,7 @@ class ProxyService:
         )
 
         last_error: Exception | None = None
+        request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
             try:
                 channel_request = copy.deepcopy(client_request)
@@ -253,7 +418,25 @@ class ProxyService:
                     channel_request, request_id, requested_model, client_ip,
                     request_headers=request_headers,
                 )
+            except ServiceException as exc:
+                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
+                    request_error = exc
+                    logger.info(
+                        "Responses channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, exc.detail,
+                    )
+                    continue
+                raise
             except Exception as exc:
+                mapped_request_error = ProxyService._map_upstream_request_error(exc)
+                if mapped_request_error:
+                    request_error = mapped_request_error
+                    logger.info(
+                        "Responses channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, mapped_request_error.detail,
+                    )
+                    continue
+
                 last_error = exc
                 logger.warning(
                     "Responses channel %s (%d) failed for model %s: %s",
@@ -262,11 +445,16 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel)
                 continue
 
-        error_detail = str(last_error) if last_error else "Unknown error"
+        if request_error:
+            error_detail = request_error.detail
+        else:
+            error_detail = str(last_error) if last_error else "Unknown error"
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
         )
+        if request_error:
+            raise request_error
         raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
 
     @staticmethod
@@ -751,21 +939,27 @@ class ProxyService:
 
             except Exception as exc:
                 stream_error = exc
+                mapped_request_error = ProxyService._map_upstream_request_error(exc)
+                error_message = mapped_request_error.detail if mapped_request_error else str(exc)
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
                 yield ProxyService._payload_to_sse(
                     ProxyService._build_responses_error_payload(
-                        str(exc),
-                        status_code=502,
+                        error_message,
+                        status_code=mapped_request_error.status_code if mapped_request_error else 502,
                     )
                 )
             finally:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
                     if stream_error:
-                        ProxyService._record_channel_failure(db, channel)
+                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
+                        if not mapped_request_error:
+                            ProxyService._record_channel_failure(db, channel)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
-                            client_ip, True, str(stream_error), channel=channel,
+                            client_ip, True,
+                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            channel=channel,
                             response_time_ms=response_time_ms,
                         )
                     else:
@@ -1162,6 +1356,7 @@ class ProxyService:
 
         # 4. Try each channel (failover)
         last_error: Exception | None = None
+        request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
             try:
                 # Build upstream request with the actual model name
@@ -1183,9 +1378,25 @@ class ProxyService:
                         request_data_copy, request_id, requested_model, client_ip,
                         request_headers=request_headers,
                     )
-            except ServiceException:
+            except ServiceException as exc:
+                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
+                    request_error = exc
+                    logger.info(
+                        "Channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, exc.detail,
+                    )
+                    continue
                 raise  # Re-raise business exceptions immediately
             except Exception as e:
+                mapped_request_error = ProxyService._map_upstream_request_error(e)
+                if mapped_request_error:
+                    request_error = mapped_request_error
+                    logger.info(
+                        "Channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, mapped_request_error.detail,
+                    )
+                    continue
+
                 last_error = e
                 logger.warning(
                     "Channel %s (%d) failed for model %s: %s",
@@ -1195,12 +1406,17 @@ class ProxyService:
                 continue
 
         # All channels exhausted
-        error_detail = str(last_error) if last_error else "Unknown error"
+        if request_error:
+            error_detail = request_error.detail
+        else:
+            error_detail = str(last_error) if last_error else "Unknown error"
         # Log the failure
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
         )
+        if request_error:
+            raise request_error
         raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
 
     # -------------------------------------------------------------------
@@ -1247,10 +1463,15 @@ class ProxyService:
 
         # 4. Failover
         last_error: Exception | None = None
+        request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
             try:
                 request_data_copy = dict(request_data)
                 request_data_copy["model"] = actual_model_name
+                request_data_copy = ProxyService._prepare_anthropic_request_for_channel(
+                    channel,
+                    request_data_copy,
+                )
 
                 if is_stream:
                     return await ProxyService._stream_anthropic_request(
@@ -1264,9 +1485,25 @@ class ProxyService:
                         request_data_copy, request_id, requested_model, client_ip,
                         request_headers=request_headers,
                     )
-            except ServiceException:
+            except ServiceException as exc:
+                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
+                    request_error = exc
+                    logger.info(
+                        "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, exc.detail,
+                    )
+                    continue
                 raise
             except Exception as e:
+                mapped_request_error = ProxyService._map_upstream_request_error(e)
+                if mapped_request_error:
+                    request_error = mapped_request_error
+                    logger.info(
+                        "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name, channel.id, mapped_request_error.detail,
+                    )
+                    continue
+
                 last_error = e
                 logger.warning(
                     "Channel %s (%d) failed for model %s: %s",
@@ -1275,11 +1512,16 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel)
                 continue
 
-        error_detail = str(last_error) if last_error else "Unknown error"
+        if request_error:
+            error_detail = request_error.detail
+        else:
+            error_detail = str(last_error) if last_error else "Unknown error"
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
         )
+        if request_error:
+            raise request_error
         raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
 
     # ===================================================================
@@ -1381,14 +1623,21 @@ class ProxyService:
                                     collected_usage["prompt_tokens"] = input_tokens
                                     collected_usage["completion_tokens"] = output_tokens
 
-                                # 收集文本内容
+                                # 收集文本内容（包括 reasoning_content 和 content）
                                 choices = chunk.get("choices", [])
                                 if choices:
                                     delta = choices[0].get("delta", {})
                                     content = delta.get("content", "")
+                                    reasoning_content = delta.get("reasoning_content", "")
                                     finish_reason = choices[0].get("finish_reason")
-                                    if content or finish_reason:
-                                        collector.add_chunk(content or "", finish_reason)
+                                    if content or reasoning_content or finish_reason:
+                                        # 优先收集 reasoning_content，然后是 content
+                                        if reasoning_content:
+                                            collector.add_chunk(reasoning_content)
+                                        if content:
+                                            collector.add_chunk(content)
+                                        if finish_reason:
+                                            collector.add_chunk("", finish_reason)
                             except (json.JSONDecodeError, TypeError):
                                 pass
 
@@ -1422,10 +1671,12 @@ class ProxyService:
 
             except Exception as e:
                 stream_error = e
+                mapped_request_error = ProxyService._map_upstream_request_error(e)
+                error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
                 logger.error("OpenAI stream error on channel %s: %s", channel.name, e)
                 error_payload = json.dumps({
                     "error": {
-                        "message": f"Stream error: {str(e)}",
+                        "message": error_message,
                         "type": "proxy_error",
                         "code": "stream_error",
                     }
@@ -1436,10 +1687,14 @@ class ProxyService:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
                     if stream_error:
-                        ProxyService._record_channel_failure(db, channel)
+                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
+                        if not mapped_request_error:
+                            ProxyService._record_channel_failure(db, channel)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
-                            client_ip, True, str(stream_error), channel=channel,
+                            client_ip, True,
+                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            channel=channel,
                             response_time_ms=response_time_ms,
                         )
                     else:
@@ -1629,10 +1884,15 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
-        headers = ProxyService._build_headers(channel, "anthropic", request_headers=request_headers)
+        model_name = request_data.get("model", requested_model)
+        headers = ProxyService._build_headers(
+            channel,
+            "anthropic",
+            request_headers=request_headers,
+            model_name=model_name,
+        )
 
         request_data["stream"] = True
-        model_name = request_data.get("model", requested_model)
 
         # Cache status tracking
         cache_status = "BYPASS"
@@ -1697,11 +1957,14 @@ class ProxyService:
                                     collected_usage["completion_tokens"] = output_tokens
 
                                 elif chunk_type == "content_block_delta":
-                                    # 收集文本内容
+                                    # 收集文本内容（包括 thinking 和 text）
                                     delta = chunk.get("delta", {})
                                     text = delta.get("text", "")
+                                    thinking = delta.get("thinking", "")
                                     if text:
                                         collector.add_chunk(text)
+                                    if thinking:
+                                        collector.add_chunk(thinking)
 
                                 elif chunk_type == "message_stop":
                                     # 记录结束
@@ -1738,12 +2001,14 @@ class ProxyService:
 
             except Exception as e:
                 stream_error = e
+                mapped_request_error = ProxyService._map_upstream_request_error(e)
+                error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
                 logger.error("Anthropic stream error on channel %s: %s", channel.name, e)
                 error_payload = json.dumps({
                     "type": "error",
                     "error": {
                         "type": "proxy_error",
-                        "message": f"Stream error: {str(e)}",
+                        "message": error_message,
                     },
                 })
                 yield f"event: error\ndata: {error_payload}\n\n"
@@ -1751,10 +2016,14 @@ class ProxyService:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
                     if stream_error:
-                        ProxyService._record_channel_failure(db, channel)
+                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
+                        if not mapped_request_error:
+                            ProxyService._record_channel_failure(db, channel)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
-                            client_ip, True, str(stream_error), channel=channel,
+                            client_ip, True,
+                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            channel=channel,
                             response_time_ms=response_time_ms,
                         )
                     else:
@@ -1812,7 +2081,12 @@ class ProxyService:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
-        headers = ProxyService._build_headers(channel, "anthropic", request_headers=request_headers)
+        headers = ProxyService._build_headers(
+            channel,
+            "anthropic",
+            request_headers=request_headers,
+            model_name=request_data.get("model", requested_model),
+        )
 
         request_data["stream"] = False
 
@@ -2102,6 +2376,7 @@ class ProxyService:
         channel: Channel,
         protocol_type: str,
         request_headers: Optional[dict[str, str]] = None,
+        model_name: Optional[str] = None,
     ) -> dict[str, str]:
         """Build upstream request headers based on protocol type and channel auth config."""
         headers = {
@@ -2136,6 +2411,9 @@ class ProxyService:
             headers["anthropic-api-key"] = channel.api_key
         else:  # x-api-key (default)
             headers["x-api-key"] = channel.api_key
+
+        if protocol_type == "anthropic" and ProxyService._is_kiro_amazonq_channel(channel, model_name):
+            headers.pop("anthropic-beta", None)
 
         return headers
 

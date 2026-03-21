@@ -412,7 +412,9 @@ INSERT INTO `unified_model` (`id`, `model_name`, `display_name`, `model_type`, `
 (10, 'gpt-5.2-codex', 'GPT-5.2 Codex', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.2 Codex'),
 (11, 'gpt-5.3-codex', 'GPT-5.3 Codex', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.3 Codex'),
 (12, 'gpt-5.4', 'GPT-5.4', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.4'),
-(13, 'gemini-2.5-flash', 'Gemini 2.5 Flash', 'chat', 'openai', 65536, 0.150000, 0.600000, 1, 'Google Gemini 2.5 Flash');
+(13, 'gemini-2.5-flash', 'Gemini 2.5 Flash', 'chat', 'openai', 65536, 0.150000, 0.600000, 1, 'Google Gemini 2.5 Flash'),
+(26, 'claude-sonnet-4-5-thinking', 'Claude Sonnet 4.5 Thinking', 'chat', 'openai', 8192, 3.000000, 15.000000, 1, 'Claude Sonnet 4.5 with extended thinking capability'),
+(27, 'claude-haiku-4-5-thinking', 'Claude Haiku 4.5 Thinking', 'chat', 'openai', 8192, 0.800000, 4.000000, 1, 'Claude Haiku 4.5 with extended thinking capability');
 
 -- ============================================================
 -- 预置模型-渠道映射配置
@@ -450,7 +452,11 @@ INSERT INTO `model_channel_mapping` (`id`, `unified_model_id`, `channel_id`, `ac
 -- GPT 5.4 映射
 (16, 12, 7, 'gpt-5.4', 1),
 -- Gemini 2.5 Flash 映射
-(17, 13, 8, 'gemini-2.5-flash', 1);
+(17, 13, 8, 'gemini-2.5-flash', 1),
+-- Claude Sonnet 4.5 Thinking 映射
+(51, 26, 9, 'claude-sonnet-4-5-thinking', 1),
+-- Claude Haiku 4.5 Thinking 映射
+(52, 27, 9, 'claude-haiku-4-5-thinking', 1);
 
 -- ============================================================
 -- 预置模型覆盖规则配置

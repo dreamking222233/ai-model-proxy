@@ -38,6 +38,7 @@ from app.models.log import (
 from app.services.model_service import ModelService
 from app.services.health_service import get_system_config
 from app.core.exceptions import ServiceException
+from app.middleware.cache_middleware import CacheMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,147 @@ class ResponsesTurnError(Exception):
 
 class ProxyService:
     """Stateless proxy that forwards LLM requests through managed channels."""
+
+    @staticmethod
+    def _is_kiro_amazonq_channel(channel: Channel, model_name: Optional[str] = None) -> bool:
+        """
+        Detect the Claude relay backed by Kiro / Amazon Q compatibility logic.
+
+        The production environment may expose it either by explicit keywords
+        (``kiro`` / ``amazonq``) or by the known relay host on 43.156.153.12.
+        The host check is limited to Claude-family models so Codex/GPT relays
+        on the same machine are not affected.
+        """
+        metadata = " ".join([
+            str(getattr(channel, "name", "") or ""),
+            str(getattr(channel, "base_url", "") or ""),
+            str(getattr(channel, "description", "") or ""),
+        ]).lower()
+        if any(keyword in metadata for keyword in ("kiro", "amazonq", "amazon q")):
+            return True
+
+        target_model = str(model_name or "").lower()
+        return "43.156.153.12" in metadata and target_model.startswith("claude")
+
+    @staticmethod
+    def _stringify_legacy_function_content(content):
+        """Convert tool/function message content into a legacy string payload."""
+        if content is None or isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            return json.dumps(content, ensure_ascii=False)
+        if not isinstance(content, list):
+            return str(content)
+
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                parts.append(str(item))
+                continue
+
+            item_type = str(item.get("type", "") or "")
+            if item_type in {"text", "input_text", "output_text"} and item.get("text") is not None:
+                parts.append(str(item.get("text")))
+            elif "text" in item and item.get("text") is not None:
+                parts.append(str(item.get("text")))
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False))
+
+        return "\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _convert_openai_tool_history_for_kiro(messages):
+        """
+        Convert new-style OpenAI tool history into the legacy function-call form.
+
+        The Kiro / Amazon Q relay accepts top-level ``tools`` definitions, but
+        rejects historical ``assistant.tool_calls`` plus ``tool`` messages with
+        ``Improperly formed request``. Rewriting only the history preserves the
+        current channel while keeping top-level tool support intact.
+        """
+        if not isinstance(messages, list):
+            return messages
+
+        converted_messages = []
+        tool_name_by_id: dict[str, str] = {}
+
+        for raw_message in messages:
+            if not isinstance(raw_message, dict):
+                converted_messages.append(raw_message)
+                continue
+
+            message = copy.deepcopy(raw_message)
+            role = str(message.get("role", "") or "")
+            tool_calls = message.get("tool_calls")
+
+            if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+                base_message = {
+                    key: value
+                    for key, value in message.items()
+                    if key not in {"tool_calls", "tool_call_id"}
+                }
+
+                for index, tool_call in enumerate(tool_calls):
+                    if not isinstance(tool_call, dict):
+                        continue
+
+                    function_payload = tool_call.get("function")
+                    if not isinstance(function_payload, dict):
+                        continue
+
+                    call_id = str(tool_call.get("id", "") or "")
+                    function_name = str(function_payload.get("name", "") or "")
+                    if call_id and function_name:
+                        tool_name_by_id[call_id] = function_name
+
+                    legacy_message = copy.deepcopy(base_message)
+                    legacy_message["function_call"] = copy.deepcopy(function_payload)
+
+                    content = legacy_message.get("content")
+                    if content is not None and not isinstance(content, str):
+                        legacy_message["content"] = ProxyService._stringify_legacy_function_content(content)
+                    if index > 0:
+                        legacy_message["content"] = None
+
+                    converted_messages.append(legacy_message)
+
+                continue
+
+            if role == "tool":
+                tool_call_id = str(message.pop("tool_call_id", "") or "")
+                message["role"] = "function"
+                message["name"] = (
+                    str(message.get("name", "") or "")
+                    or tool_name_by_id.get(tool_call_id)
+                    or "tool"
+                )
+                message["content"] = ProxyService._stringify_legacy_function_content(
+                    message.get("content")
+                )
+                converted_messages.append(message)
+                continue
+
+            if role == "function":
+                message["content"] = ProxyService._stringify_legacy_function_content(
+                    message.get("content")
+                )
+
+            converted_messages.append(message)
+
+        return converted_messages
+
+    @staticmethod
+    def _prepare_openai_request_for_channel(channel: Channel, request_data: dict) -> dict:
+        """Apply channel-specific compatibility rewrites before forwarding."""
+        prepared = copy.deepcopy(request_data)
+        if ProxyService._is_kiro_amazonq_channel(channel, prepared.get("model")):
+            prepared["messages"] = ProxyService._convert_openai_tool_history_for_kiro(
+                prepared.get("messages")
+            )
+        return prepared
 
     # -------------------------------------------------------------------
     # OpenAI Responses API entry point (for Codex CLI)
@@ -909,6 +1051,9 @@ class ProxyService:
                 # Build upstream request with the actual model name
                 request_data_copy = dict(request_data)
                 request_data_copy["model"] = actual_model_name
+                request_data_copy = ProxyService._prepare_openai_request_for_channel(
+                    channel, request_data_copy
+                )
 
                 if is_stream:
                     return await ProxyService._stream_openai_request(
@@ -1190,45 +1335,91 @@ class ProxyService:
 
         request_data["stream"] = False
 
-        timeout = httpx.Timeout(
-            _UPSTREAM_TIMEOUT,
-            connect=_UPSTREAM_CONNECT_TIMEOUT,
+        # Define upstream call function for cache middleware
+        async def upstream_call():
+            timeout = httpx.Timeout(
+                _UPSTREAM_TIMEOUT,
+                connect=_UPSTREAM_CONNECT_TIMEOUT,
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=request_data, headers=headers)
+
+            if resp.status_code != 200:
+                raise Exception(
+                    f"Upstream returned HTTP {resp.status_code}: "
+                    f"{resp.text[:500]}"
+                )
+
+            # Some upstreams always return SSE even with stream=false.
+            # Detect and parse SSE to reconstruct a non-streaming response.
+            content_type = resp.headers.get("content-type", "")
+            if "text/event-stream" in content_type or resp.text.lstrip().startswith("data: "):
+                response_body, input_tokens, output_tokens = (
+                    ProxyService._parse_sse_to_non_stream_openai(resp.text)
+                )
+            else:
+                response_body = resp.json()
+                usage = response_body.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+
+            # Return standardized response format for cache middleware
+            return {
+                "response": response_body,
+                "model": request_data.get("model"),
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                }
+            }
+
+        # Wrap request with cache middleware
+        cache_response, cache_info = await CacheMiddleware.wrap_request(
+            request_body=request_data,
+            headers=request_headers or {},
+            user=user,
+            db=db,
+            upstream_call=upstream_call,
+            unified_model=unified_model,
         )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=request_data, headers=headers)
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        if resp.status_code != 200:
-            raise Exception(
-                f"Upstream returned HTTP {resp.status_code}: "
-                f"{resp.text[:500]}"
-            )
+        # Extract response body and tokens
+        response_body = cache_response.get("response", cache_response)
+        actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
+        actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        # Some upstreams always return SSE even with stream=false.
-        # Detect and parse SSE to reconstruct a non-streaming response.
-        content_type = resp.headers.get("content-type", "")
-        if "text/event-stream" in content_type or resp.text.lstrip().startswith("data: "):
-            response_body, input_tokens, output_tokens = (
-                ProxyService._parse_sse_to_non_stream_openai(resp.text)
-            )
-        else:
-            response_body = resp.json()
-            usage = response_body.get("usage", {})
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
+        # Get billing tokens based on cache info
+        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
+            cache_info=cache_info,
+            user=user,
+            actual_tokens={
+                "input_tokens": actual_input_tokens,
+                "output_tokens": actual_output_tokens,
+            }
+        )
 
-        # Record success and do accounting
+        # Record success and do accounting with billing tokens
         ProxyService._record_success(db, channel)
         ProxyService._deduct_balance_and_log(
             db, user, api_key_record, unified_model, request_id,
-            requested_model, input_tokens, output_tokens, channel,
+            requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
         )
 
+        # Add cache status header
+        response_headers = {"X-Request-ID": request_id}
+        if cache_info and cache_info.get("is_cache_hit"):
+            response_headers["X-Cache-Status"] = "HIT"
+        elif cache_info is None:
+            response_headers["X-Cache-Status"] = "BYPASS"
+        else:
+            response_headers["X-Cache-Status"] = "MISS"
+
         return JSONResponse(
             content=response_body,
-            headers={"X-Request-ID": request_id},
+            headers=response_headers,
         )
 
     # ===================================================================
@@ -1410,43 +1601,90 @@ class ProxyService:
 
         request_data["stream"] = False
 
-        timeout = httpx.Timeout(
-            _UPSTREAM_TIMEOUT,
-            connect=_UPSTREAM_CONNECT_TIMEOUT,
+        # Define upstream call function for cache middleware
+        async def upstream_call():
+            timeout = httpx.Timeout(
+                _UPSTREAM_TIMEOUT,
+                connect=_UPSTREAM_CONNECT_TIMEOUT,
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=request_data, headers=headers)
+
+            if resp.status_code != 200:
+                raise Exception(
+                    f"Upstream returned HTTP {resp.status_code}: "
+                    f"{resp.text[:500]}"
+                )
+
+            # Some upstreams always return SSE even with stream=false.
+            content_type = resp.headers.get("content-type", "")
+            if "text/event-stream" in content_type or resp.text.lstrip().startswith("event: "):
+                response_body, input_tokens, output_tokens = (
+                    ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
+                )
+            else:
+                response_body = resp.json()
+                usage = response_body.get("usage", {})
+                input_tokens = usage.get("input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+
+            # Return standardized response format for cache middleware
+            return {
+                "response": response_body,
+                "model": request_data.get("model"),
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                }
+            }
+
+        # Wrap request with cache middleware
+        cache_response, cache_info = await CacheMiddleware.wrap_request(
+            request_body=request_data,
+            headers=request_headers or {},
+            user=user,
+            db=db,
+            upstream_call=upstream_call,
+            unified_model=unified_model,
         )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=request_data, headers=headers)
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        if resp.status_code != 200:
-            raise Exception(
-                f"Upstream returned HTTP {resp.status_code}: "
-                f"{resp.text[:500]}"
-            )
+        # Extract response body and tokens
+        response_body = cache_response.get("response", cache_response)
+        actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
+        actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        # Some upstreams always return SSE even with stream=false.
-        content_type = resp.headers.get("content-type", "")
-        if "text/event-stream" in content_type or resp.text.lstrip().startswith("event: "):
-            response_body, input_tokens, output_tokens = (
-                ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
-            )
-        else:
-            response_body = resp.json()
-            usage = response_body.get("usage", {})
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
+        # Get billing tokens based on cache info
+        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
+            cache_info=cache_info,
+            user=user,
+            actual_tokens={
+                "input_tokens": actual_input_tokens,
+                "output_tokens": actual_output_tokens,
+            }
+        )
 
+        # Record success and do accounting with billing tokens
         ProxyService._record_success(db, channel)
         ProxyService._deduct_balance_and_log(
             db, user, api_key_record, unified_model, request_id,
-            requested_model, input_tokens, output_tokens, channel,
+            requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
         )
 
+        # Add cache status header
+        response_headers = {"X-Request-ID": request_id}
+        if cache_info and cache_info.get("is_cache_hit"):
+            response_headers["X-Cache-Status"] = "HIT"
+        elif cache_info is None:
+            response_headers["X-Cache-Status"] = "BYPASS"
+        else:
+            response_headers["X-Cache-Status"] = "MISS"
+
         return JSONResponse(
             content=response_body,
-            headers={"X-Request-ID": request_id},
+            headers=response_headers,
         )
 
     # ===================================================================

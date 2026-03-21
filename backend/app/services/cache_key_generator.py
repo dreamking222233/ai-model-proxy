@@ -128,7 +128,7 @@ def should_cache(
         True 表示应该缓存，False 表示不应该缓存
     """
     # 1. 检查用户缓存开关
-    if not getattr(user, 'enable_cache', True):
+    if not getattr(user, 'cache_enabled', True):
         logger.debug(f"Cache disabled for user {user.id}")
         return False
 

@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/admin/cache", tags=["管理-缓存管理"])
 
 
 class CacheConfigUpdate(BaseModel):
-    enable_cache: int
+    cache_enabled: int
     cache_billing_enabled: int
 
 
@@ -71,7 +71,7 @@ async def update_cache_config(
         update(SysUser)
         .where(SysUser.id == user_id)
         .values(
-            enable_cache=data.enable_cache,
+            cache_enabled=data.cache_enabled,
             cache_billing_enabled=data.cache_billing_enabled
         )
     )
@@ -80,7 +80,7 @@ async def update_cache_config(
     LogService.create_operation_log(
         db, current_user.id, current_user.username,
         "update_cache_config", "user_cache", user_id,
-        f"Updated cache config: enable_cache={data.enable_cache}, cache_billing_enabled={data.cache_billing_enabled}",
+        f"Updated cache config: cache_enabled={data.cache_enabled}, cache_billing_enabled={data.cache_billing_enabled}",
         None,
     )
 

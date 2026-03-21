@@ -44,7 +44,7 @@ def get_cache_config(
 ):
     """Get user cache configuration."""
     return ResponseModel(data={
-        "enable_cache": current_user.enable_cache,
+        "cache_enabled": current_user.cache_enabled,
         "cache_billing_enabled": current_user.cache_billing_enabled,
         "cache_hit_count": current_user.cache_hit_count,
         "cache_saved_tokens": current_user.cache_saved_tokens,

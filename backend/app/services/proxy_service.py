@@ -39,6 +39,7 @@ from app.services.model_service import ModelService
 from app.services.health_service import get_system_config
 from app.core.exceptions import ServiceException
 from app.middleware.cache_middleware import CacheMiddleware
+from app.middleware.stream_cache_middleware import StreamCacheMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -647,15 +648,34 @@ class ProxyService:
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
-        """Forward a streaming Responses request to upstream ``/responses``."""
+        """Forward a streaming Responses request to upstream ``/responses``.
+        Cache: caches complete response and replays as stream on cache hit.
+        """
         start_time = time.time()
-        async def event_generator():
+        model_name = request_data.get("model", requested_model)
+
+        # Cache status tracking
+        cache_status = "BYPASS"
+        billing_input_tokens = 0
+        billing_output_tokens = 0
+        billing_is_cache_hit = False
+
+        def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
+            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            billing_input_tokens = input_tok
+            billing_output_tokens = output_tok
+            billing_is_cache_hit = is_hit
+
+        async def upstream_call(collector, collected_usage):
+            """上游 Responses API 流式调用"""
+            nonlocal cache_status
+            cache_status = "MISS"
             input_tokens = 0
             output_tokens = 0
             completed = False
             saw_error = False
             error_message = ""
-            stream_error: Exception | None = None
+            stream_error = None
 
             try:
                 async for payload in ProxyService._iter_responses_upstream_payloads(
@@ -668,12 +688,22 @@ class ProxyService:
                     if payload_type == "response.completed":
                         completed = True
                         input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                        collected_usage["prompt_tokens"] = input_tokens
+                        collected_usage["completion_tokens"] = output_tokens
+                        # 记录结束
+                        collector.add_chunk("", "stop")
                     elif payload_type == "error":
                         saw_error = True
                         error_message = (
                             payload.get("error", {}).get("message")
                             or "Upstream responses error"
                         )
+                    elif payload_type == "response.output_text.delta":
+                        # 收集文本内容
+                        delta = payload.get("delta", "")
+                        if delta:
+                            collector.add_chunk(delta)
+
                     yield ProxyService._payload_to_sse(payload)
 
                 if completed:
@@ -698,6 +728,36 @@ class ProxyService:
                         status_code=502,
                     )
                 )
+                raise
+
+            billing_callback(input_tokens, output_tokens, False)
+
+        async def event_generator():
+            stream_error = None
+
+            try:
+                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
+                    request_body=request_data,
+                    headers=request_headers or {},
+                    user=user,
+                    db=db,
+                    upstream_call=upstream_call,
+                    unified_model=unified_model,
+                    protocol="responses",
+                    model=model_name,
+                    billing_callback=billing_callback,
+                ):
+                    yield sse_line
+
+            except Exception as exc:
+                stream_error = exc
+                logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
+                yield ProxyService._payload_to_sse(
+                    ProxyService._build_responses_error_payload(
+                        str(exc),
+                        status_code=502,
+                    )
+                )
             finally:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
@@ -710,9 +770,15 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
+                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
+                            final_input = 0
+                            final_output = 0
+                        else:
+                            final_input = billing_input_tokens
+                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, input_tokens, output_tokens, channel,
+                            requested_model, final_input, final_output, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -725,6 +791,9 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
+                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
+                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
+                "X-Cache-Status": "STREAM",
             },
         )
 
@@ -963,30 +1032,77 @@ class ProxyService:
         url = f"{base_url}/responses"
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
 
-        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=request_data, headers=headers)
+        # Define upstream call function for cache middleware
+        async def upstream_call():
+            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=request_data, headers=headers)
+
+            if resp.status_code != 200:
+                raise Exception(f"Upstream returned HTTP {resp.status_code}: {resp.text[:500]}")
+
+            response_body, input_tokens, output_tokens = ProxyService._parse_non_stream_responses_body(
+                resp.text
+            )
+            response_body = ProxyService._rewrite_response_model(response_body, requested_model)
+
+            # Return standardized response format for cache middleware
+            return {
+                "response": response_body,
+                "model": request_data.get("model"),
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                }
+            }
+
+        # Wrap request with cache middleware
+        cache_response, cache_info = await CacheMiddleware.wrap_request(
+            request_body=request_data,
+            headers=request_headers or {},
+            user=user,
+            db=db,
+            upstream_call=upstream_call,
+            unified_model=unified_model,
+        )
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        if response.status_code != 200:
-            raise Exception(f"Upstream returned HTTP {response.status_code}: {response.text[:500]}")
+        # Extract response body and tokens
+        response_body = cache_response.get("response", cache_response)
+        actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
+        actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        response_body, input_tokens, output_tokens = ProxyService._parse_non_stream_responses_body(
-            response.text
+        # Get billing tokens based on cache info
+        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
+            cache_info=cache_info,
+            user=user,
+            actual_tokens={
+                "input_tokens": actual_input_tokens,
+                "output_tokens": actual_output_tokens,
+            }
         )
-        response_body = ProxyService._rewrite_response_model(response_body, requested_model)
 
+        # Record success and do accounting with billing tokens
         ProxyService._record_success(db, channel)
         ProxyService._deduct_balance_and_log(
             db, user, api_key_record, unified_model, request_id,
-            requested_model, input_tokens, output_tokens, channel,
+            requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
         )
 
+        # Add cache status header
+        response_headers = {"X-Request-ID": request_id}
+        if cache_info and cache_info.get("is_cache_hit"):
+            response_headers["X-Cache-Status"] = "HIT"
+        elif cache_info is None:
+            response_headers["X-Cache-Status"] = "BYPASS"
+        else:
+            response_headers["X-Cache-Status"] = "MISS"
+
         return JSONResponse(
             content=response_body,
-            headers={"X-Request-ID": request_id},
+            headers=response_headers,
         )
 
     # -------------------------------------------------------------------
@@ -1189,6 +1305,7 @@ class ProxyService:
         Reads SSE lines from upstream, forwards each ``data: {...}`` chunk to
         the client. After the stream ends (``data: [DONE]``), extracts token
         usage from the final chunk (if present), deducts balance, and logs.
+        Cache: caches complete response and replays as stream on cache hit.
         """
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -1201,70 +1318,111 @@ class ProxyService:
         if "stream_options" not in request_data:
             request_data["stream_options"] = {"include_usage": True}
 
-        async def event_generator():
+        model_name = request_data.get("model", requested_model)
+
+        # Cache status tracking
+        cache_status = "BYPASS"
+        billing_input_tokens = 0
+        billing_output_tokens = 0
+        billing_is_cache_hit = False
+
+        def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
+            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            billing_input_tokens = input_tok
+            billing_output_tokens = output_tok
+            billing_is_cache_hit = is_hit
+
+        async def upstream_call(collector, collected_usage):
+            """上游流式调用，同时通过 collector 收集 chunks"""
+            nonlocal cache_status
+            cache_status = "MISS"
+
             input_tokens = 0
             output_tokens = 0
+
+            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST", url, json=request_data, headers=headers,
+                ) as response:
+                    if response.status_code != 200:
+                        body = await response.aread()
+                        raise Exception(
+                            f"Upstream returned HTTP {response.status_code}: "
+                            f"{body.decode('utf-8', errors='replace')[:500]}"
+                        )
+
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+
+                            if data_str.strip() == "[DONE]":
+                                yield "data: [DONE]\n\n"
+                                completion_event = json.dumps({
+                                    "type": "response.completed",
+                                    "usage": {
+                                        "input_tokens": input_tokens,
+                                        "output_tokens": output_tokens,
+                                        "total_tokens": input_tokens + output_tokens,
+                                    },
+                                })
+                                yield f"data: {completion_event}\n\n"
+                                break
+
+                            try:
+                                chunk = json.loads(data_str)
+                                usage = chunk.get("usage")
+                                if usage:
+                                    input_tokens = usage.get("prompt_tokens", 0)
+                                    output_tokens = usage.get("completion_tokens", 0)
+                                    collected_usage["prompt_tokens"] = input_tokens
+                                    collected_usage["completion_tokens"] = output_tokens
+
+                                # 收集文本内容
+                                choices = chunk.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    finish_reason = choices[0].get("finish_reason")
+                                    if content or finish_reason:
+                                        collector.add_chunk(content or "", finish_reason)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                            yield f"data: {data_str}\n\n"
+                        else:
+                            yield f"{line}\n"
+
+            # 更新计费 tokens
+            billing_input_tokens_local = input_tokens
+            billing_output_tokens_local = output_tokens
+            billing_callback(billing_input_tokens_local, billing_output_tokens_local, False)
+
+        async def event_generator():
+            nonlocal cache_status
             stream_error = None
 
             try:
-                timeout = httpx.Timeout(
-                    _UPSTREAM_TIMEOUT,
-                    connect=_UPSTREAM_CONNECT_TIMEOUT,
-                )
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream(
-                        "POST", url, json=request_data, headers=headers,
-                    ) as response:
-                        if response.status_code != 200:
-                            body = await response.aread()
-                            raise Exception(
-                                f"Upstream returned HTTP {response.status_code}: "
-                                f"{body.decode('utf-8', errors='replace')[:500]}"
-                            )
-
-                        async for line in response.aiter_lines():
-                            if not line:
-                                # Empty line is the SSE record separator - skip it
-                                # The upstream already sends proper SSE format with \n\n
-                                continue
-
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-
-                                if data_str.strip() == "[DONE]":
-                                    # Send standard [DONE] for OpenAI clients
-                                    yield "data: [DONE]\n\n"
-                                    # Send response.completed event for Codex CLI compatibility
-                                    completion_event = json.dumps({
-                                        "type": "response.completed",
-                                        "usage": {
-                                            "input_tokens": input_tokens,
-                                            "output_tokens": output_tokens,
-                                            "total_tokens": input_tokens + output_tokens
-                                        }
-                                    })
-                                    yield f"data: {completion_event}\n\n"
-                                    break
-
-                                # Try to extract usage from this chunk
-                                try:
-                                    chunk = json.loads(data_str)
-                                    usage = chunk.get("usage")
-                                    if usage:
-                                        input_tokens = usage.get("prompt_tokens", 0)
-                                        output_tokens = usage.get("completion_tokens", 0)
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
-
-                                yield f"data: {data_str}\n\n"
-                            else:
-                                # Forward any other SSE fields (e.g., event:, id:)
-                                yield f"{line}\n"
+                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
+                    request_body=request_data,
+                    headers=request_headers or {},
+                    user=user,
+                    db=db,
+                    upstream_call=upstream_call,
+                    unified_model=unified_model,
+                    protocol="openai",
+                    model=model_name,
+                    billing_callback=billing_callback,
+                ):
+                    # 检测是否是缓存命中（wrap 内部会设置 cache_status）
+                    yield sse_line
 
             except Exception as e:
                 stream_error = e
                 logger.error("OpenAI stream error on channel %s: %s", channel.name, e)
-                # Send an error event to the client
                 error_payload = json.dumps({
                     "error": {
                         "message": f"Stream error: {str(e)}",
@@ -1275,7 +1433,6 @@ class ProxyService:
                 yield f"data: {error_payload}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
-                # Post-stream accounting
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
                     if stream_error:
@@ -1287,9 +1444,16 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
+                        # 根据缓存计费配置决定计费 tokens
+                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
+                            final_input = 0
+                            final_output = 0
+                        else:
+                            final_input = billing_input_tokens
+                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, input_tokens, output_tokens, channel,
+                            requested_model, final_input, final_output, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -1302,6 +1466,9 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
+                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
+                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
+                "X-Cache-Status": "STREAM",
             },
         )
 
@@ -1457,6 +1624,7 @@ class ProxyService:
 
         Usage info comes from ``message_start`` (input_tokens) and
         ``message_delta`` (output_tokens).
+        Cache: caches complete response and replays as stream on cache hit.
         """
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -1464,71 +1632,109 @@ class ProxyService:
         headers = ProxyService._build_headers(channel, "anthropic", request_headers=request_headers)
 
         request_data["stream"] = True
+        model_name = request_data.get("model", requested_model)
 
-        async def event_generator():
+        # Cache status tracking
+        cache_status = "BYPASS"
+        billing_input_tokens = 0
+        billing_output_tokens = 0
+        billing_is_cache_hit = False
+
+        def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
+            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            billing_input_tokens = input_tok
+            billing_output_tokens = output_tok
+            billing_is_cache_hit = is_hit
+
+        async def upstream_call(collector, collected_usage):
+            """上游流式调用，同时通过 collector 收集 chunks"""
+            nonlocal cache_status
+            cache_status = "MISS"
             input_tokens = 0
             output_tokens = 0
+
+            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST", url, json=request_data, headers=headers,
+                ) as response:
+                    if response.status_code != 200:
+                        body = await response.aread()
+                        raise Exception(
+                            f"Upstream returned HTTP {response.status_code}: "
+                            f"{body.decode('utf-8', errors='replace')[:500]}"
+                        )
+
+                    current_event = ""
+                    async for line in response.aiter_lines():
+                        if not line:
+                            yield "\n"
+                            continue
+
+                        if line.startswith("event: "):
+                            current_event = line[7:].strip()
+                            yield f"{line}\n"
+                            continue
+
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+
+                            try:
+                                chunk = json.loads(data_str)
+                                chunk_type = chunk.get("type", "")
+
+                                if chunk_type == "message_start":
+                                    msg = chunk.get("message", {})
+                                    usage = msg.get("usage", {})
+                                    input_tokens = usage.get("input_tokens", 0)
+
+                                elif chunk_type == "message_delta":
+                                    usage = chunk.get("usage", {})
+                                    output_tokens = usage.get("output_tokens", output_tokens)
+                                    if "input_tokens" in usage and usage["input_tokens"]:
+                                        input_tokens = usage["input_tokens"]
+                                    collected_usage["prompt_tokens"] = input_tokens
+                                    collected_usage["completion_tokens"] = output_tokens
+
+                                elif chunk_type == "content_block_delta":
+                                    # 收集文本内容
+                                    delta = chunk.get("delta", {})
+                                    text = delta.get("text", "")
+                                    if text:
+                                        collector.add_chunk(text)
+
+                                elif chunk_type == "message_stop":
+                                    # 记录结束
+                                    collector.add_chunk("", "end_turn")
+
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                            yield f"data: {data_str}\n\n"
+
+                            if current_event == "message_stop":
+                                break
+                        else:
+                            yield f"{line}\n"
+
+            billing_callback(input_tokens, output_tokens, False)
+
+        async def event_generator():
             stream_error = None
 
             try:
-                timeout = httpx.Timeout(
-                    _UPSTREAM_TIMEOUT,
-                    connect=_UPSTREAM_CONNECT_TIMEOUT,
-                )
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream(
-                        "POST", url, json=request_data, headers=headers,
-                    ) as response:
-                        if response.status_code != 200:
-                            body = await response.aread()
-                            raise Exception(
-                                f"Upstream returned HTTP {response.status_code}: "
-                                f"{body.decode('utf-8', errors='replace')[:500]}"
-                            )
-
-                        current_event = ""
-                        async for line in response.aiter_lines():
-                            if not line:
-                                yield "\n"
-                                continue
-
-                            if line.startswith("event: "):
-                                current_event = line[7:].strip()
-                                yield f"{line}\n"
-                                continue
-
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-
-                                # Parse to extract usage info
-                                try:
-                                    chunk = json.loads(data_str)
-                                    chunk_type = chunk.get("type", "")
-
-                                    if chunk_type == "message_start":
-                                        # Input tokens from message.usage
-                                        msg = chunk.get("message", {})
-                                        usage = msg.get("usage", {})
-                                        input_tokens = usage.get("input_tokens", 0)
-
-                                    elif chunk_type == "message_delta":
-                                        # Output tokens from usage; some proxies
-                                        # also put final input_tokens here.
-                                        usage = chunk.get("usage", {})
-                                        output_tokens = usage.get("output_tokens", output_tokens)
-                                        if "input_tokens" in usage and usage["input_tokens"]:
-                                            input_tokens = usage["input_tokens"]
-
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
-
-                                yield f"data: {data_str}\n\n"
-
-                                # Check for message_stop to end
-                                if current_event == "message_stop":
-                                    break
-                            else:
-                                yield f"{line}\n"
+                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
+                    request_body=request_data,
+                    headers=request_headers or {},
+                    user=user,
+                    db=db,
+                    upstream_call=upstream_call,
+                    unified_model=unified_model,
+                    protocol="anthropic",
+                    model=model_name,
+                    billing_callback=billing_callback,
+                ):
+                    yield sse_line
 
             except Exception as e:
                 stream_error = e
@@ -1553,9 +1759,15 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
+                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
+                            final_input = 0
+                            final_output = 0
+                        else:
+                            final_input = billing_input_tokens
+                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, input_tokens, output_tokens, channel,
+                            requested_model, final_input, final_output, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -1568,6 +1780,9 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
+                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
+                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
+                "X-Cache-Status": "STREAM",
             },
         )
 

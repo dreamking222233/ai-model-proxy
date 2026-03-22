@@ -191,7 +191,7 @@ class AuthService:
         if not user:
             raise ServiceException(404, "User not found")
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
-        for field in ("email", "avatar", "status", "role"):
+        for field in ("email", "avatar", "status", "role", "enable_cache", "cache_billing_enabled"):
             if field in d and d[field] is not None:
                 setattr(user, field, d[field])
         db.commit()

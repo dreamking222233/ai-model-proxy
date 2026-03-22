@@ -1,95 +1,170 @@
 <template>
   <div class="system-config-page">
+    <!-- Page Header -->
+    <div class="page-header">
+      <div class="header-content">
+        <a-icon type="setting" class="header-icon" />
+        <div>
+          <h2 class="page-title">系统配置</h2>
+          <p class="page-subtitle">管理系统运行参数和健康检查配置</p>
+        </div>
+      </div>
+      <a-button @click="fetchList" :loading="loading" class="refresh-btn">
+        <a-icon type="reload" :spin="loading" />
+        刷新
+      </a-button>
+    </div>
+
     <!-- Health Check Config Card -->
-    <a-card class="health-check-card" title="健康检查配置">
-      <a-row :gutter="24">
+    <a-card class="health-check-card" :bordered="false">
+      <div slot="title" class="card-title">
+        <a-icon type="heart" class="title-icon pulse" />
+        健康检查配置
+      </div>
+      <div slot="extra">
+        <a-tag color="green" v-if="!savingConfig">
+          <a-icon type="check-circle" />
+          已保存
+        </a-tag>
+        <a-tag color="orange" v-else>
+          <a-icon type="loading" />
+          保存中
+        </a-tag>
+      </div>
+
+      <a-row :gutter="24" class="config-row">
         <a-col :span="6">
-          <a-form-item label="检查间隔">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="clock-circle" />
+              检查间隔
+            </div>
             <a-input-number
               v-model="healthCheckInterval"
               :min="60"
               :max="3600"
-              style="width: 100%"
+              class="config-input"
             >
               <template slot="addonAfter">秒</template>
             </a-input-number>
-            <div class="config-hint">建议: 300秒（5分钟）</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              建议: 300秒（5分钟）
+            </div>
+          </div>
         </a-col>
         <a-col :span="6">
-          <a-form-item label="测试消息">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="message" />
+              测试消息
+            </div>
             <a-input
               v-model="healthCheckMessage"
               placeholder="健康检查时发送的测试消息"
+              class="config-input"
             />
-            <div class="config-hint">用于测试模型响应的消息内容</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              用于测试模型响应的消息内容
+            </div>
+          </div>
         </a-col>
         <a-col :span="6">
-          <a-form-item label="价格倍率">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="dollar" />
+              价格倍率
+            </div>
             <a-input-number
               v-model="priceMultiplier"
               :min="0.1"
               :max="10"
               :step="0.1"
               :precision="1"
-              style="width: 100%"
+              class="config-input"
             >
               <template slot="addonAfter">倍</template>
             </a-input-number>
-            <div class="config-hint">1.0=原价，2.0=2倍价格</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              1.0=原价，2.0=2倍价格
+            </div>
+          </div>
         </a-col>
         <a-col :span="6">
-          <a-form-item label="Token倍率">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="code" />
+              Token倍率
+            </div>
             <a-input-number
               v-model="tokenMultiplier"
               :min="0.1"
               :max="10"
               :step="0.1"
               :precision="1"
-              style="width: 100%"
+              class="config-input"
             >
               <template slot="addonAfter">倍</template>
             </a-input-number>
-            <div class="config-hint">1.0=原始Token，2.0=2倍Token</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              1.0=原始Token，2.0=2倍Token
+            </div>
+          </div>
         </a-col>
       </a-row>
-      <a-row :gutter="24">
+
+      <a-row :gutter="24" class="config-row">
         <a-col :span="12">
-          <a-form-item label="熔断阈值">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="disconnect" />
+              熔断阈值
+            </div>
             <a-input-number
               v-model="circuitBreakerThreshold"
               :min="1"
               :max="20"
-              style="width: 100%"
+              class="config-input"
             >
               <template slot="addonAfter">次</template>
             </a-input-number>
-            <div class="config-hint">连续失败多少次后触发熔断</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              连续失败多少次后触发熔断
+            </div>
+          </div>
         </a-col>
         <a-col :span="12">
-          <a-form-item label="熔断恢复时间">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="reload" />
+              熔断恢复时间
+            </div>
             <a-input-number
               v-model="circuitBreakerRecovery"
               :min="60"
               :max="3600"
-              style="width: 100%"
+              class="config-input"
             >
               <template slot="addonAfter">秒</template>
             </a-input-number>
-            <div class="config-hint">熔断后多久尝试恢复</div>
-          </a-form-item>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              熔断后多久尝试恢复
+            </div>
+          </div>
         </a-col>
       </a-row>
-      <div style="display: flex; gap: 12px;">
-        <a-button type="primary" @click="saveHealthConfig" :loading="savingConfig">
+
+      <div class="action-buttons">
+        <a-button type="primary" @click="saveHealthConfig" :loading="savingConfig" size="large" class="save-btn">
           <a-icon type="save" />
           保存配置
         </a-button>
-        <a-button @click="triggerHealthCheck" :loading="triggeringHealthCheck">
+        <a-button @click="triggerHealthCheck" :loading="triggeringHealthCheck" size="large" class="trigger-btn">
           <a-icon type="thunderbolt" />
           立即执行健康检查
         </a-button>
@@ -97,63 +172,79 @@
     </a-card>
 
     <!-- System Config Table -->
-    <div class="table-toolbar">
-      <h3 style="margin: 0;">系统配置</h3>
-      <a-button @click="fetchList" :loading="loading">
-        <a-icon type="reload" />
-        刷新
-      </a-button>
-    </div>
+    <a-card class="config-table-card" :bordered="false">
+      <div slot="title" class="card-title">
+        <a-icon type="database" class="title-icon" />
+        系统配置列表
+      </div>
 
-    <a-table
-      :columns="columns"
-      :data-source="configList"
-      :loading="loading"
-      :pagination="false"
-      row-key="id"
-      size="middle"
-    >
-      <template slot="configName" slot-scope="text, record">
-        <span style="font-weight: 500; color: #1a1a2e;">{{ configKeyMap[record.config_key] || record.config_key }}</span>
-      </template>
+      <a-table
+        :columns="columns"
+        :data-source="configList"
+        :loading="loading"
+        :pagination="false"
+        row-key="id"
+        size="middle"
+        :row-class-name="(record, index) => index % 2 === 0 ? 'table-row-light' : 'table-row-dark'"
+      >
+        <template slot="configName" slot-scope="text, record">
+          <div class="config-name-cell">
+            <a-icon type="setting" class="config-icon" />
+            <span class="config-name-text">{{ configKeyMap[record.config_key] || record.config_key }}</span>
+          </div>
+        </template>
 
-      <template slot="configKey" slot-scope="text">
-        <code>{{ text }}</code>
-      </template>
+        <template slot="configKey" slot-scope="text">
+          <code class="config-key-code">{{ text }}</code>
+        </template>
 
-      <template slot="configValue" slot-scope="text">
-        <span :title="text">
-          {{ text && text.length > 80 ? text.substring(0, 80) + '...' : (text || '-') }}
-        </span>
-      </template>
+        <template slot="configValue" slot-scope="text">
+          <div class="config-value-cell">
+            <span :title="text" class="config-value-text">
+              {{ text && text.length > 80 ? text.substring(0, 80) + '...' : (text || '-') }}
+            </span>
+          </div>
+        </template>
 
-      <template slot="configType" slot-scope="text">
-        <a-tag>{{ text || 'string' }}</a-tag>
-      </template>
+        <template slot="configType" slot-scope="text">
+          <a-tag :color="getTypeColor(text)">{{ text || 'string' }}</a-tag>
+        </template>
 
-      <template slot="action" slot-scope="text, record">
-        <a @click="handleEdit(record)">编辑</a>
-      </template>
-    </a-table>
+        <template slot="action" slot-scope="text, record">
+          <a @click="handleEdit(record)" class="edit-link">
+            <a-icon type="edit" />
+            编辑
+          </a>
+        </template>
+      </a-table>
+    </a-card>
 
     <!-- Edit Config Modal -->
     <a-modal
-      title="编辑配置"
       :visible="modalVisible"
       :confirm-loading="modalLoading"
       @ok="handleModalOk"
       @cancel="modalVisible = false"
-      :width="500"
+      :width="600"
+      :class="'config-modal'"
     >
-      <a-form layout="vertical">
+      <div slot="title" class="modal-title">
+        <a-icon type="edit" />
+        编辑配置
+      </div>
+
+      <a-form layout="vertical" class="config-form">
         <a-form-item label="配置项">
-          <a-input :value="editForm.config_key" disabled />
+          <a-input :value="editForm.config_key" disabled class="disabled-input" />
         </a-form-item>
         <a-form-item label="描述">
-          <span>{{ editForm.description || '无描述' }}</span>
+          <div class="description-text">
+            <a-icon type="info-circle" />
+            {{ editForm.description || '无描述' }}
+          </div>
         </a-form-item>
         <a-form-item label="类型">
-          <a-tag>{{ editForm.config_type || 'string' }}</a-tag>
+          <a-tag :color="getTypeColor(editForm.config_type)">{{ editForm.config_type || 'string' }}</a-tag>
         </a-form-item>
         <a-form-item label="值">
           <a-textarea
@@ -161,25 +252,39 @@
             v-model="editForm.config_value"
             :rows="6"
             placeholder="请输入配置值"
+            class="config-textarea"
           />
           <a-input-number
             v-else-if="editForm.config_type === 'number' || editForm.config_type === 'integer'"
             v-model="editForm.config_value_number"
             style="width: 100%;"
+            class="config-input"
           />
           <a-switch
             v-else-if="editForm.config_type === 'boolean'"
             :checked="editForm.config_value === 'true'"
             @change="val => editForm.config_value = val ? 'true' : 'false'"
+            checked-children="开"
+            un-checked-children="关"
           />
           <a-input
             v-else
             v-model="editForm.config_value"
             placeholder="请输入配置值"
+            class="config-input"
           />
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- Success Animation -->
+    <transition name="success-fade">
+      <div v-if="showSuccessAnimation" class="success-overlay">
+        <div class="success-checkmark">
+          <a-icon type="check-circle" />
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -200,6 +305,7 @@ export default {
       circuitBreakerRecovery: 600,
       triggeringHealthCheck: false,
       savingConfig: false,
+      showSuccessAnimation: false,
       configKeyMap: {
         'health_check_interval': '健康检查间隔',
         'circuit_breaker_threshold': '熔断阈值',
@@ -241,7 +347,7 @@ export default {
         {
           title: '操作',
           key: 'action',
-          width: 80,
+          width: 100,
           scopedSlots: { customRender: 'action' }
         }
       ],
@@ -285,6 +391,7 @@ export default {
           }
         })
       } catch (err) {
+        this.$message.error('获取配置失败')
         console.error('Failed to fetch configs:', err)
       } finally {
         this.loading = false
@@ -310,8 +417,13 @@ export default {
         }
 
         this.$message.success('配置保存成功')
+        this.showSuccessAnimation = true
+        setTimeout(() => {
+          this.showSuccessAnimation = false
+        }, 1500)
         this.fetchList()
       } catch (err) {
+        this.$message.error('配置保存失败')
         console.error('Failed to save config:', err)
       } finally {
         this.savingConfig = false
@@ -323,6 +435,7 @@ export default {
         await triggerHealthCheck()
         this.$message.success('健康检查已触发，请稍后查看健康监控页面')
       } catch (err) {
+        this.$message.error('触发健康检查失败')
         console.error('Failed to trigger health check:', err)
       } finally {
         this.triggeringHealthCheck = false
@@ -353,10 +466,21 @@ export default {
         this.modalVisible = false
         this.fetchList()
       } catch (err) {
+        this.$message.error('配置更新失败')
         console.error('Failed to update config:', err)
       } finally {
         this.modalLoading = false
       }
+    },
+    getTypeColor(type) {
+      const colorMap = {
+        'string': 'blue',
+        'number': 'green',
+        'integer': 'green',
+        'boolean': 'purple',
+        'json': 'orange'
+      }
+      return colorMap[type] || 'default'
     }
   }
 }
@@ -364,67 +488,424 @@ export default {
 
 <style lang="less" scoped>
 .system-config-page {
-  .health-check-card {
-    margin-bottom: 24px;
-    border-radius: 12px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  padding: 24px;
+  background: #f0f2f5;
+  min-height: calc(100vh - 64px);
 
-    /deep/ .ant-card-head {
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
-      border-bottom: 1px solid rgba(102, 126, 234, 0.1);
-    }
-
-    /deep/ .ant-card-head-title {
-      font-weight: 600;
-      color: #667eea;
-    }
-
-    .config-hint {
-      font-size: 12px;
-      color: #8c8c8c;
-      margin-top: 4px;
-    }
-  }
-
-  .table-toolbar {
+  .page-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
-    padding: 16px;
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-  }
+    margin-bottom: 24px;
+    padding: 24px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.25);
+    animation: slideDown 0.6s ease-out;
 
-  /deep/ .ant-table {
-    border-radius: 12px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    .header-content {
+      display: flex;
+      align-items: center;
+      gap: 20px;
 
-    .ant-table-tbody > tr {
-      transition: background-color 0.3s;
+      .header-icon {
+        font-size: 48px;
+        color: white;
+        animation: rotate 3s linear infinite;
+      }
 
-      &:hover {
-        background-color: rgba(102, 126, 234, 0.04) !important;
+      .page-title {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 700;
+        color: white;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      .page-subtitle {
+        margin: 4px 0 0 0;
+        font-size: 14px;
+        color: rgba(255, 255, 255, 0.9);
       }
     }
 
-    .ant-tag {
-      background: rgba(102, 126, 234, 0.1);
-      border-color: #667eea;
+    .refresh-btn {
+      background: white;
+      border: none;
       color: #667eea;
-      border-radius: 4px;
+      font-weight: 600;
+      height: 40px;
+      padding: 0 24px;
+      border-radius: 20px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+      }
     }
   }
 
-  code {
-    padding: 4px 8px;
+  .health-check-card,
+  .config-table-card {
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    margin-bottom: 24px;
+    overflow: hidden;
+    animation: fadeInUp 0.6s ease-out;
+
+    /deep/ .ant-card-head {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
+      border-bottom: 2px solid rgba(102, 126, 234, 0.15);
+      padding: 20px 24px;
+
+      .card-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 18px;
+        font-weight: 600;
+        color: #667eea;
+
+        .title-icon {
+          font-size: 24px;
+
+          &.pulse {
+            animation: pulse 2s ease-in-out infinite;
+          }
+        }
+      }
+    }
+
+    /deep/ .ant-card-body {
+      padding: 32px;
+    }
+  }
+
+  .config-row {
+    margin-bottom: 24px;
+
+    &:last-child {
+      margin-bottom: 32px;
+    }
+  }
+
+  .config-item {
+    .config-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #262626;
+      margin-bottom: 12px;
+
+      .anticon {
+        color: #667eea;
+        font-size: 16px;
+      }
+    }
+
+    .config-input {
+      width: 100%;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+
+      &:hover {
+        border-color: #667eea;
+        box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+      }
+
+      &:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+      }
+    }
+
+    .config-hint {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #8c8c8c;
+      margin-top: 8px;
+
+      .anticon {
+        color: #faad14;
+      }
+    }
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: 16px;
+    padding-top: 8px;
+
+    .save-btn,
+    .trigger-btn {
+      height: 44px;
+      padding: 0 32px;
+      border-radius: 22px;
+      font-size: 15px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(102, 126, 234, 0.3);
+      }
+
+      &:active {
+        transform: translateY(0);
+      }
+    }
+
+    .save-btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+
+      &:hover {
+        background: linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%);
+      }
+    }
+
+    .trigger-btn {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      border: none;
+      color: white;
+
+      &:hover {
+        background: linear-gradient(135deg, #e082ea 0%, #e4465b 100%);
+      }
+    }
+  }
+
+  .config-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    .config-icon {
+      color: #667eea;
+      font-size: 16px;
+    }
+
+    .config-name-text {
+      font-weight: 600;
+      color: #262626;
+    }
+  }
+
+  .config-key-code {
+    padding: 6px 12px;
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(102, 126, 234, 0.05));
     border: 1px solid rgba(102, 126, 234, 0.2);
-    border-radius: 6px;
-    font-size: 12px;
+    border-radius: 8px;
+    font-size: 13px;
     color: #667eea;
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-weight: 600;
   }
+
+  .config-value-cell {
+    .config-value-text {
+      color: #595959;
+      font-size: 14px;
+    }
+  }
+
+  .edit-link {
+    color: #667eea;
+    font-weight: 500;
+    transition: all 0.3s ease;
+
+    &:hover {
+      color: #764ba2;
+      transform: scale(1.05);
+    }
+
+    .anticon {
+      margin-right: 4px;
+    }
+  }
+
+  /deep/ .ant-table {
+    .table-row-light {
+      background: #fafafa;
+      transition: all 0.3s ease;
+    }
+
+    .table-row-dark {
+      background: white;
+      transition: all 0.3s ease;
+    }
+
+    .ant-table-tbody > tr {
+      &:hover {
+        background: rgba(102, 126, 234, 0.08) !important;
+        transform: scale(1.01);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      }
+    }
+  }
+
+  .config-modal {
+    /deep/ .ant-modal-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-bottom: none;
+      border-radius: 16px 16px 0 0;
+
+      .modal-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        font-size: 18px;
+        font-weight: 600;
+
+        .anticon {
+          font-size: 20px;
+        }
+      }
+
+      .ant-modal-title {
+        color: white;
+      }
+    }
+
+    /deep/ .ant-modal-close {
+      color: white;
+
+      &:hover {
+        color: rgba(255, 255, 255, 0.8);
+      }
+    }
+
+    /deep/ .ant-modal-body {
+      padding: 32px;
+    }
+
+    .config-form {
+      .disabled-input {
+        background: #f5f5f5;
+        cursor: not-allowed;
+      }
+
+      .description-text {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        background: rgba(102, 126, 234, 0.05);
+        border-radius: 8px;
+        color: #595959;
+
+        .anticon {
+          color: #667eea;
+        }
+      }
+
+      .config-textarea {
+        border-radius: 8px;
+        font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+        font-size: 13px;
+
+        &:focus {
+          border-color: #667eea;
+          box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+      }
+    }
+  }
+
+  .success-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+
+    .success-checkmark {
+      font-size: 120px;
+      color: #52c41a;
+      animation: checkmarkBounce 0.6s ease-out;
+
+      .anticon {
+        filter: drop-shadow(0 4px 12px rgba(82, 196, 26, 0.5));
+      }
+    }
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+@keyframes checkmarkBounce {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.success-fade-enter-active,
+.success-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.success-fade-enter,
+.success-fade-leave-to {
+  opacity: 0;
 }
 </style>

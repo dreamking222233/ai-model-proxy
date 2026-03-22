@@ -81,6 +81,12 @@ const routes = [
         meta: { title: '套餐管理' }
       },
       {
+        path: 'cache',
+        name: 'CacheManage',
+        component: () => import('@/views/admin/CacheManage.vue'),
+        meta: { title: '缓存管理' }
+      },
+      {
         path: 'profile',
         name: 'AdminProfile',
         component: () => import('@/views/user/Profile.vue'),
@@ -145,6 +151,12 @@ const routes = [
         name: 'Redemption',
         component: () => import('@/views/user/Redemption.vue'),
         meta: { title: '兑换码充值' }
+      },
+      {
+        path: 'cache',
+        name: 'CacheStats',
+        component: () => import('@/views/user/CacheStats.vue'),
+        meta: { title: '缓存统计' }
       },
       {
         path: 'profile',

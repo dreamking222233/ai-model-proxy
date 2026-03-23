@@ -6,7 +6,7 @@ from app.models.user import SysUser
 from app.services.auth_service import AuthService
 from app.services.balance_service import BalanceService
 from app.services.log_service import LogService
-from app.schemas.user import UserUpdate, BalanceRechargeRequest
+from app.schemas.user import UserUpdate, BalanceRechargeRequest, BalanceDeductRequest
 from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/api/admin/users", tags=["管理-用户管理"])
@@ -66,6 +66,22 @@ def recharge_balance(
         db, current_user.id, current_user.username,
         "recharge", "user_balance", data.user_id,
         f"Recharged {data.amount} for user {data.user_id}",
+        None,
+    )
+    return ResponseModel(data=balance)
+
+
+@router.post("/deduct", response_model=ResponseModel)
+def deduct_balance(
+    data: BalanceDeductRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    balance = BalanceService.deduct(db, data.user_id, data.amount, current_user.id, data.reason)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "deduct", "user_balance", data.user_id,
+        f"Deducted {data.amount} from user {data.user_id}" + (f": {data.reason}" if data.reason else ""),
         None,
     )
     return ResponseModel(data=balance)

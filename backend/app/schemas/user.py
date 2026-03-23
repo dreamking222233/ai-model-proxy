@@ -102,3 +102,11 @@ class BalanceRechargeRequest(BaseModel):
 
     user_id: int
     amount: Decimal = Field(..., gt=0)
+
+
+class BalanceDeductRequest(BaseModel):
+    """Admin deduct request."""
+
+    user_id: int
+    amount: Decimal = Field(..., gt=0)
+    reason: Optional[str] = Field(None, max_length=255)

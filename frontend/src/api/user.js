@@ -40,6 +40,14 @@ export function rechargeBalance(data) {
   })
 }
 
+export function deductBalance(data) {
+  return request({
+    url: '/api/admin/users/deduct',
+    method: 'post',
+    data
+  })
+}
+
 // ==================== User API Keys ====================
 
 export function listApiKeys() {

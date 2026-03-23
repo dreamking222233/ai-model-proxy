@@ -97,6 +97,68 @@ class BalanceService:
         }
 
     @staticmethod
+    def deduct(db: Session, user_id: int, amount: Decimal, operator_id: int, reason: str = None) -> dict:
+        """
+        Deduct funds from a user's balance (admin operation).
+
+        Args:
+            user_id: target user.
+            amount: positive Decimal amount to deduct.
+            operator_id: admin user performing the deduction.
+            reason: optional reason for deduction.
+
+        Returns:
+            dict with updated balance info.
+
+        Raises:
+            ServiceException: if balance record not found, amount invalid, or insufficient balance.
+        """
+        if amount <= 0:
+            raise ServiceException(400, "Deduct amount must be positive", "INVALID_AMOUNT")
+
+        balance = (
+            db.query(UserBalance)
+            .filter(UserBalance.user_id == user_id)
+            .with_for_update()
+            .first()
+        )
+        if not balance:
+            raise ServiceException(404, "Balance record not found", "BALANCE_NOT_FOUND")
+
+        if balance.balance < amount:
+            raise ServiceException(400, "Insufficient balance", "INSUFFICIENT_BALANCE")
+
+        balance_before = float(balance.balance)
+        balance.balance -= amount
+        balance.total_consumed += amount
+
+        record = ConsumptionRecord(
+            user_id=user_id,
+            request_id=None,
+            model_name=None,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            input_cost=Decimal("0"),
+            output_cost=Decimal("0"),
+            total_cost=amount,  # positive cost = deduction
+            balance_before=Decimal(str(balance_before)),
+            balance_after=balance.balance,
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(balance)
+
+        return {
+            "user_id": balance.user_id,
+            "balance": float(balance.balance),
+            "total_recharged": float(balance.total_recharged),
+            "total_consumed": float(balance.total_consumed),
+            "deducted_amount": float(amount),
+            "operator_id": operator_id,
+        }
+
+    @staticmethod
     def get_consumption_records(
         db: Session,
         user_id: int,

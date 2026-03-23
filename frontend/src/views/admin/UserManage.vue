@@ -181,7 +181,7 @@
 
     <!-- Recharge Modal -->
     <a-modal
-      title="余额充值"
+      :title="rechargeForm.type === 'recharge' ? '余额充值' : '余额扣除'"
       :visible="rechargeModalVisible"
       :confirm-loading="rechargeModalLoading"
       @ok="handleRechargeOk"
@@ -189,20 +189,37 @@
       :width="420"
     >
       <a-form layout="vertical">
+        <a-form-item label="操作类型">
+          <a-radio-group v-model="rechargeForm.type" button-style="solid" style="width: 100%;">
+            <a-radio-button value="recharge" style="width: 50%; text-align: center;">
+              <a-icon type="plus-circle" /> 充值
+            </a-radio-button>
+            <a-radio-button value="deduct" style="width: 50%; text-align: center;">
+              <a-icon type="minus-circle" /> 扣除
+            </a-radio-button>
+          </a-radio-group>
+        </a-form-item>
         <a-form-item label="用户">
           <a-input :value="rechargeForm.username" disabled />
         </a-form-item>
         <a-form-item label="当前余额">
           <a-input :value="'$ ' + rechargeForm.currentBalance" disabled />
         </a-form-item>
-        <a-form-item label="充值金额 ($)">
+        <a-form-item :label="rechargeForm.type === 'recharge' ? '充值金额 ($)' : '扣除金额 ($)'">
           <a-input-number
             v-model="rechargeForm.amount"
             :min="0"
             :step="1"
             :precision="4"
             style="width: 100%;"
-            placeholder="请输入充值金额"
+            :placeholder="rechargeForm.type === 'recharge' ? '请输入充值金额' : '请输入扣除金额'"
+          />
+        </a-form-item>
+        <a-form-item v-if="rechargeForm.type === 'deduct'" label="扣除原因">
+          <a-input
+            v-model="rechargeForm.reason"
+            placeholder="请输入扣除原因（可选）"
+            :max-length="255"
           />
         </a-form-item>
       </a-form>
@@ -211,7 +228,7 @@
 </template>
 
 <script>
-import { listUsers, updateUser, toggleUserStatus, rechargeBalance } from '@/api/user'
+import { listUsers, updateUser, toggleUserStatus, rechargeBalance, deductBalance } from '@/api/user'
 import { formatDate } from '@/utils'
 
 export default {
@@ -258,7 +275,9 @@ export default {
         userId: null,
         username: '',
         currentBalance: '',
-        amount: 0
+        amount: 0,
+        type: 'recharge',
+        reason: ''
       }
     }
   },
@@ -351,26 +370,38 @@ export default {
         userId: record.id,
         username: record.username,
         currentBalance: record.balance != null ? parseFloat(record.balance).toFixed(4) : '0.0000',
-        amount: 0
+        amount: 0,
+        type: 'recharge',
+        reason: ''
       }
       this.rechargeModalVisible = true
     },
     async handleRechargeOk() {
       if (!this.rechargeForm.amount || this.rechargeForm.amount <= 0) {
-        this.$message.warning('请输入有效的充值金额')
+        this.$message.warning(`请输入有效的${this.rechargeForm.type === 'recharge' ? '充值' : '扣除'}金额`)
         return
       }
       this.rechargeModalLoading = true
       try {
-        await rechargeBalance({
-          user_id: this.rechargeForm.userId,
-          amount: this.rechargeForm.amount
-        })
-        this.$message.success('余额充值成功')
+        if (this.rechargeForm.type === 'recharge') {
+          await rechargeBalance({
+            user_id: this.rechargeForm.userId,
+            amount: this.rechargeForm.amount
+          })
+          this.$message.success('余额充值成功')
+        } else {
+          await deductBalance({
+            user_id: this.rechargeForm.userId,
+            amount: this.rechargeForm.amount,
+            reason: this.rechargeForm.reason || undefined
+          })
+          this.$message.success('余额扣除成功')
+        }
         this.rechargeModalVisible = false
         this.fetchList()
       } catch (err) {
-        console.error('Failed to recharge balance:', err)
+        this.$message.error(err.message || (this.rechargeForm.type === 'recharge' ? '充值失败' : '扣除失败'))
+        console.error('Failed to update balance:', err)
       } finally {
         this.rechargeModalLoading = false
       }

@@ -62,26 +62,195 @@ class ResponsesTurnError(Exception):
 class ProxyService:
     """Stateless proxy that forwards LLM requests through managed channels."""
 
+    _LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_TOKENS = 20000
+    _LEGACY_CLAUDE_TOOL_CONTEXT_HARD_GUARD_TOKENS = 60000
+    _LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_MESSAGE_COUNT = 20
+
+    @staticmethod
+    def _is_legacy_kiro_amazonq_host(channel: Channel, model_name: Optional[str] = None) -> bool:
+        """
+        Compatibility rewrites are disabled to preserve upstream request integrity.
+        """
+        return False
+
     @staticmethod
     def _is_kiro_amazonq_channel(channel: Channel, model_name: Optional[str] = None) -> bool:
         """
-        Detect the Claude relay backed by Kiro / Amazon Q compatibility logic.
-
-        The production environment may expose it either by explicit keywords
-        (``kiro`` / ``amazonq``) or by the known relay host on 43.156.153.12.
-        The host check is limited to Claude-family models so Codex/GPT relays
-        on the same machine are not affected.
+        Upstream compatibility rewrites are disabled; requests should be
+        forwarded as-is.
         """
-        metadata = " ".join([
-            str(getattr(channel, "name", "") or ""),
-            str(getattr(channel, "base_url", "") or ""),
-            str(getattr(channel, "description", "") or ""),
-        ]).lower()
-        if any(keyword in metadata for keyword in ("kiro", "amazonq", "amazon q")):
-            return True
+        return False
 
-        target_model = str(model_name or "").lower()
-        return "43.156.153.12" in metadata and target_model.startswith("claude")
+    @staticmethod
+    def _should_apply_kiro_amazonq_compat(
+        channel: Channel,
+        model_name: Optional[str] = None,
+        force_compat: bool = False,
+    ) -> bool:
+        """Compatibility rewrites are disabled; preserve the original request."""
+        return False
+
+    @staticmethod
+    def _estimate_message_text_tokens(messages) -> int:
+        """Roughly estimate tokens from mixed Anthropic/OpenAI message content."""
+        if not isinstance(messages, list):
+            return 0
+
+        total_length = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                total_length += len(str(message))
+                continue
+
+            content = message.get("content", "")
+            if isinstance(content, str):
+                total_length += len(content)
+                continue
+
+            if not isinstance(content, list):
+                total_length += len(str(content))
+                continue
+
+            for part in content:
+                if isinstance(part, str):
+                    total_length += len(part)
+                    continue
+                if not isinstance(part, dict):
+                    total_length += len(str(part))
+                    continue
+
+                part_type = str(part.get("type", "") or "")
+                if part_type in {"text", "input_text", "output_text"}:
+                    total_length += len(str(part.get("text", "") or ""))
+                else:
+                    total_length += len(json.dumps(part, ensure_ascii=False))
+
+        return int(total_length / 2.5)
+
+    @staticmethod
+    def estimate_anthropic_input_tokens(request_data: dict) -> int:
+        """Approximate Anthropic input tokens for ``/messages/count_tokens``."""
+        total_tokens = ProxyService._estimate_message_text_tokens(
+            request_data.get("messages")
+        )
+
+        for field in (
+            "system",
+            "tools",
+            "tool_choice",
+            "metadata",
+            "thinking",
+            "context_management",
+            "betas",
+        ):
+            value = request_data.get(field)
+            if value is None:
+                continue
+
+            if isinstance(value, str):
+                total_tokens += int(len(value) / 2.5)
+            else:
+                total_tokens += int(len(json.dumps(value, ensure_ascii=False)) / 2.5)
+
+        return total_tokens
+
+    @staticmethod
+    def _guard_legacy_claude_tool_context(
+        channel: Channel,
+        requested_model: str,
+        request_data: dict,
+    ) -> None:
+        """
+        Block long-context Anthropic tool calls on the legacy 43.156 Claude relay.
+
+        Diagnostics show this upstream can emit correct ``tool_use`` events for
+        short prompts, but starts returning empty content or trivial text once
+        tool-bearing contexts become large. Failing fast with an actionable 400
+        is safer than returning a misleading 200 success to Claude Code.
+        """
+        if not ProxyService._is_legacy_kiro_amazonq_host(channel, requested_model):
+            return
+        if "tools" not in request_data:
+            return
+
+        messages = request_data.get("messages")
+        message_count = len(messages) if isinstance(messages, list) else 0
+        history_tokens = ProxyService._estimate_message_text_tokens(messages)
+        total_estimated_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
+        if (
+            history_tokens < ProxyService._LEGACY_CLAUDE_TOOL_CONTEXT_HARD_GUARD_TOKENS
+            and (
+                message_count < ProxyService._LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_MESSAGE_COUNT
+                or history_tokens < ProxyService._LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_TOKENS
+            )
+        ):
+            return
+
+        preview_text = ""
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    preview_text = content.strip()[:200]
+                    break
+                if isinstance(content, list):
+                    collected_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("text"):
+                            collected_parts.append(str(part.get("text")))
+                    preview_candidate = "\n".join(collected_parts).strip()
+                    if preview_candidate:
+                        preview_text = preview_candidate[:200]
+                        break
+
+        system_preview = ""
+        system_value = request_data.get("system")
+        if isinstance(system_value, str):
+            system_preview = system_value.strip()[:200]
+        elif isinstance(system_value, list):
+            collected_parts = []
+            for part in system_value:
+                if isinstance(part, str):
+                    collected_parts.append(part)
+                elif isinstance(part, dict) and part.get("text"):
+                    collected_parts.append(str(part.get("text")))
+            system_preview = "\n".join(collected_parts).strip()[:200]
+
+        tools_value = request_data.get("tools")
+        tool_count = len(tools_value) if isinstance(tools_value, list) else 0
+        tool_names = []
+        if isinstance(tools_value, list):
+            for tool in tools_value[:8]:
+                if isinstance(tool, dict) and tool.get("name"):
+                    tool_names.append(str(tool.get("name")))
+
+        preview_lower = preview_text.lstrip().lower()
+        if preview_lower.startswith("<system-reminder>") and message_count <= 6:
+            logger.info(
+                "Allowing large bootstrap-style Claude tool request on legacy relay %s: history_tokens=%s total_estimated_tokens=%s message_count=%s preview=%r",
+                channel.name,
+                history_tokens,
+                total_estimated_tokens,
+                message_count,
+                preview_text,
+            )
+            return
+
+        logger.warning(
+            "Blocking long-context Claude tool request on legacy relay %s: history_tokens=%s total_estimated_tokens=%s requested_model=%s message_count=%s tool_count=%s tool_names=%s preview=%r system_preview=%r",
+            channel.name,
+            history_tokens,
+            total_estimated_tokens,
+            requested_model,
+            message_count,
+            tool_count,
+            ",".join(tool_names) if tool_names else "none",
+            preview_text,
+            system_preview,
+        )
+        return
 
     @staticmethod
     def _stringify_legacy_function_content(content):
@@ -194,86 +363,27 @@ class ProxyService:
         return converted_messages
 
     @staticmethod
-    def _prepare_openai_request_for_channel(channel: Channel, request_data: dict) -> dict:
-        """Apply channel-specific compatibility rewrites before forwarding."""
-        prepared = copy.deepcopy(request_data)
-        if ProxyService._is_kiro_amazonq_channel(channel, prepared.get("model")):
-            prepared["messages"] = ProxyService._convert_openai_tool_history_for_kiro(
-                prepared.get("messages")
-            )
-        return prepared
+    def _prepare_openai_request_for_channel(
+        channel: Channel,
+        request_data: dict,
+        force_compat: bool = False,
+    ) -> dict:
+        """Forward OpenAI requests without compatibility rewrites."""
+        return copy.deepcopy(request_data)
 
     @staticmethod
     def _sanitize_anthropic_content_for_kiro(content):
-        """Remove Anthropic blocks that Kiro/AmazonQ cannot replay safely."""
-        if content is None or isinstance(content, str):
-            return content
-        if not isinstance(content, list):
-            return str(content)
-
-        sanitized = []
-        for raw_block in content:
-            if isinstance(raw_block, str):
-                sanitized.append({"type": "text", "text": raw_block})
-                continue
-            if not isinstance(raw_block, dict):
-                sanitized.append({"type": "text", "text": str(raw_block)})
-                continue
-
-            block = copy.deepcopy(raw_block)
-            block_type = str(block.get("type", "") or "")
-
-            # Kiro/AmazonQ rejects historical thinking blocks/signatures.
-            if block_type in {"thinking", "redacted_thinking"}:
-                continue
-
-            block.pop("signature", None)
-            block.pop("cache_control", None)
-
-            if "content" in block:
-                nested = block.get("content")
-                if isinstance(nested, list):
-                    block["content"] = ProxyService._sanitize_anthropic_content_for_kiro(nested)
-                elif nested is not None and not isinstance(nested, str):
-                    block["content"] = json.dumps(nested, ensure_ascii=False)
-
-            sanitized.append(block)
-
-        return sanitized
+        """Preserve Anthropic content blocks without compatibility rewrites."""
+        return copy.deepcopy(content)
 
     @staticmethod
     def _prepare_anthropic_request_for_channel(
         channel: Channel,
         request_data: dict,
+        force_compat: bool = False,
     ) -> dict:
-        """Apply Kiro/AmazonQ compatibility rewrites for Anthropic requests."""
-        prepared = copy.deepcopy(request_data)
-        if not ProxyService._is_kiro_amazonq_channel(channel, prepared.get("model")):
-            return prepared
-
-        for field in ("thinking", "context_management", "output_config", "metadata", "betas"):
-            prepared.pop(field, None)
-
-        messages = prepared.get("messages")
-        if isinstance(messages, list):
-            sanitized_messages = []
-            for raw_message in messages:
-                if not isinstance(raw_message, dict):
-                    sanitized_messages.append({
-                        "role": "user",
-                        "content": str(raw_message),
-                    })
-                    continue
-
-                message = copy.deepcopy(raw_message)
-                message["content"] = ProxyService._sanitize_anthropic_content_for_kiro(
-                    message.get("content")
-                )
-                sanitized_messages.append(message)
-
-            prepared["messages"] = sanitized_messages
-
-        return prepared
+        """Forward Anthropic requests without compatibility rewrites."""
+        return copy.deepcopy(request_data)
 
     @staticmethod
     def _extract_upstream_error_message(error_detail: str) -> str:
@@ -1358,51 +1468,87 @@ class ProxyService:
         last_error: Exception | None = None
         request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
-            try:
-                # Build upstream request with the actual model name
-                request_data_copy = dict(request_data)
-                request_data_copy["model"] = actual_model_name
-                request_data_copy = ProxyService._prepare_openai_request_for_channel(
-                    channel, request_data_copy
-                )
+            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
+            legacy_compat_retry = (
+                not explicit_compat
+                and ProxyService._is_legacy_kiro_amazonq_host(channel, actual_model_name)
+            )
+            channel_request_error: ServiceException | None = None
+            compat_attempts = [True] if explicit_compat else [False]
+            if legacy_compat_retry:
+                compat_attempts.append(True)
 
-                if is_stream:
-                    return await ProxyService._stream_openai_request(
-                        db, user, api_key_record, channel, unified_model,
-                        request_data_copy, request_id, requested_model, client_ip,
-                        request_headers=request_headers,
+            for compat_mode in compat_attempts:
+                try:
+                    # Build upstream request with the actual model name
+                    request_data_copy = dict(request_data)
+                    request_data_copy["model"] = actual_model_name
+                    request_data_copy = ProxyService._prepare_openai_request_for_channel(
+                        channel,
+                        request_data_copy,
+                        force_compat=compat_mode,
                     )
-                else:
-                    return await ProxyService._non_stream_openai_request(
-                        db, user, api_key_record, channel, unified_model,
-                        request_data_copy, request_id, requested_model, client_ip,
-                        request_headers=request_headers,
-                    )
-            except ServiceException as exc:
-                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
-                    request_error = exc
-                    logger.info(
-                        "Channel %s (%d) rejected request without counting channel failure: %s",
-                        channel.name, channel.id, exc.detail,
-                    )
-                    continue
-                raise  # Re-raise business exceptions immediately
-            except Exception as e:
-                mapped_request_error = ProxyService._map_upstream_request_error(e)
-                if mapped_request_error:
-                    request_error = mapped_request_error
-                    logger.info(
-                        "Channel %s (%d) rejected request without counting channel failure: %s",
-                        channel.name, channel.id, mapped_request_error.detail,
-                    )
-                    continue
 
-                last_error = e
-                logger.warning(
-                    "Channel %s (%d) failed for model %s: %s",
-                    channel.name, channel.id, actual_model_name, e,
-                )
-                ProxyService._record_channel_failure(db, channel)
+                    if is_stream:
+                        return await ProxyService._stream_openai_request(
+                            db, user, api_key_record, channel, unified_model,
+                            request_data_copy, request_id, requested_model, client_ip,
+                            request_headers=request_headers,
+                        )
+                    else:
+                        return await ProxyService._non_stream_openai_request(
+                            db, user, api_key_record, channel, unified_model,
+                            request_data_copy, request_id, requested_model, client_ip,
+                            request_headers=request_headers,
+                        )
+                except ServiceException as exc:
+                    if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
+                        if legacy_compat_retry and not compat_mode:
+                            logger.info(
+                                "Channel %s (%d) rejected raw request, retrying with Kiro/AmazonQ compatibility: %s",
+                                channel.name,
+                                channel.id,
+                                exc.detail,
+                            )
+                            continue
+
+                        channel_request_error = exc
+                        logger.info(
+                            "Channel %s (%d) rejected request without counting channel failure: %s",
+                            channel.name, channel.id, exc.detail,
+                        )
+                        break
+                    raise  # Re-raise business exceptions immediately
+                except Exception as e:
+                    mapped_request_error = ProxyService._map_upstream_request_error(e)
+                    if mapped_request_error:
+                        if legacy_compat_retry and not compat_mode:
+                            logger.info(
+                                "Channel %s (%d) rejected raw request, retrying with Kiro/AmazonQ compatibility: %s",
+                                channel.name,
+                                channel.id,
+                                mapped_request_error.detail,
+                            )
+                            continue
+
+                        channel_request_error = mapped_request_error
+                        logger.info(
+                            "Channel %s (%d) rejected request without counting channel failure: %s",
+                            channel.name, channel.id, mapped_request_error.detail,
+                        )
+                        break
+
+                    last_error = e
+                    logger.warning(
+                        "Channel %s (%d) failed for model %s: %s",
+                        channel.name, channel.id, actual_model_name, e,
+                    )
+                    ProxyService._record_channel_failure(db, channel)
+                    channel_request_error = None
+                    break
+
+            if channel_request_error:
+                request_error = channel_request_error
                 continue
 
         # All channels exhausted
@@ -1465,51 +1611,103 @@ class ProxyService:
         last_error: Exception | None = None
         request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
-            try:
-                request_data_copy = dict(request_data)
-                request_data_copy["model"] = actual_model_name
-                request_data_copy = ProxyService._prepare_anthropic_request_for_channel(
-                    channel,
-                    request_data_copy,
-                )
+            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
+            legacy_compat_retry = (
+                not explicit_compat
+                and ProxyService._is_legacy_kiro_amazonq_host(channel, actual_model_name)
+            )
+            channel_request_error: ServiceException | None = None
+            compat_attempts = [True] if explicit_compat else [False]
+            if legacy_compat_retry:
+                compat_attempts.append(True)
 
-                if is_stream:
-                    return await ProxyService._stream_anthropic_request(
-                        db, user, api_key_record, channel, unified_model,
-                        request_data_copy, request_id, requested_model, client_ip,
-                        request_headers=request_headers,
+            for compat_mode in compat_attempts:
+                try:
+                    request_data_copy = dict(request_data)
+                    request_data_copy["model"] = actual_model_name
+                    if not compat_mode:
+                        ProxyService._guard_legacy_claude_tool_context(
+                            channel,
+                            requested_model,
+                            request_data_copy,
+                        )
+                    request_data_copy = ProxyService._prepare_anthropic_request_for_channel(
+                        channel,
+                        request_data_copy,
+                        force_compat=compat_mode,
                     )
-                else:
-                    return await ProxyService._non_stream_anthropic_request(
-                        db, user, api_key_record, channel, unified_model,
-                        request_data_copy, request_id, requested_model, client_ip,
-                        request_headers=request_headers,
-                    )
-            except ServiceException as exc:
-                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
-                    request_error = exc
-                    logger.info(
-                        "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
-                        channel.name, channel.id, exc.detail,
-                    )
-                    continue
-                raise
-            except Exception as e:
-                mapped_request_error = ProxyService._map_upstream_request_error(e)
-                if mapped_request_error:
-                    request_error = mapped_request_error
-                    logger.info(
-                        "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
-                        channel.name, channel.id, mapped_request_error.detail,
-                    )
-                    continue
 
-                last_error = e
-                logger.warning(
-                    "Channel %s (%d) failed for model %s: %s",
-                    channel.name, channel.id, actual_model_name, e,
-                )
-                ProxyService._record_channel_failure(db, channel)
+                    if is_stream:
+                        return await ProxyService._stream_anthropic_request(
+                            db, user, api_key_record, channel, unified_model,
+                            request_data_copy, request_id, requested_model, client_ip,
+                            request_headers=request_headers,
+                            force_compat=compat_mode,
+                        )
+                    else:
+                        return await ProxyService._non_stream_anthropic_request(
+                            db, user, api_key_record, channel, unified_model,
+                            request_data_copy, request_id, requested_model, client_ip,
+                            request_headers=request_headers,
+                            force_compat=compat_mode,
+                        )
+                except ServiceException as exc:
+                    if exc.error_code == "LEGACY_CLAUDE_TOOL_CONTEXT_LIMIT":
+                        channel_request_error = exc
+                        logger.info(
+                            "Anthropic channel %s (%d) blocked long-context tool request before upstream call: %s",
+                            channel.name,
+                            channel.id,
+                            exc.detail,
+                        )
+                        break
+                    if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
+                        if legacy_compat_retry and not compat_mode:
+                            logger.info(
+                                "Anthropic channel %s (%d) rejected raw request, retrying with Kiro/AmazonQ compatibility: %s",
+                                channel.name,
+                                channel.id,
+                                exc.detail,
+                            )
+                            continue
+
+                        channel_request_error = exc
+                        logger.info(
+                            "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
+                            channel.name, channel.id, exc.detail,
+                        )
+                        break
+                    raise
+                except Exception as e:
+                    mapped_request_error = ProxyService._map_upstream_request_error(e)
+                    if mapped_request_error:
+                        if legacy_compat_retry and not compat_mode:
+                            logger.info(
+                                "Anthropic channel %s (%d) rejected raw request, retrying with Kiro/AmazonQ compatibility: %s",
+                                channel.name,
+                                channel.id,
+                                mapped_request_error.detail,
+                            )
+                            continue
+
+                        channel_request_error = mapped_request_error
+                        logger.info(
+                            "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
+                            channel.name, channel.id, mapped_request_error.detail,
+                        )
+                        break
+
+                    last_error = e
+                    logger.warning(
+                        "Channel %s (%d) failed for model %s: %s",
+                        channel.name, channel.id, actual_model_name, e,
+                    )
+                    ProxyService._record_channel_failure(db, channel)
+                    channel_request_error = None
+                    break
+
+            if channel_request_error:
+                request_error = channel_request_error
                 continue
 
         if request_error:
@@ -1860,6 +2058,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        force_compat: bool = False,
     ) -> StreamingResponse:
         """
         SSE streaming forward for the Anthropic messages protocol.
@@ -1890,6 +2089,7 @@ class ProxyService:
             "anthropic",
             request_headers=request_headers,
             model_name=model_name,
+            force_compat=force_compat,
         )
 
         request_data["stream"] = True
@@ -2071,6 +2271,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        force_compat: bool = False,
     ) -> JSONResponse:
         """
         Non-streaming forward for the Anthropic messages protocol.
@@ -2086,6 +2287,7 @@ class ProxyService:
             "anthropic",
             request_headers=request_headers,
             model_name=request_data.get("model", requested_model),
+            force_compat=force_compat,
         )
 
         request_data["stream"] = False
@@ -2377,6 +2579,7 @@ class ProxyService:
         protocol_type: str,
         request_headers: Optional[dict[str, str]] = None,
         model_name: Optional[str] = None,
+        force_compat: bool = False,
     ) -> dict[str, str]:
         """Build upstream request headers based on protocol type and channel auth config."""
         headers = {
@@ -2411,9 +2614,6 @@ class ProxyService:
             headers["anthropic-api-key"] = channel.api_key
         else:  # x-api-key (default)
             headers["x-api-key"] = channel.api_key
-
-        if protocol_type == "anthropic" and ProxyService._is_kiro_amazonq_channel(channel, model_name):
-            headers.pop("anthropic-beta", None)
 
         return headers
 

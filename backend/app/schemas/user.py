@@ -71,8 +71,6 @@ class UserUpdate(BaseModel):
     avatar: Optional[str] = Field(None, max_length=512)
     status: Optional[int] = Field(None, ge=0, le=1)
     role: Optional[str] = Field(None, pattern=r"^(admin|user)$")
-    enable_cache: Optional[int] = Field(None, ge=0, le=1)
-    cache_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
 
 
 class PasswordChange(BaseModel):

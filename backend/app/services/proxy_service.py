@@ -946,28 +946,20 @@ class ProxyService:
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
-        """Forward a streaming Responses request to upstream ``/responses``.
-        Cache: caches complete response and replays as stream on cache hit.
-        """
+        """Forward a streaming Responses request to upstream ``/responses``."""
         start_time = time.time()
         model_name = request_data.get("model", requested_model)
 
-        # Cache status tracking
-        cache_status = "BYPASS"
         billing_input_tokens = 0
         billing_output_tokens = 0
-        billing_is_cache_hit = False
 
         def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
-            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
-            billing_is_cache_hit = is_hit
 
         async def upstream_call(collector, collected_usage):
             """上游 Responses API 流式调用"""
-            nonlocal cache_status
-            cache_status = "MISS"
             input_tokens = 0
             output_tokens = 0
             completed = False
@@ -1074,15 +1066,9 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
-                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
-                            final_input = 0
-                            final_output = 0
-                        else:
-                            final_input = billing_input_tokens
-                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, final_input, final_output, channel,
+                            requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -1095,9 +1081,6 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
-                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
-                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
-                "X-Cache-Status": "STREAM",
             },
         )
 
@@ -1336,7 +1319,7 @@ class ProxyService:
         url = f"{base_url}/responses"
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
 
-        # Define upstream call function for cache middleware
+        # Define upstream call function for passthrough middleware
         async def upstream_call():
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -1350,7 +1333,7 @@ class ProxyService:
             )
             response_body = ProxyService._rewrite_response_model(response_body, requested_model)
 
-            # Return standardized response format for cache middleware
+            # Return standardized response format for the shared middleware contract
             return {
                 "response": response_body,
                 "model": request_data.get("model"),
@@ -1360,7 +1343,7 @@ class ProxyService:
                 }
             }
 
-        # Wrap request with cache middleware
+        # Shared passthrough middleware contract
         cache_response, cache_info = await CacheMiddleware.wrap_request(
             request_body=request_data,
             headers=request_headers or {},
@@ -1377,7 +1360,7 @@ class ProxyService:
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        # Get billing tokens based on cache info
+        # Middleware is passthrough; billing tokens equal actual tokens
         billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
             cache_info=cache_info,
             user=user,
@@ -1395,14 +1378,7 @@ class ProxyService:
             client_ip, response_time_ms, is_stream=False,
         )
 
-        # Add cache status header
         response_headers = {"X-Request-ID": request_id}
-        if cache_info and cache_info.get("is_cache_hit"):
-            response_headers["X-Cache-Status"] = "HIT"
-        elif cache_info is None:
-            response_headers["X-Cache-Status"] = "BYPASS"
-        else:
-            response_headers["X-Cache-Status"] = "MISS"
 
         return JSONResponse(
             content=response_body,
@@ -1745,7 +1721,6 @@ class ProxyService:
         Reads SSE lines from upstream, forwards each ``data: {...}`` chunk to
         the client. After the stream ends (``data: [DONE]``), extracts token
         usage from the final chunk (if present), deducts balance, and logs.
-        Cache: caches complete response and replays as stream on cache hit.
         """
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -1760,23 +1735,16 @@ class ProxyService:
 
         model_name = request_data.get("model", requested_model)
 
-        # Cache status tracking
-        cache_status = "BYPASS"
         billing_input_tokens = 0
         billing_output_tokens = 0
-        billing_is_cache_hit = False
 
         def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
-            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
-            billing_is_cache_hit = is_hit
 
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
-            nonlocal cache_status
-            cache_status = "MISS"
-
             input_tokens = 0
             output_tokens = 0
 
@@ -1849,7 +1817,6 @@ class ProxyService:
             billing_callback(billing_input_tokens_local, billing_output_tokens_local, False)
 
         async def event_generator():
-            nonlocal cache_status
             stream_error = None
 
             try:
@@ -1897,16 +1864,9 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
-                        # 根据缓存计费配置决定计费 tokens
-                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
-                            final_input = 0
-                            final_output = 0
-                        else:
-                            final_input = billing_input_tokens
-                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, final_input, final_output, channel,
+                            requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -1919,9 +1879,6 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
-                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
-                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
-                "X-Cache-Status": "STREAM",
             },
         )
 
@@ -1955,7 +1912,7 @@ class ProxyService:
 
         request_data["stream"] = False
 
-        # Define upstream call function for cache middleware
+        # Define upstream call function for passthrough middleware
         async def upstream_call():
             timeout = httpx.Timeout(
                 _UPSTREAM_TIMEOUT,
@@ -1983,7 +1940,7 @@ class ProxyService:
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
 
-            # Return standardized response format for cache middleware
+            # Return standardized response format for the shared middleware contract
             return {
                 "response": response_body,
                 "model": request_data.get("model"),
@@ -1993,7 +1950,7 @@ class ProxyService:
                 }
             }
 
-        # Wrap request with cache middleware
+        # Shared passthrough middleware contract
         cache_response, cache_info = await CacheMiddleware.wrap_request(
             request_body=request_data,
             headers=request_headers or {},
@@ -2010,7 +1967,7 @@ class ProxyService:
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        # Get billing tokens based on cache info
+        # Middleware is passthrough; billing tokens equal actual tokens
         billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
             cache_info=cache_info,
             user=user,
@@ -2028,14 +1985,7 @@ class ProxyService:
             client_ip, response_time_ms, is_stream=False,
         )
 
-        # Add cache status header
         response_headers = {"X-Request-ID": request_id}
-        if cache_info and cache_info.get("is_cache_hit"):
-            response_headers["X-Cache-Status"] = "HIT"
-        elif cache_info is None:
-            response_headers["X-Cache-Status"] = "BYPASS"
-        else:
-            response_headers["X-Cache-Status"] = "MISS"
 
         return JSONResponse(
             content=response_body,
@@ -2078,7 +2028,6 @@ class ProxyService:
 
         Usage info comes from ``message_start`` (input_tokens) and
         ``message_delta`` (output_tokens).
-        Cache: caches complete response and replays as stream on cache hit.
         """
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -2094,22 +2043,16 @@ class ProxyService:
 
         request_data["stream"] = True
 
-        # Cache status tracking
-        cache_status = "BYPASS"
         billing_input_tokens = 0
         billing_output_tokens = 0
-        billing_is_cache_hit = False
 
         def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
-            nonlocal billing_input_tokens, billing_output_tokens, billing_is_cache_hit
+            nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
-            billing_is_cache_hit = is_hit
 
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
-            nonlocal cache_status
-            cache_status = "MISS"
             input_tokens = 0
             output_tokens = 0
 
@@ -2228,15 +2171,9 @@ class ProxyService:
                         )
                     else:
                         ProxyService._record_success(db, channel)
-                        if billing_is_cache_hit and user.cache_billing_enabled == 1:
-                            final_input = 0
-                            final_output = 0
-                        else:
-                            final_input = billing_input_tokens
-                            final_output = billing_output_tokens
                         ProxyService._deduct_balance_and_log(
                             db, user, api_key_record, unified_model, request_id,
-                            requested_model, final_input, final_output, channel,
+                            requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
                         )
                 except Exception as accounting_err:
@@ -2249,9 +2186,6 @@ class ProxyService:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
-                # StreamingResponse headers 在构造时固定，无法反映实际 cache 状态
-                # 实际状态（HIT/MISS/BYPASS）已通过日志记录
-                "X-Cache-Status": "STREAM",
             },
         )
 
@@ -2292,7 +2226,7 @@ class ProxyService:
 
         request_data["stream"] = False
 
-        # Define upstream call function for cache middleware
+        # Define upstream call function for passthrough middleware
         async def upstream_call():
             timeout = httpx.Timeout(
                 _UPSTREAM_TIMEOUT,
@@ -2319,7 +2253,7 @@ class ProxyService:
                 input_tokens = usage.get("input_tokens", 0)
                 output_tokens = usage.get("output_tokens", 0)
 
-            # Return standardized response format for cache middleware
+            # Return standardized response format for the shared middleware contract
             return {
                 "response": response_body,
                 "model": request_data.get("model"),
@@ -2329,7 +2263,7 @@ class ProxyService:
                 }
             }
 
-        # Wrap request with cache middleware
+        # Shared passthrough middleware contract
         cache_response, cache_info = await CacheMiddleware.wrap_request(
             request_body=request_data,
             headers=request_headers or {},
@@ -2346,7 +2280,7 @@ class ProxyService:
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
 
-        # Get billing tokens based on cache info
+        # Middleware is passthrough; billing tokens equal actual tokens
         billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
             cache_info=cache_info,
             user=user,
@@ -2364,14 +2298,7 @@ class ProxyService:
             client_ip, response_time_ms, is_stream=False,
         )
 
-        # Add cache status header
         response_headers = {"X-Request-ID": request_id}
-        if cache_info and cache_info.get("is_cache_hit"):
-            response_headers["X-Cache-Status"] = "HIT"
-        elif cache_info is None:
-            response_headers["X-Cache-Status"] = "BYPASS"
-        else:
-            response_headers["X-Cache-Status"] = "MISS"
 
         return JSONResponse(
             content=response_body,

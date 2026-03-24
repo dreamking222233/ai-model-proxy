@@ -148,10 +148,6 @@ class AuthService:
             "total_consumed": float(balance.total_consumed) if balance else 0,
             "total_recharged": float(balance.total_recharged) if balance else 0,
             "total_tokens": int(total_tokens),
-            "cache_enabled": user.cache_enabled,
-            "cache_billing_enabled": user.cache_billing_enabled,
-            "cache_hit_count": user.cache_hit_count,
-            "cache_saved_tokens": user.cache_saved_tokens,
         }
 
     @staticmethod
@@ -174,10 +170,6 @@ class AuthService:
                 "balance": float(bal.balance) if bal else 0,
                 "subscription_type": u.subscription_type,
                 "subscription_expires_at": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
-                "cache_enabled": u.cache_enabled,
-                "cache_billing_enabled": u.cache_billing_enabled,
-                "cache_hit_count": u.cache_hit_count,
-                "cache_saved_tokens": u.cache_saved_tokens,
             })
         return result, total
 
@@ -191,7 +183,7 @@ class AuthService:
         if not user:
             raise ServiceException(404, "User not found")
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
-        for field in ("email", "avatar", "status", "role", "enable_cache", "cache_billing_enabled"):
+        for field in ("email", "avatar", "status", "role"):
             if field in d and d[field] is not None:
                 setattr(user, field, d[field])
         db.commit()

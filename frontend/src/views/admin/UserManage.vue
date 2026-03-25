@@ -163,19 +163,6 @@
             <a-select-option :value="0">禁用</a-select-option>
           </a-select>
         </a-form-item>
-        <a-divider>缓存配置</a-divider>
-        <a-form-item label="启用缓存">
-          <a-switch v-model="editForm.enable_cache" :checked-value="1" :unchecked-value="0" />
-          <div style="margin-top: 4px; font-size: 12px; color: #8c8c8c">
-            开启后，系统将缓存用户的 AI 请求以提高响应速度
-          </div>
-        </a-form-item>
-        <a-form-item label="缓存计费">
-          <a-switch v-model="editForm.cache_billing_enabled" :checked-value="1" :unchecked-value="0" />
-          <div style="margin-top: 4px; font-size: 12px; color: #8c8c8c">
-            开启后，缓存命中时按缓存后的 tokens 计费（节省费用）
-          </div>
-        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -264,9 +251,7 @@ export default {
         username: '',
         email: '',
         role: 'user',
-        status: 1,
-        enable_cache: 1,
-        cache_billing_enabled: 0
+        status: 1
       },
       // Recharge Modal
       rechargeModalVisible: false,
@@ -332,9 +317,7 @@ export default {
         username: record.username,
         email: record.email || '',
         role: record.role || 'user',
-        status: record.status != null ? record.status : 1,
-        enable_cache: record.enable_cache != null ? record.enable_cache : 1,
-        cache_billing_enabled: record.cache_billing_enabled != null ? record.cache_billing_enabled : 0
+        status: record.status != null ? record.status : 1
       }
       this.editModalVisible = true
     },
@@ -343,9 +326,7 @@ export default {
       try {
         await updateUser(this.editUserId, {
           role: this.editForm.role,
-          status: this.editForm.status,
-          enable_cache: this.editForm.enable_cache,
-          cache_billing_enabled: this.editForm.cache_billing_enabled
+          status: this.editForm.status
         })
         this.$message.success('用户更新成功')
         this.editModalVisible = false

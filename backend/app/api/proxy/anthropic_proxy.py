@@ -7,6 +7,28 @@ from app.services.proxy_service import ProxyService
 router = APIRouter(tags=["代理-Anthropic"])
 
 
+@router.post("/v1/messages/count_tokens")
+async def anthropic_count_tokens_v1(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Anthropic count_tokens compatibility endpoint with /v1 prefix."""
+    await verify_api_key(request, db)
+    body = await request.json()
+    return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}
+
+
+@router.post("/messages/count_tokens")
+async def anthropic_count_tokens_root(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Anthropic count_tokens compatibility endpoint without /v1 prefix."""
+    await verify_api_key(request, db)
+    body = await request.json()
+    return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}
+
+
 @router.post("/v1/messages")
 async def anthropic_messages_v1(
     request: Request,

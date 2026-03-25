@@ -11,11 +11,12 @@ Handles OpenAI and Anthropic protocol forwarding with:
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -37,6 +38,13 @@ from app.models.log import (
 )
 from app.services.model_service import ModelService
 from app.services.health_service import get_system_config
+from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
+from app.services.conversation_shadow_service import ConversationShadowService
+from app.services.conversation_session_service import ConversationSessionService
+from app.services.compression_guard_service import CompressionGuardService
+from app.services.upstream_session_strategy_service import UpstreamSessionStrategyService
+from app.services.request_body_cache_service import RequestBodyCacheService
+from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.core.exceptions import ServiceException
 from app.middleware.cache_middleware import CacheMiddleware
 from app.middleware.stream_cache_middleware import StreamCacheMiddleware
@@ -65,6 +73,453 @@ class ProxyService:
     _LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_TOKENS = 20000
     _LEGACY_CLAUDE_TOOL_CONTEXT_HARD_GUARD_TOKENS = 60000
     _LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_MESSAGE_COUNT = 20
+    _REQUEST_DEBUG_MAX_STRING = 400
+    _REQUEST_DEBUG_MAX_LIST_ITEMS = 6
+    _REQUEST_DEBUG_MAX_DICT_ITEMS = 12
+    _REQUEST_DEBUG_MAX_DEPTH = 5
+    _REQUEST_DEBUG_MESSAGE_WINDOW = 6
+    _REQUEST_DEBUG_REPEAT_SAMPLES = 5
+    _recent_anthropic_request_fingerprints: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _truncate_log_string(value: Any, max_length: int | None = None) -> str:
+        """Return a readable string preview for debug logs."""
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        limit = max_length or ProxyService._REQUEST_DEBUG_MAX_STRING
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}...<truncated {len(text) - limit} chars>"
+
+    @staticmethod
+    def _compact_for_debug_log(
+        value: Any,
+        *,
+        depth: int = 0,
+    ) -> Any:
+        """Compact nested payloads so request debug logs stay readable."""
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+
+        if isinstance(value, str):
+            return ProxyService._truncate_log_string(value)
+
+        if depth >= ProxyService._REQUEST_DEBUG_MAX_DEPTH:
+            return ProxyService._truncate_log_string(value)
+
+        if isinstance(value, list):
+            limited_items = value[:ProxyService._REQUEST_DEBUG_MAX_LIST_ITEMS]
+            compacted = [
+                ProxyService._compact_for_debug_log(item, depth=depth + 1)
+                for item in limited_items
+            ]
+            if len(value) > len(limited_items):
+                compacted.append(
+                    {
+                        "__truncated_items__": len(value) - len(limited_items),
+                    }
+                )
+            return compacted
+
+        if isinstance(value, dict):
+            compacted: dict[str, Any] = {}
+            items = list(value.items())
+            limited_items = items[:ProxyService._REQUEST_DEBUG_MAX_DICT_ITEMS]
+            for key, item_value in limited_items:
+                compacted[str(key)] = ProxyService._compact_for_debug_log(
+                    item_value,
+                    depth=depth + 1,
+                )
+            if len(items) > len(limited_items):
+                compacted["__truncated_keys__"] = len(items) - len(limited_items)
+            return compacted
+
+        return ProxyService._truncate_log_string(value)
+
+    @staticmethod
+    def _stable_debug_dump(value: Any) -> str:
+        """Serialize values consistently for hashing and size estimates."""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        except TypeError:
+            return str(value)
+
+    @staticmethod
+    def _debug_hash(value: Any) -> str:
+        """Hash debug payloads for duplicate detection."""
+        return hashlib.sha256(
+            ProxyService._stable_debug_dump(value).encode("utf-8", errors="replace")
+        ).hexdigest()
+
+    @staticmethod
+    def _debug_size(value: Any) -> int:
+        """Measure serialized size for duplicate payload estimates."""
+        return len(ProxyService._stable_debug_dump(value))
+
+    @staticmethod
+    def _summarize_exact_duplicates(entries: list[dict[str, Any]]) -> dict[str, Any]:
+        """Summarize exact duplicate entries within a single request payload."""
+        if not entries:
+            return {
+                "total": 0,
+                "unique": 0,
+                "repeated_groups": 0,
+                "duplicate_instances": 0,
+                "duplicate_chars": 0,
+                "samples": [],
+            }
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            signature = entry["signature"]
+            bucket = grouped.setdefault(
+                signature,
+                {
+                    "count": 0,
+                    "size_chars": entry["size_chars"],
+                    "preview": entry["preview"],
+                    "location": entry["location"],
+                },
+            )
+            bucket["count"] += 1
+
+        repeated = []
+        duplicate_instances = 0
+        duplicate_chars = 0
+        for item in grouped.values():
+            if item["count"] <= 1:
+                continue
+            extra_instances = item["count"] - 1
+            item["duplicate_chars"] = extra_instances * item["size_chars"]
+            duplicate_instances += extra_instances
+            duplicate_chars += item["duplicate_chars"]
+            repeated.append(item)
+
+        repeated.sort(
+            key=lambda item: (item["duplicate_chars"], item["count"], item["size_chars"]),
+            reverse=True,
+        )
+
+        return {
+            "total": len(entries),
+            "unique": len(grouped),
+            "repeated_groups": len(repeated),
+            "duplicate_instances": duplicate_instances,
+            "duplicate_chars": duplicate_chars,
+            "samples": repeated[:ProxyService._REQUEST_DEBUG_REPEAT_SAMPLES],
+        }
+
+    @staticmethod
+    def _build_anthropic_duplicate_analysis(request_data: dict) -> dict[str, Any]:
+        """Calculate duplicate content metrics for one Anthropic request."""
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+
+        system_value = request_data.get("system")
+        if isinstance(system_value, list):
+            system_blocks = system_value
+        elif system_value is None:
+            system_blocks = []
+        else:
+            system_blocks = [system_value]
+
+        tools = request_data.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+
+        system_entries = []
+        for index, block in enumerate(system_blocks):
+            system_entries.append(
+                {
+                    "signature": ProxyService._debug_hash(block),
+                    "size_chars": ProxyService._debug_size(block),
+                    "preview": ProxyService._compact_for_debug_log(block),
+                    "location": f"system[{index}]",
+                }
+            )
+
+        tool_entries = []
+        for index, tool in enumerate(tools):
+            tool_entries.append(
+                {
+                    "signature": ProxyService._debug_hash(tool),
+                    "size_chars": ProxyService._debug_size(tool),
+                    "preview": ProxyService._compact_for_debug_log(tool),
+                    "location": f"tools[{index}]",
+                }
+            )
+
+        message_entries = []
+        content_entries = []
+        for index, message in enumerate(messages):
+            role = str(message.get("role", "") or "") if isinstance(message, dict) else ""
+            message_entries.append(
+                {
+                    "signature": ProxyService._debug_hash(message),
+                    "size_chars": ProxyService._debug_size(message),
+                    "preview": ProxyService._compact_for_debug_log(message),
+                    "location": f"messages[{index}] role={role}",
+                }
+            )
+
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                blocks = content
+            elif content is None:
+                blocks = []
+            else:
+                blocks = [content]
+
+            for block_index, block in enumerate(blocks):
+                block_location = f"messages[{index}].content[{block_index}] role={role}"
+                content_entries.append(
+                    {
+                        "signature": ProxyService._debug_hash(block),
+                        "size_chars": ProxyService._debug_size(block),
+                        "preview": ProxyService._compact_for_debug_log(block),
+                        "location": block_location,
+                    }
+                )
+
+        return {
+            "system_blocks": ProxyService._summarize_exact_duplicates(system_entries),
+            "tools": ProxyService._summarize_exact_duplicates(tool_entries),
+            "messages": ProxyService._summarize_exact_duplicates(message_entries),
+            "content_blocks": ProxyService._summarize_exact_duplicates(content_entries),
+        }
+
+    @staticmethod
+    def _build_anthropic_request_fingerprint(request_data: dict) -> dict[str, Any]:
+        """Build section-level hashes for cross-request duplicate comparison."""
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+
+        tools = request_data.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+
+        system_value = request_data.get("system")
+        tail_messages = messages[-ProxyService._REQUEST_DEBUG_MESSAGE_WINDOW:]
+
+        return {
+            "payload_hash": ProxyService._debug_hash(request_data),
+            "system_hash": ProxyService._debug_hash(system_value),
+            "tools_hash": ProxyService._debug_hash(tools),
+            "messages_hash": ProxyService._debug_hash(messages),
+            "messages_tail_hash": ProxyService._debug_hash(tail_messages),
+            "message_count": len(messages),
+            "estimated_input_tokens": ProxyService.estimate_anthropic_input_tokens(request_data),
+            "sizes": {
+                "payload_chars": ProxyService._debug_size(request_data),
+                "system_chars": ProxyService._debug_size(system_value),
+                "tools_chars": ProxyService._debug_size(tools),
+                "messages_chars": ProxyService._debug_size(messages),
+                "messages_tail_chars": ProxyService._debug_size(tail_messages),
+            },
+        }
+
+    @staticmethod
+    def _compare_with_previous_anthropic_request(
+        request_key: Optional[str],
+        fingerprint: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Compare current Anthropic request with the previous one for the same key."""
+        if not request_key:
+            return None
+
+        previous = ProxyService._recent_anthropic_request_fingerprints.get(request_key)
+        ProxyService._recent_anthropic_request_fingerprints[request_key] = fingerprint
+        if not previous:
+            return {
+                "has_previous": False,
+            }
+
+        sizes = fingerprint.get("sizes", {})
+        previous_sizes = previous.get("sizes", {})
+        repeated_sections = []
+        reused_chars = 0
+        for section, size_key in (
+            ("system", "system_chars"),
+            ("tools", "tools_chars"),
+            ("messages", "messages_chars"),
+            ("messages_tail", "messages_tail_chars"),
+            ("payload", "payload_chars"),
+        ):
+            hash_key = f"{section}_hash"
+            if previous.get(hash_key) == fingerprint.get(hash_key):
+                repeated_sections.append(section)
+                reused_chars += int(sizes.get(size_key, 0) or 0)
+
+        return {
+            "has_previous": True,
+            "same_payload": previous.get("payload_hash") == fingerprint.get("payload_hash"),
+            "same_system": previous.get("system_hash") == fingerprint.get("system_hash"),
+            "same_tools": previous.get("tools_hash") == fingerprint.get("tools_hash"),
+            "same_messages": previous.get("messages_hash") == fingerprint.get("messages_hash"),
+            "same_messages_tail": previous.get("messages_tail_hash") == fingerprint.get("messages_tail_hash"),
+            "repeated_sections": repeated_sections,
+            "reused_chars_estimate": reused_chars,
+            "message_count_delta": int(fingerprint.get("message_count", 0) or 0) - int(previous.get("message_count", 0) or 0),
+            "estimated_input_tokens_delta": int(fingerprint.get("estimated_input_tokens", 0) or 0) - int(previous.get("estimated_input_tokens", 0) or 0),
+            "payload_chars_delta": int(sizes.get("payload_chars", 0) or 0) - int(previous_sizes.get("payload_chars", 0) or 0),
+        }
+
+    @staticmethod
+    def _build_anthropic_request_debug_snapshot(request_data: dict) -> dict[str, Any]:
+        """Build a compact snapshot for Anthropic request debugging."""
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+
+        tools = request_data.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+
+        system_value = request_data.get("system")
+        tail_messages = messages[-ProxyService._REQUEST_DEBUG_MESSAGE_WINDOW:]
+
+        return {
+            "model": request_data.get("model"),
+            "stream": bool(request_data.get("stream", False)),
+            "max_tokens": request_data.get("max_tokens"),
+            "temperature": request_data.get("temperature"),
+            "top_p": request_data.get("top_p"),
+            "message_count": len(messages),
+            "estimated_input_tokens": ProxyService.estimate_anthropic_input_tokens(request_data),
+            "section_hashes": {
+                "system": ProxyService._debug_hash(system_value),
+                "tools": ProxyService._debug_hash(tools),
+                "messages": ProxyService._debug_hash(messages),
+                "messages_tail": ProxyService._debug_hash(tail_messages),
+                "payload": ProxyService._debug_hash(request_data),
+            },
+            "section_sizes": {
+                "system_chars": ProxyService._debug_size(system_value),
+                "tools_chars": ProxyService._debug_size(tools),
+                "messages_chars": ProxyService._debug_size(messages),
+                "messages_tail_chars": ProxyService._debug_size(tail_messages),
+                "payload_chars": ProxyService._debug_size(request_data),
+            },
+            "duplicate_analysis": ProxyService._build_anthropic_duplicate_analysis(request_data),
+            "system": ProxyService._compact_for_debug_log(system_value),
+            "tools": ProxyService._compact_for_debug_log(tools),
+            "tools_count": len(tools),
+            "tool_choice": ProxyService._compact_for_debug_log(request_data.get("tool_choice")),
+            "messages_tail": ProxyService._compact_for_debug_log(tail_messages),
+        }
+
+    @staticmethod
+    def _log_anthropic_request_debug(
+        stage: str,
+        request_id: str,
+        request_data: dict,
+        *,
+        channel: Channel | None = None,
+        requested_model: Optional[str] = None,
+        client_ip: Optional[str] = None,
+        force_compat: bool = False,
+        request_key: Optional[str] = None,
+    ) -> None:
+        """Emit a compact request snapshot for Claude relay debugging."""
+        snapshot = ProxyService._build_anthropic_request_debug_snapshot(request_data)
+        snapshot["cross_request_compare"] = ProxyService._compare_with_previous_anthropic_request(
+            request_key,
+            ProxyService._build_anthropic_request_fingerprint(request_data),
+        )
+        logger.info(
+            "Anthropic request debug stage=%s request_id=%s requested_model=%s actual_model=%s "
+            "channel=%s channel_id=%s client_ip=%s force_compat=%s snapshot=%s",
+            stage,
+            request_id,
+            requested_model,
+            request_data.get("model"),
+            channel.name if channel else None,
+            channel.id if channel else None,
+            client_ip,
+            force_compat,
+            json.dumps(snapshot, ensure_ascii=False),
+        )
+
+    @staticmethod
+    def _extract_cache_info_from_error(exc: Exception) -> Optional[dict[str, Any]]:
+        """Read request-body cache info that middleware attached to an exception."""
+        cache_info = getattr(exc, "_request_cache_info", None)
+        return cache_info if isinstance(cache_info, dict) else None
+
+    @staticmethod
+    def _merge_anthropic_usage_snapshot(
+        target: dict[str, Any],
+        usage: Optional[dict[str, Any]],
+    ) -> None:
+        """Merge Anthropic usage fragments from streaming or SSE-parsed responses."""
+        if not isinstance(usage, dict):
+            return
+
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_creation_5m_input_tokens",
+            "cache_creation_1h_input_tokens",
+        ):
+            if usage.get(key) is not None:
+                target[key] = int(usage.get(key) or 0)
+
+        cache_creation = usage.get("cache_creation")
+        if isinstance(cache_creation, dict):
+            merged_cache_creation = dict(target.get("cache_creation") or {})
+            if cache_creation.get("ephemeral_5m_input_tokens") is not None:
+                merged_cache_creation["ephemeral_5m_input_tokens"] = int(
+                    cache_creation.get("ephemeral_5m_input_tokens") or 0
+                )
+            if cache_creation.get("ephemeral_1h_input_tokens") is not None:
+                merged_cache_creation["ephemeral_1h_input_tokens"] = int(
+                    cache_creation.get("ephemeral_1h_input_tokens") or 0
+                )
+            if merged_cache_creation:
+                target["cache_creation"] = merged_cache_creation
+
+    @staticmethod
+    def _resolve_prompt_cache_billing_input_tokens(
+        db: Session,
+        usage_summary: dict[str, Any],
+    ) -> int:
+        """Resolve billed input tokens for Anthropic prompt-cache requests."""
+        billing_mode = AnthropicPromptCacheService.get_billing_mode(db)
+        if billing_mode == "actual_upstream":
+            return int(usage_summary.get("input_tokens", 0) or 0)
+        return int(usage_summary.get("logical_input_tokens", 0) or 0)
+
+    @staticmethod
+    def _merge_prompt_cache_state_into_cache_info(
+        cache_info: Optional[dict[str, Any]],
+        prompt_cache_state: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        """Merge Anthropic prompt-cache request/usage info into shared cache_info."""
+        if not prompt_cache_state:
+            return cache_info
+        return AnthropicPromptCacheService.merge_into_cache_info(
+            cache_info,
+            attempt_meta=prompt_cache_state.get("attempt_meta"),
+            usage_summary=prompt_cache_state.get("usage_summary"),
+            fallback_triggered=bool(prompt_cache_state.get("fallback_triggered")),
+            fallback_reason=prompt_cache_state.get("fallback_reason"),
+        )
+
+    @staticmethod
+    def _merge_conversation_shadow_into_cache_info(
+        cache_info: Optional[dict[str, Any]],
+        conversation_shadow_info: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        """Merge conversation shadow compaction info into shared cache_info."""
+        return ConversationShadowService.merge_into_cache_info(
+            cache_info,
+            conversation_shadow_info,
+        )
 
     @staticmethod
     def _is_legacy_kiro_amazonq_host(channel: Channel, model_name: Optional[str] = None) -> bool:
@@ -929,6 +1384,7 @@ class ProxyService:
 
         last_error: Exception | None = None
         request_error: ServiceException | None = None
+        request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
             try:
                 channel_request = copy.deepcopy(client_request)
@@ -959,6 +1415,9 @@ class ProxyService:
                     continue
                 raise
             except Exception as exc:
+                error_cache_info = ProxyService._extract_cache_info_from_error(exc)
+                if error_cache_info:
+                    request_cache_info = error_cache_info
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
                 if mapped_request_error:
                     request_error = mapped_request_error
@@ -983,6 +1442,7 @@ class ProxyService:
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
+            cache_info=request_cache_info,
         )
         if request_error:
             raise request_error
@@ -1066,6 +1526,7 @@ class ProxyService:
 
             turn_completed = False
             last_error: Exception | None = None
+            last_cache_info: Optional[dict[str, Any]] = None
             for channel, actual_model_name in channels:
                 channel_request = copy.deepcopy(normalized_request)
                 channel_request["model"] = actual_model_name
@@ -1073,6 +1534,14 @@ class ProxyService:
                     actual_model_name,
                     channel_request,
                 )
+                cache_info = RequestBodyCacheService.analyze_request(
+                    db=db,
+                    user_id=user.id,
+                    request_body=channel_request,
+                    request_format="responses",
+                    requested_model=requested_model,
+                )
+                last_cache_info = cache_info
                 started_at = time.time()
                 try:
                     completed_output, input_tokens, output_tokens = (
@@ -1090,6 +1559,7 @@ class ProxyService:
                         db, user, api_key_record, unified_model, request_id,
                         requested_model, input_tokens, output_tokens, channel,
                         client_ip, response_time_ms, is_stream=True,
+                        cache_info=cache_info,
                     )
                     last_response_output = completed_output
                     turn_completed = True
@@ -1107,6 +1577,7 @@ class ProxyService:
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True, str(exc), channel=channel,
                             response_time_ms=response_time_ms,
+                            cache_info=cache_info,
                         )
                         return
                     continue
@@ -1122,6 +1593,7 @@ class ProxyService:
                         db, user, api_key_record, request_id, requested_model,
                         client_ip, True, str(exc), channel=channel,
                         response_time_ms=response_time_ms,
+                        cache_info=cache_info,
                     )
                     return
 
@@ -1132,6 +1604,7 @@ class ProxyService:
             ProxyService._log_failed_request(
                 db, user, api_key_record, request_id, requested_model,
                 client_ip, True, error_detail,
+                cache_info=last_cache_info,
             )
             await websocket.send_text(json.dumps(
                 ProxyService._build_responses_error_payload(
@@ -1445,6 +1918,7 @@ class ProxyService:
 
         async def event_generator():
             stream_error = None
+            cache_state: dict[str, Any] = {}
 
             try:
                 async for sse_line in StreamCacheMiddleware.wrap_stream_request(
@@ -1455,8 +1929,10 @@ class ProxyService:
                     upstream_call=upstream_call,
                     unified_model=unified_model,
                     protocol="responses",
+                    request_format="responses",
                     model=model_name,
                     billing_callback=billing_callback,
+                    cache_state=cache_state,
                 ):
                     yield sse_line
 
@@ -1478,12 +1954,14 @@ class ProxyService:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
+                        error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
                             mapped_request_error.detail if mapped_request_error else str(stream_error),
                             channel=channel,
                             response_time_ms=response_time_ms,
+                            cache_info=error_cache_info,
                         )
                     else:
                         ProxyService._record_success(db, channel)
@@ -1491,6 +1969,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -1772,6 +2251,8 @@ class ProxyService:
             db=db,
             upstream_call=upstream_call,
             unified_model=unified_model,
+            request_format="responses",
+            requested_model=requested_model,
         )
 
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -1797,6 +2278,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            cache_info=cache_info,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -1840,7 +2322,6 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
-
         # 1. Check user balance (only for balance mode users)
         if user.subscription_type == "balance":
             balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
@@ -1864,6 +2345,7 @@ class ProxyService:
         # 4. Try each channel (failover)
         last_error: Exception | None = None
         request_error: ServiceException | None = None
+        request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
             explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
             legacy_compat_retry = (
@@ -1930,6 +2412,9 @@ class ProxyService:
                         break
                     raise  # Re-raise business exceptions immediately
                 except Exception as e:
+                    error_cache_info = ProxyService._extract_cache_info_from_error(e)
+                    if error_cache_info:
+                        request_cache_info = error_cache_info
                     mapped_request_error = ProxyService._map_upstream_request_error(e)
                     if mapped_request_error:
                         if legacy_compat_retry and not compat_mode:
@@ -1970,6 +2455,7 @@ class ProxyService:
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
+            cache_info=request_cache_info,
         )
         if request_error:
             raise request_error
@@ -1996,6 +2482,15 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+        conversation_shadow_info = ConversationShadowService.analyze_request(
+            db,
+            user_id=user.id,
+            requested_model=requested_model,
+            protocol_type="anthropic",
+            request_data=request_data,
+            request_headers=request_headers,
+            is_stream=bool(is_stream),
+        )
 
         # 1. Check user balance (only for balance mode users)
         if user.subscription_type == "balance":
@@ -2020,6 +2515,7 @@ class ProxyService:
         # 4. Failover
         last_error: Exception | None = None
         request_error: ServiceException | None = None
+        request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
             explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
             legacy_compat_retry = (
@@ -2053,6 +2549,7 @@ class ProxyService:
                             request_data_copy, request_id, requested_model, client_ip,
                             request_headers=request_headers,
                             force_compat=compat_mode,
+                            conversation_shadow_info=conversation_shadow_info,
                         )
                     else:
                         return await ProxyService._non_stream_anthropic_request(
@@ -2060,6 +2557,7 @@ class ProxyService:
                             request_data_copy, request_id, requested_model, client_ip,
                             request_headers=request_headers,
                             force_compat=compat_mode,
+                            conversation_shadow_info=conversation_shadow_info,
                         )
                 except ServiceException as exc:
                     if exc.error_code == "LEGACY_CLAUDE_TOOL_CONTEXT_LIMIT":
@@ -2089,6 +2587,9 @@ class ProxyService:
                         break
                     raise
                 except Exception as e:
+                    error_cache_info = ProxyService._extract_cache_info_from_error(e)
+                    if error_cache_info:
+                        request_cache_info = error_cache_info
                     mapped_request_error = ProxyService._map_upstream_request_error(e)
                     if mapped_request_error:
                         if legacy_compat_retry and not compat_mode:
@@ -2127,6 +2628,10 @@ class ProxyService:
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
+            cache_info=ProxyService._merge_conversation_shadow_into_cache_info(
+                request_cache_info,
+                conversation_shadow_info,
+            ),
         )
         if request_error:
             raise request_error
@@ -2189,6 +2694,18 @@ class ProxyService:
                 ) as response:
                     if response.status_code != 200:
                         body = await response.aread()
+                        logger.warning(
+                            "Anthropic upstream error request_id=%s channel=%s channel_id=%s status=%s body=%s request_snapshot=%s",
+                            request_id,
+                            channel.name,
+                            channel.id,
+                            response.status_code,
+                            body.decode("utf-8", errors="replace")[:500],
+                            json.dumps(
+                                ProxyService._build_anthropic_request_debug_snapshot(request_data),
+                                ensure_ascii=False,
+                            ),
+                        )
                         raise Exception(
                             f"Upstream returned HTTP {response.status_code}: "
                             f"{body.decode('utf-8', errors='replace')[:500]}"
@@ -2252,6 +2769,7 @@ class ProxyService:
 
         async def event_generator():
             stream_error = None
+            cache_state: dict[str, Any] = {}
 
             try:
                 async for sse_line in StreamCacheMiddleware.wrap_stream_request(
@@ -2262,8 +2780,10 @@ class ProxyService:
                     upstream_call=upstream_call,
                     unified_model=unified_model,
                     protocol="openai",
+                    request_format="openai_chat",
                     model=model_name,
                     billing_callback=billing_callback,
+                    cache_state=cache_state,
                 ):
                     # 检测是否是缓存命中（wrap 内部会设置 cache_status）
                     yield sse_line
@@ -2289,12 +2809,14 @@ class ProxyService:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
+                        error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
                             mapped_request_error.detail if mapped_request_error else str(stream_error),
                             channel=channel,
                             response_time_ms=response_time_ms,
+                            cache_info=error_cache_info,
                         )
                     else:
                         ProxyService._record_success(db, channel)
@@ -2302,6 +2824,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -2356,6 +2879,18 @@ class ProxyService:
                 resp = await client.post(url, json=request_data, headers=headers)
 
             if resp.status_code != 200:
+                logger.warning(
+                    "Anthropic upstream error request_id=%s channel=%s channel_id=%s status=%s body=%s request_snapshot=%s",
+                    request_id,
+                    channel.name,
+                    channel.id,
+                    resp.status_code,
+                    resp.text[:500],
+                    json.dumps(
+                        ProxyService._build_anthropic_request_debug_snapshot(request_data),
+                        ensure_ascii=False,
+                    ),
+                )
                 raise Exception(
                     f"Upstream returned HTTP {resp.status_code}: "
                     f"{resp.text[:500]}"
@@ -2392,6 +2927,8 @@ class ProxyService:
             db=db,
             upstream_call=upstream_call,
             unified_model=unified_model,
+            request_format="openai_chat",
+            requested_model=requested_model,
         )
 
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -2417,6 +2954,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            cache_info=cache_info,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -2664,6 +3202,7 @@ class ProxyService:
 
         async def event_generator():
             stream_error = None
+            cache_state: dict[str, Any] = {}
 
             try:
                 async for sse_line in StreamCacheMiddleware.wrap_stream_request(
@@ -2674,8 +3213,10 @@ class ProxyService:
                     upstream_call=upstream_call,
                     unified_model=unified_model,
                     protocol="openai",
+                    request_format="anthropic_messages",
                     model=model_name,
                     billing_callback=billing_callback,
+                    cache_state=cache_state,
                 ):
                     yield sse_line
 
@@ -2700,12 +3241,14 @@ class ProxyService:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
+                        error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
                             mapped_request_error.detail if mapped_request_error else str(stream_error),
                             channel=channel,
                             response_time_ms=response_time_ms,
+                            cache_info=error_cache_info,
                         )
                     else:
                         ProxyService._record_success(db, channel)
@@ -2713,6 +3256,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -2804,6 +3348,8 @@ class ProxyService:
             db=db,
             upstream_call=upstream_call,
             unified_model=unified_model,
+            request_format="anthropic_messages",
+            requested_model=requested_model,
         )
 
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -2825,6 +3371,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            cache_info=cache_info,
         )
 
         return JSONResponse(
@@ -2849,6 +3396,7 @@ class ProxyService:
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
         force_compat: bool = False,
+        conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         """
         SSE streaming forward for the Anthropic messages protocol.
@@ -2882,9 +3430,19 @@ class ProxyService:
         )
 
         request_data["stream"] = True
+        original_request_data = copy.deepcopy(request_data)
 
         billing_input_tokens = 0
         billing_output_tokens = 0
+        prompt_cache_state: dict[str, Any] = {}
+        conversation_runtime_info = copy.deepcopy(conversation_shadow_info) if conversation_shadow_info else None
+        if conversation_runtime_info:
+            conversation_runtime_info["upstream_session_mode"] = UpstreamSessionStrategyService.get_session_mode(channel)
+        active_compacted_request = (
+            copy.deepcopy(conversation_shadow_info.get("_conversation_compacted_request"))
+            if CompressionGuardService.should_apply_stream_compaction(conversation_shadow_info)
+            else None
+        )
 
         def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
             nonlocal billing_input_tokens, billing_output_tokens
@@ -2893,92 +3451,204 @@ class ProxyService:
 
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
-            input_tokens = 0
-            output_tokens = 0
-
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
             async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=request_data, headers=headers,
-                ) as response:
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        raise Exception(
-                            f"Upstream returned HTTP {response.status_code}: "
-                            f"{body.decode('utf-8', errors='replace')[:500]}"
+                compression_fallback_reason: Optional[str] = None
+                request_attempts: list[dict[str, Any]] = []
+                if active_compacted_request:
+                    compacted_request = copy.deepcopy(active_compacted_request)
+                    compacted_request["model"] = request_data.get("model", requested_model)
+                    compacted_request["stream"] = True
+                    request_attempts.append({
+                        "label": "compacted",
+                        "request_data": compacted_request,
+                        "is_compacted": True,
+                    })
+                request_attempts.append({
+                    "label": "full",
+                    "request_data": copy.deepcopy(original_request_data),
+                    "is_compacted": False,
+                })
+
+                for request_attempt_index, request_attempt in enumerate(request_attempts):
+                    prompt_cache_variants = AnthropicPromptCacheService.build_request_variants(
+                        db,
+                        request_attempt["request_data"],
+                        request_headers=request_headers,
+                    )
+                    prompt_fallback_reason: Optional[str] = None
+                    should_retry_full = False
+
+                    for variant_index, variant in enumerate(prompt_cache_variants):
+                        input_tokens = 0
+                        output_tokens = 0
+                        usage_state: dict[str, Any] = {}
+                        current_headers = dict(headers)
+                        current_headers.update(variant.get("header_overrides") or {})
+
+                        async with client.stream(
+                            "POST",
+                            url,
+                            json=variant["request_data"],
+                            headers=current_headers,
+                        ) as response:
+                            if response.status_code != 200:
+                                body = await response.aread()
+                                body_text = body.decode("utf-8", errors="replace")[:500]
+                                if AnthropicPromptCacheService.should_retry_with_fallback(
+                                    status_code=response.status_code,
+                                    response_text=body_text,
+                                    attempt_meta=variant["meta"],
+                                    has_more_variants=variant_index < len(prompt_cache_variants) - 1,
+                                ):
+                                    prompt_fallback_reason = f"HTTP {response.status_code}: {body_text}"
+                                    logger.warning(
+                                        "Anthropic prompt cache fallback request_id=%s channel=%s channel_id=%s "
+                                        "variant=%s reason=%s",
+                                        request_id,
+                                        channel.name,
+                                        channel.id,
+                                        variant["meta"].get("label"),
+                                        prompt_fallback_reason,
+                                    )
+                                    continue
+
+                                if request_attempt["is_compacted"] and CompressionGuardService.can_retry_stream_before_first_byte():
+                                    compression_fallback_reason = (
+                                        f"compressed_request HTTP {response.status_code}: {body_text}"
+                                    )
+                                    should_retry_full = True
+                                    break
+
+                                raise Exception(
+                                    f"Upstream returned HTTP {response.status_code}: {body_text}"
+                                )
+
+                            prompt_cache_state["attempt_meta"] = copy.deepcopy(variant["meta"])
+                            prompt_cache_state["fallback_triggered"] = bool(variant_index > 0)
+                            prompt_cache_state["fallback_reason"] = prompt_fallback_reason
+
+                            if conversation_runtime_info:
+                                if request_attempt["is_compacted"]:
+                                    conversation_runtime_info["compression_mode"] = "stream_active"
+                                    conversation_runtime_info["compression_status"] = "ACTIVE_APPLIED"
+                                    conversation_runtime_info["compression_fallback_reason"] = None
+                                elif active_compacted_request and request_attempt_index > 0:
+                                    conversation_runtime_info["compression_mode"] = "stream_active"
+                                    conversation_runtime_info["compression_status"] = "ACTIVE_FALLBACK_FULL"
+                                    conversation_runtime_info["compression_fallback_reason"] = compression_fallback_reason
+                                    conversation_runtime_info["_conversation_mark_cooldown"] = True
+                                commit_payload = conversation_runtime_info.get("_conversation_shadow_commit") or {}
+                                commit_payload["compression_mode"] = conversation_runtime_info.get("compression_mode")
+                                conversation_runtime_info["_conversation_shadow_commit"] = commit_payload
+
+                            current_event = ""
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    yield "\n"
+                                    continue
+
+                                if line.startswith("event: "):
+                                    current_event = line[7:].strip()
+                                    yield f"{line}\n"
+                                    continue
+
+                                if line.startswith("data: "):
+                                    data_str = line[6:]
+
+                                    try:
+                                        chunk = json.loads(data_str)
+                                        chunk_type = chunk.get("type", "")
+
+                                        if chunk_type == "message_start":
+                                            msg = chunk.get("message", {})
+                                            usage = msg.get("usage", {})
+                                            ProxyService._merge_anthropic_usage_snapshot(
+                                                usage_state,
+                                                usage,
+                                            )
+                                            input_tokens = int(usage.get("input_tokens", 0) or 0)
+
+                                        elif chunk_type == "message_delta":
+                                            usage = chunk.get("usage", {})
+                                            ProxyService._merge_anthropic_usage_snapshot(
+                                                usage_state,
+                                                usage,
+                                            )
+                                            output_tokens = int(
+                                                usage.get("output_tokens", output_tokens) or output_tokens
+                                            )
+                                            if usage.get("input_tokens") is not None:
+                                                input_tokens = int(usage.get("input_tokens") or 0)
+                                            collected_usage["prompt_tokens"] = input_tokens
+                                            collected_usage["completion_tokens"] = output_tokens
+
+                                        elif chunk_type == "content_block_delta":
+                                            delta = chunk.get("delta", {})
+                                            text = delta.get("text", "")
+                                            thinking = delta.get("thinking", "")
+                                            if text:
+                                                collector.add_chunk(text)
+                                            if thinking:
+                                                collector.add_chunk(thinking)
+
+                                        elif chunk_type == "message_stop":
+                                            collector.add_chunk("", "end_turn")
+
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+
+                                    yield f"data: {data_str}\n\n"
+
+                                    if current_event == "message_stop":
+                                        break
+                                else:
+                                    yield f"{line}\n"
+
+                            usage_summary = AnthropicPromptCacheService.extract_usage_summary(
+                                usage_state,
+                                attempt_meta=variant["meta"],
+                            )
+                            prompt_cache_state["usage_summary"] = usage_summary
+                            billing_callback(
+                                ProxyService._resolve_prompt_cache_billing_input_tokens(
+                                    db,
+                                    usage_summary,
+                                ),
+                                int(usage_summary.get("output_tokens", 0) or 0),
+                                False,
+                            )
+                            return
+
+                    if should_retry_full:
+                        logger.warning(
+                            "Conversation compaction stream fallback to full request_id=%s channel=%s channel_id=%s reason=%s",
+                            request_id,
+                            channel.name,
+                            channel.id,
+                            compression_fallback_reason,
                         )
+                        continue
 
-                    current_event = ""
-                    async for line in response.aiter_lines():
-                        if not line:
-                            yield "\n"
-                            continue
-
-                        if line.startswith("event: "):
-                            current_event = line[7:].strip()
-                            yield f"{line}\n"
-                            continue
-
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-
-                            try:
-                                chunk = json.loads(data_str)
-                                chunk_type = chunk.get("type", "")
-
-                                if chunk_type == "message_start":
-                                    msg = chunk.get("message", {})
-                                    usage = msg.get("usage", {})
-                                    input_tokens = usage.get("input_tokens", 0)
-
-                                elif chunk_type == "message_delta":
-                                    usage = chunk.get("usage", {})
-                                    output_tokens = usage.get("output_tokens", output_tokens)
-                                    if "input_tokens" in usage and usage["input_tokens"]:
-                                        input_tokens = usage["input_tokens"]
-                                    collected_usage["prompt_tokens"] = input_tokens
-                                    collected_usage["completion_tokens"] = output_tokens
-
-                                elif chunk_type == "content_block_delta":
-                                    # 收集文本内容（包括 thinking 和 text）
-                                    delta = chunk.get("delta", {})
-                                    text = delta.get("text", "")
-                                    thinking = delta.get("thinking", "")
-                                    if text:
-                                        collector.add_chunk(text)
-                                    if thinking:
-                                        collector.add_chunk(thinking)
-
-                                elif chunk_type == "message_stop":
-                                    # 记录结束
-                                    collector.add_chunk("", "end_turn")
-
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-
-                            yield f"data: {data_str}\n\n"
-
-                            if current_event == "message_stop":
-                                break
-                        else:
-                            yield f"{line}\n"
-
-            billing_callback(input_tokens, output_tokens, False)
+                raise Exception(compression_fallback_reason or "Anthropic prompt cache request failed")
 
         async def event_generator():
             stream_error = None
+            cache_state: dict[str, Any] = {}
 
             try:
                 async for sse_line in StreamCacheMiddleware.wrap_stream_request(
-                    request_body=request_data,
+                    request_body=original_request_data,
                     headers=request_headers or {},
                     user=user,
                     db=db,
                     upstream_call=upstream_call,
                     unified_model=unified_model,
                     protocol="anthropic",
+                    request_format="anthropic_messages",
                     model=model_name,
                     billing_callback=billing_callback,
+                    cache_state=cache_state,
                 ):
                     yield sse_line
 
@@ -2998,16 +3668,26 @@ class ProxyService:
             finally:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 try:
+                    merged_cache_info = ProxyService._merge_prompt_cache_state_into_cache_info(
+                        cache_state.get("cache_info"),
+                        prompt_cache_state,
+                    )
+                    merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+                        merged_cache_info,
+                        conversation_runtime_info or conversation_shadow_info,
+                    )
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
+                        error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
                             mapped_request_error.detail if mapped_request_error else str(stream_error),
                             channel=channel,
                             response_time_ms=response_time_ms,
+                            cache_info=error_cache_info,
                         )
                     else:
                         ProxyService._record_success(db, channel)
@@ -3015,6 +3695,8 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            cache_info=merged_cache_info,
+                            conversation_state_info=conversation_runtime_info or conversation_shadow_info,
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -3046,6 +3728,7 @@ class ProxyService:
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
         force_compat: bool = False,
+        conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> JSONResponse:
         """
         Non-streaming forward for the Anthropic messages protocol.
@@ -3065,6 +3748,19 @@ class ProxyService:
         )
 
         request_data["stream"] = False
+        original_request_data = copy.deepcopy(request_data)
+        prompt_cache_state: dict[str, Any] = {}
+        conversation_runtime_info = copy.deepcopy(conversation_shadow_info) if conversation_shadow_info else None
+        if conversation_runtime_info:
+            conversation_runtime_info["upstream_session_mode"] = UpstreamSessionStrategyService.get_session_mode(channel)
+        active_compacted_request = (
+            copy.deepcopy(conversation_shadow_info.get("_conversation_compacted_request"))
+            if CompressionGuardService.should_apply_non_stream_compaction(
+                conversation_shadow_info,
+                is_stream=False,
+            )
+            else None
+        )
 
         # Define upstream call function for passthrough middleware
         async def upstream_call():
@@ -3073,45 +3769,156 @@ class ProxyService:
                 connect=_UPSTREAM_CONNECT_TIMEOUT,
             )
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=request_data, headers=headers)
+                compression_fallback_reason: Optional[str] = None
+                request_attempts: list[dict[str, Any]] = []
+                if active_compacted_request:
+                    compacted_request = copy.deepcopy(active_compacted_request)
+                    compacted_request["model"] = request_data.get("model", requested_model)
+                    compacted_request["stream"] = False
+                    request_attempts.append({
+                        "label": "compacted",
+                        "request_data": compacted_request,
+                        "is_compacted": True,
+                    })
+                request_attempts.append({
+                    "label": "full",
+                    "request_data": copy.deepcopy(original_request_data),
+                    "is_compacted": False,
+                })
 
-            if resp.status_code != 200:
-                raise Exception(
-                    f"Upstream returned HTTP {resp.status_code}: "
-                    f"{resp.text[:500]}"
-                )
+                for request_attempt_index, request_attempt in enumerate(request_attempts):
+                    request_payload = request_attempt["request_data"]
+                    prompt_cache_variants = AnthropicPromptCacheService.build_request_variants(
+                        db,
+                        request_payload,
+                        request_headers=request_headers,
+                    )
+                    prompt_fallback_reason: Optional[str] = None
+                    should_retry_full = False
 
-            # Some upstreams always return SSE even with stream=false.
-            content_type = resp.headers.get("content-type", "")
-            if "text/event-stream" in content_type or resp.text.lstrip().startswith("event: "):
-                response_body, input_tokens, output_tokens = (
-                    ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
-                )
-            else:
-                response_body = resp.json()
-                usage = response_body.get("usage", {})
-                input_tokens = usage.get("input_tokens", 0)
-                output_tokens = usage.get("output_tokens", 0)
+                    for variant_index, variant in enumerate(prompt_cache_variants):
+                        current_headers = dict(headers)
+                        current_headers.update(variant.get("header_overrides") or {})
+                        resp = await client.post(
+                            url,
+                            json=variant["request_data"],
+                            headers=current_headers,
+                        )
 
-            # Return standardized response format for the shared middleware contract
-            return {
-                "response": response_body,
-                "model": request_data.get("model"),
-                "usage": {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
-                }
-            }
+                        if resp.status_code != 200:
+                            body_text = resp.text[:500]
+                            if AnthropicPromptCacheService.should_retry_with_fallback(
+                                status_code=resp.status_code,
+                                response_text=body_text,
+                                attempt_meta=variant["meta"],
+                                has_more_variants=variant_index < len(prompt_cache_variants) - 1,
+                            ):
+                                prompt_fallback_reason = f"HTTP {resp.status_code}: {body_text}"
+                                logger.warning(
+                                    "Anthropic prompt cache fallback request_id=%s channel=%s channel_id=%s "
+                                    "variant=%s reason=%s",
+                                    request_id,
+                                    channel.name,
+                                    channel.id,
+                                    variant["meta"].get("label"),
+                                    prompt_fallback_reason,
+                                )
+                                continue
+
+                            if request_attempt["is_compacted"] and CompressionGuardService.should_fallback_to_full_request(
+                                status_code=resp.status_code,
+                                response_text=body_text,
+                            ):
+                                compression_fallback_reason = (
+                                    f"compressed_request HTTP {resp.status_code}: {body_text}"
+                                )
+                                should_retry_full = True
+                                break
+
+                            raise Exception(
+                                f"Upstream returned HTTP {resp.status_code}: "
+                                f"{body_text}"
+                            )
+
+                        prompt_cache_state["attempt_meta"] = copy.deepcopy(variant["meta"])
+                        prompt_cache_state["fallback_triggered"] = bool(variant_index > 0)
+                        prompt_cache_state["fallback_reason"] = prompt_fallback_reason
+
+                        content_type = resp.headers.get("content-type", "")
+                        if "text/event-stream" in content_type or resp.text.lstrip().startswith("event: "):
+                            response_body, input_tokens, output_tokens = (
+                                ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
+                            )
+                        else:
+                            response_body = resp.json()
+                            usage = response_body.get("usage", {})
+                            input_tokens = usage.get("input_tokens", 0)
+                            output_tokens = usage.get("output_tokens", 0)
+
+                        usage_summary = AnthropicPromptCacheService.extract_usage_summary(
+                            response_body.get("usage") or {},
+                            attempt_meta=variant["meta"],
+                        )
+                        prompt_cache_state["usage_summary"] = usage_summary
+
+                        if conversation_runtime_info:
+                            if request_attempt["is_compacted"]:
+                                conversation_runtime_info["compression_mode"] = "non_stream_active"
+                                conversation_runtime_info["compression_status"] = "ACTIVE_APPLIED"
+                                conversation_runtime_info["compression_fallback_reason"] = None
+                            elif active_compacted_request and request_attempt_index > 0:
+                                conversation_runtime_info["compression_mode"] = "non_stream_active"
+                                conversation_runtime_info["compression_status"] = "ACTIVE_FALLBACK_FULL"
+                                conversation_runtime_info["compression_fallback_reason"] = compression_fallback_reason
+                                conversation_runtime_info["_conversation_mark_cooldown"] = True
+                            commit_payload = conversation_runtime_info.get("_conversation_shadow_commit") or {}
+                            commit_payload["compression_mode"] = conversation_runtime_info.get("compression_mode")
+                            conversation_runtime_info["_conversation_shadow_commit"] = commit_payload
+
+                        return {
+                            "response": response_body,
+                            "model": request_data.get("model"),
+                            "usage": {
+                                "prompt_tokens": usage_summary.get("input_tokens", 0),
+                                "completion_tokens": usage_summary.get("output_tokens", 0),
+                                "cache_read_input_tokens": usage_summary.get("cache_read_input_tokens", 0),
+                                "cache_creation_input_tokens": usage_summary.get("cache_creation_input_tokens", 0),
+                                "logical_input_tokens": usage_summary.get("logical_input_tokens", 0),
+                            },
+                        }
+
+                    if should_retry_full:
+                        logger.warning(
+                            "Conversation compaction fallback to full request_id=%s channel=%s channel_id=%s reason=%s",
+                            request_id,
+                            channel.name,
+                            channel.id,
+                            compression_fallback_reason,
+                        )
+                        continue
+
+                raise Exception(compression_fallback_reason or "Anthropic request failed")
 
         # Shared passthrough middleware contract
-        cache_response, cache_info = await CacheMiddleware.wrap_request(
-            request_body=request_data,
-            headers=request_headers or {},
-            user=user,
-            db=db,
-            upstream_call=upstream_call,
-            unified_model=unified_model,
-        )
+        try:
+            cache_response, cache_info = await CacheMiddleware.wrap_request(
+                request_body=original_request_data,
+                headers=request_headers or {},
+                user=user,
+                db=db,
+                upstream_call=upstream_call,
+                unified_model=unified_model,
+                request_format="anthropic_messages",
+                requested_model=requested_model,
+            )
+        except Exception as exc:
+            merged_error_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+                ProxyService._extract_cache_info_from_error(exc),
+                conversation_shadow_info,
+            )
+            if merged_error_cache_info:
+                setattr(exc, "_request_cache_info", merged_error_cache_info)
+            raise
 
         response_time_ms = int((time.time() - start_time) * 1000)
 
@@ -3119,16 +3926,30 @@ class ProxyService:
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
-
-        # Middleware is passthrough; billing tokens equal actual tokens
-        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
-            cache_info=cache_info,
-            user=user,
-            actual_tokens={
-                "input_tokens": actual_input_tokens,
-                "output_tokens": actual_output_tokens,
-            }
+        usage_summary = prompt_cache_state.get("usage_summary") or {
+            "input_tokens": actual_input_tokens,
+            "output_tokens": actual_output_tokens,
+            "logical_input_tokens": actual_input_tokens,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_creation_5m_input_tokens": 0,
+            "cache_creation_1h_input_tokens": 0,
+            "prompt_cache_status": "BYPASS",
+        }
+        merged_cache_info = ProxyService._merge_prompt_cache_state_into_cache_info(
+            cache_info,
+            prompt_cache_state,
         )
+        merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+            merged_cache_info,
+            conversation_runtime_info or conversation_shadow_info,
+        )
+
+        billing_input_tokens = ProxyService._resolve_prompt_cache_billing_input_tokens(
+            db,
+            usage_summary,
+        )
+        billing_output_tokens = int(usage_summary.get("output_tokens", actual_output_tokens) or 0)
 
         # Record success and do accounting with billing tokens
         ProxyService._record_success(db, channel)
@@ -3136,6 +3957,8 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            cache_info=merged_cache_info,
+            conversation_state_info=conversation_runtime_info or conversation_shadow_info,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -3238,6 +4061,7 @@ class ProxyService:
         """
         input_tokens = 0
         output_tokens = 0
+        usage_state: dict[str, Any] = {}
         msg_id = None
         msg_model = None
         stop_reason = None
@@ -3257,6 +4081,7 @@ class ProxyService:
                     msg_id = msg.get("id")
                     msg_model = msg.get("model")
                     usage = msg.get("usage", {})
+                    ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
                     input_tokens = usage.get("input_tokens", 0)
 
                 elif chunk_type == "content_block_start":
@@ -3292,6 +4117,7 @@ class ProxyService:
                     delta = chunk.get("delta", {})
                     stop_reason = delta.get("stop_reason", stop_reason)
                     usage = chunk.get("usage", {})
+                    ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
                     output_tokens = usage.get("output_tokens", output_tokens)
                     if "input_tokens" in usage and usage["input_tokens"]:
                         input_tokens = usage["input_tokens"]
@@ -3343,6 +4169,15 @@ class ProxyService:
             "usage": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_read_input_tokens": int(usage_state.get("cache_read_input_tokens", 0) or 0),
+                "cache_creation_input_tokens": int(usage_state.get("cache_creation_input_tokens", 0) or 0),
+                "cache_creation_5m_input_tokens": int(
+                    usage_state.get("cache_creation_5m_input_tokens", 0) or 0
+                ),
+                "cache_creation_1h_input_tokens": int(
+                    usage_state.get("cache_creation_1h_input_tokens", 0) or 0
+                ),
+                "cache_creation": copy.deepcopy(usage_state.get("cache_creation") or {}),
             },
         }
 
@@ -3506,6 +4341,8 @@ class ProxyService:
         client_ip: str,
         response_time_ms: int,
         is_stream: bool,
+        cache_info: Optional[dict[str, Any]] = None,
+        conversation_state_info: Optional[dict[str, Any]] = None,
     ) -> None:
         """
         Calculate cost, deduct from user balance (for balance mode) or just record usage (for unlimited mode),
@@ -3569,7 +4406,35 @@ class ProxyService:
                     balance_before = 0.0
                     balance_after = 0.0
 
+            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+            shadow_commit = None
+            if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
+                shadow_commit = cache_info.get("_conversation_shadow_commit")
+            elif (
+                conversation_state_info
+                and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
+            ):
+                shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
+
+            committed_session_id = ConversationSessionService.commit_success_state(
+                db,
+                user_id=user.id,
+                requested_model=requested_model,
+                protocol_type=channel.protocol_type or "",
+                channel_id=channel.id,
+                shadow_commit=shadow_commit,
+            )
+            if committed_session_id and not cache_log_fields.get("conversation_session_id"):
+                cache_log_fields["conversation_session_id"] = committed_session_id
+                if cache_info is not None:
+                    cache_info["conversation_session_id"] = committed_session_id
+                if conversation_state_info is not None:
+                    conversation_state_info["conversation_session_id"] = committed_session_id
+
             # Write consumption record (for both modes)
+            logical_input_tokens = int(
+                cache_log_fields.get("logical_input_tokens") or input_tokens
+            )
             consumption = ConsumptionRecord(
                 user_id=user.id,
                 request_id=request_id,
@@ -3577,6 +4442,15 @@ class ProxyService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
+                logical_input_tokens=logical_input_tokens,
+                upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
+                upstream_cache_read_input_tokens=int(
+                    cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
+                ),
+                upstream_cache_creation_input_tokens=int(
+                    cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
+                ),
+                upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
                 input_cost=Decimal(str(input_cost)),
                 output_cost=Decimal(str(output_cost)),
                 total_cost=Decimal(str(total_cost)),
@@ -3602,11 +4476,51 @@ class ProxyService:
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 response_time_ms=response_time_ms,
+                cache_status=cache_log_fields["cache_status"],
+                cache_hit_segments=cache_log_fields["cache_hit_segments"],
+                cache_miss_segments=cache_log_fields["cache_miss_segments"],
+                cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
+                cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
+                cache_new_tokens=cache_log_fields["cache_new_tokens"],
+                cache_reused_chars=cache_log_fields["cache_reused_chars"],
+                cache_new_chars=cache_log_fields["cache_new_chars"],
+                logical_input_tokens=logical_input_tokens,
+                upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
+                upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
+                upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
+                upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
+                upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
+                conversation_session_id=cache_log_fields["conversation_session_id"],
+                conversation_match_status=cache_log_fields["conversation_match_status"],
+                compression_mode=cache_log_fields["compression_mode"],
+                compression_status=cache_log_fields["compression_status"],
+                original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
+                compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
+                compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
+                compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
+                compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
+                upstream_session_mode=cache_log_fields["upstream_session_mode"],
+                upstream_session_id=cache_log_fields["upstream_session_id"],
                 status="success",
                 error_message=None,
                 client_ip=client_ip,
             )
             db.add(req_log)
+
+            RequestCacheSummaryService.persist_request_cache_summary(
+                db,
+                request_id=request_id,
+                user_id=user.id,
+                requested_model=requested_model,
+                protocol_type=channel.protocol_type,
+                cache_info=cache_info,
+            )
+            if cache_info and cache_info.get("_conversation_mark_cooldown"):
+                ConversationSessionService.mark_session_cooldown_by_session_id(
+                    db,
+                    cache_log_fields.get("conversation_session_id") or committed_session_id,
+                )
 
             # Update API key stats
             api_key_record.total_requests += 1
@@ -3632,9 +4546,11 @@ class ProxyService:
         error_message: str,
         channel: Channel | None = None,
         response_time_ms: Optional[int] = None,
+        cache_info: Optional[dict[str, Any]] = None,
     ) -> None:
         """Log a failed request without deducting balance."""
         try:
+            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
             req_log = RequestLog(
                 request_id=request_id,
                 user_id=user.id,
@@ -3649,11 +4565,46 @@ class ProxyService:
                 output_tokens=0,
                 total_tokens=0,
                 response_time_ms=response_time_ms,
+                cache_status=cache_log_fields["cache_status"],
+                cache_hit_segments=cache_log_fields["cache_hit_segments"],
+                cache_miss_segments=cache_log_fields["cache_miss_segments"],
+                cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
+                cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
+                cache_new_tokens=cache_log_fields["cache_new_tokens"],
+                cache_reused_chars=cache_log_fields["cache_reused_chars"],
+                cache_new_chars=cache_log_fields["cache_new_chars"],
+                logical_input_tokens=int(cache_log_fields.get("logical_input_tokens", 0) or 0),
+                upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
+                upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
+                upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
+                upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
+                upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
+                conversation_session_id=cache_log_fields["conversation_session_id"],
+                conversation_match_status=cache_log_fields["conversation_match_status"],
+                compression_mode=cache_log_fields["compression_mode"],
+                compression_status=cache_log_fields["compression_status"],
+                original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
+                compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
+                compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
+                compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
+                compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
+                upstream_session_mode=cache_log_fields["upstream_session_mode"],
+                upstream_session_id=cache_log_fields["upstream_session_id"],
                 status="error",
                 error_message=error_message[:2000] if error_message else None,
                 client_ip=client_ip,
             )
             db.add(req_log)
+
+            RequestCacheSummaryService.persist_request_cache_summary(
+                db,
+                request_id=request_id,
+                user_id=user.id,
+                requested_model=requested_model,
+                protocol_type=channel.protocol_type if channel else None,
+                cache_info=cache_info,
+            )
             db.commit()
         except Exception as e:
             logger.error("Failed to log error request: %s", e)

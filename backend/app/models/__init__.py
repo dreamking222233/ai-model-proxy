@@ -6,10 +6,13 @@ from app.models.model import UnifiedModel, ModelChannelMapping, ModelOverrideRul
 from app.models.log import (
     HealthCheckLog,
     RequestLog,
+    RequestCacheSummary,
     SystemConfig,
     OperationLog,
     UserBalance,
     ConsumptionRecord,
+    ConversationSession,
+    ConversationCheckpoint,
 )
 
 __all__ = [
@@ -21,8 +24,11 @@ __all__ = [
     "ModelOverrideRule",
     "HealthCheckLog",
     "RequestLog",
+    "RequestCacheSummary",
     "SystemConfig",
     "OperationLog",
     "UserBalance",
     "ConsumptionRecord",
+    "ConversationSession",
+    "ConversationCheckpoint",
 ]

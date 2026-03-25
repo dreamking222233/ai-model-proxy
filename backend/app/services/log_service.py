@@ -1,6 +1,7 @@
 """Request log, operation log, and statistics service."""
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from datetime import datetime, timedelta
@@ -8,13 +9,23 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 
-from app.models.log import RequestLog, OperationLog, ConsumptionRecord
+from app.models.log import RequestLog, OperationLog, ConsumptionRecord, RequestCacheSummary
 from app.models.user import SysUser
 from app.core.exceptions import ServiceException
 
 
 class LogService:
     """Query and create log records, compute aggregated statistics."""
+
+    @staticmethod
+    def _load_cache_details(details_json: Optional[str]) -> Optional[dict]:
+        """Parse cached request-summary JSON safely."""
+        if not details_json:
+            return None
+        try:
+            return json.loads(details_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
 
     @staticmethod
     def list_request_logs(
@@ -39,11 +50,14 @@ class LogService:
         query = db.query(
             RequestLog,
             SysUser.username,
-            ConsumptionRecord.total_cost
+            ConsumptionRecord.total_cost,
+            RequestCacheSummary.details_json,
         ).outerjoin(
             SysUser, RequestLog.user_id == SysUser.id
         ).outerjoin(
             ConsumptionRecord, RequestLog.request_id == ConsumptionRecord.request_id
+        ).outerjoin(
+            RequestCacheSummary, RequestLog.request_id == RequestCacheSummary.request_id
         )
 
         if user_id is not None:
@@ -90,13 +104,40 @@ class LogService:
                 "output_tokens": log.output_tokens,
                 "total_tokens": log.total_tokens,
                 "response_time_ms": log.response_time_ms,
+                "cache_status": log.cache_status,
+                "cache_hit_segments": log.cache_hit_segments or 0,
+                "cache_miss_segments": log.cache_miss_segments or 0,
+                "cache_bypass_segments": log.cache_bypass_segments or 0,
+                "cache_reused_tokens": log.cache_reused_tokens or 0,
+                "cache_new_tokens": log.cache_new_tokens or 0,
+                "cache_reused_chars": log.cache_reused_chars or 0,
+                "cache_new_chars": log.cache_new_chars or 0,
+                "logical_input_tokens": log.logical_input_tokens or 0,
+                "upstream_input_tokens": log.upstream_input_tokens or 0,
+                "upstream_cache_read_input_tokens": log.upstream_cache_read_input_tokens or 0,
+                "upstream_cache_creation_input_tokens": log.upstream_cache_creation_input_tokens or 0,
+                "upstream_cache_creation_5m_input_tokens": log.upstream_cache_creation_5m_input_tokens or 0,
+                "upstream_cache_creation_1h_input_tokens": log.upstream_cache_creation_1h_input_tokens or 0,
+                "upstream_prompt_cache_status": log.upstream_prompt_cache_status or "BYPASS",
+                "conversation_session_id": log.conversation_session_id,
+                "conversation_match_status": log.conversation_match_status,
+                "compression_mode": log.compression_mode,
+                "compression_status": log.compression_status,
+                "original_estimated_input_tokens": log.original_estimated_input_tokens or 0,
+                "compressed_estimated_input_tokens": log.compressed_estimated_input_tokens or 0,
+                "compression_saved_estimated_tokens": log.compression_saved_estimated_tokens or 0,
+                "compression_ratio": float(log.compression_ratio or 0),
+                "compression_fallback_reason": log.compression_fallback_reason,
+                "upstream_session_mode": log.upstream_session_mode,
+                "upstream_session_id": log.upstream_session_id,
                 "status": log.status,
                 "error_message": log.error_message,
                 "client_ip": log.client_ip,
                 "total_cost": float(total_cost) if total_cost else 0.0,
+                "cache_details": LogService._load_cache_details(cache_details),
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
-            for log, username, total_cost in rows
+            for log, username, total_cost, cache_details in rows
         ]
         return result, total
 

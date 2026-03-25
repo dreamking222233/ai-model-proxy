@@ -171,6 +171,345 @@
       </div>
     </a-card>
 
+    <a-card class="health-check-card" :bordered="false">
+      <div slot="title" class="card-title">
+        <a-icon type="database" class="title-icon" />
+        缓存配置
+      </div>
+      <div slot="extra">
+        <a-tag color="green" v-if="!savingCacheConfig">
+          <a-icon type="check-circle" />
+          已保存
+        </a-tag>
+        <a-tag color="orange" v-else>
+          <a-icon type="loading" />
+          保存中
+        </a-tag>
+      </div>
+
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="cloud-server" />
+              Prompt Cache 开关
+            </div>
+            <a-switch
+              v-model="anthropicPromptCacheEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              仅对 Anthropic `/v1/messages` 注入官方缓存元数据
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="eye" />
+              用户端显示
+            </div>
+            <a-switch
+              v-model="anthropicPromptCacheUserVisible"
+              checked-children="显示"
+              un-checked-children="隐藏"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              开启后，用户可看到真实上游缓存读取/创建
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="history" />
+              历史缓存
+            </div>
+            <a-switch
+              v-model="anthropicPromptCacheHistoryEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              给最近一轮用户消息打 5m/1h 缓存断点
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="clock-circle" />
+              静态 TTL
+            </div>
+            <a-select v-model="anthropicPromptCacheStaticTtl" class="config-input">
+              <a-select-option value="5m">5m</a-select-option>
+              <a-select-option value="1h">1h</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              优先缓存稳定的 tools/system 前缀
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="clock-circle" />
+              历史 TTL
+            </div>
+            <a-select v-model="anthropicPromptCacheHistoryTtl" class="config-input">
+              <a-select-option value="5m">5m</a-select-option>
+              <a-select-option value="1h">1h</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              当前建议先使用 5m，保证兼容性优先
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="calculator" />
+              计费口径
+            </div>
+            <a-select v-model="anthropicPromptCacheBillingMode" class="config-input">
+              <a-select-option value="logical">logical</a-select-option>
+              <a-select-option value="actual_upstream">actual_upstream</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              默认按逻辑 Token 计费，不让缓存影响用户账单
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="branches" />
+              会话压缩开关
+            </div>
+            <a-switch
+              v-model="conversationStateCompactionEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              启用后对 Anthropic 长对话进行会话识别与历史压缩
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="deployment-unit" />
+              执行阶段
+            </div>
+            <a-select v-model="conversationStateCompactionStage" class="config-input">
+              <a-select-option value="off">off</a-select-option>
+              <a-select-option value="shadow">shadow</a-select-option>
+              <a-select-option value="non_stream_active">non_stream_active</a-select-option>
+              <a-select-option value="stream_shadow">stream_shadow</a-select-option>
+              <a-select-option value="stream_active">stream_active</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              建议先 `shadow`，确认稳定后再开 `non_stream_active`
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="profile" />
+              压缩模式
+            </div>
+            <a-select v-model="conversationStateCompactionMode" class="config-input">
+              <a-select-option value="safe_history">safe_history</a-select-option>
+              <a-select-option value="stateful_preferred">stateful_preferred</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              当前默认只压缩已完成历史，不压 system/tools
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="eye" />
+              用户端显示
+            </div>
+            <a-switch
+              v-model="conversationStateUserVisible"
+              checked-children="显示"
+              un-checked-children="隐藏"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              开启后用户可看到会话压缩 shadow/active 收益
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="history" />
+              最近精确轮数
+            </div>
+            <a-input-number
+              v-model="conversationStateRecentTurns"
+              :min="2"
+              :max="20"
+              class="config-input"
+            >
+              <template slot="addonAfter">轮</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              历史压缩时始终保留最近若干轮完整对话
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="fund" />
+              触发阈值
+            </div>
+            <a-input-number
+              v-model="conversationStateTriggerTokens"
+              :min="1000"
+              :max="200000"
+              :step="500"
+              class="config-input"
+            >
+              <template slot="addonAfter">tok</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              原始估算输入 token 超过阈值才考虑压缩
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="sync" />
+              异步检查点
+            </div>
+            <a-switch
+              v-model="conversationStateAsyncCheckpointEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              默认开启，避免摘要生成阻塞主请求
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="database" />
+              内部分析开关
+            </div>
+            <a-switch
+              v-model="requestBodyCacheEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              仅执行系统内部请求体缓存分析，不修改上游请求
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="eye" />
+              用户端可见
+            </div>
+            <a-switch
+              v-model="requestBodyCacheUserVisible"
+              checked-children="显示"
+              un-checked-children="隐藏"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              开启后，用户可在账单与使用页看到缓存读取/创建
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="clock-circle" />
+              缓存 TTL
+            </div>
+            <a-input-number
+              v-model="requestBodyCacheTtl"
+              :min="60"
+              :max="86400"
+              class="config-input"
+            >
+              <template slot="addonAfter">秒</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              默认 1800 秒（30 分钟）
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="filter" />
+              最小片段长度
+            </div>
+            <a-input-number
+              v-model="requestBodyCacheMinChars"
+              :min="32"
+              :max="8192"
+              class="config-input"
+            >
+              <template slot="addonAfter">字符</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              过小片段仅统计为跳过，避免缓存碎片化
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
+      <div class="action-buttons">
+        <a-button type="primary" @click="saveCacheConfig" :loading="savingCacheConfig" size="large" class="save-btn">
+          <a-icon type="save" />
+          保存缓存配置
+        </a-button>
+      </div>
+    </a-card>
+
     <!-- System Config Table -->
     <a-card class="config-table-card" :bordered="false">
       <div slot="title" class="card-title">
@@ -303,8 +642,26 @@ export default {
       tokenMultiplier: 1.0,
       circuitBreakerThreshold: 5,
       circuitBreakerRecovery: 600,
+      anthropicPromptCacheEnabled: false,
+      anthropicPromptCacheUserVisible: false,
+      anthropicPromptCacheHistoryEnabled: true,
+      anthropicPromptCacheStaticTtl: '5m',
+      anthropicPromptCacheHistoryTtl: '5m',
+      anthropicPromptCacheBillingMode: 'logical',
+      conversationStateCompactionEnabled: false,
+      conversationStateUserVisible: false,
+      conversationStateAsyncCheckpointEnabled: true,
+      conversationStateCompactionStage: 'shadow',
+      conversationStateCompactionMode: 'safe_history',
+      conversationStateRecentTurns: 6,
+      conversationStateTriggerTokens: 12000,
+      requestBodyCacheEnabled: false,
+      requestBodyCacheUserVisible: false,
+      requestBodyCacheTtl: 1800,
+      requestBodyCacheMinChars: 256,
       triggeringHealthCheck: false,
       savingConfig: false,
+      savingCacheConfig: false,
       showSuccessAnimation: false,
       configKeyMap: {
         'health_check_interval': '健康检查间隔',
@@ -314,7 +671,26 @@ export default {
         'price_multiplier': '价格倍率',
         'token_multiplier': 'Token倍率',
         'max_message_length': '最大消息长度',
-        'max_context_tokens': '最大上下文Token数'
+        'max_context_tokens': '最大上下文Token数',
+        'anthropic_prompt_cache_enabled': 'Anthropic Prompt Cache 开关',
+        'anthropic_prompt_cache_user_visible': 'Anthropic Prompt Cache 用户可见',
+        'anthropic_prompt_cache_history_enabled': 'Anthropic Prompt Cache 历史缓存',
+        'anthropic_prompt_cache_static_ttl': 'Anthropic Prompt Cache 静态 TTL',
+        'anthropic_prompt_cache_history_ttl': 'Anthropic Prompt Cache 历史 TTL',
+        'anthropic_prompt_cache_beta_header': 'Anthropic Prompt Cache Beta Header',
+        'anthropic_prompt_cache_billing_mode': 'Anthropic Prompt Cache 计费口径',
+        'conversation_state_compaction_enabled': '会话压缩开关',
+        'conversation_state_compaction_stage': '会话压缩阶段',
+        'conversation_state_compaction_mode': '会话压缩模式',
+        'conversation_state_compaction_recent_turns': '保留最近精确轮数',
+        'conversation_state_compaction_trigger_tokens': '触发压缩阈值',
+        'conversation_state_user_visible': '用户端显示会话压缩',
+        'conversation_state_async_checkpoint_enabled': '异步检查点构建',
+        'request_body_cache_enabled': '请求体缓存开关',
+        'request_body_cache_user_visible': '用户端显示缓存',
+        'request_body_cache_ttl_seconds': '请求体缓存TTL',
+        'request_body_cache_min_chars': '最小缓存片段长度',
+        'request_body_cache_formats': '请求体缓存格式'
       },
       columns: [
         {
@@ -388,6 +764,40 @@ export default {
             this.circuitBreakerThreshold = Number(config.config_value) || 5
           } else if (config.config_key === 'circuit_breaker_recovery') {
             this.circuitBreakerRecovery = Number(config.config_value) || 600
+          } else if (config.config_key === 'anthropic_prompt_cache_enabled') {
+            this.anthropicPromptCacheEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'anthropic_prompt_cache_user_visible') {
+            this.anthropicPromptCacheUserVisible = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'anthropic_prompt_cache_history_enabled') {
+            this.anthropicPromptCacheHistoryEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'anthropic_prompt_cache_static_ttl') {
+            this.anthropicPromptCacheStaticTtl = config.config_value || '5m'
+          } else if (config.config_key === 'anthropic_prompt_cache_history_ttl') {
+            this.anthropicPromptCacheHistoryTtl = config.config_value || '5m'
+          } else if (config.config_key === 'anthropic_prompt_cache_billing_mode') {
+            this.anthropicPromptCacheBillingMode = config.config_value || 'logical'
+          } else if (config.config_key === 'conversation_state_compaction_enabled') {
+            this.conversationStateCompactionEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'conversation_state_user_visible') {
+            this.conversationStateUserVisible = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'conversation_state_async_checkpoint_enabled') {
+            this.conversationStateAsyncCheckpointEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'conversation_state_compaction_stage') {
+            this.conversationStateCompactionStage = config.config_value || 'shadow'
+          } else if (config.config_key === 'conversation_state_compaction_mode') {
+            this.conversationStateCompactionMode = config.config_value || 'safe_history'
+          } else if (config.config_key === 'conversation_state_compaction_recent_turns') {
+            this.conversationStateRecentTurns = Number(config.config_value) || 6
+          } else if (config.config_key === 'conversation_state_compaction_trigger_tokens') {
+            this.conversationStateTriggerTokens = Number(config.config_value) || 12000
+          } else if (config.config_key === 'request_body_cache_enabled') {
+            this.requestBodyCacheEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'request_body_cache_user_visible') {
+            this.requestBodyCacheUserVisible = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'request_body_cache_ttl_seconds') {
+            this.requestBodyCacheTtl = Number(config.config_value) || 1800
+          } else if (config.config_key === 'request_body_cache_min_chars') {
+            this.requestBodyCacheMinChars = Number(config.config_value) || 256
           }
         })
       } catch (err) {
@@ -427,6 +837,45 @@ export default {
         console.error('Failed to save config:', err)
       } finally {
         this.savingConfig = false
+      }
+    },
+    async saveCacheConfig() {
+      this.savingCacheConfig = true
+      try {
+        const updates = [
+          { key: 'anthropic_prompt_cache_enabled', value: this.anthropicPromptCacheEnabled ? 'true' : 'false' },
+          { key: 'anthropic_prompt_cache_user_visible', value: this.anthropicPromptCacheUserVisible ? 'true' : 'false' },
+          { key: 'anthropic_prompt_cache_history_enabled', value: this.anthropicPromptCacheHistoryEnabled ? 'true' : 'false' },
+          { key: 'anthropic_prompt_cache_static_ttl', value: this.anthropicPromptCacheStaticTtl },
+          { key: 'anthropic_prompt_cache_history_ttl', value: this.anthropicPromptCacheHistoryTtl },
+          { key: 'anthropic_prompt_cache_billing_mode', value: this.anthropicPromptCacheBillingMode },
+          { key: 'conversation_state_compaction_enabled', value: this.conversationStateCompactionEnabled ? 'true' : 'false' },
+          { key: 'conversation_state_user_visible', value: this.conversationStateUserVisible ? 'true' : 'false' },
+          { key: 'conversation_state_async_checkpoint_enabled', value: this.conversationStateAsyncCheckpointEnabled ? 'true' : 'false' },
+          { key: 'conversation_state_compaction_stage', value: this.conversationStateCompactionStage },
+          { key: 'conversation_state_compaction_mode', value: this.conversationStateCompactionMode },
+          { key: 'conversation_state_compaction_recent_turns', value: String(this.conversationStateRecentTurns) },
+          { key: 'conversation_state_compaction_trigger_tokens', value: String(this.conversationStateTriggerTokens) },
+          { key: 'request_body_cache_enabled', value: this.requestBodyCacheEnabled ? 'true' : 'false' },
+          { key: 'request_body_cache_user_visible', value: this.requestBodyCacheUserVisible ? 'true' : 'false' },
+          { key: 'request_body_cache_ttl_seconds', value: String(this.requestBodyCacheTtl) },
+          { key: 'request_body_cache_min_chars', value: String(this.requestBodyCacheMinChars) }
+        ]
+
+        for (const update of updates) {
+          const config = this.configList.find(c => c.config_key === update.key)
+          if (config) {
+            await updateConfig(config.id, { config_value: update.value })
+          }
+        }
+
+        this.$message.success('缓存配置保存成功')
+        this.fetchList()
+      } catch (err) {
+        this.$message.error('缓存配置保存失败')
+        console.error('Failed to save cache config:', err)
+      } finally {
+        this.savingCacheConfig = false
       }
     },
     async triggerHealthCheck() {

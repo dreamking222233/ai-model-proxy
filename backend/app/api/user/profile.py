@@ -5,6 +5,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import SysUser
 from app.services.auth_service import AuthService
 from app.services.log_service import LogService
+from app.services.health_service import get_system_config
 from app.models.log import SystemConfig
 from app.schemas.user import PasswordChange
 from app.schemas.common import ResponseModel
@@ -50,13 +51,23 @@ def get_usage_logs(
     summary = LogService.get_usage_summary(
         db, current_user.id, start_date=start_date, end_date=end_date
     )
+    cache_visible = (
+        (bool(get_system_config(db, "anthropic_prompt_cache_enabled", False)) and bool(
+            get_system_config(db, "anthropic_prompt_cache_user_visible", False)
+        ))
+        or bool(get_system_config(db, "conversation_state_user_visible", False))
+        or (bool(get_system_config(db, "request_body_cache_enabled", False)) and bool(
+            get_system_config(db, "request_body_cache_user_visible", False)
+        ))
+    )
 
     return ResponseModel(data={
         "list": items,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "summary": summary
+        "summary": summary,
+        "cache_visible": cache_visible,
     })
 
 
@@ -66,7 +77,13 @@ def get_site_config(
     current_user: SysUser = Depends(get_current_user),
 ):
     """Return public site config values for frontend display."""
-    keys = ["api_base_url"]
+    keys = [
+        "api_base_url",
+        "anthropic_prompt_cache_enabled",
+        "anthropic_prompt_cache_user_visible",
+        "conversation_state_compaction_enabled",
+        "conversation_state_user_visible",
+    ]
     configs = db.query(SystemConfig).filter(SystemConfig.config_key.in_(keys)).all()
     result = {c.config_key: c.config_value for c in configs}
     return ResponseModel(data=result)

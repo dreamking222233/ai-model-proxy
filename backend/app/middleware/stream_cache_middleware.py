@@ -1,8 +1,8 @@
 """
-流式缓存中间件已停用。
+流式请求体缓存分析中间件。
 
-保留该模块仅为兼容现有调用点；所有流式请求直接透传到上游，不再执行缓存查询、
-缓存保存或缓存重放。
+该中间件只负责在流式请求发往上游前执行请求体分段缓存分析，不缓存或回放上游
+响应流。
 """
 import time
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.user import SysUser
+from app.services.request_body_cache_service import RequestBodyCacheService
 
 
 class StreamCollector:
@@ -35,7 +36,7 @@ class StreamCollector:
 
 
 class StreamCacheMiddleware:
-    """已停用的流式缓存中间件占位实现。"""
+    """流式请求体缓存分析中间件。"""
 
     @staticmethod
     async def wrap_stream_request(
@@ -46,11 +47,26 @@ class StreamCacheMiddleware:
         upstream_call: Callable[..., AsyncGenerator[str, None]],
         unified_model: Any,
         protocol: str,
+        request_format: str,
         model: str,
         billing_callback: Optional[Callable[[int, int, bool], None]] = None,
+        cache_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """直接透传上游流式响应，不做任何缓存处理。"""
+        """Analyze request-body cache usage, then stream upstream response unchanged."""
+        cache_info = RequestBodyCacheService.analyze_request(
+            db=db,
+            user_id=user.id,
+            request_body=request_body,
+            request_format=request_format,
+            requested_model=model,
+        )
+        if cache_state is not None:
+            cache_state["cache_info"] = cache_info
         collector = StreamCollector()
         collected_usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
-        async for chunk in upstream_call(collector, collected_usage):
-            yield chunk
+        try:
+            async for chunk in upstream_call(collector, collected_usage):
+                yield chunk
+        except Exception as exc:
+            setattr(exc, "_request_cache_info", cache_info)
+            raise

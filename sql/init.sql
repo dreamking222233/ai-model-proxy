@@ -226,6 +226,32 @@ CREATE TABLE `request_log` (
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
     `response_time_ms` INT DEFAULT NULL,
+    `cache_status` VARCHAR(20) DEFAULT NULL COMMENT 'Request body cache status',
+    `cache_hit_segments` INT NOT NULL DEFAULT 0,
+    `cache_miss_segments` INT NOT NULL DEFAULT 0,
+    `cache_bypass_segments` INT NOT NULL DEFAULT 0,
+    `cache_reused_tokens` INT NOT NULL DEFAULT 0,
+    `cache_new_tokens` INT NOT NULL DEFAULT 0,
+    `cache_reused_chars` INT NOT NULL DEFAULT 0,
+    `cache_new_chars` INT NOT NULL DEFAULT 0,
+    `logical_input_tokens` INT DEFAULT 0,
+    `upstream_input_tokens` INT DEFAULT 0,
+    `upstream_cache_read_input_tokens` INT DEFAULT 0,
+    `upstream_cache_creation_input_tokens` INT DEFAULT 0,
+    `upstream_cache_creation_5m_input_tokens` INT DEFAULT 0,
+    `upstream_cache_creation_1h_input_tokens` INT DEFAULT 0,
+    `upstream_prompt_cache_status` VARCHAR(20) DEFAULT NULL COMMENT 'Anthropic prompt cache status',
+    `conversation_session_id` VARCHAR(64) DEFAULT NULL COMMENT 'Conversation session id',
+    `conversation_match_status` VARCHAR(20) DEFAULT NULL COMMENT 'Conversation match status',
+    `compression_mode` VARCHAR(32) DEFAULT NULL COMMENT 'Conversation compaction mode',
+    `compression_status` VARCHAR(64) DEFAULT NULL COMMENT 'Conversation compaction status',
+    `original_estimated_input_tokens` INT DEFAULT 0,
+    `compressed_estimated_input_tokens` INT DEFAULT 0,
+    `compression_saved_estimated_tokens` INT DEFAULT 0,
+    `compression_ratio` DECIMAL(10, 4) DEFAULT 0,
+    `compression_fallback_reason` TEXT DEFAULT NULL,
+    `upstream_session_mode` VARCHAR(20) DEFAULT NULL COMMENT 'Upstream session mode',
+    `upstream_session_id` VARCHAR(128) DEFAULT NULL COMMENT 'Upstream session id',
     `status` ENUM('success', 'error', 'timeout') NOT NULL DEFAULT 'success',
     `error_message` TEXT DEFAULT NULL,
     `client_ip` VARCHAR(45) DEFAULT NULL,
@@ -236,8 +262,38 @@ CREATE TABLE `request_log` (
     KEY `idx_channel_id` (`channel_id`),
     KEY `idx_created_at` (`created_at`),
     KEY `idx_status` (`status`),
-    KEY `idx_requested_model` (`requested_model`)
+    KEY `idx_requested_model` (`requested_model`),
+    KEY `idx_conversation_session_id` (`conversation_session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='请求日志表';
+
+-- ============================================================
+-- 8. request_cache_summary - 请求体缓存摘要表
+-- ============================================================
+CREATE TABLE `request_cache_summary` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `request_id` VARCHAR(36) NOT NULL COMMENT 'Request UUID',
+    `user_id` BIGINT UNSIGNED DEFAULT NULL,
+    `requested_model` VARCHAR(128) DEFAULT NULL,
+    `protocol_type` VARCHAR(20) DEFAULT NULL,
+    `request_format` VARCHAR(32) DEFAULT NULL COMMENT 'anthropic_messages/openai_chat/responses',
+    `cache_status` VARCHAR(20) NOT NULL DEFAULT 'BYPASS',
+    `hit_segment_count` INT NOT NULL DEFAULT 0,
+    `miss_segment_count` INT NOT NULL DEFAULT 0,
+    `bypass_segment_count` INT NOT NULL DEFAULT 0,
+    `reused_tokens` INT NOT NULL DEFAULT 0,
+    `new_tokens` INT NOT NULL DEFAULT 0,
+    `reused_chars` INT NOT NULL DEFAULT 0,
+    `new_chars` INT NOT NULL DEFAULT 0,
+    `ttl_seconds` INT NOT NULL DEFAULT 0,
+    `details_json` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_request_id` (`request_id`),
+    KEY `idx_user_id` (`user_id`),
+    KEY `idx_requested_model` (`requested_model`),
+    KEY `idx_cache_status` (`cache_status`),
+    KEY `idx_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='请求体缓存摘要表';
 
 -- ============================================================
 -- 9. system_config - 系统配置表
@@ -299,6 +355,11 @@ CREATE TABLE `consumption_record` (
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
+    `logical_input_tokens` INT DEFAULT 0,
+    `upstream_input_tokens` INT DEFAULT 0,
+    `upstream_cache_read_input_tokens` INT DEFAULT 0,
+    `upstream_cache_creation_input_tokens` INT DEFAULT 0,
+    `upstream_prompt_cache_status` VARCHAR(20) DEFAULT NULL COMMENT 'Anthropic prompt cache status',
     `input_cost` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `output_cost` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `total_cost` DECIMAL(12, 6) NOT NULL DEFAULT 0,
@@ -316,7 +377,57 @@ CREATE TABLE `consumption_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ============================================================
--- 13. cache_log - 缓存日志表
+-- 13. conversation_session - 会话状态表
+-- ============================================================
+CREATE TABLE `conversation_session` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `session_id` VARCHAR(64) NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `requested_model` VARCHAR(128) DEFAULT NULL,
+    `protocol_type` VARCHAR(20) DEFAULT NULL,
+    `channel_id` BIGINT UNSIGNED DEFAULT NULL,
+    `system_hash` VARCHAR(64) NOT NULL,
+    `tools_hash` VARCHAR(64) NOT NULL,
+    `message_count` INT NOT NULL DEFAULT 0,
+    `last_message_hash` VARCHAR(64) DEFAULT NULL,
+    `compression_mode` VARCHAR(32) DEFAULT 'shadow',
+    `upstream_session_mode` VARCHAR(20) DEFAULT 'stateless',
+    `upstream_session_id` VARCHAR(128) DEFAULT NULL,
+    `state_version` INT NOT NULL DEFAULT 1,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+    `last_shadow_saved_tokens` INT NOT NULL DEFAULT 0,
+    `cooldown_until` DATETIME DEFAULT NULL,
+    `last_active_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_session_id` (`session_id`),
+    KEY `idx_user_model_proto` (`user_id`, `requested_model`, `protocol_type`),
+    KEY `idx_system_tools_hash` (`system_hash`, `tools_hash`),
+    KEY `idx_status` (`status`),
+    KEY `idx_last_active_at` (`last_active_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话状态表';
+
+-- ============================================================
+-- 14. conversation_checkpoint - 会话检查点表
+-- ============================================================
+CREATE TABLE `conversation_checkpoint` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `session_id` VARCHAR(64) NOT NULL,
+    `checkpoint_seq` INT NOT NULL DEFAULT 1,
+    `source_turn_start` INT NOT NULL DEFAULT 0,
+    `source_turn_end` INT NOT NULL DEFAULT 0,
+    `source_hash` VARCHAR(64) NOT NULL,
+    `summary_json` TEXT NOT NULL,
+    `summary_token_estimate` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_session_id` (`session_id`),
+    KEY `idx_source_hash` (`source_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话检查点表';
+
+-- ============================================================
+-- 15. cache_log - 缓存日志表
 -- ============================================================
 CREATE TABLE `cache_log` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -340,7 +451,7 @@ CREATE TABLE `cache_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='缓存日志表';
 
 -- ============================================================
--- 14. redemption_code - 兑换码表
+-- 16. redemption_code - 兑换码表
 -- ============================================================
 CREATE TABLE `redemption_code` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -384,7 +495,31 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('api_base_url', 'https://your-domain.com', 'string', 'API基础地址，用于快速开始页面展示给用户的接入地址'),
 ('max_context_tokens', '200000', 'number', '最大上下文Token数量限制'),
 ('max_message_length', '500000', 'number', '单条消息最大字符数限制'),
-('price_multiplier', '1.0', 'number', '价格倍率（1.0=原价，2.0=2倍价格）');
+('price_multiplier', '1.0', 'number', '价格倍率（1.0=原价，2.0=2倍价格）'),
+('request_body_cache_enabled', 'false', 'boolean', '是否启用请求体分段缓存分析'),
+('request_body_cache_user_visible', 'false', 'boolean', '用户端是否显示缓存读取/创建信息'),
+('request_body_cache_ttl_seconds', '1800', 'number', '请求体缓存 TTL（秒）'),
+('request_body_cache_min_chars', '256', 'number', '最小缓存片段字符数阈值'),
+('request_body_cache_formats', 'anthropic_messages,openai_chat,responses', 'string', '启用请求体缓存分析的请求格式'),
+('anthropic_prompt_cache_enabled', 'false', 'boolean', '是否启用 Anthropic Prompt Cache'),
+('anthropic_prompt_cache_history_enabled', 'true', 'boolean', '是否启用 Anthropic Prompt Cache 历史自动缓存'),
+('anthropic_prompt_cache_static_ttl', '5m', 'string', 'Anthropic Prompt Cache 静态前缀 TTL（5m/1h）'),
+('anthropic_prompt_cache_history_ttl', '5m', 'string', 'Anthropic Prompt Cache 历史前缀 TTL（5m/1h）'),
+('anthropic_prompt_cache_beta_header', 'extended-cache-ttl-2025-04-11', 'string', 'Anthropic Prompt Cache 1h TTL beta header'),
+('anthropic_prompt_cache_user_visible', 'false', 'boolean', '用户端是否显示 Anthropic Prompt Cache 读写详情'),
+('anthropic_prompt_cache_billing_mode', 'logical', 'string', 'Anthropic Prompt Cache 计费口径：logical 或 actual_upstream'),
+('conversation_state_compaction_enabled', 'false', 'boolean', '是否启用会话状态压缩'),
+('conversation_state_compaction_stage', 'shadow', 'string', '会话状态压缩阶段：off/shadow/non_stream_active/stream_shadow/stream_active'),
+('conversation_state_compaction_mode', 'safe_history', 'string', '会话状态压缩模式：off/safe_history/stateful_preferred'),
+('conversation_state_compaction_recent_turns', '6', 'number', '会话压缩时保留的最近精确 turn 数'),
+('conversation_state_compaction_trigger_tokens', '12000', 'number', '触发会话历史压缩的估算 token 阈值'),
+('conversation_state_compaction_summary_max_tokens', '1500', 'number', '会话检查点摘要最大估算 token'),
+('conversation_state_session_ttl_seconds', '86400', 'number', '会话状态 TTL（秒）'),
+('conversation_state_match_window', '20', 'number', '会话匹配时最多回看最近多少个候选会话'),
+('conversation_state_failure_cooldown_seconds', '600', 'number', '压缩失败后的会话冷却时间（秒）'),
+('conversation_state_user_visible', 'false', 'boolean', '用户端是否显示会话压缩收益'),
+('conversation_state_async_checkpoint_enabled', 'true', 'boolean', '是否启用异步会话检查点构建'),
+('conversation_state_tool_compaction_enabled', 'false', 'boolean', '是否启用实验性的 tools/system 压缩');
 
 -- ============================================================
 -- 预置渠道配置

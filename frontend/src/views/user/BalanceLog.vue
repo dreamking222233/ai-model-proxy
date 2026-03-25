@@ -119,6 +119,12 @@
                       <span class="token-value">{{ formatNumber(record.total_tokens || 0) }}</span>
                     </span>
                   </div>
+                  <div v-if="cacheVisible && hasPromptCacheUsage(record)" class="cache-detail">
+                    <span class="cache-chip cache-chip--hit">{{ getPromptCacheStatusText(record) }}</span>
+                    <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.upstream_cache_read_input_tokens || 0) }}</span>
+                    <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
+                    <span class="cache-chip cache-chip--token">实入 {{ formatNumber(record.upstream_input_tokens || 0) }} tok</span>
+                  </div>
                 </div>
               </template>
 
@@ -304,6 +310,25 @@
                         <span class="token-value">{{ formatNumber(record.total_tokens || 0) }}</span>
                       </span>
                     </div>
+                    <div v-if="cacheVisible && hasPromptCacheUsage(record)" class="cache-detail">
+                      <span class="cache-chip cache-chip--hit">{{ getPromptCacheStatusText(record) }}</span>
+                      <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.upstream_cache_read_input_tokens || 0) }}</span>
+                      <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
+                      <span class="cache-chip cache-chip--token">实入 {{ formatNumber(record.upstream_input_tokens || 0) }} tok</span>
+                    </div>
+                    <div v-else-if="cacheVisible && hasCacheSummary(record)" class="cache-detail">
+                      <span class="cache-chip cache-chip--token">内部缓存</span>
+                      <span class="cache-chip cache-chip--hit">{{ record.cache_status || 'BYPASS' }}</span>
+                      <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.cache_hit_segments || 0) }} 段</span>
+                      <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.cache_miss_segments || 0) }} 段</span>
+                      <span class="cache-chip cache-chip--token">复用 ~{{ formatNumber(record.cache_reused_tokens || 0) }} tok</span>
+                    </div>
+                    <div v-if="hasConversationShadow(record)" class="cache-detail">
+                      <span class="cache-chip cache-chip--token">会话压缩</span>
+                      <span class="cache-chip cache-chip--hit">{{ getCompressionStatusText(record) }}</span>
+                      <span class="cache-chip cache-chip--hit">{{ getConversationMatchText(record) }}</span>
+                      <span class="cache-chip cache-chip--miss">预估省 {{ formatNumber(record.compression_saved_estimated_tokens || 0) }} tok</span>
+                    </div>
                   </div>
                 </template>
 
@@ -370,6 +395,41 @@
           <a-descriptions-item label="请求时间">
             {{ selectedRecord.created_at ? formatTime(selectedRecord.created_at) : '-' }}
           </a-descriptions-item>
+          <a-descriptions-item v-if="cacheVisible" label="真实上游缓存">
+            <div v-if="hasPromptCacheUsage(selectedRecord)" class="modal-cache-summary">
+              <a-tag color="blue">{{ getPromptCacheStatusText(selectedRecord) }}</a-tag>
+              <span>读 {{ formatNumber(selectedRecord.upstream_cache_read_input_tokens || 0) }} tok</span>
+              <span>建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok</span>
+              <span>上游实入 {{ formatNumber(selectedRecord.upstream_input_tokens || 0) }} tok</span>
+              <span>逻辑输入 {{ formatNumber(selectedRecord.logical_input_tokens || selectedRecord.input_tokens || 0) }} tok</span>
+            </div>
+            <span v-else class="text-muted">未启用或本次未触发真实上游缓存</span>
+          </a-descriptions-item>
+          <a-descriptions-item v-if="cacheVisible" label="内部缓存">
+            <div v-if="hasCacheSummary(selectedRecord)" class="modal-cache-summary">
+              <a-tag color="cyan">{{ selectedRecord.cache_status || 'BYPASS' }}</a-tag>
+              <span>读 {{ formatNumber(selectedRecord.cache_hit_segments || 0) }} 段</span>
+              <span>建 {{ formatNumber(selectedRecord.cache_miss_segments || 0) }} 段</span>
+              <span>跳过 {{ formatNumber(selectedRecord.cache_bypass_segments || 0) }} 段</span>
+              <span>复用 ~{{ formatNumber(selectedRecord.cache_reused_tokens || 0) }} tok</span>
+            </div>
+            <span v-else class="text-muted">无内部请求体缓存记录</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="会话压缩 Shadow">
+            <div v-if="hasConversationShadow(selectedRecord)" class="modal-cache-summary">
+              <a-tag color="geekblue">{{ getCompressionStatusText(selectedRecord) }}</a-tag>
+              <span>会话 {{ selectedRecord.conversation_session_id || '-' }}</span>
+              <span>匹配 {{ getConversationMatchText(selectedRecord) }}</span>
+              <span>原始估算 {{ formatNumber(selectedRecord.original_estimated_input_tokens || 0) }} tok</span>
+              <span>压缩估算 {{ formatNumber(selectedRecord.compressed_estimated_input_tokens || 0) }} tok</span>
+              <span>理论节省 {{ formatNumber(selectedRecord.compression_saved_estimated_tokens || 0) }} tok</span>
+            </div>
+            <span v-else class="text-muted">未启用或未进入会话压缩 shadow</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="压缩回退原因">
+            <span v-if="selectedRecord.compression_fallback_reason">{{ selectedRecord.compression_fallback_reason }}</span>
+            <span v-else class="text-muted">无</span>
+          </a-descriptions-item>
         </a-descriptions>
 
         <div v-if="selectedRecord.error_message" class="error-message-section">
@@ -427,6 +487,7 @@ export default {
       statusFilter: undefined,
       errorModalVisible: false,
       selectedRecord: {},
+      cacheVisible: false,
       summaryStats: defaultUsageSummary(),
       billingPagination: {
         current: 1,
@@ -628,6 +689,9 @@ export default {
         const data = res.data || {}
         this.billingRecords = data.list || data.items || []
         this.billingPagination.total = data.total || 0
+        if (typeof data.cache_visible !== 'undefined') {
+          this.cacheVisible = Boolean(data.cache_visible)
+        }
       } catch (e) {
         // error handled by interceptor
       } finally {
@@ -654,6 +718,7 @@ export default {
         const data = res.data || {}
         this.usageLogs = data.list || []
         this.usagePagination.total = data.total || 0
+        this.cacheVisible = Boolean(data.cache_visible)
         if (data.summary) {
           this.summaryStats.todayRequests = data.summary.todayRequests || 0
           this.summaryStats.todayTokens = data.summary.todayTokens || 0
@@ -743,6 +808,64 @@ export default {
     formatNumber(num) {
       if (num === null || num === undefined) return '0'
       return Number(num).toLocaleString()
+    },
+    hasCacheSummary(record) {
+      if (!record) return false
+      return Boolean(
+        record.cache_status ||
+        Number(record.cache_hit_segments || 0) > 0 ||
+        Number(record.cache_miss_segments || 0) > 0 ||
+        Number(record.cache_bypass_segments || 0) > 0
+      )
+    },
+    hasPromptCacheUsage(record) {
+      if (!record) return false
+      return Boolean(
+        Number(record.upstream_cache_read_input_tokens || 0) > 0 ||
+        Number(record.upstream_cache_creation_input_tokens || 0) > 0 ||
+        ['READ', 'WRITE', 'MIXED', 'NONE'].includes(String(record.upstream_prompt_cache_status || ''))
+      )
+    },
+    hasConversationShadow(record) {
+      if (!record) return false
+      return Boolean(
+        record.compression_status ||
+        Number(record.compression_saved_estimated_tokens || 0) > 0 ||
+        record.conversation_session_id
+      )
+    },
+    getPromptCacheStatusText(record) {
+      const map = {
+        READ: '缓存读取',
+        WRITE: '缓存创建',
+        MIXED: '读写混合',
+        NONE: '已尝试未命中',
+        BYPASS: '未启用'
+      }
+      return map[String(record && record.upstream_prompt_cache_status || 'BYPASS')] || '未启用'
+    },
+    getCompressionStatusText(record) {
+      const map = {
+        SHADOW_READY: 'Shadow可压缩',
+        SHADOW_BYPASS_NEW_SESSION: '新会话',
+        SHADOW_BYPASS_THRESHOLD: '未达阈值',
+        SHADOW_BYPASS_RESET: '历史重置',
+        ACTIVE_APPLIED: '已真实压缩',
+        ACTIVE_FALLBACK_FULL: '压缩失败已回退',
+        BYPASS: '未启用'
+      }
+      return map[String(record && record.compression_status || 'BYPASS')] || String(record && record.compression_status || 'BYPASS')
+    },
+    getConversationMatchText(record) {
+      const map = {
+        NEW: 'NEW',
+        EXACT: 'EXACT',
+        APPEND: 'APPEND',
+        APPEND_TAIL_MUTATION: '尾部改写',
+        RESET: 'RESET',
+        BYPASS: 'BYPASS'
+      }
+      return map[String(record && record.conversation_match_status || 'BYPASS')] || String(record && record.conversation_match_status || 'BYPASS')
     },
     formatCost(val) {
       if (val === null || val === undefined) return '$0.000000'
@@ -1137,6 +1260,13 @@ export default {
       display: flex;
       align-items: center;
       gap: 14px;
+      margin-bottom: 6px;
+    }
+
+    .cache-detail {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }
   }
 
@@ -1191,6 +1321,37 @@ export default {
   .response-time,
   .total-cost {
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+
+  .cache-chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 18px;
+    background: #f5f5f5;
+    color: #595959;
+
+    &--hit {
+      background: rgba(82, 196, 26, 0.12);
+      color: #389e0d;
+    }
+
+    &--miss {
+      background: rgba(24, 144, 255, 0.12);
+      color: #096dd9;
+    }
+
+    &--token {
+      background: rgba(250, 140, 22, 0.12);
+      color: #d46b08;
+    }
+  }
+
+  .modal-cache-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
   }
 
   .cost-cell {

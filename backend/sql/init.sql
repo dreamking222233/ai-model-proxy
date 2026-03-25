@@ -432,6 +432,8 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('conversation_state_compaction_summary_max_tokens', '1500', 'number', '会话检查点摘要最大估算 token'),
 ('conversation_state_session_ttl_seconds', '86400', 'number', '会话状态 TTL（秒）'),
 ('conversation_state_match_window', '20', 'number', '会话匹配时最多回看最近多少个候选会话'),
+('conversation_state_match_tail_tolerance_messages', '2', 'number', '会话匹配时允许尾部改写/重排的最大消息数'),
+('conversation_state_match_min_shared_prefix', '8', 'number', '会话匹配时判定尾部改写所需的最小公共前缀消息数'),
 ('conversation_state_failure_cooldown_seconds', '600', 'number', '压缩失败后的会话冷却时间（秒）'),
 ('conversation_state_user_visible', 'false', 'boolean', '用户端是否显示会话压缩收益'),
 ('conversation_state_async_checkpoint_enabled', 'true', 'boolean', '是否启用异步会话检查点构建'),

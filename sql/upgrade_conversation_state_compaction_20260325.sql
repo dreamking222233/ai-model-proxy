@@ -235,6 +235,14 @@ SELECT 'conversation_state_match_window', '20', 'number', '会话匹配时最多
 WHERE NOT EXISTS (SELECT 1 FROM `system_config` WHERE `config_key` = 'conversation_state_match_window');
 
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`)
+SELECT 'conversation_state_match_tail_tolerance_messages', '2', 'number', '会话匹配时允许尾部改写/重排的最大消息数'
+WHERE NOT EXISTS (SELECT 1 FROM `system_config` WHERE `config_key` = 'conversation_state_match_tail_tolerance_messages');
+
+INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`)
+SELECT 'conversation_state_match_min_shared_prefix', '8', 'number', '会话匹配时判定尾部改写所需的最小公共前缀消息数'
+WHERE NOT EXISTS (SELECT 1 FROM `system_config` WHERE `config_key` = 'conversation_state_match_min_shared_prefix');
+
+INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`)
 SELECT 'conversation_state_failure_cooldown_seconds', '600', 'number', '压缩失败后的会话冷却时间（秒）'
 WHERE NOT EXISTS (SELECT 1 FROM `system_config` WHERE `config_key` = 'conversation_state_failure_cooldown_seconds');
 

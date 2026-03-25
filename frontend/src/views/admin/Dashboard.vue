@@ -430,7 +430,8 @@ export default {
       if (!this.healthChart) return
 
       const healthy = this.stats.healthy_channels || 0
-      const unhealthy = (this.stats.total_channels || 0) - healthy
+      const enabled = this.stats.enabled_channels || 0
+      const unhealthy = Math.max(enabled - healthy, 0)
 
       this.healthChart.setOption({
         tooltip: {

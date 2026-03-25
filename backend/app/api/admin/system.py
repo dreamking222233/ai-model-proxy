@@ -77,6 +77,9 @@ def get_dashboard_stats(
 
     total_users = db.query(func.count(UserModel.id)).scalar()
     total_channels = db.query(func.count(Channel.id)).scalar()
+    enabled_channels = db.query(func.count(Channel.id)).filter(
+        Channel.enabled == 1
+    ).scalar()
     healthy_channels = db.query(func.count(Channel.id)).filter(
         Channel.enabled == 1, Channel.is_healthy == 1
     ).scalar()
@@ -95,6 +98,7 @@ def get_dashboard_stats(
     return ResponseModel(data={
         "total_users": total_users,
         "total_channels": total_channels,
+        "enabled_channels": enabled_channels,
         "healthy_channels": healthy_channels,
         "total_models": total_models,
         "today_requests": today_requests,

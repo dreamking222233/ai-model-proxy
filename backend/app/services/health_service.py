@@ -35,6 +35,19 @@ def get_system_config(db: Session, key: str, default=None):
     return config.config_value
 
 
+def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[str, str]:
+    """Resolve mapping directives for health checks."""
+    raw_target = str(actual_model_name or "")
+    prefix, separator, remainder = raw_target.partition(":")
+    if separator and prefix == "responses" and remainder:
+        return remainder, "responses"
+
+    protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
+    if protocol == "anthropic":
+        return raw_target, "anthropic_messages"
+    return raw_target, "openai_chat"
+
+
 class HealthService:
     """Concurrent health checks for all enabled channels."""
 
@@ -186,11 +199,22 @@ class HealthService:
         """
         base_url = channel.base_url.rstrip("/")
         protocol = channel.protocol_type
+        upstream_model_name, upstream_api = _resolve_health_target(channel, actual_model_name)
+        header_protocol = "anthropic" if upstream_api == "anthropic_messages" else "openai"
 
-        if protocol == "openai":
+        if upstream_api == "responses":
+            url = f"{base_url}/responses"
+            payload = {
+                "model": upstream_model_name,
+                "input": "Hi",
+                "max_output_tokens": 5,
+                "stream": False,
+                "store": False,
+            }
+        elif protocol == "openai":
             url = f"{base_url}/chat/completions"
             payload = {
-                "model": actual_model_name,
+                "model": upstream_model_name,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": 5,
                 "stream": False,
@@ -198,7 +222,7 @@ class HealthService:
         elif protocol == "anthropic":
             url = f"{base_url}/messages"
             payload = {
-                "model": actual_model_name,
+                "model": upstream_model_name,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": 5,
             }
@@ -208,21 +232,21 @@ class HealthService:
         # Build headers using channel auth_header_type (same logic as proxy_service)
         auth_header_type = getattr(channel, "auth_header_type", None)
         if not auth_header_type:
-            auth_header_type = "authorization" if protocol == "openai" else "x-api-key"
+            auth_header_type = "authorization" if header_protocol == "openai" else "x-api-key"
 
         headers: dict = {
             "Content-Type": "application/json",
             "User-Agent": _UPSTREAM_DEFAULT_USER_AGENT,
         }
-        if protocol == "anthropic":
+        if header_protocol == "anthropic":
             headers["anthropic-version"] = "2023-06-01"
 
         if auth_header_type == "authorization":
             headers["Authorization"] = f"Bearer {channel.api_key}"
-        elif protocol == "openai" and auth_header_type == "x-api-key":
+        elif header_protocol == "openai" and auth_header_type == "x-api-key":
             headers["x-api-key"] = channel.api_key
             headers["Authorization"] = f"Bearer {channel.api_key}"
-        elif protocol == "anthropic" and auth_header_type in {"x-api-key", "anthropic-api-key"}:
+        elif header_protocol == "anthropic" and auth_header_type in {"x-api-key", "anthropic-api-key"}:
             headers["x-api-key"] = channel.api_key
             headers["anthropic-api-key"] = channel.api_key
         elif auth_header_type == "anthropic-api-key":

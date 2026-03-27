@@ -533,7 +533,9 @@ INSERT INTO `channel` (`id`, `name`, `base_url`, `api_key`, `protocol_type`, `pr
 (6, 'pay.kxaug.xyz-Claude', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - Claude模型'),
 (7, 'pay.kxaug.xyz-GPT', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - GPT/Codex模型'),
 (8, 'mmaqq.top', 'https://mmaqq.top/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 4, 1, '保底渠道 - 全模型'),
-(9, '43.156.153.12-Claude', 'http://43.156.153.12:8080/v1', 'sk-qeBTyXmKefPLsYPBbX9Xk1hmW94EemEp', 'anthropic', 1, 1, '自建渠道，支持 claude-haiku-4.5, claude-sonnet-4.5, claude-sonnet-4');
+(9, '43.156.153.12-Claude', 'http://43.156.153.12:8080/v1', 'sk-qeBTyXmKefPLsYPBbX9Xk1hmW94EemEp', 'anthropic', 1, 1, '自建渠道，支持 claude-haiku-4.5, claude-sonnet-4.5, claude-sonnet-4'),
+(10, '43.156.153.12-codex', 'http://43.156.153.12:8317/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 1, 1, 'GPT-5 Codex 系列模型渠道'),
+(11, '43.156.153.12-codex转claude', 'http://43.156.153.12:8317/v1', 'sk-YOUR-API-KEY-HERE', 'anthropic', 1, 1, 'Anthropic 协议入口，内部转发到 Codex Responses / gpt-5.4，供 Claude Code 使用');
 
 -- ============================================================
 -- 预置统一模型配置
@@ -550,6 +552,13 @@ INSERT INTO `unified_model` (`id`, `model_name`, `display_name`, `model_type`, `
 (11, 'gpt-5.3-codex', 'GPT-5.3 Codex', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.3 Codex'),
 (12, 'gpt-5.4', 'GPT-5.4', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.4'),
 (13, 'gemini-2.5-flash', 'Gemini 2.5 Flash', 'chat', 'openai', 65536, 0.150000, 0.600000, 1, 'Google Gemini 2.5 Flash'),
+(28, 'gpt-5.1-codex-mini', 'GPT-5.1 Codex Mini', 'chat', 'openai', 128000, 0.500000, 1.500000, 1, 'GPT-5.1 Codex Mini - 轻量级代码模型'),
+(29, 'gpt-5', 'GPT-5', 'chat', 'openai', 128000, 2.500000, 7.500000, 1, 'GPT-5 - 基础模型'),
+(30, 'gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 'chat', 'openai', 128000, 4.000000, 12.000000, 1, 'GPT-5.1 Codex Max - 高性能代码模型'),
+(31, 'gpt-5.4-mini', 'GPT-5.4 Mini', 'chat', 'openai', 128000, 0.800000, 2.400000, 1, 'GPT-5.4 Mini - 轻量级模型'),
+(32, 'gpt-5-codex', 'GPT-5 Codex', 'chat', 'openai', 128000, 3.000000, 9.000000, 1, 'GPT-5 Codex - 代码专用模型'),
+(33, 'gpt-5-codex-mini', 'GPT-5 Codex Mini', 'chat', 'openai', 128000, 0.600000, 1.800000, 1, 'GPT-5 Codex Mini - 轻量级代码模型'),
+(34, 'claude-opus-4-6', 'Claude Opus 4.6', 'chat', 'anthropic', 32768, 5.000000, 20.000000, 1, 'Claude Opus 4.6 alias exposed via Anthropic and routed to GPT-5.4 high reasoning on Codex Responses'),
 (26, 'claude-sonnet-4-5-thinking', 'Claude Sonnet 4.5 Thinking', 'chat', 'openai', 8192, 3.000000, 15.000000, 1, 'Claude Sonnet 4.5 with extended thinking capability'),
 (27, 'claude-haiku-4-5-thinking', 'Claude Haiku 4.5 Thinking', 'chat', 'openai', 8192, 0.800000, 4.000000, 1, 'Claude Haiku 4.5 with extended thinking capability');
 
@@ -590,6 +599,21 @@ INSERT INTO `model_channel_mapping` (`id`, `unified_model_id`, `channel_id`, `ac
 (16, 12, 7, 'gpt-5.4', 1),
 -- Gemini 2.5 Flash 映射
 (17, 13, 8, 'gemini-2.5-flash', 1),
+-- 43.156.153.12-codex 渠道映射（Responses API）
+(53, 28, 10, 'responses:gpt-5.1-codex-mini', 1),
+(54, 8, 10, 'responses:gpt-5.2', 1),
+(55, 10, 10, 'responses:gpt-5.2-codex', 1),
+(56, 11, 10, 'responses:gpt-5.3-codex', 1),
+(57, 29, 10, 'responses:gpt-5', 1),
+(58, 7, 10, 'responses:gpt-5.1', 1),
+(59, 30, 10, 'responses:gpt-5.1-codex-max', 1),
+(60, 12, 10, 'responses:gpt-5.4', 1),
+(61, 31, 10, 'responses:gpt-5.4-mini', 1),
+(62, 32, 10, 'responses:gpt-5-codex', 1),
+(63, 33, 10, 'responses:gpt-5-codex-mini', 1),
+(64, 9, 10, 'responses:gpt-5.1-codex', 1),
+-- 43.156.153.12-codex转claude 渠道映射（Anthropic-facing / Responses-backed）
+(65, 34, 11, 'responses:gpt-5.4', 1),
 -- Claude Sonnet 4.5 Thinking 映射
 (51, 26, 9, 'claude-sonnet-4-5-thinking', 1),
 -- Claude Haiku 4.5 Thinking 映射

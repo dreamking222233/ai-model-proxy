@@ -79,6 +79,7 @@ class ProxyService:
     _REQUEST_DEBUG_MAX_DEPTH = 5
     _REQUEST_DEBUG_MESSAGE_WINDOW = 6
     _REQUEST_DEBUG_REPEAT_SAMPLES = 5
+    _STREAM_DEBUG_EVENT_LIMIT = 80
     _recent_anthropic_request_fingerprints: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -441,6 +442,136 @@ class ProxyService:
             client_ip,
             force_compat,
             json.dumps(snapshot, ensure_ascii=False),
+        )
+
+    @staticmethod
+    def _build_anthropic_runtime_debug_summary(
+        request_data: dict,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        """Build a focused Anthropic request summary for runtime debugging."""
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+
+        tools = request_data.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+
+        tool_names: list[str] = []
+        for tool in tools[:12]:
+            if not isinstance(tool, dict):
+                continue
+            tool_name = str(tool.get("name", "") or "")
+            if tool_name:
+                tool_names.append(tool_name)
+
+        normalized_headers = {
+            str(key).lower(): value
+            for key, value in (request_headers or {}).items()
+            if isinstance(value, str) and value.strip()
+        }
+
+        return {
+            "stream": bool(request_data.get("stream", False)),
+            "message_count": len(messages),
+            "max_tokens": request_data.get("max_tokens"),
+            "tools_count": len(tools),
+            "tool_names": tool_names,
+            "tool_choice": ProxyService._compact_for_debug_log(request_data.get("tool_choice")),
+            "anthropic_version": normalized_headers.get("anthropic-version"),
+            "anthropic_beta": normalized_headers.get("anthropic-beta"),
+        }
+
+    @staticmethod
+    def _log_anthropic_runtime_debug(
+        stage: str,
+        request_id: str,
+        requested_model: str,
+        request_data: dict,
+        *,
+        channel: Channel | None = None,
+        client_ip: Optional[str] = None,
+        upstream_model: Optional[str] = None,
+        upstream_api: Optional[str] = None,
+        force_compat: bool = False,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> None:
+        """Emit concise runtime debug logs for Anthropic requests."""
+        summary = ProxyService._build_anthropic_runtime_debug_summary(
+            request_data,
+            request_headers=request_headers,
+        )
+        logger.info(
+            "Anthropic runtime debug stage=%s request_id=%s requested_model=%s upstream_model=%s "
+            "upstream_api=%s channel=%s channel_id=%s client_ip=%s force_compat=%s summary=%s",
+            stage,
+            request_id,
+            requested_model,
+            upstream_model or request_data.get("model"),
+            upstream_api,
+            channel.name if channel else None,
+            channel.id if channel else None,
+            client_ip,
+            force_compat,
+            json.dumps(summary, ensure_ascii=False),
+        )
+
+    @staticmethod
+    def _record_stream_debug_event(
+        sequence: list[str],
+        counts: dict[str, int],
+        event_name: str,
+        detail: Optional[Any] = None,
+    ) -> None:
+        """Append one compact event marker into an in-memory stream trace."""
+        detail_text = ""
+        if detail is not None and detail != "":
+            detail_text = ProxyService._truncate_log_string(str(detail), 120)
+        event_key = event_name if not detail_text else f"{event_name}:{detail_text}"
+        counts[event_key] = counts.get(event_key, 0) + 1
+        if len(sequence) < ProxyService._STREAM_DEBUG_EVENT_LIMIT:
+            sequence.append(event_key)
+
+    @staticmethod
+    def _log_anthropic_stream_debug(
+        stage: str,
+        request_id: str,
+        requested_model: str,
+        *,
+        actual_model: Optional[str],
+        channel: Channel,
+        client_ip: Optional[str],
+        status: str,
+        event_sequence: list[str],
+        event_counts: dict[str, int],
+        upstream_sequence: Optional[list[str]] = None,
+        upstream_counts: Optional[dict[str, int]] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Emit one summarized stream trace for Anthropic requests."""
+        trace: dict[str, Any] = {
+            "status": status,
+            "event_sequence": event_sequence,
+            "event_counts": event_counts,
+        }
+        if upstream_sequence is not None:
+            trace["upstream_sequence"] = upstream_sequence
+        if upstream_counts is not None:
+            trace["upstream_counts"] = upstream_counts
+        if extra:
+            trace["extra"] = extra
+        logger.info(
+            "Anthropic stream debug stage=%s request_id=%s requested_model=%s actual_model=%s "
+            "channel=%s channel_id=%s client_ip=%s trace=%s",
+            stage,
+            request_id,
+            requested_model,
+            actual_model,
+            channel.name,
+            channel.id,
+            client_ip,
+            json.dumps(trace, ensure_ascii=False),
         )
 
     @staticmethod
@@ -841,6 +972,295 @@ class ProxyService:
         return copy.deepcopy(request_data)
 
     @staticmethod
+    def _resolve_mapped_upstream_target(
+        channel: Channel,
+        actual_model_name: str,
+        *,
+        default_openai_api: str = "openai_chat",
+    ) -> tuple[str, str]:
+        """Resolve mapping directives like ``responses:gpt-5.4`` into model + API."""
+        raw_target = str(actual_model_name or "")
+        prefix, separator, remainder = raw_target.partition(":")
+        if separator and prefix == "responses" and remainder:
+            return remainder, "responses"
+
+        protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
+        if protocol == "anthropic":
+            return raw_target, "anthropic_messages"
+        return raw_target, default_openai_api
+
+    @staticmethod
+    def _build_responses_message_content_parts(value) -> list[dict]:
+        """Convert Anthropic string/content blocks into Responses message parts."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            if value == "":
+                return []
+            return [{"type": "input_text", "text": value}]
+        if not isinstance(value, list):
+            return [{"type": "input_text", "text": str(value)}]
+
+        parts: list[dict] = []
+        for item in value:
+            if isinstance(item, str):
+                if item == "":
+                    continue
+                parts.append({"type": "input_text", "text": item})
+                continue
+            if not isinstance(item, dict):
+                parts.append({"type": "input_text", "text": str(item)})
+                continue
+
+            item_type = str(item.get("type", "") or "")
+            if item_type in {"text", "input_text", "output_text"}:
+                text_value = str(item.get("text", "") or "")
+                if text_value:
+                    parts.append({"type": "input_text", "text": text_value})
+                continue
+
+            if item_type == "image" and isinstance(item.get("source"), dict):
+                source = item.get("source") or {}
+                source_type = str(source.get("type", "") or "")
+                if source_type == "base64":
+                    data_value = str(source.get("data", "") or "")
+                    media_type = str(source.get("media_type", "") or "")
+                    if data_value and media_type:
+                        parts.append({
+                            "type": "input_image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data_value,
+                            },
+                        })
+                        continue
+                if source_type == "url":
+                    url_value = str(source.get("url", "") or "")
+                    if url_value:
+                        parts.append({
+                            "type": "input_image",
+                            "source": {
+                                "type": "url",
+                                "url": url_value,
+                            },
+                        })
+                        continue
+
+            if "text" in item and item.get("text") is not None:
+                text_value = str(item.get("text"))
+                if text_value:
+                    parts.append({"type": "input_text", "text": text_value})
+                continue
+
+            parts.append({"type": "input_text", "text": json.dumps(item, ensure_ascii=False)})
+
+        return parts
+
+    @staticmethod
+    def _build_responses_message_item(role: str, parts: list[dict]) -> Optional[dict]:
+        """Build one Responses message item and collapse to string when possible."""
+        if not parts:
+            return None
+        if len(parts) == 1 and parts[0].get("type") == "input_text":
+            return {
+                "type": "message",
+                "role": role,
+                "content": str(parts[0].get("text", "") or ""),
+            }
+        return {
+            "type": "message",
+            "role": role,
+            "content": parts,
+        }
+
+    @staticmethod
+    def _convert_anthropic_tools_to_responses(
+        request_data: dict,
+    ) -> tuple[list[dict], Optional[str | dict]]:
+        """Convert Anthropic tool declarations to Responses tool schema."""
+        raw_tools = request_data.get("tools")
+        responses_tools: list[dict] = []
+        if isinstance(raw_tools, list):
+            for tool in raw_tools:
+                if not isinstance(tool, dict):
+                    continue
+                tool_name = str(tool.get("name", "") or "")
+                if not tool_name:
+                    continue
+                responses_tools.append({
+                    "type": "function",
+                    "name": tool_name,
+                    "description": tool.get("description"),
+                    "parameters": copy.deepcopy(
+                        tool.get("input_schema")
+                        or {"type": "object", "properties": {}}
+                    ),
+                })
+
+        raw_tool_choice = request_data.get("tool_choice")
+        if isinstance(raw_tool_choice, dict):
+            choice_type = str(raw_tool_choice.get("type", "") or "")
+            if choice_type == "auto":
+                return responses_tools, "auto"
+            if choice_type == "any":
+                return responses_tools, "required"
+            if choice_type == "tool":
+                tool_name = str(raw_tool_choice.get("name", "") or "")
+                if tool_name:
+                    return responses_tools, {
+                        "type": "function",
+                        "name": tool_name,
+                    }
+        return responses_tools, None
+
+    @staticmethod
+    def _convert_anthropic_request_to_responses(
+        request_data: dict,
+        *,
+        requested_model: str,
+    ) -> dict:
+        """Convert an Anthropic Messages request into an OpenAI Responses request."""
+        request_copy = copy.deepcopy(request_data)
+        responses_request: dict[str, Any] = {
+            "model": request_copy.get("model"),
+            "stream": bool(request_copy.get("stream", False)),
+            "store": False,
+        }
+
+        max_tokens = request_copy.get("max_tokens")
+        if max_tokens is not None:
+            responses_request["max_output_tokens"] = max_tokens
+
+        input_items: list[dict] = []
+
+        system_parts = ProxyService._build_responses_message_content_parts(
+            request_copy.get("system")
+        )
+        system_message = ProxyService._build_responses_message_item("developer", system_parts)
+        if system_message:
+            input_items.append(system_message)
+
+        for raw_message in request_copy.get("messages", []) or []:
+            if not isinstance(raw_message, dict):
+                continue
+
+            role = str(raw_message.get("role", "") or "")
+            if role not in {"user", "assistant"}:
+                continue
+
+            content = raw_message.get("content")
+            if isinstance(content, str):
+                content_blocks = [{"type": "text", "text": content}] if content else []
+            elif isinstance(content, list):
+                content_blocks = copy.deepcopy(content)
+            elif content is None:
+                content_blocks = []
+            else:
+                content_blocks = [{"type": "text", "text": str(content)}]
+
+            message_parts: list[dict] = []
+
+            def flush_message_parts() -> None:
+                nonlocal message_parts
+                message_item = ProxyService._build_responses_message_item(role, message_parts)
+                if message_item:
+                    input_items.append(message_item)
+                message_parts = []
+
+            for block in content_blocks:
+                if isinstance(block, str):
+                    if block:
+                        message_parts.append({"type": "input_text", "text": block})
+                    continue
+
+                if not isinstance(block, dict):
+                    message_parts.append({"type": "input_text", "text": str(block)})
+                    continue
+
+                block_type = str(block.get("type", "") or "")
+                if block_type in {"text", "image"}:
+                    message_parts.extend(
+                        ProxyService._build_responses_message_content_parts([block])
+                    )
+                    continue
+
+                if block_type in {"thinking", "redacted_thinking"}:
+                    flush_message_parts()
+                    # Anthropic thinking blocks are provider-internal artifacts.
+                    # Do not replay them into Responses input items, because many
+                    # /v1/responses upstreams expect a different reasoning schema
+                    # and will reject ad-hoc ``type=reasoning`` payloads.
+                    continue
+
+                if block_type == "tool_use" and role == "assistant":
+                    flush_message_parts()
+                    tool_name = str(block.get("name", "") or "tool")
+                    call_id = str(
+                        block.get("id")
+                        or f"call_{uuid.uuid4().hex[:24]}"
+                    )
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "arguments": json.dumps(
+                            block.get("input") or {},
+                            ensure_ascii=False,
+                        ),
+                    })
+                    continue
+
+                if block_type == "tool_result" and role == "user":
+                    flush_message_parts()
+                    tool_use_id = str(
+                        block.get("tool_use_id")
+                        or block.get("id")
+                        or f"call_{uuid.uuid4().hex[:24]}"
+                    )
+                    tool_result = ProxyService._stringify_legacy_function_content(
+                        block.get("content")
+                    ) or ""
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_use_id,
+                        "output": tool_result,
+                    })
+                    continue
+
+                message_parts.append({
+                    "type": "input_text",
+                    "text": json.dumps(block, ensure_ascii=False),
+                })
+
+            flush_message_parts()
+
+        if not input_items:
+            input_items = [{
+                "type": "message",
+                "role": "user",
+                "content": "",
+            }]
+
+        responses_request["input"] = input_items
+
+        tools, tool_choice = ProxyService._convert_anthropic_tools_to_responses(
+            request_copy
+        )
+        if tools:
+            responses_request["tools"] = tools
+        if tool_choice is not None:
+            responses_request["tool_choice"] = tool_choice
+
+        if requested_model == "claude-opus-4-6":
+            reasoning = copy.deepcopy(responses_request.get("reasoning") or {})
+            reasoning["effort"] = "high"
+            reasoning.setdefault("summary", "auto")
+            responses_request["reasoning"] = reasoning
+
+        return responses_request
+
+    @staticmethod
     def _build_anthropic_text_blocks(value) -> list[dict]:
         """Convert string/list content into Anthropic text blocks."""
         if value is None:
@@ -957,6 +1377,43 @@ class ProxyService:
                 return parsed
             return {"value": parsed}
         return {"value": arguments}
+
+    @staticmethod
+    def _stringify_tool_arguments_json(arguments: Any) -> str:
+        """Serialize tool arguments into the JSON text Anthropic deltas expect."""
+        if arguments is None:
+            return ""
+        if isinstance(arguments, str):
+            return arguments
+        try:
+            return json.dumps(arguments, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(arguments)
+
+    @staticmethod
+    def _extract_responses_reasoning_text(value: Any) -> str:
+        """Flatten Responses reasoning payloads into a readable Anthropic thinking string."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                text_value = ProxyService._extract_responses_reasoning_text(item)
+                if text_value:
+                    parts.append(text_value)
+            return "\n".join(parts).strip()
+        if isinstance(value, dict):
+            for key in ("text", "summary_text", "content", "thinking"):
+                text_value = ProxyService._extract_responses_reasoning_text(value.get(key))
+                if text_value:
+                    return text_value
+            try:
+                return json.dumps(value, ensure_ascii=False).strip()
+            except (TypeError, ValueError):
+                return str(value).strip()
+        return str(value).strip()
 
     @staticmethod
     def _convert_openai_tools_to_anthropic(request_data: dict) -> tuple[list[dict], Optional[dict], bool]:
@@ -1233,6 +1690,99 @@ class ProxyService:
         }
 
     @staticmethod
+    def _convert_responses_output_to_anthropic_content(output_items: Any) -> list[dict]:
+        """Convert Responses output items into Anthropic content blocks."""
+        if not isinstance(output_items, list):
+            return [{"type": "text", "text": ""}]
+
+        content_blocks: list[dict] = []
+        for item in output_items:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = str(item.get("type", "") or "")
+            if item_type == "message":
+                for part in item.get("content") or []:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = str(part.get("type", "") or "")
+                    if part_type in {"output_text", "text", "input_text"}:
+                        text_value = str(part.get("text", "") or "")
+                        if text_value:
+                            content_blocks.append({
+                                "type": "text",
+                                "text": text_value,
+                            })
+                continue
+
+            if item_type == "function_call":
+                tool_name = str(item.get("name", "") or "tool")
+                tool_id = str(
+                    item.get("call_id")
+                    or item.get("id")
+                    or f"toolu_{uuid.uuid4().hex[:24]}"
+                )
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": ProxyService._parse_tool_arguments(
+                        item.get("arguments")
+                    ),
+                })
+                continue
+
+            if item_type == "reasoning":
+                thinking_value = ProxyService._extract_responses_reasoning_text(
+                    item.get("summary") or item.get("content")
+                )
+                if thinking_value:
+                    content_blocks.append({
+                        "type": "thinking",
+                        "thinking": thinking_value,
+                    })
+
+        if not content_blocks:
+            return [{"type": "text", "text": ""}]
+        return content_blocks
+
+    @staticmethod
+    def _convert_responses_response_to_anthropic(response_body: dict) -> dict:
+        """Convert an OpenAI Responses response into an Anthropic message response."""
+        output_items = response_body.get("output") or []
+        content_blocks = ProxyService._convert_responses_output_to_anthropic_content(
+            output_items
+        )
+        usage = response_body.get("usage") or {}
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        has_tool_use = any(
+            isinstance(block, dict) and str(block.get("type", "") or "") == "tool_use"
+            for block in content_blocks
+        )
+
+        return {
+            "id": response_body.get("id") or f"msg_{uuid.uuid4().hex[:24]}",
+            "type": "message",
+            "role": "assistant",
+            "content": content_blocks,
+            "model": response_body.get("model") or "unknown",
+            "stop_reason": "tool_use" if has_tool_use else "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+
+    @staticmethod
+    def _build_anthropic_sse_event(event_name: str, payload: dict) -> str:
+        """Render one Anthropic-compatible SSE event."""
+        return (
+            f"event: {event_name}\n"
+            f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        )
+
+    @staticmethod
     def _build_openai_stream_chunk(
         *,
         chunk_id: str,
@@ -1387,10 +1937,15 @@ class ProxyService:
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
             try:
-                channel_request = copy.deepcopy(client_request)
-                channel_request["model"] = actual_model_name
-                channel_request = ProxyService._prepare_responses_request_body(
+                upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
+                    channel,
                     actual_model_name,
+                    default_openai_api="responses",
+                )
+                channel_request = copy.deepcopy(client_request)
+                channel_request["model"] = upstream_model_name
+                channel_request = ProxyService._prepare_responses_request_body(
+                    upstream_model_name,
                     channel_request,
                 )
 
@@ -1529,9 +2084,14 @@ class ProxyService:
             last_cache_info: Optional[dict[str, Any]] = None
             for channel, actual_model_name in channels:
                 channel_request = copy.deepcopy(normalized_request)
-                channel_request["model"] = actual_model_name
-                channel_request = ProxyService._prepare_responses_request_body(
+                upstream_model_name, _ = ProxyService._resolve_mapped_upstream_target(
+                    channel,
                     actual_model_name,
+                    default_openai_api="responses",
+                )
+                channel_request["model"] = upstream_model_name
+                channel_request = ProxyService._prepare_responses_request_body(
+                    upstream_model_name,
                     channel_request,
                 )
                 cache_info = RequestBodyCacheService.analyze_request(
@@ -1559,6 +2119,7 @@ class ProxyService:
                         db, user, api_key_record, unified_model, request_id,
                         requested_model, input_tokens, output_tokens, channel,
                         client_ip, response_time_ms, is_stream=True,
+                        actual_model=channel_request.get("model"),
                         cache_info=cache_info,
                     )
                     last_response_output = completed_output
@@ -1969,6 +2530,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
@@ -2278,6 +2840,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            actual_model=request_data.get("model"),
             cache_info=cache_info,
         )
 
@@ -2347,10 +2910,15 @@ class ProxyService:
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
-            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
+            upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
+                channel,
+                actual_model_name,
+            )
+            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, upstream_model_name)
             legacy_compat_retry = (
                 not explicit_compat
-                and ProxyService._is_legacy_kiro_amazonq_host(channel, actual_model_name)
+                and upstream_api == "anthropic_messages"
+                and ProxyService._is_legacy_kiro_amazonq_host(channel, upstream_model_name)
             )
             channel_request_error: ServiceException | None = None
             compat_attempts = [True] if explicit_compat else [False]
@@ -2361,13 +2929,19 @@ class ProxyService:
                 try:
                     # Build upstream request with the actual model name
                     request_data_copy = dict(request_data)
-                    request_data_copy["model"] = actual_model_name
+                    request_data_copy["model"] = upstream_model_name
                     request_data_copy = ProxyService._prepare_openai_request_for_channel(
                         channel,
                         request_data_copy,
                         force_compat=compat_mode,
                     )
                     upstream_protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
+                    if upstream_api == "responses":
+                        raise ServiceException(
+                            400,
+                            "This model mapping requires /v1/messages or /v1/responses, not /v1/chat/completions",
+                            "UPSTREAM_INVALID_REQUEST",
+                        )
 
                     if is_stream:
                         if upstream_protocol == "anthropic":
@@ -2436,7 +3010,7 @@ class ProxyService:
                     last_error = e
                     logger.warning(
                         "Channel %s (%d) failed for model %s: %s",
-                        channel.name, channel.id, actual_model_name, e,
+                        channel.name, channel.id, upstream_model_name, e,
                     )
                     ProxyService._record_channel_failure(db, channel)
                     channel_request_error = None
@@ -2482,6 +3056,14 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+        ProxyService._log_anthropic_runtime_debug(
+            "entry",
+            request_id,
+            requested_model,
+            request_data,
+            client_ip=client_ip,
+            request_headers=request_headers,
+        )
         conversation_shadow_info = ConversationShadowService.analyze_request(
             db,
             user_id=user.id,
@@ -2517,10 +3099,15 @@ class ProxyService:
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
-            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, actual_model_name)
+            upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
+                channel,
+                actual_model_name,
+            )
+            explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, upstream_model_name)
             legacy_compat_retry = (
                 not explicit_compat
-                and ProxyService._is_legacy_kiro_amazonq_host(channel, actual_model_name)
+                and upstream_api == "anthropic_messages"
+                and ProxyService._is_legacy_kiro_amazonq_host(channel, upstream_model_name)
             )
             channel_request_error: ServiceException | None = None
             compat_attempts = [True] if explicit_compat else [False]
@@ -2530,20 +3117,40 @@ class ProxyService:
             for compat_mode in compat_attempts:
                 try:
                     request_data_copy = dict(request_data)
-                    request_data_copy["model"] = actual_model_name
-                    if not compat_mode:
+                    request_data_copy["model"] = upstream_model_name
+                    if upstream_api == "anthropic_messages" and not compat_mode:
                         ProxyService._guard_legacy_claude_tool_context(
                             channel,
                             requested_model,
                             request_data_copy,
                         )
-                    request_data_copy = ProxyService._prepare_anthropic_request_for_channel(
-                        channel,
+                    if upstream_api == "anthropic_messages":
+                        request_data_copy = ProxyService._prepare_anthropic_request_for_channel(
+                            channel,
+                            request_data_copy,
+                            force_compat=compat_mode,
+                        )
+                    ProxyService._log_anthropic_runtime_debug(
+                        "dispatch",
+                        request_id,
+                        requested_model,
                         request_data_copy,
+                        channel=channel,
+                        client_ip=client_ip,
+                        upstream_model=upstream_model_name,
+                        upstream_api=upstream_api,
                         force_compat=compat_mode,
+                        request_headers=request_headers,
                     )
 
                     if is_stream:
+                        if upstream_api == "responses":
+                            return await ProxyService._stream_anthropic_via_responses_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
                         return await ProxyService._stream_anthropic_request(
                             db, user, api_key_record, channel, unified_model,
                             request_data_copy, request_id, requested_model, client_ip,
@@ -2552,6 +3159,13 @@ class ProxyService:
                             conversation_shadow_info=conversation_shadow_info,
                         )
                     else:
+                        if upstream_api == "responses":
+                            return await ProxyService._non_stream_anthropic_via_responses_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
                         return await ProxyService._non_stream_anthropic_request(
                             db, user, api_key_record, channel, unified_model,
                             request_data_copy, request_id, requested_model, client_ip,
@@ -2611,7 +3225,7 @@ class ProxyService:
                     last_error = e
                     logger.warning(
                         "Channel %s (%d) failed for model %s: %s",
-                        channel.name, channel.id, actual_model_name, e,
+                        channel.name, channel.id, upstream_model_name, e,
                     )
                     ProxyService._record_channel_failure(db, channel)
                     channel_request_error = None
@@ -2824,6 +3438,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
@@ -2954,6 +3569,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            actual_model=request_data.get("model"),
             cache_info=cache_info,
         )
 
@@ -3256,6 +3872,7 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
                         )
                 except Exception as accounting_err:
@@ -3371,7 +3988,724 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            actual_model=request_data.get("model"),
             cache_info=cache_info,
+        )
+
+        return JSONResponse(
+            content=response_body,
+            headers={"X-Request-ID": request_id},
+        )
+
+    @staticmethod
+    async def _stream_anthropic_via_responses_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+        conversation_shadow_info: Optional[dict[str, Any]] = None,
+    ) -> StreamingResponse:
+        """Stream an Anthropic client request through an OpenAI Responses upstream."""
+        start_time = time.time()
+        responses_request = ProxyService._convert_anthropic_request_to_responses(
+            request_data,
+            requested_model=requested_model,
+        )
+        responses_request["stream"] = True
+        upstream_event_sequence: list[str] = []
+        upstream_event_counts: dict[str, int] = {}
+        client_event_sequence: list[str] = []
+        client_event_counts: dict[str, int] = {}
+        stream_debug_extra: dict[str, Any] = {
+            "bridge": "anthropic_via_responses",
+            "completed": False,
+            "stop_reason": None,
+            "saw_tool_use": False,
+        }
+
+        billing_input_tokens = 0
+        billing_output_tokens = 0
+
+        def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
+            nonlocal billing_input_tokens, billing_output_tokens
+            billing_input_tokens = input_tok
+            billing_output_tokens = output_tok
+
+        def record_upstream_event(event_name: str, detail: Optional[Any] = None) -> None:
+            ProxyService._record_stream_debug_event(
+                upstream_event_sequence,
+                upstream_event_counts,
+                event_name,
+                detail,
+            )
+
+        def build_client_event(
+            event_name: str,
+            payload: dict[str, Any],
+            *,
+            detail: Optional[Any] = None,
+        ) -> str:
+            ProxyService._record_stream_debug_event(
+                client_event_sequence,
+                client_event_counts,
+                event_name,
+                detail,
+            )
+            return ProxyService._build_anthropic_sse_event(event_name, payload)
+
+        async def upstream_call(collector, collected_usage):
+            input_tokens = 0
+            output_tokens = 0
+            completed = False
+            saw_error = False
+            error_message = ""
+            message_started = False
+            message_id = f"msg_{uuid.uuid4().hex[:24]}"
+            text_block_open = False
+            text_block_index = -1
+            next_block_index = 0
+            saw_text_delta = False
+            saw_tool_use = False
+            seen_reasoning_ids: set[str] = set()
+            tool_block_states: dict[str, dict[str, Any]] = {}
+            tool_call_aliases: dict[str, str] = {}
+            final_response: dict[str, Any] | None = None
+
+            def ensure_message_start(response_obj: Optional[dict[str, Any]] = None) -> list[str]:
+                nonlocal message_started, message_id, input_tokens
+                if message_started:
+                    return []
+                response_data = response_obj or {}
+                message_id = str(response_data.get("id") or message_id)
+                usage = response_data.get("usage") or {}
+                if usage.get("input_tokens") is not None:
+                    input_tokens = int(usage.get("input_tokens") or 0)
+                message_started = True
+                return [build_client_event(
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": message_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": requested_model,
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "usage": {
+                                "input_tokens": input_tokens,
+                                "output_tokens": 0,
+                            },
+                        },
+                    },
+                )]
+
+            def open_text_block() -> list[str]:
+                nonlocal text_block_open, text_block_index, next_block_index
+                if text_block_open:
+                    return []
+                text_block_index = next_block_index
+                next_block_index += 1
+                text_block_open = True
+                return [build_client_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": text_block_index,
+                        "content_block": {
+                            "type": "text",
+                            "text": "",
+                        },
+                    },
+                    detail="text",
+                )]
+
+            def close_text_block() -> list[str]:
+                nonlocal text_block_open
+                if not text_block_open:
+                    return []
+                text_block_open = False
+                return [build_client_event(
+                    "content_block_stop",
+                    {
+                        "type": "content_block_stop",
+                        "index": text_block_index,
+                    },
+                    detail="text",
+                )]
+
+            def emit_reasoning_block(item: dict[str, Any]) -> list[str]:
+                nonlocal next_block_index
+                item_id = str(item.get("id") or "")
+                if item_id:
+                    if item_id in seen_reasoning_ids:
+                        return []
+                    seen_reasoning_ids.add(item_id)
+                thinking_value = ProxyService._extract_responses_reasoning_text(
+                    item.get("summary") or item.get("content")
+                )
+                if not thinking_value:
+                    return []
+                collector.add_chunk(thinking_value)
+                block_index = next_block_index
+                next_block_index += 1
+                return [
+                    build_client_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": block_index,
+                            "content_block": {"type": "thinking"},
+                        },
+                        detail="thinking",
+                    ),
+                    build_client_event(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": block_index,
+                            "delta": {
+                                "type": "thinking_delta",
+                                "thinking": thinking_value,
+                            },
+                        },
+                        detail="thinking_delta",
+                    ),
+                    build_client_event(
+                        "content_block_stop",
+                        {
+                            "type": "content_block_stop",
+                            "index": block_index,
+                        },
+                        detail="thinking",
+                    ),
+                ]
+
+            def _resolve_tool_call_id(item: dict[str, Any]) -> str:
+                raw_ids = [
+                    str(item.get("call_id") or ""),
+                    str(item.get("item_id") or ""),
+                    str(item.get("id") or ""),
+                ]
+                for raw_id in raw_ids:
+                    if raw_id and raw_id in tool_call_aliases:
+                        return tool_call_aliases[raw_id]
+
+                canonical_id = next((raw_id for raw_id in raw_ids if raw_id), "")
+                if not canonical_id:
+                    canonical_id = f"toolu_{uuid.uuid4().hex[:24]}"
+
+                for raw_id in raw_ids:
+                    if raw_id:
+                        tool_call_aliases[raw_id] = canonical_id
+                return canonical_id
+
+            def ensure_tool_use_block_started(item: dict[str, Any]) -> tuple[str, list[str]]:
+                nonlocal next_block_index, saw_tool_use
+                call_id = _resolve_tool_call_id(item)
+                state = tool_block_states.get(call_id)
+                if state is None:
+                    state = {
+                        "id": call_id,
+                        "name": str(item.get("name", "") or "tool"),
+                        "index": next_block_index,
+                        "started": False,
+                        "closed": False,
+                        "arguments_text": "",
+                    }
+                    tool_block_states[call_id] = state
+                    next_block_index += 1
+                elif item.get("name"):
+                    state["name"] = str(item.get("name") or state["name"])
+
+                saw_tool_use = True
+                if state["started"]:
+                    return call_id, []
+
+                state["started"] = True
+                return call_id, [
+                    build_client_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": state["index"],
+                            "content_block": {
+                                "type": "tool_use",
+                                "id": call_id,
+                                "name": state["name"],
+                                "input": {},
+                            },
+                        },
+                        detail=f"tool_use:{state['name']}",
+                    )
+                ]
+
+            def emit_tool_argument_delta(item: dict[str, Any], delta_text: Any) -> list[str]:
+                call_id, events = ensure_tool_use_block_started(item)
+                state = tool_block_states[call_id]
+                serialized_delta = ProxyService._stringify_tool_arguments_json(delta_text)
+                if serialized_delta == "":
+                    return events
+                state["arguments_text"] = f"{state['arguments_text']}{serialized_delta}"
+                events.append(
+                    build_client_event(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": state["index"],
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": serialized_delta,
+                            },
+                        },
+                        detail="input_json_delta",
+                    )
+                )
+                return events
+
+            def close_tool_use_block(item: dict[str, Any], final_arguments: Any = None) -> list[str]:
+                call_id, events = ensure_tool_use_block_started(item)
+                state = tool_block_states[call_id]
+                if state["closed"]:
+                    return events
+
+                final_text = ProxyService._stringify_tool_arguments_json(final_arguments)
+                current_text = str(state.get("arguments_text", "") or "")
+                if final_text:
+                    missing_text = ""
+                    if not current_text:
+                        missing_text = final_text
+                    elif final_text.startswith(current_text):
+                        missing_text = final_text[len(current_text):]
+                    elif final_text != current_text:
+                        missing_text = ""
+
+                    if missing_text:
+                        state["arguments_text"] = f"{current_text}{missing_text}"
+                        events.append(
+                            build_client_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": state["index"],
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": missing_text,
+                                    },
+                                },
+                                detail="input_json_delta",
+                            )
+                        )
+
+                state["closed"] = True
+                events.append(
+                    build_client_event(
+                        "content_block_stop",
+                        {
+                            "type": "content_block_stop",
+                            "index": state["index"],
+                        },
+                        detail="tool_use",
+                    )
+                )
+                return events
+
+            async for payload in ProxyService._iter_responses_upstream_payloads(
+                channel,
+                responses_request,
+                requested_model,
+                request_headers=request_headers,
+            ):
+                payload_type = str(payload.get("type", "") or "")
+                payload_detail = None
+                if payload_type in {"response.output_item.added", "response.output_item.done"}:
+                    payload_detail = str((payload.get("item") or {}).get("type", "") or "")
+                elif payload_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
+                    payload_detail = payload.get("item_id") or payload.get("call_id")
+                record_upstream_event(payload_type, payload_detail)
+                if payload_type in {"response.created", "response.in_progress"}:
+                    response_obj = payload.get("response") or {}
+                    for sse_line in ensure_message_start(response_obj):
+                        yield sse_line
+                    continue
+
+                if payload_type == "response.output_text.delta":
+                    for sse_line in ensure_message_start():
+                        yield sse_line
+                    for sse_line in open_text_block():
+                        yield sse_line
+                    delta_value = str(payload.get("delta", "") or "")
+                    if delta_value:
+                        saw_text_delta = True
+                        collector.add_chunk(delta_value)
+                        yield build_client_event(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": text_block_index,
+                                "delta": {
+                                    "type": "text_delta",
+                                    "text": delta_value,
+                                },
+                            },
+                            detail="text_delta",
+                        )
+                    continue
+
+                if payload_type == "response.output_item.added":
+                    item = payload.get("item") or {}
+                    if str(item.get("type", "") or "") == "function_call":
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in close_text_block():
+                            yield sse_line
+                        _, events = ensure_tool_use_block_started(item)
+                        for sse_line in events:
+                            yield sse_line
+                    continue
+
+                if payload_type == "response.function_call_arguments.delta":
+                    call_item = {
+                        "call_id": payload.get("call_id"),
+                        "item_id": payload.get("item_id"),
+                        "id": payload.get("id"),
+                        "name": payload.get("name"),
+                    }
+                    for sse_line in ensure_message_start():
+                        yield sse_line
+                    for sse_line in close_text_block():
+                        yield sse_line
+                    for sse_line in emit_tool_argument_delta(call_item, payload.get("delta")):
+                        yield sse_line
+                    continue
+
+                if payload_type == "response.function_call_arguments.done":
+                    call_item = {
+                        "call_id": payload.get("call_id"),
+                        "item_id": payload.get("item_id"),
+                        "id": payload.get("id"),
+                        "name": payload.get("name"),
+                    }
+                    for sse_line in ensure_message_start():
+                        yield sse_line
+                    for sse_line in close_text_block():
+                        yield sse_line
+                    for sse_line in close_tool_use_block(call_item, payload.get("arguments")):
+                        yield sse_line
+                    continue
+
+                if payload_type == "response.output_item.done":
+                    item = payload.get("item") or {}
+                    item_type = str(item.get("type", "") or "")
+                    if item_type == "reasoning":
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in close_text_block():
+                            yield sse_line
+                        for sse_line in emit_reasoning_block(item):
+                            yield sse_line
+                        continue
+                    if item_type == "function_call":
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in close_text_block():
+                            yield sse_line
+                        for sse_line in close_tool_use_block(item, item.get("arguments")):
+                            yield sse_line
+                        continue
+
+                if payload_type == "response.completed":
+                    final_response = payload.get("response") or {}
+                    for sse_line in ensure_message_start(final_response):
+                        yield sse_line
+
+                    input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                    collected_usage["prompt_tokens"] = input_tokens
+                    collected_usage["completion_tokens"] = output_tokens
+
+                    for sse_line in close_text_block():
+                        yield sse_line
+
+                    final_output = final_response.get("output") or []
+                    if isinstance(final_output, list):
+                        if not saw_text_delta:
+                            text_content = []
+                            for item in final_output:
+                                if not isinstance(item, dict) or str(item.get("type", "") or "") != "message":
+                                    continue
+                                for part in item.get("content") or []:
+                                    if isinstance(part, dict) and str(part.get("type", "") or "") in {
+                                        "output_text", "text", "input_text",
+                                    }:
+                                        text_value = str(part.get("text", "") or "")
+                                        if text_value:
+                                            text_content.append(text_value)
+                            if text_content:
+                                for sse_line in open_text_block():
+                                    yield sse_line
+                                joined_text = "".join(text_content)
+                                collector.add_chunk(joined_text)
+                                yield build_client_event(
+                                    "content_block_delta",
+                                    {
+                                        "type": "content_block_delta",
+                                        "index": text_block_index,
+                                        "delta": {
+                                            "type": "text_delta",
+                                            "text": joined_text,
+                                        },
+                                    },
+                                    detail="text_delta",
+                                )
+                                for sse_line in close_text_block():
+                                    yield sse_line
+
+                        for item in final_output:
+                            if not isinstance(item, dict):
+                                continue
+                            item_type = str(item.get("type", "") or "")
+                            if item_type == "reasoning":
+                                for sse_line in emit_reasoning_block(item):
+                                    yield sse_line
+                            elif item_type == "function_call":
+                                for sse_line in close_tool_use_block(item, item.get("arguments")):
+                                    yield sse_line
+
+                    collector.add_chunk(
+                        "",
+                        "tool_use" if saw_tool_use else "end_turn",
+                    )
+                    stream_debug_extra["completed"] = True
+                    stream_debug_extra["stop_reason"] = "tool_use" if saw_tool_use else "end_turn"
+                    stream_debug_extra["saw_tool_use"] = saw_tool_use
+                    yield build_client_event(
+                        "message_delta",
+                        {
+                            "type": "message_delta",
+                            "delta": {
+                                "stop_reason": "tool_use" if saw_tool_use else "end_turn",
+                                "stop_sequence": None,
+                            },
+                            "usage": {
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                            },
+                        },
+                        detail="tool_use" if saw_tool_use else "end_turn",
+                    )
+                    yield build_client_event(
+                        "message_stop",
+                        {"type": "message_stop"},
+                        detail="final",
+                    )
+                    completed = True
+                    break
+
+                if payload_type == "error":
+                    saw_error = True
+                    error_message = (
+                        payload.get("error", {}).get("message")
+                        or "Upstream responses error"
+                    )
+
+            if not completed:
+                if saw_error:
+                    raise Exception(error_message or "Upstream responses error")
+                raise Exception("stream closed before response.completed")
+
+            billing_callback(input_tokens, output_tokens, False)
+
+        async def event_generator():
+            stream_error = None
+            cache_state: dict[str, Any] = {}
+
+            try:
+                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
+                    request_body=responses_request,
+                    headers=request_headers or {},
+                    user=user,
+                    db=db,
+                    upstream_call=upstream_call,
+                    unified_model=unified_model,
+                    protocol="anthropic",
+                    request_format="responses",
+                    model=requested_model,
+                    billing_callback=billing_callback,
+                    cache_state=cache_state,
+                ):
+                    yield sse_line
+            except Exception as exc:
+                stream_error = exc
+                mapped_request_error = ProxyService._map_upstream_request_error(exc)
+                error_message = mapped_request_error.detail if mapped_request_error else str(exc)
+                logger.error("Anthropic->Responses stream error on channel %s: %s", channel.name, exc)
+                yield build_client_event(
+                    "error",
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "proxy_error",
+                            "message": error_message,
+                        },
+                    },
+                    detail="proxy_error",
+                )
+            finally:
+                response_time_ms = int((time.time() - start_time) * 1000)
+                try:
+                    merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+                        cache_state.get("cache_info"),
+                        conversation_shadow_info,
+                    )
+                    if stream_error:
+                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
+                        if not mapped_request_error:
+                            ProxyService._record_channel_failure(db, channel)
+                        error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
+                        ProxyService._log_failed_request(
+                            db, user, api_key_record, request_id, requested_model,
+                            client_ip, True,
+                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            channel=channel,
+                            response_time_ms=response_time_ms,
+                            cache_info=error_cache_info,
+                        )
+                    else:
+                        ProxyService._record_success(db, channel)
+                        ProxyService._deduct_balance_and_log(
+                            db, user, api_key_record, unified_model, request_id,
+                            requested_model, billing_input_tokens, billing_output_tokens, channel,
+                            client_ip, response_time_ms, is_stream=True,
+                            actual_model=request_data.get("model"),
+                            cache_info=merged_cache_info,
+                            conversation_state_info=conversation_shadow_info,
+                        )
+                except Exception as accounting_err:
+                    logger.error("Post-stream accounting error: %s", accounting_err)
+                ProxyService._log_anthropic_stream_debug(
+                    "anthropic_via_responses",
+                    request_id,
+                    requested_model,
+                    actual_model=request_data.get("model"),
+                    channel=channel,
+                    client_ip=client_ip,
+                    status="error" if stream_error else "success",
+                    event_sequence=client_event_sequence,
+                    event_counts=client_event_counts,
+                    upstream_sequence=upstream_event_sequence,
+                    upstream_counts=upstream_event_counts,
+                    extra=stream_debug_extra,
+                )
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Request-ID": request_id,
+            },
+        )
+
+    @staticmethod
+    async def _non_stream_anthropic_via_responses_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+        conversation_shadow_info: Optional[dict[str, Any]] = None,
+    ) -> JSONResponse:
+        """Send an Anthropic request through an OpenAI Responses upstream."""
+        start_time = time.time()
+        base_url = channel.base_url.rstrip("/")
+        url = f"{base_url}/responses"
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        responses_request = ProxyService._convert_anthropic_request_to_responses(
+            request_data,
+            requested_model=requested_model,
+        )
+        responses_request["stream"] = False
+
+        async def upstream_call():
+            timeout = httpx.Timeout(
+                _UPSTREAM_TIMEOUT,
+                connect=_UPSTREAM_CONNECT_TIMEOUT,
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=responses_request, headers=headers)
+
+            if resp.status_code != 200:
+                raise Exception(
+                    f"Upstream returned HTTP {resp.status_code}: "
+                    f"{resp.text[:500]}"
+                )
+
+            response_body, input_tokens, output_tokens = ProxyService._parse_non_stream_responses_body(
+                resp.text
+            )
+            response_body = ProxyService._rewrite_response_model(response_body, requested_model)
+            anthropic_response = ProxyService._convert_responses_response_to_anthropic(
+                response_body
+            )
+            return {
+                "response": anthropic_response,
+                "model": request_data.get("model"),
+                "usage": {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                },
+            }
+
+        cache_response, cache_info = await CacheMiddleware.wrap_request(
+            request_body=responses_request,
+            headers=request_headers or {},
+            user=user,
+            db=db,
+            upstream_call=upstream_call,
+            unified_model=unified_model,
+            request_format="responses",
+            requested_model=requested_model,
+        )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        response_body = cache_response.get("response", cache_response)
+        actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
+        actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
+        merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+            cache_info,
+            conversation_shadow_info,
+        )
+
+        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
+            cache_info=merged_cache_info,
+            user=user,
+            actual_tokens={
+                "input_tokens": actual_input_tokens,
+                "output_tokens": actual_output_tokens,
+            },
+        )
+
+        ProxyService._record_success(db, channel)
+        ProxyService._deduct_balance_and_log(
+            db, user, api_key_record, unified_model, request_id,
+            requested_model, billing_input_tokens, billing_output_tokens, channel,
+            client_ip, response_time_ms, is_stream=False,
+            actual_model=request_data.get("model"),
+            cache_info=merged_cache_info,
+            conversation_state_info=conversation_shadow_info,
         )
 
         return JSONResponse(
@@ -3431,6 +4765,13 @@ class ProxyService:
 
         request_data["stream"] = True
         original_request_data = copy.deepcopy(request_data)
+        stream_event_sequence: list[str] = []
+        stream_event_counts: dict[str, int] = {}
+        stream_debug_extra: dict[str, Any] = {
+            "bridge": "anthropic_passthrough",
+            "completed": False,
+            "stop_reason": None,
+        }
 
         billing_input_tokens = 0
         billing_output_tokens = 0
@@ -3559,6 +4900,28 @@ class ProxyService:
                                     try:
                                         chunk = json.loads(data_str)
                                         chunk_type = chunk.get("type", "")
+                                        chunk_detail = None
+                                        if chunk_type == "content_block_start":
+                                            chunk_detail = str(
+                                                (chunk.get("content_block") or {}).get("type", "") or ""
+                                            )
+                                        elif chunk_type == "content_block_delta":
+                                            delta = chunk.get("delta") or {}
+                                            chunk_detail = str(
+                                                delta.get("type")
+                                                or ("text_delta" if delta.get("text") else "")
+                                                or ("thinking_delta" if delta.get("thinking") else "")
+                                            )
+                                        elif chunk_type == "message_delta":
+                                            chunk_detail = str(
+                                                (chunk.get("delta") or {}).get("stop_reason", "") or ""
+                                            )
+                                        ProxyService._record_stream_debug_event(
+                                            stream_event_sequence,
+                                            stream_event_counts,
+                                            str(chunk_type or current_event or "unknown"),
+                                            chunk_detail,
+                                        )
 
                                         if chunk_type == "message_start":
                                             msg = chunk.get("message", {})
@@ -3582,6 +4945,10 @@ class ProxyService:
                                                 input_tokens = int(usage.get("input_tokens") or 0)
                                             collected_usage["prompt_tokens"] = input_tokens
                                             collected_usage["completion_tokens"] = output_tokens
+                                            stream_debug_extra["stop_reason"] = (
+                                                (chunk.get("delta") or {}).get("stop_reason")
+                                                or stream_debug_extra.get("stop_reason")
+                                            )
 
                                         elif chunk_type == "content_block_delta":
                                             delta = chunk.get("delta", {})
@@ -3594,6 +4961,7 @@ class ProxyService:
 
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")
+                                            stream_debug_extra["completed"] = True
 
                                     except (json.JSONDecodeError, TypeError):
                                         pass
@@ -3657,6 +5025,12 @@ class ProxyService:
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
                 error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
                 logger.error("Anthropic stream error on channel %s: %s", channel.name, e)
+                ProxyService._record_stream_debug_event(
+                    stream_event_sequence,
+                    stream_event_counts,
+                    "error",
+                    "proxy_error",
+                )
                 error_payload = json.dumps({
                     "type": "error",
                     "error": {
@@ -3695,11 +5069,24 @@ class ProxyService:
                             db, user, api_key_record, unified_model, request_id,
                             requested_model, billing_input_tokens, billing_output_tokens, channel,
                             client_ip, response_time_ms, is_stream=True,
+                            actual_model=request_data.get("model"),
                             cache_info=merged_cache_info,
                             conversation_state_info=conversation_runtime_info or conversation_shadow_info,
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
+                ProxyService._log_anthropic_stream_debug(
+                    "anthropic_passthrough",
+                    request_id,
+                    requested_model,
+                    actual_model=request_data.get("model"),
+                    channel=channel,
+                    client_ip=client_ip,
+                    status="error" if stream_error else "success",
+                    event_sequence=stream_event_sequence,
+                    event_counts=stream_event_counts,
+                    extra=stream_debug_extra,
+                )
 
         return StreamingResponse(
             event_generator(),
@@ -3957,6 +5344,7 @@ class ProxyService:
             db, user, api_key_record, unified_model, request_id,
             requested_model, billing_input_tokens, billing_output_tokens, channel,
             client_ip, response_time_ms, is_stream=False,
+            actual_model=request_data.get("model"),
             cache_info=merged_cache_info,
             conversation_state_info=conversation_runtime_info or conversation_shadow_info,
         )
@@ -4341,6 +5729,7 @@ class ProxyService:
         client_ip: str,
         response_time_ms: int,
         is_stream: bool,
+        actual_model: Optional[str] = None,
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
     ) -> None:
@@ -4469,7 +5858,7 @@ class ProxyService:
                 channel_id=channel.id,
                 channel_name=channel.name,
                 requested_model=requested_model,
-                actual_model=unified_model.model_name,
+                actual_model=actual_model or unified_model.model_name,
                 protocol_type=channel.protocol_type,
                 is_stream=1 if is_stream else 0,
                 input_tokens=input_tokens,

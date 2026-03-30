@@ -26,6 +26,10 @@
           @click="handleMenuClick"
           class="user-menu"
         >
+          <a-menu-item key="/user/chat">
+            <a-icon type="message" />
+            <span>AI 对话</span>
+          </a-menu-item>
           <a-menu-item key="/user/dashboard">
             <a-icon type="dashboard" />
             <span>仪表盘</span>
@@ -35,8 +39,8 @@
             <span>API 密钥</span>
           </a-menu-item>
           <a-menu-item key="/user/balance">
-            <a-icon type="dollar" />
-            <span>账单与使用</span>
+            <a-icon type="file-text" />
+            <span>账单记录</span>
           </a-menu-item>
           <a-menu-item key="/user/redemption">
             <a-icon type="gift" />
@@ -101,7 +105,7 @@
       </a-layout-header>
 
       <!-- Content - scrollable -->
-      <a-layout-content class="user-content">
+      <a-layout-content class="user-content" :class="{ 'user-content--fullscreen': isFullscreen }">
         <router-view />
       </a-layout-content>
     </a-layout>
@@ -125,6 +129,9 @@ export default {
     username() {
       const user = getUser()
       return user ? user.username : '用户'
+    },
+    isFullscreen() {
+      return this.$route.meta && this.$route.meta.fullscreen === true
     }
   },
   methods: {
@@ -483,6 +490,12 @@ export default {
   overflow-y: auto;
   padding: 24px;
   background: #f0f2f5;
+
+  &--fullscreen {
+    padding: 0;
+    overflow: hidden;
+    background: #fff;
+  }
 }
 
 /* =============================================

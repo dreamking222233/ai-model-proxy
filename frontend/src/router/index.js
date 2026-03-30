@@ -27,6 +27,12 @@ const routes = [
         redirect: 'dashboard'
       },
       {
+        path: 'chat',
+        name: 'AdminChat',
+        component: () => import('@/views/common/AiChat.vue'),
+        meta: { title: 'AI 对话', isAdmin: true, fullscreen: true }
+      },
+      {
         path: 'dashboard',
         name: 'AdminDashboard',
         component: () => import('@/views/admin/Dashboard.vue'),
@@ -81,12 +87,6 @@ const routes = [
         meta: { title: '套餐管理' }
       },
       {
-        path: 'cache',
-        name: 'CacheManage',
-        component: () => import('@/views/admin/CacheManage.vue'),
-        meta: { title: '缓存管理' }
-      },
-      {
         path: 'profile',
         name: 'AdminProfile',
         component: () => import('@/views/user/Profile.vue'),
@@ -102,6 +102,12 @@ const routes = [
       {
         path: '',
         redirect: 'dashboard'
+      },
+      {
+        path: 'chat',
+        name: 'UserChat',
+        component: () => import('@/views/common/AiChat.vue'),
+        meta: { title: 'AI 对话', fullscreen: true }
       },
       {
         path: 'dashboard',
@@ -151,12 +157,6 @@ const routes = [
         name: 'Redemption',
         component: () => import('@/views/user/Redemption.vue'),
         meta: { title: '兑换码充值' }
-      },
-      {
-        path: 'cache',
-        name: 'CacheStats',
-        component: () => import('@/views/user/CacheStats.vue'),
-        meta: { title: '缓存统计' }
       },
       {
         path: 'profile',

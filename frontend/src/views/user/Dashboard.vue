@@ -34,14 +34,24 @@
     <a-card class="redemption-card">
       <div class="redemption-content">
         <div class="redemption-icon">
-          <a-icon type="gift" style="font-size: 24px; color: #667eea" />
+          <a-icon :type="hasRedeemed ? 'check-circle' : 'gift'" :style="{ fontSize: '24px', color: hasRedeemed ? '#52c41a' : '#667eea' }" />
         </div>
-        <div class="redemption-input-area">
+        <div v-if="hasRedeemed" class="redemption-redeemed-info">
+          <span class="redeemed-text">
+            <a-icon type="check-circle" style="color: #52c41a; margin-right: 4px" />
+            兑换码已使用（每位用户仅限一次）
+          </span>
+          <a-button type="link" size="small" @click="$router.push('/user/balance')">
+            查看余额 <a-icon type="right" />
+          </a-button>
+        </div>
+        <div v-else class="redemption-input-area">
           <a-input
             v-model="redemptionCode"
-            placeholder="输入兑换码充值余额"
+            placeholder="输入兑换码充值余额（每位用户仅限一次）"
             size="large"
-            style="max-width: 300px"
+            style="max-width: 360px"
+            :maxLength="32"
             @pressEnter="handleRedeem"
           >
             <a-icon slot="prefix" type="barcode" />
@@ -184,7 +194,7 @@
 
 <script>
 import { getBalance, getUsageLogs, getProfile } from '@/api/user'
-import { redeemCode } from '@/api/redemption'
+import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
 import { formatDate } from '@/utils'
 
@@ -202,7 +212,8 @@ export default {
         totalTokens: 0
       },
       redemptionCode: '',
-      redeemLoading: false
+      redeemLoading: false,
+      hasRedeemed: false
     }
   },
   computed: {
@@ -228,6 +239,7 @@ export default {
     this.fetchProfile()
     this.fetchBalance()
     this.fetchUsageSummary()
+    this.fetchRedemptionStatus()
   },
   mounted() {
     this.showAnnouncementModal()
@@ -377,6 +389,10 @@ export default {
       }
     },
     async handleRedeem() {
+      if (this.hasRedeemed) {
+        this.$message.warning('您已使用过兑换码，每位用户仅限一次')
+        return
+      }
       if (!this.redemptionCode || !this.redemptionCode.trim()) {
         this.$message.warning('请输入兑换码')
         return
@@ -386,11 +402,22 @@ export default {
         const res = await redeemCode({ code: this.redemptionCode.trim() })
         this.$message.success(res.message || '兑换成功')
         this.redemptionCode = ''
+        this.hasRedeemed = true
         this.fetchBalance()
       } catch (e) {
         // error handled by interceptor
       } finally {
         this.redeemLoading = false
+      }
+    },
+    async fetchRedemptionStatus() {
+      try {
+        const res = await getRedemptionStatus()
+        const data = res.data || {}
+        this.hasRedeemed = data.has_redeemed || false
+      } catch (e) {
+        // 失败不阻塞
+        this.hasRedeemed = false
       }
     }
   }
@@ -607,6 +634,19 @@ export default {
         display: flex;
         gap: 12px;
         align-items: center;
+      }
+
+      .redemption-redeemed-info {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        .redeemed-text {
+          color: #52c41a;
+          font-weight: 500;
+          font-size: 14px;
+        }
       }
     }
   }

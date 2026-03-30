@@ -18,8 +18,9 @@ ON DUPLICATE KEY UPDATE
 
 -- 2. 添加模型-渠道映射
 -- 渠道 9: 43.156.153.12-Claude
+-- 注意: claude-sonnet-4-5-thinking 映射到 claude-sonnet-4.5 (上游实际请求的模型名)
 INSERT INTO `model_channel_mapping` (`id`, `unified_model_id`, `channel_id`, `actual_model_name`, `enabled`) VALUES
-(51, 26, 9, 'claude-sonnet-4-5-thinking', 1),
+(51, 26, 9, 'claude-sonnet-4.5', 1),
 (52, 27, 9, 'claude-haiku-4-5-thinking', 1)
 ON DUPLICATE KEY UPDATE
     `actual_model_name` = VALUES(`actual_model_name`),

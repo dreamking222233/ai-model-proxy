@@ -82,6 +82,75 @@ class ProxyService:
     _STREAM_DEBUG_EVENT_LIMIT = 80
     _recent_anthropic_request_fingerprints: dict[str, dict[str, Any]] = {}
 
+    # ----- Model identity system prompt mapping -----
+    _MODEL_VENDOR_MAP = [
+        # (keyword, display_vendor)
+        ("claude", "Anthropic"),
+        ("gpt", "OpenAI"),
+        ("o1", "OpenAI"),
+        ("o3", "OpenAI"),
+        ("o4", "OpenAI"),
+        ("gemini", "Google"),
+        ("deepseek", "DeepSeek"),
+        ("qwen", "Alibaba"),
+    ]
+
+    @staticmethod
+    def _build_model_identity_prompt(requested_model: str) -> str:
+        """Build a model identity system prompt like '你是 Claude Opus 4.6 模型，由 Anthropic 开发'."""
+        if not requested_model:
+            return ""
+        model_lower = requested_model.lower()
+        vendor = ""
+        for keyword, display_vendor in ProxyService._MODEL_VENDOR_MAP:
+            if keyword in model_lower:
+                vendor = display_vendor
+                break
+        if vendor:
+            return f"你是 {requested_model} 模型，由 {vendor} 开发"
+        return f"你是 {requested_model} 模型"
+
+    @staticmethod
+    def _inject_model_identity(request_data: dict, requested_model: str, protocol: str) -> None:
+        """Inject a model identity system prompt into the request body (in-place).
+
+        Supports three protocols:
+          * ``openai``    – prepend to ``messages`` as ``{"role":"system",...}``
+          * ``anthropic`` – prepend to ``system`` field (string or block list)
+          * ``responses`` – prepend to ``instructions`` field
+        """
+        prompt = ProxyService._build_model_identity_prompt(requested_model)
+        if not prompt:
+            return
+
+        if protocol == "openai":
+            # messages: [{role, content}, ...]
+            messages = request_data.get("messages")
+            if not isinstance(messages, list):
+                return
+            system_msg = {"role": "system", "content": prompt}
+            # Insert at position 0
+            messages.insert(0, system_msg)
+
+        elif protocol == "anthropic":
+            # system can be a string or list of blocks
+            existing = request_data.get("system")
+            if existing is None or existing == "":
+                request_data["system"] = prompt
+            elif isinstance(existing, str):
+                request_data["system"] = prompt + "\n\n" + existing
+            elif isinstance(existing, list):
+                # Prepend as a text block
+                request_data["system"] = [{"type": "text", "text": prompt}] + existing
+
+        elif protocol == "responses":
+            # instructions is a string field
+            existing = request_data.get("instructions") or ""
+            if existing:
+                request_data["instructions"] = prompt + "\n\n" + existing
+            else:
+                request_data["instructions"] = prompt
+
     @staticmethod
     def _truncate_log_string(value: Any, max_length: int | None = None) -> str:
         """Return a readable string preview for debug logs."""
@@ -1928,6 +1997,9 @@ class ProxyService:
         is_stream = bool(client_request.get("stream", True))
         client_request["stream"] = is_stream
 
+        # Inject model identity system prompt
+        ProxyService._inject_model_identity(client_request, requested_model, "responses")
+
         unified_model, channels = ProxyService._prepare_responses_request_context(
             db, user, requested_model
         )
@@ -2064,6 +2136,10 @@ class ProxyService:
                 continue
 
             requested_model = str(state_request.get("model", "") or "")
+
+            # Inject model identity system prompt for websocket requests
+            ProxyService._inject_model_identity(normalized_request, requested_model, "responses")
+
             try:
                 unified_model, channels = ProxyService._prepare_responses_request_context(
                     db, user, requested_model
@@ -2885,6 +2961,10 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+
+        # Inject model identity system prompt
+        ProxyService._inject_model_identity(request_data, requested_model, "openai")
+
         # 1. Check user balance (only for balance mode users)
         if user.subscription_type == "balance":
             balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
@@ -3056,6 +3136,10 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+
+        # Inject model identity system prompt
+        ProxyService._inject_model_identity(request_data, requested_model, "anthropic")
+
         ProxyService._log_anthropic_runtime_debug(
             "entry",
             request_id,

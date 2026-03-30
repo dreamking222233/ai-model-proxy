@@ -42,3 +42,11 @@ export function redeemCode(data) {
     data
   })
 }
+
+// 查询当前用户兑换状态（是否已使用过兑换码）
+export function getRedemptionStatus() {
+  return request({
+    url: '/api/user/redemption/status',
+    method: 'get'
+  })
+}

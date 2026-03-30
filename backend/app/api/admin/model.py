@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import get_current_user, require_admin
 from app.models.user import SysUser
+from app.models.model import UnifiedModel, ModelChannelMapping
+from app.models.channel import Channel
 from app.services.model_service import ModelService
 from app.schemas.model import (
     UnifiedModelCreate, UnifiedModelUpdate,
@@ -142,3 +144,57 @@ def delete_override_rule(
 ):
     ModelService.delete_override_rule(db, rule_id)
     return ResponseModel(message="Override rule deleted")
+
+
+# ---- Chat Page: Channels + Models mapping ----
+
+@router.get("/chat/channels-models", response_model=ResponseModel)
+def get_channels_models(
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    """Return all enabled channels with their mapped chat models.
+    Used by admin chat page for channel+model two-level selection.
+    """
+    channels = (
+        db.query(Channel)
+        .filter(Channel.enabled == 1)
+        .order_by(Channel.priority, Channel.name)
+        .all()
+    )
+
+    result = []
+    for ch in channels:
+        mappings = (
+            db.query(ModelChannelMapping)
+            .join(UnifiedModel, ModelChannelMapping.unified_model_id == UnifiedModel.id)
+            .filter(
+                ModelChannelMapping.channel_id == ch.id,
+                ModelChannelMapping.enabled == 1,
+                UnifiedModel.enabled == 1,
+                UnifiedModel.model_type == "chat",
+            )
+            .all()
+        )
+
+        models = []
+        for mp in mappings:
+            um = db.query(UnifiedModel).filter(UnifiedModel.id == mp.unified_model_id).first()
+            if um:
+                actual = mp.actual_model_name or ""
+                api_type = "anthropic" if actual.startswith("responses:") else "openai"
+                models.append({
+                    "model_name": um.model_name,
+                    "display_name": um.display_name or um.model_name,
+                    "actual_model_name": mp.actual_model_name,
+                    "api_type": api_type,
+                })
+
+        if models:
+            result.append({
+                "channel_id": ch.id,
+                "channel_name": ch.name,
+                "models": models,
+            })
+
+    return ResponseModel(data=result)

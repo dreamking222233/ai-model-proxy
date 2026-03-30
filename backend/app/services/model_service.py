@@ -1,10 +1,10 @@
 """Unified model, channel mapping, and override rule service."""
 from __future__ import annotations
 
-from typing import Optional
-
 import fnmatch
+import logging
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.models.model import UnifiedModel, ModelChannelMapping, ModelOverrideRule
 from app.models.channel import Channel
 from app.core.exceptions import ServiceException
+
+logger = logging.getLogger(__name__)
 
 
 class ModelService:
@@ -418,6 +420,12 @@ class ModelService:
                     .first()
                 )
                 if target:
+                    logger.info(
+                        "Model override matched: requested=%s rule=%s target=%s",
+                        requested_model_name,
+                        rule.source_pattern,
+                        target.model_name,
+                    )
                     return target
 
         # Step 2: Direct lookup

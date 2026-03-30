@@ -7,7 +7,7 @@
           <a-icon type="rocket" />
         </div>
         <h1 class="hero-title">快速开始</h1>
-        <p class="hero-desc">只需 3 步，即可在任何支持 OpenAI / Anthropic 协议的工具中使用本平台</p>
+        <p class="hero-desc">只需 4 步，即可在任何支持 OpenAI / Anthropic 协议的工具中使用本平台</p>
       </div>
       <div class="steps-bar">
         <div class="step-item" :class="{ active: activeSection === 'key' }" @click="scrollTo('key')">
@@ -20,8 +20,13 @@
           <span>配置工具</span>
         </div>
         <div class="step-divider"></div>
-        <div class="step-item" :class="{ active: activeSection === 'test' }" @click="scrollTo('test')">
+        <div class="step-item" :class="{ active: activeSection === 'protocol' }" @click="scrollTo('protocol')">
           <div class="step-num">3</div>
+          <span>API 协议调用</span>
+        </div>
+        <div class="step-divider"></div>
+        <div class="step-item" :class="{ active: activeSection === 'test' }" @click="scrollTo('test')">
+          <div class="step-num">4</div>
           <span>测试验证</span>
         </div>
       </div>
@@ -78,7 +83,7 @@
 
         <a-tabs v-model="activeTab" class="config-tabs">
           <!-- Claude Code -->
-          <a-tab-pane key="claude-code" tab="Claude Code">
+          <a-tab-pane key="claude-code" tab="Claude Code" force-render>
             <div class="tool-header">
               <div class="tool-info">
                 <h3>Claude Code (CLI)</h3>
@@ -150,7 +155,7 @@
           </a-tab-pane>
 
           <!-- OpenClaw -->
-          <a-tab-pane key="openclaw" tab="OpenClaw">
+          <a-tab-pane key="openclaw" tab="OpenClaw" force-render>
             <div class="tool-header">
               <div class="tool-info">
                 <h3>OpenClaw</h3>
@@ -210,10 +215,223 @@
       </div>
     </a-card>
 
-    <!-- Step 3: Test & Verify -->
-    <a-card class="section-card" :bordered="false" id="section-test">
+    <!-- Step 3: API Protocol Calling -->
+    <a-card class="section-card" :bordered="false" id="section-protocol">
       <div class="section-header">
         <div class="section-badge">3</div>
+        <h2 class="section-title">API 协议调用</h2>
+      </div>
+      <div class="section-body">
+        <p>本平台支持三种 API 协议，以下是各协议的调用方法和代码示例。</p>
+
+        <a-tabs v-model="protocolTab" class="config-tabs">
+          <!-- OpenAI Chat Completions -->
+          <a-tab-pane key="openai" tab="OpenAI Chat Completions" force-render>
+            <div class="protocol-header">
+              <div class="protocol-info">
+                <h3>OpenAI Chat Completions API</h3>
+                <p>兼容 OpenAI 官方 API，适用于大多数第三方工具</p>
+              </div>
+            </div>
+            <div class="info-box" style="margin-bottom: 16px;">
+              <div class="info-row">
+                <span class="info-label">端点</span>
+                <div class="info-value copyable" @click="copyText(relayOpenaiBase + '/chat/completions')">
+                  <code>{{ relayOpenaiBase }}/chat/completions</code>
+                  <a-icon type="copy" class="copy-icon" />
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">认证</span>
+                <div class="info-value">
+                  <code>Authorization: Bearer sk-xxxx</code>
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">流式输出</span>
+                <div class="info-value">
+                  <code>stream: true</code> (SSE)
+                </div>
+              </div>
+            </div>
+
+            <a-tabs size="small" class="code-example-tabs">
+              <a-tab-pane key="python-openai" tab="Python">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Python (OpenAI SDK)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiPythonCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ openaiPythonCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="node-openai" tab="Node.js">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Node.js (OpenAI SDK)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiNodeCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ openaiNodeCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="curl-openai" tab="cURL">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>cURL</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiCurlCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ openaiCurlCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+          </a-tab-pane>
+
+          <!-- Anthropic Messages -->
+          <a-tab-pane key="anthropic" tab="Anthropic Messages" force-render>
+            <div class="protocol-header">
+              <div class="protocol-info">
+                <h3>Anthropic Messages API</h3>
+                <p>Anthropic 官方协议，适用于 Claude Code 等工具</p>
+              </div>
+            </div>
+            <div class="info-box" style="margin-bottom: 16px;">
+              <div class="info-row">
+                <span class="info-label">端点</span>
+                <div class="info-value copyable" @click="copyText(relayBase + '/v1/messages')">
+                  <code>{{ relayBase }}/v1/messages</code>
+                  <a-icon type="copy" class="copy-icon" />
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">认证</span>
+                <div class="info-value">
+                  <code>x-api-key: sk-xxxx</code>
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">版本</span>
+                <div class="info-value">
+                  <code>anthropic-version: 2023-06-01</code>
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">流式输出</span>
+                <div class="info-value">
+                  <code>stream: true</code> (SSE)
+                </div>
+              </div>
+            </div>
+
+            <a-tabs size="small" class="code-example-tabs">
+              <a-tab-pane key="python-anthropic" tab="Python">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Python (Anthropic SDK)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicPythonCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ anthropicPythonCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="node-anthropic" tab="Node.js">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Node.js (Anthropic SDK)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicNodeCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ anthropicNodeCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="curl-anthropic" tab="cURL">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>cURL</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicCurlCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ anthropicCurlCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+          </a-tab-pane>
+
+          <!-- OpenAI Responses (Codex) -->
+          <a-tab-pane key="responses" tab="OpenAI Responses (Codex)" force-render>
+            <div class="protocol-header">
+              <div class="protocol-info">
+                <h3>OpenAI Responses API</h3>
+                <p>用于 Codex 等交互式工具，支持 WebSocket</p>
+              </div>
+            </div>
+            <div class="info-box" style="margin-bottom: 16px;">
+              <div class="info-row">
+                <span class="info-label">HTTP 端点</span>
+                <div class="info-value copyable" @click="copyText(relayOpenaiBase + '/responses')">
+                  <code>{{ relayOpenaiBase }}/responses</code>
+                  <a-icon type="copy" class="copy-icon" />
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">WebSocket 端点</span>
+                <div class="info-value copyable" @click="copyText(relayWsBase + '/v1/responses')">
+                  <code>{{ relayWsBase }}/v1/responses</code>
+                  <a-icon type="copy" class="copy-icon" />
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">认证</span>
+                <div class="info-value">
+                  <code>Authorization: Bearer sk-xxxx</code>
+                </div>
+              </div>
+            </div>
+
+            <a-tabs size="small" class="code-example-tabs">
+              <a-tab-pane key="python-responses" tab="Python">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Python (HTTP)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesPythonCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ responsesPythonCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="node-responses" tab="Node.js">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Node.js (WebSocket)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesNodeCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ responsesNodeCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="curl-responses" tab="cURL">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>cURL (HTTP)</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesCurlCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ responsesCurlCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+
+            <a-alert
+              type="info"
+              show-icon
+              style="margin-top: 12px;"
+            >
+              <template slot="message">
+                <span>Responses API 主要用于 Codex 等需要双向通信的工具。大多数场景推荐使用 OpenAI Chat Completions 或 Anthropic Messages API。</span>
+              </template>
+            </a-alert>
+          </a-tab-pane>
+        </a-tabs>
+      </div>
+    </a-card>
+
+    <!-- Step 4: Test & Verify -->
+    <a-card class="section-card" :bordered="false" id="section-test">
+      <div class="section-header">
+        <div class="section-badge">4</div>
         <h2 class="section-title">测试验证</h2>
       </div>
       <div class="section-body">
@@ -236,7 +454,7 @@
           type="success"
           show-icon
           message="如果收到正常的 AI 回复，说明配置成功！"
-          description="你可以在「账单与使用」页面统一查看请求日志、消费明细和余额变化。"
+          description="你可以在「账单记录」页面统一查看请求日志、消费明细和余额变化。"
           style="margin-top: 16px;"
         />
       </div>
@@ -253,13 +471,14 @@
           <a-collapse-panel key="1" header="支持哪些模型？">
             <p>平台支持管理员配置的所有统一模型。你可以通过调用 <code>GET /v1/models</code> 接口查看当前可用的模型列表。常见模型包括 Claude 系列、GPT 系列等。</p>
           </a-collapse-panel>
-          <a-collapse-panel key="2" header="OpenAI 协议和 Anthropic 协议有什么区别？">
-            <p>两种协议的请求格式不同：</p>
+          <a-collapse-panel key="2" header="三种 API 协议有什么区别？">
+            <p>本平台支持三种 API 协议：</p>
             <ul>
-              <li><strong>OpenAI 协议</strong>：使用 <code>/v1/chat/completions</code> 端点，适用于大多数第三方工具</li>
-              <li><strong>Anthropic 协议</strong>：使用 <code>/v1/messages</code> 端点，适用于 Claude Code 等 Anthropic 官方工具</li>
+              <li><strong>OpenAI Chat Completions</strong>：使用 <code>/v1/chat/completions</code> 端点，兼容性最好，适用于大多数第三方工具（Cursor、LobeChat、Continue 等）</li>
+              <li><strong>Anthropic Messages</strong>：使用 <code>/v1/messages</code> 端点，适用于 Claude Code、OpenClaw 等支持 Anthropic 协议的工具</li>
+              <li><strong>OpenAI Responses</strong>：使用 <code>/v1/responses</code> 端点，支持 HTTP 和 WebSocket，主要用于 Codex 等需要双向通信的工具</li>
             </ul>
-            <p>两种协议都可以访问平台上的所有模型，系统会自动处理协议转换。</p>
+            <p>三种协议都可以访问平台上的所有模型，系统会自动处理协议转换。大多数场景推荐使用 OpenAI Chat Completions 协议。</p>
           </a-collapse-panel>
           <a-collapse-panel key="3" header="请求失败怎么办？">
             <p>请按以下步骤排查：</p>
@@ -287,6 +506,7 @@ export default {
   data() {
     return {
       activeTab: 'claude-code',
+      protocolTab: 'openai',
       activeSection: 'key',
       apiBase: ''
     }
@@ -300,6 +520,9 @@ export default {
     },
     relayOpenaiBase() {
       return this.relayBase ? `${this.relayBase}/v1` : ''
+    },
+    relayWsBase() {
+      return this.relayBase.replace(/^https?:/, 'wss:')
     },
     claudeCodeEnv() {
       return `# 设置 API 基础地址和密钥
@@ -346,6 +569,147 @@ source ~/.zshrc`
   },
   "model": "gpt-5.4"
 }`
+    },
+    // OpenAI Protocol Examples
+    openaiPythonCode() {
+      return `from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-你的密钥",
+    base_url="${this.relayOpenaiBase}",
+)
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"}
+    ]
+)
+print(response.choices[0].message.content)`
+    },
+    openaiNodeCode() {
+      return `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "sk-你的密钥",
+  baseURL: "${this.relayOpenaiBase}",
+});
+
+const response = await client.chat.completions.create({
+  model: "gpt-4",
+  messages: [
+    { role: "system", content: "You are a helpful assistant." },
+    { role: "user", content: "Hello!" },
+  ],
+});
+console.log(response.choices[0].message.content);`
+    },
+    openaiCurlCode() {
+      return `curl -X POST "${this.relayOpenaiBase}/chat/completions" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'`
+    },
+    // Anthropic Protocol Examples
+    anthropicPythonCode() {
+      return `from anthropic import Anthropic
+
+client = Anthropic(
+    api_key="sk-你的密钥",
+    base_url="${this.relayBase}",
+)
+
+message = client.messages.create(
+    model="claude-sonnet-4",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello!"}
+    ]
+)
+print(message.content[0].text)`
+    },
+    anthropicNodeCode() {
+      return `import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  apiKey: "sk-你的密钥",
+  baseURL: "${this.relayBase}",
+});
+
+const message = await client.messages.create({
+  model: "claude-sonnet-4",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello!" }],
+});
+console.log(message.content[0].text);`
+    },
+    anthropicCurlCode() {
+      return `curl -X POST "${this.relayBase}/v1/messages" \\
+  -H "x-api-key: sk-你的密钥" \\
+  -H "anthropic-version: 2023-06-01" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "claude-sonnet-4",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'`
+    },
+    // Responses API Examples
+    responsesPythonCode() {
+      return `import requests
+
+url = "${this.relayOpenaiBase}/responses"
+headers = {
+    "Authorization": "Bearer sk-你的密钥",
+    "Content-Type": "application/json"
+}
+data = {
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}]
+}
+
+response = requests.post(url, headers=headers, json=data)
+print(response.json())`
+    },
+    responsesNodeCode() {
+      return `import WebSocket from 'ws';
+
+const ws = new WebSocket("${this.relayWsBase}/v1/responses", {
+  headers: {
+    "Authorization": "Bearer sk-你的密钥"
+  }
+});
+
+ws.on('open', () => {
+  ws.send(JSON.stringify({
+    model: "gpt-4",
+    messages: [{ role: "user", content: "Hello!" }]
+  }));
+});
+
+ws.on('message', (data) => {
+  console.log('Received:', data.toString());
+});`
+    },
+    responsesCurlCode() {
+      return `curl -X POST "${this.relayOpenaiBase}/responses" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'`
     },
     curlModels() {
       return `curl ${this.relayOpenaiBase}/models \\
@@ -631,6 +995,38 @@ source ~/.zshrc`
 
     /deep/ .ant-tabs-ink-bar {
       background: linear-gradient(90deg, #667eea, #764ba2);
+    }
+  }
+
+  .protocol-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 16px;
+
+    .protocol-info {
+      h3 {
+        font-size: 16px;
+        font-weight: 600;
+        color: #1a1a2e;
+        margin: 0 0 4px;
+      }
+
+      p {
+        font-size: 13px;
+        color: #8c8c8c;
+        margin: 0;
+      }
+    }
+  }
+
+  .code-example-tabs {
+    /deep/ .ant-tabs-nav {
+      margin-bottom: 12px;
+    }
+
+    /deep/ .ant-tabs-tab {
+      padding: 6px 12px;
+      font-size: 13px;
     }
   }
 

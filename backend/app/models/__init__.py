@@ -14,6 +14,7 @@ from app.models.log import (
     ConversationSession,
     ConversationCheckpoint,
 )
+from app.models.redemption import RedemptionCode
 
 __all__ = [
     "SysUser",
@@ -31,4 +32,5 @@ __all__ = [
     "ConsumptionRecord",
     "ConversationSession",
     "ConversationCheckpoint",
+    "RedemptionCode",
 ]

@@ -32,6 +32,10 @@
           @click="handleMenuClick"
           class="admin-menu"
         >
+          <a-menu-item key="/admin/chat">
+            <a-icon type="robot" />
+            <span>AI 对话</span>
+          </a-menu-item>
           <a-menu-item key="/admin/dashboard">
             <a-icon type="dashboard" />
             <span>仪表盘</span>
@@ -115,7 +119,7 @@
       </a-layout-header>
 
       <!-- Content - scrollable -->
-      <a-layout-content class="admin-content">
+      <a-layout-content class="admin-content" :class="{ 'admin-content--fullscreen': isFullscreen }">
         <router-view />
       </a-layout-content>
     </a-layout>
@@ -139,6 +143,9 @@ export default {
     username() {
       const user = getUser()
       return user ? user.username : '管理员'
+    },
+    isFullscreen() {
+      return this.$route.meta && this.$route.meta.fullscreen === true
     }
   },
   methods: {
@@ -511,6 +518,12 @@ export default {
   overflow-y: auto;
   padding: 24px;
   background: #f0f2f5;
+
+  &--fullscreen {
+    padding: 0;
+    overflow: hidden;
+    background: #fff;
+  }
 }
 
 /* =============================================

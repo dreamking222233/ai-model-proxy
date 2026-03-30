@@ -6,13 +6,47 @@
       <p class="page-desc">使用兑换码为账户充值余额</p>
     </div>
 
+    <!-- Already Redeemed Banner -->
+    <div v-if="hasRedeemed" class="redeemed-banner">
+      <div class="redeemed-banner-icon">
+        <a-icon type="check-circle" />
+      </div>
+      <div class="redeemed-banner-content">
+        <h3>您已成功兑换过</h3>
+        <p>
+          每位用户仅能使用一次兑换码。您已于
+          <span class="highlight">{{ formatTime(redeemedInfo.redeemed_at) }}</span>
+          兑换了 <span class="highlight">${{ (redeemedInfo.redeemed_amount || 0).toFixed(4) }}</span>。
+        </p>
+        <a-button type="primary" size="small" @click="$router.push('/user/balance')">
+          <a-icon type="wallet" />
+          查看余额
+        </a-button>
+      </div>
+    </div>
+
     <!-- Redemption Card -->
     <a-card class="redemption-card" :bordered="false">
       <div class="redemption-icon">
-        <a-icon type="gift" />
+        <a-icon :type="hasRedeemed ? 'lock' : 'gift'" />
       </div>
-      <h3 class="redemption-title">输入兑换码</h3>
-      <p class="redemption-hint">请输入管理员提供的兑换码进行充值</p>
+      <h3 class="redemption-title">{{ hasRedeemed ? '兑换码已使用' : '输入兑换码' }}</h3>
+      <p class="redemption-hint">
+        <template v-if="hasRedeemed">您已使用过兑换码，无法再次兑换</template>
+        <template v-else>请输入管理员提供的兑换码进行充值（每位用户仅限一次）</template>
+      </p>
+
+      <!-- One-time limit notice -->
+      <a-alert
+        v-if="!hasRedeemed"
+        type="info"
+        showIcon
+        style="max-width: 400px; margin: 0 auto 24px; text-align: left;"
+      >
+        <template slot="message">
+          <span>温馨提示：每位用户仅能使用 <strong>一次</strong> 兑换码，请确认后再操作</span>
+        </template>
+      </a-alert>
 
       <a-form layout="vertical" style="max-width: 400px; margin: 0 auto;">
         <a-form-item>
@@ -21,6 +55,7 @@
             size="large"
             placeholder="请输入兑换码"
             :maxLength="32"
+            :disabled="hasRedeemed || statusLoading"
             @pressEnter="handleRedeem"
           >
             <a-icon slot="prefix" type="barcode" style="color: rgba(0,0,0,.25)" />
@@ -32,10 +67,11 @@
             size="large"
             block
             :loading="loading"
+            :disabled="hasRedeemed || statusLoading"
             @click="handleRedeem"
           >
-            <a-icon type="check-circle" />
-            立即兑换
+            <a-icon :type="hasRedeemed ? 'lock' : 'check-circle'" />
+            {{ hasRedeemed ? '已兑换，无法使用' : '立即兑换' }}
           </a-button>
         </a-form-item>
       </a-form>
@@ -73,23 +109,56 @@
           </div>
         </div>
       </div>
+      <a-alert
+        type="warning"
+        showIcon
+        style="margin-top: 24px;"
+      >
+        <template slot="message">
+          <span>注意：每位用户仅限使用一次兑换码，兑换后不可撤销，请谨慎操作。</span>
+        </template>
+      </a-alert>
     </a-card>
   </div>
 </template>
 
 <script>
-import { redeemCode } from '@/api/redemption'
+import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 
 export default {
   name: 'Redemption',
   data() {
     return {
       code: '',
-      loading: false
+      loading: false,
+      statusLoading: true,
+      hasRedeemed: false,
+      redeemedInfo: {}
     }
   },
+  created() {
+    this.fetchRedemptionStatus()
+  },
   methods: {
+    async fetchRedemptionStatus() {
+      this.statusLoading = true
+      try {
+        const res = await getRedemptionStatus()
+        const data = res.data || {}
+        this.hasRedeemed = data.has_redeemed || false
+        this.redeemedInfo = data
+      } catch (err) {
+        // 接口失败不阻塞页面，默认允许兑换
+        this.hasRedeemed = false
+      } finally {
+        this.statusLoading = false
+      }
+    },
     async handleRedeem() {
+      if (this.hasRedeemed) {
+        this.$message.warning('您已使用过兑换码，每位用户仅限一次')
+        return
+      }
       if (!this.code || !this.code.trim()) {
         this.$message.warning('请输入兑换码')
         return
@@ -100,6 +169,11 @@ export default {
         const res = await redeemCode({ code: this.code.trim() })
         this.$message.success(res.message || '兑换成功')
         this.code = ''
+        this.hasRedeemed = true
+        this.redeemedInfo = {
+          redeemed_amount: res.data && res.data.amount,
+          redeemed_at: res.data && res.data.redeemed_at
+        }
         setTimeout(() => {
           this.$router.push('/user/balance')
         }, 1500)
@@ -109,6 +183,10 @@ export default {
       } finally {
         this.loading = false
       }
+    },
+    formatTime(time) {
+      if (!time) return '-'
+      return new Date(time).toLocaleString('zh-CN')
     }
   }
 }
@@ -137,6 +215,56 @@ export default {
       font-size: 14px;
       color: #8c8c8c;
       margin: 0;
+    }
+  }
+
+  // Already Redeemed Banner
+  .redeemed-banner {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 24px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #f6ffed 0%, #e6fffb 100%);
+    border: 1px solid #b7eb8f;
+    border-radius: 12px;
+    animation: fadeInDown 0.5s ease;
+
+    .redeemed-banner-icon {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #52c41a, #73d13d);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(82, 196, 26, 0.3);
+    }
+
+    .redeemed-banner-content {
+      flex: 1;
+
+      h3 {
+        font-size: 16px;
+        font-weight: 600;
+        color: #52c41a;
+        margin: 0 0 4px 0;
+      }
+
+      p {
+        font-size: 13px;
+        color: #595959;
+        margin: 0 0 8px 0;
+        line-height: 1.5;
+
+        .highlight {
+          font-weight: 600;
+          color: #52c41a;
+        }
+      }
     }
   }
 
@@ -190,6 +318,12 @@ export default {
         font-weight: 500;
         letter-spacing: 1px;
       }
+
+      &.ant-input-affix-wrapper-disabled {
+        background: #f5f5f5;
+        border-color: #d9d9d9;
+        cursor: not-allowed;
+      }
     }
 
     /deep/ .ant-btn-primary {
@@ -202,13 +336,20 @@ export default {
       box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
       transition: all 0.3s;
 
-      &:hover {
+      &:hover:not([disabled]) {
         transform: translateY(-2px);
         box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
       }
 
-      &:active {
+      &:active:not([disabled]) {
         transform: translateY(0);
+      }
+
+      &[disabled] {
+        background: #d9d9d9;
+        box-shadow: none;
+        color: #fff;
+        opacity: 0.8;
       }
     }
   }
@@ -282,6 +423,17 @@ export default {
   50% {
     transform: scale(1.05);
     opacity: 0.8;
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 </style>

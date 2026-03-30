@@ -118,9 +118,52 @@ class RedemptionService:
         return codes
 
     @staticmethod
+    def check_user_redeemed(db: Session, user_id: int) -> bool:
+        """
+        Check if a user has already redeemed any code.
+
+        Args:
+            user_id: The user to check.
+
+        Returns:
+            True if the user has already redeemed a code.
+        """
+        count = db.query(RedemptionCode).filter(
+            RedemptionCode.used_by == user_id,
+            RedemptionCode.status == "used"
+        ).count()
+        return count > 0
+
+    @staticmethod
+    def get_user_redemption_info(db: Session, user_id: int) -> dict:
+        """
+        Get user's redemption usage info.
+
+        Args:
+            user_id: The user to query.
+
+        Returns:
+            Dict with has_redeemed flag and optional redemption details.
+        """
+        record = db.query(RedemptionCode).filter(
+            RedemptionCode.used_by == user_id,
+            RedemptionCode.status == "used"
+        ).first()
+
+        if record:
+            return {
+                "has_redeemed": True,
+                "redeemed_amount": float(record.amount),
+                "redeemed_at": record.used_at.isoformat() if record.used_at else None,
+            }
+        return {"has_redeemed": False}
+
+    @staticmethod
     def redeem_code(db: Session, user_id: int, code: str) -> dict:
         """
         Redeem a code for a user.
+
+        Each user can only redeem ONE code in total.
 
         Args:
             user_id: The user redeeming the code.
@@ -130,12 +173,21 @@ class RedemptionService:
             Dict with redemption result.
 
         Raises:
-            ServiceException: If code is invalid, already used, or expired.
+            ServiceException: If code is invalid, already used, expired,
+                              or user has already redeemed a code.
         """
-        # Find the code
+        # Check if user has already redeemed any code (one-time limit)
+        already_redeemed = db.query(RedemptionCode).filter(
+            RedemptionCode.used_by == user_id,
+            RedemptionCode.status == "used"
+        ).count()
+        if already_redeemed > 0:
+            raise ServiceException(400, "每位用户仅能使用一次兑换码，您已兑换过", "USER_ALREADY_REDEEMED")
+
+        # Find the code with row-level lock to prevent concurrent redemption
         redemption = db.query(RedemptionCode).filter(
             RedemptionCode.code == code.upper()
-        ).first()
+        ).with_for_update().first()
 
         if not redemption:
             raise ServiceException(404, "兑换码不存在", "CODE_NOT_FOUND")

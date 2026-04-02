@@ -5114,8 +5114,8 @@ class ProxyService:
                                             thinking = delta.get("thinking", "")
                                             if text:
                                                 collector.add_chunk(text)
-                                                if cache_state.get("first_stream_output_time") is None:
-                                                    cache_state["first_stream_output_time"] = time.time()
+                                                if collected_usage.get("_first_stream_output_time") is None:
+                                                    collected_usage["_first_stream_output_time"] = time.time()
                                             if thinking:
                                                 collector.add_chunk(thinking)
 

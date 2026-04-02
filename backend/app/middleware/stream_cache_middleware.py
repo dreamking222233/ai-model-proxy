@@ -20,6 +20,7 @@ class StreamCollector:
         self.chunks: List[Dict[str, Any]] = []
         self.start_time = time.time()
         self.last_chunk_time = self.start_time
+        self.first_chunk_time: Optional[float] = None
 
     def add_chunk(self, content: str, finish_reason: Optional[str] = None):
         """保留原接口，避免影响调用方。"""
@@ -32,6 +33,8 @@ class StreamCollector:
                 "finish_reason": finish_reason,
             }
         )
+        if content and self.first_chunk_time is None:
+            self.first_chunk_time = current_time
         self.last_chunk_time = current_time
 
 
@@ -63,9 +66,15 @@ class StreamCacheMiddleware:
         if cache_state is not None:
             cache_state["cache_info"] = cache_info
         collector = StreamCollector()
+        if cache_state is not None:
+            cache_state["stream_collector"] = collector
         collected_usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+        if cache_state is not None:
+            cache_state["collected_usage"] = collected_usage
         try:
             async for chunk in upstream_call(collector, collected_usage):
+                if cache_state is not None and collected_usage.get("_first_stream_output_time") is not None:
+                    cache_state["first_stream_output_time"] = collected_usage["_first_stream_output_time"]
                 yield chunk
         except Exception as exc:
             setattr(exc, "_request_cache_info", cache_info)

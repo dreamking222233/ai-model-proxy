@@ -119,7 +119,7 @@
         <!-- 响应时间 -->
         <template slot="col_rt" slot-scope="text">
           <span v-if="text != null" class="response-time" :class="getRtClass(text)">
-            {{ text }}<span class="response-time-unit"> ms</span>
+            {{ formatResponseTime(text) }}<span class="response-time-unit"> s</span>
           </span>
           <span v-else class="text-muted">-</span>
         </template>
@@ -148,7 +148,7 @@
         </a-descriptions-item>
         <a-descriptions-item label="响应时间">
           <span v-if="sel.response_time_ms != null" class="response-time" :class="getRtClass(sel.response_time_ms)">
-            {{ sel.response_time_ms }} <span class="response-time-unit">ms</span>
+            {{ formatResponseTime(sel.response_time_ms) }} <span class="response-time-unit">s</span>
           </span>
           <span v-else class="text-muted">-</span>
         </a-descriptions-item>
@@ -300,6 +300,9 @@ export default {
       if (ms <= 1000) return 'response-time--fast'
       if (ms <= 5000) return 'response-time--normal'
       return 'response-time--slow'
+    },
+    formatResponseTime(ms) {
+      return (Number(ms || 0) / 1000).toFixed(2)
     },
     formatNumber(n) {
       if (n == null) return '0'

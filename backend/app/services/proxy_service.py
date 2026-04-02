@@ -2180,7 +2180,7 @@ class ProxyService:
                 last_cache_info = cache_info
                 started_at = time.time()
                 try:
-                    completed_output, input_tokens, output_tokens = (
+                    completed_output, input_tokens, output_tokens, first_chunk_time = (
                         await ProxyService._forward_responses_websocket_turn(
                             websocket,
                             channel,
@@ -2189,7 +2189,7 @@ class ProxyService:
                             request_headers=request_headers,
                         )
                     )
-                    response_time_ms = int((time.time() - started_at) * 1000)
+                    response_time_ms = ProxyService._calculate_elapsed_ms(started_at, first_chunk_time)
                     ProxyService._record_success(db, channel)
                     ProxyService._deduct_balance_and_log(
                         db, user, api_key_record, unified_model, request_id,
@@ -2202,7 +2202,10 @@ class ProxyService:
                     turn_completed = True
                     break
                 except ResponsesTurnError as exc:
-                    response_time_ms = int((time.time() - started_at) * 1000)
+                    response_time_ms = ProxyService._calculate_elapsed_ms(
+                        started_at,
+                        getattr(exc, "first_chunk_time", None),
+                    )
                     last_error = exc
                     logger.warning(
                         "Responses websocket channel %s (%d) failed for model %s: %s",
@@ -2219,7 +2222,7 @@ class ProxyService:
                         return
                     continue
                 except Exception as exc:
-                    response_time_ms = int((time.time() - started_at) * 1000)
+                    response_time_ms = ProxyService._calculate_elapsed_ms(started_at)
                     last_error = exc
                     logger.warning(
                         "Responses websocket channel %s (%d) failed for model %s: %s",
@@ -2353,6 +2356,32 @@ class ProxyService:
                     item["role"] = "developer"
 
         return prepared
+
+    @staticmethod
+    def _calculate_elapsed_ms(start_time: float, first_chunk_time: Optional[float] = None) -> int:
+        target_time = first_chunk_time or time.time()
+        return max(0, int((target_time - start_time) * 1000))
+
+    @staticmethod
+    def _resolve_stream_response_time_ms(start_time: float, cache_state: Optional[dict[str, Any]] = None) -> int:
+        cache_state = cache_state or {}
+        first_chunk_time = cache_state.get("first_stream_output_time")
+        if first_chunk_time is None:
+            collector = cache_state.get("stream_collector")
+            first_chunk_time = getattr(collector, "first_chunk_time", None)
+        return ProxyService._calculate_elapsed_ms(start_time, first_chunk_time)
+
+    @staticmethod
+    def _has_stream_first_chunk(cache_state: Optional[dict[str, Any]] = None) -> bool:
+        cache_state = cache_state or {}
+        if cache_state.get("first_stream_output_time") is not None:
+            return True
+        collector = cache_state.get("stream_collector")
+        return getattr(collector, "first_chunk_time", None) is not None
+
+    @staticmethod
+    def _format_stream_timeout_error() -> str:
+        return "流式请求未收到首字即结束"
 
     @staticmethod
     def _normalize_responses_websocket_request(
@@ -2524,6 +2553,8 @@ class ProxyService:
                         delta = payload.get("delta", "")
                         if delta:
                             collector.add_chunk(delta)
+                            if collected_usage.get("_first_stream_output_time") is None:
+                                collected_usage["_first_stream_output_time"] = time.time()
 
                     yield ProxyService._payload_to_sse(payload)
 
@@ -2571,6 +2602,12 @@ class ProxyService:
                     billing_callback=billing_callback,
                     cache_state=cache_state,
                 ):
+                    if (
+                        cache_state.get("first_stream_output_time") is None
+                        and isinstance(sse_line, str)
+                        and "response.output_text.delta" in sse_line
+                    ):
+                        cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
 
             except Exception as exc:
@@ -2585,7 +2622,7 @@ class ProxyService:
                     )
                 )
             finally:
-                response_time_ms = int((time.time() - start_time) * 1000)
+                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
@@ -2629,7 +2666,7 @@ class ProxyService:
         request_data: dict,
         requested_model: str,
         request_headers: Optional[dict[str, str]] = None,
-    ) -> tuple[list, int, int]:
+    ) -> tuple[list, int, int, Optional[float]]:
         """Forward one websocket turn to upstream ``/responses`` SSE."""
         completed_output: list = []
         input_tokens = 0
@@ -2638,6 +2675,7 @@ class ProxyService:
         sent_any_payload = False
         saw_error = False
         error_message = ""
+        first_chunk_time: Optional[float] = None
 
         try:
             async for payload in ProxyService._iter_responses_upstream_payloads(
@@ -2647,6 +2685,8 @@ class ProxyService:
                 request_headers=request_headers,
             ):
                 sent_any_payload = True
+                if first_chunk_time is None:
+                    first_chunk_time = time.time()
                 payload_type = str(payload.get("type", "") or "")
                 if payload_type == "response.completed":
                     completed = True
@@ -2666,14 +2706,20 @@ class ProxyService:
                     status_code=502,
                 )
                 await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
-                raise ResponsesTurnError(str(exc), can_retry=False) from exc
-            raise ResponsesTurnError(str(exc), can_retry=True) from exc
+                error = ResponsesTurnError(str(exc), can_retry=False)
+                error.first_chunk_time = first_chunk_time
+                raise error from exc
+            error = ResponsesTurnError(str(exc), can_retry=True)
+            error.first_chunk_time = first_chunk_time
+            raise error from exc
 
         if completed:
-            return completed_output, input_tokens, output_tokens
+            return completed_output, input_tokens, output_tokens, first_chunk_time
 
         if saw_error:
-            raise ResponsesTurnError(error_message or "Upstream responses error", can_retry=not sent_any_payload)
+            error = ResponsesTurnError(error_message or "Upstream responses error", can_retry=not sent_any_payload)
+            error.first_chunk_time = first_chunk_time
+            raise error
 
         if sent_any_payload:
             error_payload = ProxyService._build_responses_error_payload(
@@ -2681,9 +2727,13 @@ class ProxyService:
                 status_code=408,
             )
             await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
-            raise ResponsesTurnError("stream closed before response.completed", can_retry=False)
+            error = ResponsesTurnError("stream closed before response.completed", can_retry=False)
+            error.first_chunk_time = first_chunk_time
+            raise error
 
-        raise ResponsesTurnError("stream closed before response.completed", can_retry=True)
+        error = ResponsesTurnError("stream closed before response.completed", can_retry=True)
+        error.first_chunk_time = first_chunk_time
+        raise error
 
     @staticmethod
     async def _iter_responses_upstream_payloads(
@@ -2893,7 +2943,7 @@ class ProxyService:
             requested_model=requested_model,
         )
 
-        response_time_ms = int((time.time() - start_time) * 1000)
+        response_time_ms = ProxyService._calculate_elapsed_ms(start_time)
 
         # Extract response body and tokens
         response_body = cache_response.get("response", cache_response)
@@ -3451,6 +3501,8 @@ class ProxyService:
                                             collector.add_chunk(reasoning_content)
                                         if content:
                                             collector.add_chunk(content)
+                                            if collected_usage.get("_first_stream_output_time") is None:
+                                                collected_usage["_first_stream_output_time"] = time.time()
                                         if finish_reason:
                                             collector.add_chunk("", finish_reason)
                             except (json.JSONDecodeError, TypeError):
@@ -3484,6 +3536,12 @@ class ProxyService:
                     cache_state=cache_state,
                 ):
                     # 检测是否是缓存命中（wrap 内部会设置 cache_status）
+                    if (
+                        cache_state.get("first_stream_output_time") is None
+                        and isinstance(sse_line, str)
+                        and '"content":' in sse_line
+                    ):
+                        cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
 
             except Exception as e:
@@ -3501,7 +3559,7 @@ class ProxyService:
                 yield f"data: {error_payload}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
-                response_time_ms = int((time.time() - start_time) * 1000)
+                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
@@ -3630,7 +3688,7 @@ class ProxyService:
             requested_model=requested_model,
         )
 
-        response_time_ms = int((time.time() - start_time) * 1000)
+        response_time_ms = ProxyService._calculate_elapsed_ms(start_time)
 
         # Extract response body and tokens
         response_body = cache_response.get("response", cache_response)
@@ -3820,6 +3878,8 @@ class ProxyService:
 
                             if text_value:
                                 collector.add_chunk(str(text_value))
+                                if collected_usage.get("_first_stream_output_time") is None:
+                                    collected_usage["_first_stream_output_time"] = time.time()
                                 text_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
                                     model_name=upstream_model,
@@ -3918,6 +3978,12 @@ class ProxyService:
                     billing_callback=billing_callback,
                     cache_state=cache_state,
                 ):
+                    if (
+                        cache_state.get("first_stream_output_time") is None
+                        and isinstance(sse_line, str)
+                        and '"content":' in sse_line
+                    ):
+                        cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
 
             except Exception as e:
@@ -3935,7 +4001,7 @@ class ProxyService:
                 yield f"data: {error_payload}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
-                response_time_ms = int((time.time() - start_time) * 1000)
+                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
@@ -4053,7 +4119,7 @@ class ProxyService:
             requested_model=requested_model,
         )
 
-        response_time_ms = int((time.time() - start_time) * 1000)
+        response_time_ms = ProxyService._calculate_elapsed_ms(start_time)
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
@@ -4429,6 +4495,8 @@ class ProxyService:
                     if delta_value:
                         saw_text_delta = True
                         collector.add_chunk(delta_value)
+                        if collected_usage.get("_first_stream_output_time") is None:
+                            collected_usage["_first_stream_output_time"] = time.time()
                         yield build_client_event(
                             "content_block_delta",
                             {
@@ -4624,6 +4692,12 @@ class ProxyService:
                     billing_callback=billing_callback,
                     cache_state=cache_state,
                 ):
+                    if (
+                        cache_state.get("first_stream_output_time") is None
+                        and isinstance(sse_line, str)
+                        and '"type":"content_block_delta"' in sse_line
+                    ):
+                        cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
             except Exception as exc:
                 stream_error = exc
@@ -4642,7 +4716,7 @@ class ProxyService:
                     detail="proxy_error",
                 )
             finally:
-                response_time_ms = int((time.time() - start_time) * 1000)
+                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
                     merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
                         cache_state.get("cache_info"),
@@ -4764,7 +4838,7 @@ class ProxyService:
             requested_model=requested_model,
         )
 
-        response_time_ms = int((time.time() - start_time) * 1000)
+        response_time_ms = ProxyService._calculate_elapsed_ms(start_time)
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
@@ -5040,6 +5114,8 @@ class ProxyService:
                                             thinking = delta.get("thinking", "")
                                             if text:
                                                 collector.add_chunk(text)
+                                                if cache_state.get("first_stream_output_time") is None:
+                                                    cache_state["first_stream_output_time"] = time.time()
                                             if thinking:
                                                 collector.add_chunk(thinking)
 
@@ -5124,7 +5200,7 @@ class ProxyService:
                 })
                 yield f"event: error\ndata: {error_payload}\n\n"
             finally:
-                response_time_ms = int((time.time() - start_time) * 1000)
+                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
                     merged_cache_info = ProxyService._merge_prompt_cache_state_into_cache_info(
                         cache_state.get("cache_info"),
@@ -5391,7 +5467,7 @@ class ProxyService:
                 setattr(exc, "_request_cache_info", merged_error_cache_info)
             raise
 
-        response_time_ms = int((time.time() - start_time) * 1000)
+        response_time_ms = ProxyService._calculate_elapsed_ms(start_time)
 
         # Extract response body and tokens
         response_body = cache_response.get("response", cache_response)

@@ -23,7 +23,8 @@
                 :class="{ active: selectedProvider === p.name }"
                 @click="selectedProvider = selectedProvider === p.name ? null : p.name"
               >
-                <span class="provider-dot" :style="{ background: p.color }"></span>
+                <img v-if="p.icon" :src="p.icon" :alt="p.label" class="provider-logo provider-logo-sm">
+                <span v-else class="provider-dot" :style="{ background: p.color }"></span>
                 <span>{{ p.label }}</span>
                 <span class="tag-count">{{ p.count }}</span>
               </div>
@@ -110,7 +111,13 @@
             >
               <div class="card-left">
                 <div class="provider-avatar" :style="{ background: getProviderColor(model.model_name) }">
-                  {{ getProviderLetter(model.model_name) }}
+                  <img
+                    v-if="getProvider(model.model_name).icon"
+                    :src="getProvider(model.model_name).icon"
+                    :alt="getProvider(model.model_name).label"
+                    class="provider-logo"
+                  >
+                  <span v-else>{{ getProviderLetter(model.model_name) }}</span>
                 </div>
               </div>
               <div class="card-center">
@@ -153,14 +160,17 @@
 
 <script>
 import { listAvailableModels } from '@/api/model'
+import anthropicIcon from '@/assets/provider-icons/anthropic.svg'
+import openaiIcon from '@/assets/provider-icons/openai.svg'
+import googleIcon from '@/assets/provider-icons/google.svg'
 
 const PROVIDER_RULES = [
-  { key: 'claude', label: 'Anthropic', color: '#d97706' },
-  { key: 'gpt', label: 'OpenAI', color: '#10a37f' },
-  { key: 'o1', label: 'OpenAI', color: '#10a37f' },
-  { key: 'o3', label: 'OpenAI', color: '#10a37f' },
-  { key: 'o4', label: 'OpenAI', color: '#10a37f' },
-  { key: 'gemini', label: 'Google', color: '#4285f4' },
+  { key: 'claude', label: 'Anthropic', color: '#d97706', icon: anthropicIcon },
+  { key: 'gpt', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
+  { key: 'o1', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
+  { key: 'o3', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
+  { key: 'o4', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
+  { key: 'gemini', label: 'Google', color: '#4285f4', icon: googleIcon },
   { key: 'deepseek', label: 'DeepSeek', color: '#0066ff' },
   { key: 'qwen', label: '通义千问', color: '#6236ff' },
   { key: 'glm', label: '智谱', color: '#3b5998' },
@@ -175,6 +185,14 @@ const PROVIDER_RULES = [
   { key: 'ernie', label: '百度文心', color: '#2932e1' },
   { key: 'spark', label: '讯飞星火', color: '#0070f0' }
 ]
+
+const DEFAULT_PROVIDER = { label: '其他', color: '#8c8c8c', icon: null }
+
+const PROVIDER_ICON_MAP = {
+  Anthropic: anthropicIcon,
+  OpenAI: openaiIcon,
+  Google: googleIcon
+}
 
 export default {
   name: 'ModelList',
@@ -194,7 +212,7 @@ export default {
       this.models.forEach(m => {
         const p = this.getProvider(m.model_name)
         if (!map[p.label]) {
-          map[p.label] = { name: p.label, label: p.label, color: p.color, count: 0 }
+          map[p.label] = { name: p.label, label: p.label, color: p.color, icon: p.icon, count: 0 }
         }
         map[p.label].count++
       })
@@ -253,10 +271,10 @@ export default {
       const name = (modelName || '').toLowerCase()
       for (const rule of PROVIDER_RULES) {
         if (name.startsWith(rule.key)) {
-          return { label: rule.label, color: rule.color }
+          return { label: rule.label, color: rule.color, icon: rule.icon || PROVIDER_ICON_MAP[rule.label] || null }
         }
       }
-      return { label: '其他', color: '#8c8c8c' }
+      return DEFAULT_PROVIDER
     },
     getProviderColor(modelName) {
       return this.getProvider(modelName).color
@@ -364,6 +382,18 @@ export default {
         flex-shrink: 0;
       }
 
+      .provider-logo {
+        width: 16px;
+        height: 16px;
+        object-fit: contain;
+        flex-shrink: 0;
+
+        &.provider-logo-sm {
+          width: 14px;
+          height: 14px;
+        }
+      }
+
       .tag-count {
         margin-left: auto;
         font-size: 12px;
@@ -453,6 +483,14 @@ export default {
       font-size: 16px;
       font-weight: 700;
       color: #fff;
+      overflow: hidden;
+
+      .provider-logo {
+        width: 22px;
+        height: 22px;
+        object-fit: contain;
+        filter: brightness(0) invert(1);
+      }
     }
 
     .card-center {

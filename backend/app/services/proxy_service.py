@@ -1070,6 +1070,45 @@ class ProxyService:
         if not isinstance(value, list):
             return [{"type": "input_text", "text": str(value)}]
 
+        def build_input_image_part(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+            source = item.get("source") or {}
+            if not isinstance(source, dict):
+                return None
+
+            source_type = str(source.get("type", "") or "").strip().lower()
+            if source_type == "base64":
+                data_value = str(source.get("data", "") or "").strip()
+                media_type = str(source.get("media_type", "") or "").strip()
+                if not data_value or not media_type:
+                    raise ServiceException(
+                        400,
+                        "anthropic image source.base64 requires non-empty data and media_type",
+                        "INVALID_REQUEST",
+                    )
+                return {
+                    "type": "input_image",
+                    "image_url": f"data:{media_type};base64,{data_value}",
+                }
+
+            if source_type == "url":
+                url_value = str(source.get("url", "") or "").strip()
+                if not url_value:
+                    raise ServiceException(
+                        400,
+                        "anthropic image source.url requires non-empty url",
+                        "INVALID_REQUEST",
+                    )
+                return {
+                    "type": "input_image",
+                    "image_url": url_value,
+                }
+
+            raise ServiceException(
+                400,
+                f"unsupported anthropic image source type: {source_type or 'unknown'}",
+                "INVALID_REQUEST",
+            )
+
         parts: list[dict] = []
         for item in value:
             if isinstance(item, str):
@@ -1088,33 +1127,17 @@ class ProxyService:
                     parts.append({"type": "input_text", "text": text_value})
                 continue
 
-            if item_type == "image" and isinstance(item.get("source"), dict):
-                source = item.get("source") or {}
-                source_type = str(source.get("type", "") or "")
-                if source_type == "base64":
-                    data_value = str(source.get("data", "") or "")
-                    media_type = str(source.get("media_type", "") or "")
-                    if data_value and media_type:
-                        parts.append({
-                            "type": "input_image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": data_value,
-                            },
-                        })
-                        continue
-                if source_type == "url":
-                    url_value = str(source.get("url", "") or "")
-                    if url_value:
-                        parts.append({
-                            "type": "input_image",
-                            "source": {
-                                "type": "url",
-                                "url": url_value,
-                            },
-                        })
-                        continue
+            if item_type == "image":
+                image_part = build_input_image_part(item)
+                if image_part:
+                    parts.append(image_part)
+                continue
+
+            if item_type == "input_image":
+                normalized_item = ProxyService._normalize_responses_content_part(item)
+                if normalized_item:
+                    parts.append(normalized_item)
+                    continue
 
             if "text" in item and item.get("text") is not None:
                 text_value = str(item.get("text"))
@@ -1361,17 +1384,31 @@ class ProxyService:
                 continue
 
             image_url = item.get("image_url")
-            if item_type == "image_url" and isinstance(image_url, dict):
-                raw_url = str(image_url.get("url", "") or "")
-                if raw_url.startswith("data:image/") and ";base64," in raw_url:
+            if item_type in {"image_url", "input_image"}:
+                raw_url = ""
+                if isinstance(image_url, dict):
+                    raw_url = str(image_url.get("url", "") or "")
+                elif isinstance(image_url, str):
+                    raw_url = image_url
+                if raw_url.startswith("data:") and ";base64," in raw_url:
                     meta, encoded = raw_url.split(";base64,", 1)
                     media_type = meta[5:]
+                    if media_type:
+                        blocks.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": encoded,
+                            },
+                        })
+                        continue
+                elif raw_url:
                     blocks.append({
                         "type": "image",
                         "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": encoded,
+                            "type": "url",
+                            "url": raw_url,
                         },
                     })
                     continue
@@ -1453,11 +1490,71 @@ class ProxyService:
         if arguments is None:
             return ""
         if isinstance(arguments, str):
+            stripped = arguments.strip()
+            if not stripped:
+                return ""
             return arguments
         try:
             return json.dumps(arguments, ensure_ascii=False)
         except (TypeError, ValueError):
             return str(arguments)
+
+    @staticmethod
+    def _normalize_responses_content_part(part: Any) -> Optional[dict[str, Any]]:
+        """Normalize one Responses message content part into a stable upstream schema."""
+        if part is None:
+            return None
+        if isinstance(part, str):
+            if part == "":
+                return None
+            return {"type": "input_text", "text": part}
+        if not isinstance(part, dict):
+            return {"type": "input_text", "text": str(part)}
+
+        normalized = copy.deepcopy(part)
+        part_type = str(normalized.get("type", "") or "")
+        if part_type in {"text", "input_text", "output_text"}:
+            text_value = str(normalized.get("text", "") or "")
+            if text_value == "":
+                return None
+            return {"type": "input_text", "text": text_value}
+
+        if part_type == "input_image":
+            image_url = normalized.get("image_url")
+            file_id = normalized.get("file_id")
+            if image_url is None and isinstance(normalized.get("source"), dict):
+                source = normalized.get("source") or {}
+                source_type = str(source.get("type", "") or "").strip().lower()
+                if source_type == "base64":
+                    data_value = str(source.get("data", "") or "").strip()
+                    media_type = str(source.get("media_type", "") or "").strip()
+                    if data_value and media_type:
+                        image_url = f"data:{media_type};base64,{data_value}"
+                elif source_type == "url":
+                    image_url = str(source.get("url", "") or "").strip()
+
+            if isinstance(image_url, str):
+                image_url = image_url.strip()
+            if isinstance(file_id, str):
+                file_id = file_id.strip()
+
+            if image_url:
+                result = {"type": "input_image", "image_url": image_url}
+            elif file_id:
+                result = {"type": "input_image", "file_id": file_id}
+            else:
+                raise ServiceException(
+                    400,
+                    "responses input_image requires image_url or file_id",
+                    "INVALID_REQUEST",
+                )
+
+            detail = normalized.get("detail")
+            if detail is not None:
+                result["detail"] = detail
+            return result
+
+        return normalized
 
     @staticmethod
     def _extract_responses_reasoning_text(value: Any) -> str:
@@ -2313,12 +2410,17 @@ class ProxyService:
             item = copy.deepcopy(raw_item)
             if item.get("type") == "message":
                 content = item.get("content")
-                if isinstance(content, str):
-                    item["content"] = [{"type": "input_text", "text": content}]
-                elif content is None:
-                    item["content"] = []
-                elif not isinstance(content, list):
-                    item["content"] = [{"type": "input_text", "text": str(content)}]
+                normalized_content: list[dict[str, Any]] = []
+                if isinstance(content, list):
+                    for part in content:
+                        normalized_part = ProxyService._normalize_responses_content_part(part)
+                        if normalized_part is not None:
+                            normalized_content.append(normalized_part)
+                else:
+                    normalized_part = ProxyService._normalize_responses_content_part(content)
+                    if normalized_part is not None:
+                        normalized_content.append(normalized_part)
+                item["content"] = normalized_content
             normalized_items.append(item)
         return normalized_items
 
@@ -4339,47 +4441,77 @@ class ProxyService:
                 ]
 
             def _resolve_tool_call_id(item: dict[str, Any]) -> str:
-                raw_ids = [
-                    str(item.get("call_id") or ""),
-                    str(item.get("item_id") or ""),
-                    str(item.get("id") or ""),
-                ]
+                raw_ids = []
+                for key in ("call_id", "item_id", "id"):
+                    raw_value = str(item.get(key) or "").strip()
+                    if raw_value:
+                        raw_ids.append(raw_value)
                 for raw_id in raw_ids:
-                    if raw_id and raw_id in tool_call_aliases:
+                    if raw_id in tool_call_aliases:
                         return tool_call_aliases[raw_id]
 
-                canonical_id = next((raw_id for raw_id in raw_ids if raw_id), "")
+                canonical_id = next((raw_id for raw_id in raw_ids if raw_id.startswith("call_")), "")
+                if not canonical_id:
+                    canonical_id = next((raw_id for raw_id in raw_ids if raw_id.startswith("toolu_")), "")
+                if not canonical_id:
+                    canonical_id = next((raw_id for raw_id in raw_ids if raw_id), "")
                 if not canonical_id:
                     canonical_id = f"toolu_{uuid.uuid4().hex[:24]}"
 
                 for raw_id in raw_ids:
-                    if raw_id:
-                        tool_call_aliases[raw_id] = canonical_id
+                    tool_call_aliases[raw_id] = canonical_id
+                tool_call_aliases[canonical_id] = canonical_id
                 return canonical_id
 
-            def ensure_tool_use_block_started(item: dict[str, Any]) -> tuple[str, list[str]]:
-                nonlocal next_block_index, saw_tool_use
+            def _resolve_tool_name(item: dict[str, Any], state: Optional[dict[str, Any]] = None) -> str:
+                candidate_names = [
+                    item.get("name"),
+                    item.get("tool_name"),
+                    item.get("function_name"),
+                ]
+                if state is not None:
+                    candidate_names.append(state.get("name"))
+                for candidate in candidate_names:
+                    candidate_text = str(candidate or "").strip()
+                    if candidate_text and candidate_text != "tool":
+                        return candidate_text
+                return str((state or {}).get("name") or "tool")
+
+            def _register_tool_call(item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+                nonlocal next_block_index
                 call_id = _resolve_tool_call_id(item)
                 state = tool_block_states.get(call_id)
                 if state is None:
                     state = {
                         "id": call_id,
-                        "name": str(item.get("name", "") or "tool"),
+                        "name": _resolve_tool_name(item),
                         "index": next_block_index,
                         "started": False,
                         "closed": False,
                         "arguments_text": "",
+                        "completed_arguments_text": "",
+                        "saw_delta": False,
+                        "argument_mismatch": False,
+                        "name_source": "payload" if item.get("name") else "fallback",
+                        "closed_by": None,
                     }
                     tool_block_states[call_id] = state
                     next_block_index += 1
-                elif item.get("name"):
-                    state["name"] = str(item.get("name") or state["name"])
+                else:
+                    resolved_name = _resolve_tool_name(item, state)
+                    if resolved_name and resolved_name != state.get("name"):
+                        state["name"] = resolved_name
+                        state["name_source"] = "payload"
+                return call_id, state
 
-                saw_tool_use = True
+            def ensure_tool_use_block_started(item: dict[str, Any]) -> tuple[str, list[str]]:
+                nonlocal saw_tool_use
+                call_id, state = _register_tool_call(item)
                 if state["started"]:
                     return call_id, []
 
                 state["started"] = True
+                saw_tool_use = True
                 return call_id, [
                     build_client_event(
                         "content_block_start",
@@ -4403,6 +4535,7 @@ class ProxyService:
                 serialized_delta = ProxyService._stringify_tool_arguments_json(delta_text)
                 if serialized_delta == "":
                     return events
+                state["saw_delta"] = True
                 state["arguments_text"] = f"{state['arguments_text']}{serialized_delta}"
                 events.append(
                     build_client_event(
@@ -4420,7 +4553,12 @@ class ProxyService:
                 )
                 return events
 
-            def close_tool_use_block(item: dict[str, Any], final_arguments: Any = None) -> list[str]:
+            def close_tool_use_block(
+                item: dict[str, Any],
+                final_arguments: Any = None,
+                *,
+                close_reason: str = "done",
+            ) -> list[str]:
                 call_id, events = ensure_tool_use_block_started(item)
                 state = tool_block_states[call_id]
                 if state["closed"]:
@@ -4429,16 +4567,19 @@ class ProxyService:
                 final_text = ProxyService._stringify_tool_arguments_json(final_arguments)
                 current_text = str(state.get("arguments_text", "") or "")
                 if final_text:
-                    missing_text = ""
                     if not current_text:
                         missing_text = final_text
                     elif final_text.startswith(current_text):
                         missing_text = final_text[len(current_text):]
                     elif final_text != current_text:
+                        state["completed_arguments_text"] = final_text
+                        state["argument_mismatch"] = True
+                        missing_text = ""
+                    else:
                         missing_text = ""
 
                     if missing_text:
-                        state["arguments_text"] = f"{current_text}{missing_text}"
+                        state["arguments_text"] = current_text + missing_text
                         events.append(
                             build_client_event(
                                 "content_block_delta",
@@ -4453,8 +4594,13 @@ class ProxyService:
                                 detail="input_json_delta",
                             )
                         )
+                    elif not current_text and not state.get("argument_mismatch"):
+                        state["arguments_text"] = final_text
+                elif not current_text:
+                    state["completed_arguments_text"] = ""
 
                 state["closed"] = True
+                state["closed_by"] = close_reason
                 events.append(
                     build_client_event(
                         "content_block_stop",
@@ -4467,210 +4613,289 @@ class ProxyService:
                 )
                 return events
 
-            async for payload in ProxyService._iter_responses_upstream_payloads(
-                channel,
-                responses_request,
-                requested_model,
-                request_headers=request_headers,
-            ):
-                payload_type = str(payload.get("type", "") or "")
-                payload_detail = None
-                if payload_type in {"response.output_item.added", "response.output_item.done"}:
-                    payload_detail = str((payload.get("item") or {}).get("type", "") or "")
-                elif payload_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
-                    payload_detail = payload.get("item_id") or payload.get("call_id")
-                record_upstream_event(payload_type, payload_detail)
-                if payload_type in {"response.created", "response.in_progress"}:
-                    response_obj = payload.get("response") or {}
-                    for sse_line in ensure_message_start(response_obj):
-                        yield sse_line
-                    continue
+            def has_open_tool_use_blocks() -> bool:
+                return any(
+                    isinstance(state, dict) and state.get("started") and not state.get("closed")
+                    for state in tool_block_states.values()
+                )
 
-                if payload_type == "response.output_text.delta":
-                    for sse_line in ensure_message_start():
-                        yield sse_line
-                    for sse_line in open_text_block():
-                        yield sse_line
-                    delta_value = str(payload.get("delta", "") or "")
-                    if delta_value:
-                        saw_text_delta = True
-                        collector.add_chunk(delta_value)
-                        if collected_usage.get("_first_stream_output_time") is None:
-                            collected_usage["_first_stream_output_time"] = time.time()
+            def has_closed_tool_use_blocks() -> bool:
+                return any(
+                    isinstance(state, dict) and state.get("closed")
+                    for state in tool_block_states.values()
+                )
+
+            def emit_missing_final_tool_blocks(final_output: Any) -> list[str]:
+                emitted_events: list[str] = []
+                if not isinstance(final_output, list):
+                    return emitted_events
+                for item in final_output:
+                    if not isinstance(item, dict) or str(item.get("type", "") or "") != "function_call":
+                        continue
+                    call_id = _resolve_tool_call_id(item)
+                    state = tool_block_states.get(call_id)
+                    if state is None or not state.get("closed"):
+                        emitted_events.extend(
+                            close_tool_use_block(
+                                item,
+                                item.get("arguments"),
+                                close_reason="completed_fallback",
+                            )
+                        )
+                return emitted_events
+
+            def resolve_final_stop_reason(final_output: Any) -> str:
+                if has_open_tool_use_blocks():
+                    return "tool_use"
+                if has_closed_tool_use_blocks():
+                    return "tool_use"
+                if isinstance(final_output, list):
+                    for item in final_output:
+                        if isinstance(item, dict) and str(item.get("type", "") or "") == "function_call":
+                            return "tool_use"
+                return "end_turn"
+
+            def build_tool_debug_snapshot() -> dict[str, Any]:
+                tool_states = {}
+                for call_id, state in tool_block_states.items():
+                    tool_states[call_id] = {
+                        "name": state.get("name"),
+                        "index": state.get("index"),
+                        "started": bool(state.get("started")),
+                        "closed": bool(state.get("closed")),
+                        "name_source": state.get("name_source"),
+                        "closed_by": state.get("closed_by"),
+                        "arguments_length": len(str(state.get("arguments_text", "") or "")),
+                        "has_completed_arguments_text": bool(state.get("completed_arguments_text")),
+                        "argument_mismatch": bool(state.get("argument_mismatch")),
+                        "saw_delta": bool(state.get("saw_delta")),
+                    }
+                return {
+                    "tool_call_aliases": copy.deepcopy(tool_call_aliases),
+                    "tool_blocks": tool_states,
+                }
+
+            try:
+                async for payload in ProxyService._iter_responses_upstream_payloads(
+                    channel,
+                    responses_request,
+                    requested_model,
+                    request_headers=request_headers,
+                ):
+                    payload_type = str(payload.get("type", "") or "")
+                    payload_detail = None
+                    if payload_type in {"response.output_item.added", "response.output_item.done"}:
+                        payload_detail = str((payload.get("item") or {}).get("type", "") or "")
+                    elif payload_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
+                        payload_detail = payload.get("item_id") or payload.get("call_id")
+                    record_upstream_event(payload_type, payload_detail)
+                    if payload_type in {"response.created", "response.in_progress"}:
+                        response_obj = payload.get("response") or {}
+                        for sse_line in ensure_message_start(response_obj):
+                            yield sse_line
+                        continue
+
+                    if payload_type == "response.output_text.delta":
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in open_text_block():
+                            yield sse_line
+                        delta_value = str(payload.get("delta", "") or "")
+                        if delta_value:
+                            saw_text_delta = True
+                            collector.add_chunk(delta_value)
+                            if collected_usage.get("_first_stream_output_time") is None:
+                                collected_usage["_first_stream_output_time"] = time.time()
+                            yield build_client_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": text_block_index,
+                                    "delta": {
+                                        "type": "text_delta",
+                                        "text": delta_value,
+                                    },
+                                },
+                                detail="text_delta",
+                            )
+                        continue
+
+                    if payload_type == "response.output_item.added":
+                        item = payload.get("item") or {}
+                        if str(item.get("type", "") or "") == "function_call":
+                            for sse_line in ensure_message_start():
+                                yield sse_line
+                            for sse_line in close_text_block():
+                                yield sse_line
+                            _, events = ensure_tool_use_block_started(item)
+                            for sse_line in events:
+                                yield sse_line
+                        continue
+
+                    if payload_type == "response.function_call_arguments.delta":
+                        call_item = {
+                            "call_id": payload.get("call_id"),
+                            "item_id": payload.get("item_id"),
+                            "id": payload.get("id"),
+                            "name": payload.get("name"),
+                        }
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in close_text_block():
+                            yield sse_line
+                        for sse_line in emit_tool_argument_delta(call_item, payload.get("delta")):
+                            yield sse_line
+                        continue
+
+                    if payload_type == "response.function_call_arguments.done":
+                        call_item = {
+                            "call_id": payload.get("call_id"),
+                            "item_id": payload.get("item_id"),
+                            "id": payload.get("id"),
+                            "name": payload.get("name"),
+                        }
+                        for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in close_text_block():
+                            yield sse_line
+                        for sse_line in close_tool_use_block(
+                            call_item,
+                            payload.get("arguments"),
+                            close_reason="arguments_done",
+                        ):
+                            yield sse_line
+                        continue
+
+                    if payload_type == "response.output_item.done":
+                        item = payload.get("item") or {}
+                        item_type = str(item.get("type", "") or "")
+                        if item_type == "reasoning":
+                            for sse_line in ensure_message_start():
+                                yield sse_line
+                            for sse_line in close_text_block():
+                                yield sse_line
+                            for sse_line in emit_reasoning_block(item):
+                                yield sse_line
+                            continue
+                        if item_type == "function_call":
+                            for sse_line in ensure_message_start():
+                                yield sse_line
+                            for sse_line in close_text_block():
+                                yield sse_line
+                            for sse_line in close_tool_use_block(
+                                item,
+                                item.get("arguments"),
+                                close_reason="output_item_done",
+                            ):
+                                yield sse_line
+                            continue
+
+                    if payload_type == "response.completed":
+                        final_response = payload.get("response") or {}
+                        for sse_line in ensure_message_start(final_response):
+                            yield sse_line
+
+                        input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                        collected_usage["prompt_tokens"] = input_tokens
+                        collected_usage["completion_tokens"] = output_tokens
+
+                        for sse_line in close_text_block():
+                            yield sse_line
+
+                        final_output = final_response.get("output") or []
+                        if isinstance(final_output, list):
+                            if not saw_text_delta:
+                                text_content = []
+                                for item in final_output:
+                                    if not isinstance(item, dict) or str(item.get("type", "") or "") != "message":
+                                        continue
+                                    for part in item.get("content") or []:
+                                        if isinstance(part, dict) and str(part.get("type", "") or "") in {
+                                            "output_text", "text", "input_text",
+                                        }:
+                                            text_value = str(part.get("text", "") or "")
+                                            if text_value:
+                                                text_content.append(text_value)
+                                if text_content:
+                                    for sse_line in open_text_block():
+                                        yield sse_line
+                                    joined_text = "".join(text_content)
+                                    collector.add_chunk(joined_text)
+                                    yield build_client_event(
+                                        "content_block_delta",
+                                        {
+                                            "type": "content_block_delta",
+                                            "index": text_block_index,
+                                            "delta": {
+                                                "type": "text_delta",
+                                                "text": joined_text,
+                                            },
+                                        },
+                                        detail="text_delta",
+                                    )
+                                    for sse_line in close_text_block():
+                                        yield sse_line
+
+                            for item in final_output:
+                                if not isinstance(item, dict):
+                                    continue
+                                item_type = str(item.get("type", "") or "")
+                                if item_type == "reasoning":
+                                    for sse_line in emit_reasoning_block(item):
+                                        yield sse_line
+
+                            for sse_line in emit_missing_final_tool_blocks(final_output):
+                                yield sse_line
+
+                        final_stop_reason = resolve_final_stop_reason(final_output)
+                        collector.add_chunk("", final_stop_reason)
+                        stream_debug_extra["completed"] = True
+                        stream_debug_extra["stop_reason"] = final_stop_reason
+                        stream_debug_extra["saw_tool_use"] = saw_tool_use or has_closed_tool_use_blocks()
+                        stream_debug_extra["final_output_types"] = [
+                            str(item.get("type", "") or "")
+                            for item in final_output
+                            if isinstance(item, dict)
+                        ] if isinstance(final_output, list) else []
+                        stream_debug_extra["stop_reason_source"] = (
+                            "tool_blocks" if final_stop_reason == "tool_use" else "final_output"
+                        )
+                        stream_debug_extra.update(build_tool_debug_snapshot())
                         yield build_client_event(
-                            "content_block_delta",
+                            "message_delta",
                             {
-                                "type": "content_block_delta",
-                                "index": text_block_index,
+                                "type": "message_delta",
                                 "delta": {
-                                    "type": "text_delta",
-                                    "text": delta_value,
+                                    "stop_reason": final_stop_reason,
+                                    "stop_sequence": None,
+                                },
+                                "usage": {
+                                    "input_tokens": input_tokens,
+                                    "output_tokens": output_tokens,
                                 },
                             },
-                            detail="text_delta",
+                            detail=final_stop_reason,
                         )
-                    continue
+                        yield build_client_event(
+                            "message_stop",
+                            {"type": "message_stop"},
+                            detail="final",
+                        )
+                        completed = True
+                        break
 
-                if payload_type == "response.output_item.added":
-                    item = payload.get("item") or {}
-                    if str(item.get("type", "") or "") == "function_call":
-                        for sse_line in ensure_message_start():
-                            yield sse_line
-                        for sse_line in close_text_block():
-                            yield sse_line
-                        _, events = ensure_tool_use_block_started(item)
-                        for sse_line in events:
-                            yield sse_line
-                    continue
+                    if payload_type == "error":
+                        saw_error = True
+                        error_message = (
+                            payload.get("error", {}).get("message")
+                            or "Upstream responses error"
+                        )
 
-                if payload_type == "response.function_call_arguments.delta":
-                    call_item = {
-                        "call_id": payload.get("call_id"),
-                        "item_id": payload.get("item_id"),
-                        "id": payload.get("id"),
-                        "name": payload.get("name"),
-                    }
-                    for sse_line in ensure_message_start():
-                        yield sse_line
-                    for sse_line in close_text_block():
-                        yield sse_line
-                    for sse_line in emit_tool_argument_delta(call_item, payload.get("delta")):
-                        yield sse_line
-                    continue
-
-                if payload_type == "response.function_call_arguments.done":
-                    call_item = {
-                        "call_id": payload.get("call_id"),
-                        "item_id": payload.get("item_id"),
-                        "id": payload.get("id"),
-                        "name": payload.get("name"),
-                    }
-                    for sse_line in ensure_message_start():
-                        yield sse_line
-                    for sse_line in close_text_block():
-                        yield sse_line
-                    for sse_line in close_tool_use_block(call_item, payload.get("arguments")):
-                        yield sse_line
-                    continue
-
-                if payload_type == "response.output_item.done":
-                    item = payload.get("item") or {}
-                    item_type = str(item.get("type", "") or "")
-                    if item_type == "reasoning":
-                        for sse_line in ensure_message_start():
-                            yield sse_line
-                        for sse_line in close_text_block():
-                            yield sse_line
-                        for sse_line in emit_reasoning_block(item):
-                            yield sse_line
-                        continue
-                    if item_type == "function_call":
-                        for sse_line in ensure_message_start():
-                            yield sse_line
-                        for sse_line in close_text_block():
-                            yield sse_line
-                        for sse_line in close_tool_use_block(item, item.get("arguments")):
-                            yield sse_line
-                        continue
-
-                if payload_type == "response.completed":
-                    final_response = payload.get("response") or {}
-                    for sse_line in ensure_message_start(final_response):
-                        yield sse_line
-
-                    input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
-                    collected_usage["prompt_tokens"] = input_tokens
-                    collected_usage["completion_tokens"] = output_tokens
-
-                    for sse_line in close_text_block():
-                        yield sse_line
-
-                    final_output = final_response.get("output") or []
-                    if isinstance(final_output, list):
-                        if not saw_text_delta:
-                            text_content = []
-                            for item in final_output:
-                                if not isinstance(item, dict) or str(item.get("type", "") or "") != "message":
-                                    continue
-                                for part in item.get("content") or []:
-                                    if isinstance(part, dict) and str(part.get("type", "") or "") in {
-                                        "output_text", "text", "input_text",
-                                    }:
-                                        text_value = str(part.get("text", "") or "")
-                                        if text_value:
-                                            text_content.append(text_value)
-                            if text_content:
-                                for sse_line in open_text_block():
-                                    yield sse_line
-                                joined_text = "".join(text_content)
-                                collector.add_chunk(joined_text)
-                                yield build_client_event(
-                                    "content_block_delta",
-                                    {
-                                        "type": "content_block_delta",
-                                        "index": text_block_index,
-                                        "delta": {
-                                            "type": "text_delta",
-                                            "text": joined_text,
-                                        },
-                                    },
-                                    detail="text_delta",
-                                )
-                                for sse_line in close_text_block():
-                                    yield sse_line
-
-                        for item in final_output:
-                            if not isinstance(item, dict):
-                                continue
-                            item_type = str(item.get("type", "") or "")
-                            if item_type == "reasoning":
-                                for sse_line in emit_reasoning_block(item):
-                                    yield sse_line
-                            elif item_type == "function_call":
-                                for sse_line in close_tool_use_block(item, item.get("arguments")):
-                                    yield sse_line
-
-                    collector.add_chunk(
-                        "",
-                        "tool_use" if saw_tool_use else "end_turn",
-                    )
-                    stream_debug_extra["completed"] = True
-                    stream_debug_extra["stop_reason"] = "tool_use" if saw_tool_use else "end_turn"
-                    stream_debug_extra["saw_tool_use"] = saw_tool_use
-                    yield build_client_event(
-                        "message_delta",
-                        {
-                            "type": "message_delta",
-                            "delta": {
-                                "stop_reason": "tool_use" if saw_tool_use else "end_turn",
-                                "stop_sequence": None,
-                            },
-                            "usage": {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                            },
-                        },
-                        detail="tool_use" if saw_tool_use else "end_turn",
-                    )
-                    yield build_client_event(
-                        "message_stop",
-                        {"type": "message_stop"},
-                        detail="final",
-                    )
-                    completed = True
-                    break
-
-                if payload_type == "error":
-                    saw_error = True
-                    error_message = (
-                        payload.get("error", {}).get("message")
-                        or "Upstream responses error"
-                    )
-
-            if not completed:
-                if saw_error:
-                    raise Exception(error_message or "Upstream responses error")
-                raise Exception("stream closed before response.completed")
+            finally:
+                if not completed:
+                    if saw_error:
+                        raise Exception(error_message or "Upstream responses error")
+                    raise Exception("stream closed before response.completed")
 
             billing_callback(input_tokens, output_tokens, False)
 
@@ -4770,6 +4995,55 @@ class ProxyService:
                 "Connection": "keep-alive",
                 "X-Request-ID": request_id,
             },
+        )
+
+    @staticmethod
+    async def _stream_anthropic_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channels: list[Channel],
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+        conversation_shadow_info: Optional[dict[str, Any]] = None,
+    ) -> StreamingResponse:
+        """Stream Anthropic request with channel failover and accounting."""
+        use_responses_bridge = ProxyService._should_use_responses_bridge(
+            channels[0],
+            request_data,
+            protocol="anthropic",
+        )
+        if use_responses_bridge:
+            return await ProxyService._stream_anthropic_via_responses_request(
+                db,
+                user,
+                api_key_record,
+                channels[0],
+                unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                client_ip,
+                request_headers=request_headers,
+                conversation_shadow_info=conversation_shadow_info,
+            )
+
+        return await ProxyService._stream_anthropic_passthrough_request(
+            db,
+            user,
+            api_key_record,
+            channels[0],
+            unified_model,
+            request_data,
+            request_id,
+            requested_model,
+            client_ip,
+            request_headers=request_headers,
+            conversation_shadow_info=conversation_shadow_info,
         )
 
     @staticmethod
@@ -4876,7 +5150,7 @@ class ProxyService:
     # ===================================================================
 
     @staticmethod
-    async def _stream_anthropic_request(
+    async def _stream_anthropic_passthrough_request(
         db: Session,
         user: SysUser,
         api_key_record: UserApiKey,

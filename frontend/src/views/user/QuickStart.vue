@@ -424,6 +424,77 @@
               </template>
             </a-alert>
           </a-tab-pane>
+
+          <a-tab-pane key="images" tab="Image Generations" force-render>
+            <div class="protocol-header">
+              <div class="protocol-info">
+                <h3>OpenAI Compatible Image Generation</h3>
+                <p>用于 Gemini 生图模型，返回 Base64 图片，不支持 stream</p>
+              </div>
+            </div>
+            <div class="info-box" style="margin-bottom: 16px;">
+              <div class="info-row">
+                <span class="info-label">端点</span>
+                <div class="info-value">
+                  <code>{{ relayOpenaiBase }}/images/generations</code>
+                  <br />
+                  <code>{{ relayBase }}/v1/image/created</code>
+                </div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">认证</span>
+                <div class="info-value"><code>Authorization: Bearer sk-xxxx</code></div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">请求字段</span>
+                <div class="info-value"><code>model</code>、<code>prompt</code>、<code>size</code>/<code>aspect_ratio</code>、<code>response_format=b64_json</code>、<code>n=1</code></div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">返回格式</span>
+                <div class="info-value"><code>data[].b64_json</code> + <code>mime_type</code> + <code>usage.image_credits_charged</code></div>
+              </div>
+              <div class="info-row">
+                <span class="info-label">计费说明</span>
+                <div class="info-value">扣图片积分，不扣美元余额；不同模型倍率不同</div>
+              </div>
+            </div>
+
+            <a-tabs size="small" class="code-example-tabs">
+              <a-tab-pane key="curl-images" tab="cURL">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>cURL</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(imageCurlCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ imageCurlCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="python-images" tab="Python">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Python</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(imagePythonCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ imagePythonCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+              <a-tab-pane key="node-images" tab="Node.js">
+                <div class="code-section">
+                  <div class="code-title">
+                    <span>Node.js</span>
+                    <a-button type="link" size="small" icon="copy" @click="copyText(imageNodeCode)">复制</a-button>
+                  </div>
+                  <pre class="code-block"><code>{{ imageNodeCode }}</code></pre>
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+
+            <a-alert type="warning" show-icon style="margin-top: 12px;">
+              <template slot="message">
+                <span>图片接口仅支持非流式调用。请在用户账单页或管理员日志页查看图片积分消耗。</span>
+              </template>
+            </a-alert>
+          </a-tab-pane>
         </a-tabs>
       </div>
     </a-card>
@@ -710,6 +781,58 @@ ws.on('message', (data) => {
       {"role": "user", "content": "Hello!"}
     ]
   }'`
+    },
+    imageCurlCode() {
+      return `curl -X POST "${this.relayOpenaiBase}/images/generations" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gemini-3.1-flash-image-preview",
+    "prompt": "生成一张赛博朋克风格的城市夜景",
+    "response_format": "b64_json",
+    "aspect_ratio": "1:1",
+    "n": 1
+  }'`
+    },
+    imagePythonCode() {
+      return `import requests
+
+url = "${this.relayOpenaiBase}/images/generations"
+headers = {
+    "Authorization": "Bearer sk-你的密钥",
+    "Content-Type": "application/json"
+}
+payload = {
+    "model": "gemini-3.1-flash-image-preview",
+    "prompt": "生成一张赛博朋克风格的城市夜景",
+    "response_format": "b64_json",
+    "aspect_ratio": "1:1",
+    "n": 1
+}
+
+resp = requests.post(url, headers=headers, json=payload)
+body = resp.json()
+print(body["usage"]["image_credits_charged"])
+print(body["data"][0]["b64_json"][:64])`
+    },
+    imageNodeCode() {
+      return `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "sk-你的密钥",
+  baseURL: "${this.relayOpenaiBase}",
+});
+
+const result = await client.images.generate({
+  model: "gemini-3.1-flash-image-preview",
+  prompt: "生成一张赛博朋克风格的城市夜景",
+  response_format: "b64_json",
+  aspect_ratio: "1:1",
+  n: 1,
+});
+
+console.log(result.usage.image_credits_charged);
+console.log(result.data[0].b64_json.slice(0, 64));`
     },
     curlModels() {
       return `curl ${this.relayOpenaiBase}/models \\

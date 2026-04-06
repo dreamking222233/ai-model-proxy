@@ -48,6 +48,22 @@ export function deductBalance(data) {
   })
 }
 
+export function rechargeImageCredits(data) {
+  return request({
+    url: '/api/admin/users/image-credits/recharge',
+    method: 'post',
+    data
+  })
+}
+
+export function deductImageCredits(data) {
+  return request({
+    url: '/api/admin/users/image-credits/deduct',
+    method: 'post',
+    data
+  })
+}
+
 // ==================== User API Keys ====================
 
 export function listApiKeys() {

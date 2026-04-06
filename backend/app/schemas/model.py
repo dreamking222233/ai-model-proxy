@@ -21,6 +21,8 @@ class UnifiedModelCreate(BaseModel):
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
     output_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
+    billing_type: str = Field(default="token", max_length=20)
+    image_credit_multiplier: int = Field(default=1, ge=1)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
 
@@ -35,6 +37,8 @@ class UnifiedModelUpdate(BaseModel):
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Optional[Decimal] = Field(None, ge=0)
     output_price_per_million: Optional[Decimal] = Field(None, ge=0)
+    billing_type: Optional[str] = Field(None, max_length=20)
+    image_credit_multiplier: Optional[int] = Field(None, ge=1)
     enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
 
@@ -50,6 +54,8 @@ class UnifiedModelInfo(BaseModel):
     max_tokens: Optional[int] = None
     input_price_per_million: Decimal
     output_price_per_million: Decimal
+    billing_type: str
+    image_credit_multiplier: int
     enabled: int
     description: Optional[str] = None
     created_at: Optional[datetime] = None

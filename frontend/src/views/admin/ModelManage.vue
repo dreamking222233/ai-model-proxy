@@ -31,6 +31,12 @@
             <a-tag>{{ text || '-' }}</a-tag>
           </template>
 
+          <template slot="billingType" slot-scope="text, record">
+            <a-tag v-if="text === 'image_credit'" color="gold">图片积分 x{{ record.image_credit_multiplier || 1 }}</a-tag>
+            <a-tag v-else-if="text === 'free'" color="green">免费</a-tag>
+            <a-tag v-else color="blue">Token</a-tag>
+          </template>
+
           <template slot="enabled" slot-scope="text">
             <a-tag :color="text ? 'green' : 'red'">
               {{ text ? '已启用' : '已禁用' }}
@@ -175,7 +181,18 @@
           <a-select v-model="modelForm.protocol_type" placeholder="Select protocol">
             <a-select-option value="openai">OpenAI</a-select-option>
             <a-select-option value="anthropic">Anthropic</a-select-option>
+            <a-select-option value="google">Google</a-select-option>
           </a-select>
+        </a-form-item>
+        <a-form-item label="计费类型">
+          <a-select v-model="modelForm.billing_type" placeholder="Select billing type">
+            <a-select-option value="token">按 Token 计费</a-select-option>
+            <a-select-option value="image_credit">按图片积分计费</a-select-option>
+            <a-select-option value="free">免费</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="图片积分倍率">
+          <a-input-number v-model="modelForm.image_credit_multiplier" :min="1" :step="1" style="width: 100%;" />
         </a-form-item>
         <a-row :gutter="16">
           <a-col :span="12">
@@ -311,6 +328,7 @@ export default {
         { title: '显示名称', dataIndex: 'display_name', key: 'display_name' },
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 100, scopedSlots: { customRender: 'type' } },
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
+        { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
         { title: '输出价格', dataIndex: 'output_price_per_million', key: 'outputPrice', width: 110, scopedSlots: { customRender: 'outputPrice' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
@@ -328,6 +346,8 @@ export default {
         display_name: '',
         model_type: 'chat',
         protocol_type: 'openai',
+        billing_type: 'token',
+        image_credit_multiplier: 1,
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
@@ -450,6 +470,8 @@ export default {
         display_name: '',
         model_type: 'chat',
         protocol_type: 'openai',
+        billing_type: 'token',
+        image_credit_multiplier: 1,
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
@@ -465,6 +487,8 @@ export default {
         display_name: record.display_name || '',
         model_type: record.model_type || 'chat',
         protocol_type: record.protocol_type || 'openai',
+        billing_type: record.billing_type || 'token',
+        image_credit_multiplier: record.image_credit_multiplier || 1,
         input_price_per_million: record.input_price_per_million || 0,
         output_price_per_million: record.output_price_per_million || 0,
         max_tokens: record.max_tokens || 4096,

@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.user import SysUser
-from app.models.log import UserBalance
+from app.models.log import UserBalance, UserImageBalance
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.exceptions import ServiceException
 from sqlalchemy import or_
@@ -55,6 +55,7 @@ class AuthService:
             total_consumed=0,
         )
         db.add(balance)
+        db.add(UserImageBalance(user_id=user.id, balance=0, total_recharged=0, total_consumed=0))
         db.commit()
         db.refresh(user)
 
@@ -127,8 +128,9 @@ class AuthService:
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-        # Fetch balance
+        # Fetch balances
         balance = db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+        image_balance = db.query(UserImageBalance).filter(UserImageBalance.user_id == user_id).first()
 
         # Calculate total tokens from request logs
         total_tokens = db.query(
@@ -147,6 +149,9 @@ class AuthService:
             "balance": float(balance.balance) if balance else 0,
             "total_consumed": float(balance.total_consumed) if balance else 0,
             "total_recharged": float(balance.total_recharged) if balance else 0,
+            "image_credit_balance": int(image_balance.balance) if image_balance else 0,
+            "image_credit_total_consumed": int(image_balance.total_consumed) if image_balance else 0,
+            "image_credit_total_recharged": int(image_balance.total_recharged) if image_balance else 0,
             "total_tokens": int(total_tokens),
         }
 
@@ -161,6 +166,7 @@ class AuthService:
         result = []
         for u in users:
             bal = db.query(UserBalance).filter(UserBalance.user_id == u.id).first()
+            image_bal = db.query(UserImageBalance).filter(UserImageBalance.user_id == u.id).first()
             result.append({
                 "id": u.id, "username": u.username, "email": u.email,
                 "role": u.role, "status": u.status, "avatar": u.avatar,
@@ -168,6 +174,7 @@ class AuthService:
                 "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "balance": float(bal.balance) if bal else 0,
+                "image_credit_balance": int(image_bal.balance) if image_bal else 0,
                 "subscription_type": u.subscription_type,
                 "subscription_expires_at": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
             })

@@ -37,6 +37,7 @@ from app.models.log import (
     UserSubscription,
 )
 from app.services.model_service import ModelService
+from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.conversation_shadow_service import ConversationShadowService
@@ -6130,7 +6131,9 @@ class ProxyService:
             headers.setdefault("anthropic-version", "2023-06-01")
 
         # Set authentication header based on channel configuration
-        if auth_header_type == "authorization":
+        if protocol_type == "google" and auth_header_type in {"x-goog-api-key", "x-api-key"}:
+            headers["x-goog-api-key"] = channel.api_key
+        elif auth_header_type == "authorization":
             headers["Authorization"] = f"Bearer {channel.api_key}"
         elif protocol_type == "openai" and auth_header_type == "x-api-key":
             # Existing records may still hold the migration default ``x-api-key``.
@@ -6350,10 +6353,14 @@ class ProxyService:
                 requested_model=requested_model,
                 actual_model=actual_model or unified_model.model_name,
                 protocol_type=channel.protocol_type,
+                request_type="chat",
+                billing_type="subscription" if billing_mode == "subscription" else "token",
                 is_stream=1 if is_stream else 0,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
+                image_credits_charged=0,
+                image_count=0,
                 response_time_ms=response_time_ms,
                 cache_status=cache_log_fields["cache_status"],
                 cache_hit_segments=cache_log_fields["cache_hit_segments"],
@@ -6426,6 +6433,10 @@ class ProxyService:
         channel: Channel | None = None,
         response_time_ms: Optional[int] = None,
         cache_info: Optional[dict[str, Any]] = None,
+        request_type: str = "chat",
+        billing_type: str = "token",
+        image_credits_charged: int = 0,
+        image_count: int = 0,
     ) -> None:
         """Log a failed request without deducting balance."""
         try:
@@ -6439,10 +6450,14 @@ class ProxyService:
                 requested_model=requested_model,
                 actual_model=None,
                 protocol_type=channel.protocol_type if channel else None,
+                request_type=request_type,
+                billing_type=billing_type,
                 is_stream=1 if is_stream else 0,
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
+                image_credits_charged=int(image_credits_charged or 0),
+                image_count=int(image_count or 0),
                 response_time_ms=response_time_ms,
                 cache_status=cache_log_fields["cache_status"],
                 cache_hit_segments=cache_log_fields["cache_hit_segments"],
@@ -6553,3 +6568,299 @@ class ProxyService:
         except Exception as e:
             logger.warning("Failed to validate request length: %s", e)
             # Don't block request if validation fails
+
+    # ===================================================================
+    # Image generation request handling
+    # ===================================================================
+
+    @staticmethod
+    def _map_image_size_to_aspect_ratio(size_value: Any) -> Optional[str]:
+        if not size_value:
+            return None
+        mapping = {
+            "1024x1024": "1:1",
+            "1536x1024": "3:2",
+            "1024x1536": "2:3",
+            "1792x1024": "16:9",
+            "1024x1792": "9:16",
+        }
+        return mapping.get(str(size_value).lower())
+
+    @staticmethod
+    def _build_google_image_payload(request_data: dict) -> dict:
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        aspect_ratio = request_data.get("aspect_ratio") or ProxyService._map_image_size_to_aspect_ratio(
+            request_data.get("size")
+        )
+        image_config: dict[str, Any] = {}
+        if aspect_ratio:
+            image_config["aspectRatio"] = aspect_ratio
+
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+        if image_config:
+            payload["generationConfig"]["imageConfig"] = image_config
+        return payload
+
+    @staticmethod
+    def _parse_google_image_response(response_body: dict) -> tuple[list[dict], Optional[str]]:
+        images: list[dict] = []
+        text_output: list[str] = []
+        for candidate in response_body.get("candidates") or []:
+            content = candidate.get("content") or {}
+            for part in content.get("parts") or []:
+                inline = part.get("inlineData") or {}
+                data = inline.get("data")
+                if data:
+                    images.append({
+                        "b64_json": data,
+                        "mime_type": inline.get("mimeType") or "image/png",
+                    })
+                elif part.get("text"):
+                    text_output.append(str(part.get("text")))
+        return images, "\n".join(text_output).strip() or None
+
+    @staticmethod
+    def _deduct_image_credits_and_log(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        unified_model: UnifiedModel,
+        request_id: str,
+        requested_model: str,
+        actual_model: str,
+        channel: Channel,
+        client_ip: str,
+        response_time_ms: int,
+        image_count: int = 1,
+    ) -> None:
+        try:
+            charged_credits = int(unified_model.image_credit_multiplier or 1)
+            ImageCreditService.deduct_for_request(
+                db,
+                user_id=user.id,
+                request_id=request_id,
+                model_name=requested_model,
+                amount=charged_credits,
+                multiplier=charged_credits,
+                remark=f"Image generation: {image_count} image(s)",
+            )
+            req_log = RequestLog(
+                request_id=request_id,
+                user_id=user.id,
+                user_api_key_id=api_key_record.id,
+                channel_id=channel.id,
+                channel_name=channel.name,
+                requested_model=requested_model,
+                actual_model=actual_model,
+                protocol_type=channel.protocol_type,
+                request_type="image_generation",
+                billing_type="image_credit",
+                is_stream=0,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                image_credits_charged=charged_credits,
+                image_count=image_count,
+                response_time_ms=response_time_ms,
+                status="success",
+                error_message=None,
+                client_ip=client_ip,
+            )
+            db.add(req_log)
+            api_key_record.total_requests += 1
+            api_key_record.last_used_at = datetime.utcnow()
+            db.commit()
+        except Exception as e:
+            logger.error("Image credit deduction / logging failed: %s", e)
+            db.rollback()
+
+    @staticmethod
+    async def _non_stream_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        start_time = time.time()
+        base_url = channel.base_url.rstrip("/")
+        url = f"{base_url}/v1beta/models/{upstream_model_name}:generateContent"
+        headers = ProxyService._build_headers(channel, "google", request_headers=request_headers)
+        payload = ProxyService._build_google_image_payload(request_data)
+
+        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                body_text = response.text[:1000]
+                raise ServiceException(
+                    400 if 400 <= response.status_code < 500 else 503,
+                    f"Google image generation failed: HTTP {response.status_code} {body_text}",
+                    "GOOGLE_IMAGE_GENERATION_FAILED",
+                )
+            response_body = response.json()
+
+        images, extra_text = ProxyService._parse_google_image_response(response_body)
+        if not images:
+            raise ServiceException(
+                503,
+                "Google image generation returned no image data",
+                "GOOGLE_IMAGE_GENERATION_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+        ProxyService._deduct_image_credits_and_log(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            upstream_model_name,
+            channel,
+            client_ip,
+            response_time_ms,
+            image_count=len(images),
+        )
+
+        response_payload = {
+            "created": int(time.time()),
+            "model": requested_model,
+            "request_id": request_id,
+            "data": images,
+            "usage": {
+                "billing_type": "image_credit",
+                "image_credits_charged": int(unified_model.image_credit_multiplier or 1),
+                "model_multiplier": int(unified_model.image_credit_multiplier or 1),
+            },
+        }
+        if extra_text:
+            response_payload["text"] = extra_text
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def handle_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_data: dict,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ):
+        request_id = str(uuid.uuid4())
+        requested_model = str(request_data.get("model", "") or "")
+        if not requested_model:
+            raise ServiceException(400, "Missing required field: model", "IMAGE_MODEL_NOT_FOUND")
+
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        if not prompt:
+            raise ServiceException(400, "Missing required field: prompt", "INVALID_IMAGE_PROMPT")
+        if bool(request_data.get("stream")):
+            raise ServiceException(400, "Image generation does not support stream", "IMAGE_STREAM_NOT_SUPPORTED")
+        if request_data.get("response_format") not in (None, "b64_json"):
+            raise ServiceException(
+                400,
+                "Only b64_json response_format is supported",
+                "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
+            )
+        if int(request_data.get("n", 1) or 1) != 1:
+            raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
+
+        unified_model = ModelService.resolve_model(db, requested_model)
+        if not unified_model:
+            raise ServiceException(404, f"Model '{requested_model}' not found", "IMAGE_MODEL_NOT_FOUND")
+        if str(unified_model.model_type or "") != "image":
+            raise ServiceException(400, "Requested model is not an image model", "IMAGE_MODEL_NOT_SUPPORTED")
+        if str(unified_model.billing_type or "token") != "image_credit":
+            raise ServiceException(
+                400,
+                "Requested model is not configured for image credit billing",
+                "IMAGE_MODEL_NOT_SUPPORTED",
+            )
+
+        image_credit_cost = int(unified_model.image_credit_multiplier or 1)
+        ImageCreditService.check_balance(db, user.id, image_credit_cost)
+
+        channels = ModelService.get_available_channels(db, unified_model.id)
+        if not channels:
+            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+
+        last_error: Exception | None = None
+        request_error: ServiceException | None = None
+        for channel, actual_model_name in channels:
+            try:
+                upstream_model_name = actual_model_name or requested_model
+                return await ProxyService._non_stream_image_request(
+                    db,
+                    user,
+                    api_key_record,
+                    channel,
+                    unified_model,
+                    request_data,
+                    request_id,
+                    requested_model,
+                    upstream_model_name,
+                    client_ip,
+                    request_headers=request_headers,
+                )
+            except ServiceException as exc:
+                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG", "GOOGLE_IMAGE_GENERATION_FAILED"}:
+                    request_error = exc
+                    logger.info(
+                        "Image channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name,
+                        channel.id,
+                        exc.detail,
+                    )
+                    continue
+                raise
+            except Exception as exc:
+                mapped_request_error = ProxyService._map_upstream_request_error(exc)
+                if mapped_request_error:
+                    request_error = mapped_request_error
+                    logger.info(
+                        "Image channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name,
+                        channel.id,
+                        mapped_request_error.detail,
+                    )
+                    continue
+                last_error = exc
+                logger.warning(
+                    "Image channel %s (%d) failed for model %s: %s",
+                    channel.name,
+                    channel.id,
+                    actual_model_name,
+                    exc,
+                )
+                ProxyService._record_channel_failure(db, channel)
+                continue
+
+        error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
+        ProxyService._log_failed_request(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            requested_model,
+            client_ip,
+            False,
+            error_detail,
+            request_type="image_generation",
+            billing_type="image_credit",
+            image_credits_charged=image_credit_cost,
+            image_count=1,
+        )
+        if request_error:
+            raise request_error
+        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")

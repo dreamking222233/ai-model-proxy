@@ -76,6 +76,13 @@
               </div>
               <div
                 class="filter-tag"
+                :class="{ active: selectedBilling === 'image_credit' }"
+                @click="selectedBilling = selectedBilling === 'image_credit' ? null : 'image_credit'"
+              >
+                <span>按图片积分计费</span>
+              </div>
+              <div
+                class="filter-tag"
                 :class="{ active: selectedBilling === 'free' }"
                 @click="selectedBilling = selectedBilling === 'free' ? null : 'free'"
               >
@@ -123,19 +130,29 @@
               <div class="card-center">
                 <div class="card-name">{{ model.model_name }}</div>
                 <div class="card-prices">
-                  <span class="price-tag input">
-                    <span class="price-label">输入</span>
-                    ${{ model.input_price }} / 1M tokens
-                  </span>
-                  <span class="price-tag output">
-                    <span class="price-label">输出</span>
-                    ${{ model.output_price }} / 1M tokens
-                  </span>
+                  <template v-if="model.billing_type === 'image_credit'">
+                    <span class="price-tag image-credit">
+                      <span class="price-label">图片计费</span>
+                      {{ getImageCreditText(model) }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="price-tag input">
+                      <span class="price-label">输入</span>
+                      ${{ model.input_price }} / 1M tokens
+                    </span>
+                    <span class="price-tag output">
+                      <span class="price-label">输出</span>
+                      ${{ model.output_price }} / 1M tokens
+                    </span>
+                  </template>
                 </div>
                 <div class="card-tags">
-                  <a-tag v-if="model.input_price > 0 || model.output_price > 0" color="blue" size="small">按Token计费</a-tag>
+                  <a-tag v-if="model.billing_type === 'image_credit'" color="gold" size="small">按图片积分计费</a-tag>
+                  <a-tag v-else-if="model.billing_type === 'token' || model.input_price > 0 || model.output_price > 0" color="blue" size="small">按Token计费</a-tag>
                   <a-tag v-else color="green" size="small">免费</a-tag>
-                  <a-tag v-if="model.max_tokens" size="small">{{ formatTokens(model.max_tokens) }} tokens</a-tag>
+                  <a-tag v-if="model.model_type === 'image'" color="purple" size="small">图像生成</a-tag>
+                  <a-tag v-else-if="model.max_tokens" size="small">{{ formatTokens(model.max_tokens) }} tokens</a-tag>
                 </div>
               </div>
               <div class="card-right">
@@ -245,9 +262,11 @@ export default {
         list = list.filter(m => (m.model_type || 'chat') === this.selectedType)
       }
       if (this.selectedBilling === 'token') {
-        list = list.filter(m => m.input_price > 0 || m.output_price > 0)
+        list = list.filter(m => (m.billing_type || 'token') === 'token')
+      } else if (this.selectedBilling === 'image_credit') {
+        list = list.filter(m => m.billing_type === 'image_credit')
       } else if (this.selectedBilling === 'free') {
-        list = list.filter(m => m.input_price === 0 && m.output_price === 0)
+        list = list.filter(m => (m.billing_type || 'token') === 'free')
       }
       return list
     }
@@ -286,6 +305,10 @@ export default {
       if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M'
       if (n >= 1000) return (n / 1000).toFixed(0) + 'K'
       return n
+    },
+    getImageCreditText(model) {
+      const credits = Number(model.image_credit_multiplier || 1)
+      return `每次 ${credits} 图片积分`
     },
     copyText(text) {
       if (navigator.clipboard) {

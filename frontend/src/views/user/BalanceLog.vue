@@ -51,9 +51,20 @@
           <a-tag class="model-tag">{{ text }}</a-tag>
         </template>
 
-        <!-- Token + 缓存信息 -->
+        <!-- 用量 / 图片积分 -->
         <template slot="col_tokens" slot-scope="text, record">
-          <div class="token-cell">
+          <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
+            <div class="image-credit-row">
+              <span class="image-credit-main">{{ formatNumber(record.image_credits_charged || 0) }} 图片积分</span>
+              <a-tag color="purple">{{ record.image_count || 1 }} 张图片</a-tag>
+            </div>
+            <div class="cache-detail">
+              <span class="cache-chip cache-chip--token">图片生成</span>
+              <span class="cache-chip cache-chip--hit">非流式</span>
+              <span class="cache-chip cache-chip--miss">计费 {{ getBillingTypeText(record) }}</span>
+            </div>
+          </div>
+          <div v-else class="token-cell">
             <div class="token-bar">
               <div class="token-bar-segment token-bar-segment--input" :style="{ width: getTokenPercent(record.input_tokens, record.total_tokens) }"></div>
               <div class="token-bar-segment token-bar-segment--output" :style="{ width: getTokenPercent(record.output_tokens, record.total_tokens) }"></div>
@@ -74,14 +85,12 @@
                 <span class="token-value">{{ formatNumber(record.total_tokens || 0) }}</span>
               </span>
             </div>
-            <!-- 上游 Prompt Cache -->
             <div v-if="hasPromptCacheUsage(record)" class="cache-detail">
               <span class="cache-chip cache-chip--hit">{{ getPromptCacheStatusText(record) }}</span>
               <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.upstream_cache_read_input_tokens || 0) }}</span>
               <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
               <span class="cache-chip cache-chip--token">实入 {{ formatNumber(record.upstream_input_tokens || 0) }} tok</span>
             </div>
-            <!-- 内部缓存 -->
             <div v-else-if="hasCacheSummary(record)" class="cache-detail">
               <span class="cache-chip cache-chip--token">内部缓存</span>
               <span class="cache-chip cache-chip--hit">{{ record.cache_status }}</span>
@@ -89,7 +98,6 @@
               <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.cache_miss_segments || 0) }} 段</span>
               <span class="cache-chip cache-chip--token">复用 ~{{ formatNumber(record.cache_reused_tokens || 0) }} tok</span>
             </div>
-            <!-- 会话压缩 -->
             <div v-if="hasConversationShadow(record)" class="cache-detail">
               <span class="cache-chip cache-chip--token">会话压缩</span>
               <span class="cache-chip cache-chip--hit">{{ getCompressionStatusText(record) }}</span>
@@ -99,9 +107,10 @@
           </div>
         </template>
 
-        <!-- 费用 -->
-        <template slot="col_cost" slot-scope="text">
-          <span v-if="text" class="total-cost">-${{ Math.abs(text || 0).toFixed(6) }}</span>
+        <!-- 费用 / 计费 -->
+        <template slot="col_cost" slot-scope="text, record">
+          <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(record.image_credits_charged || 0) }} 积分</span>
+          <span v-else-if="text" class="total-cost">-${{ Math.abs(text || 0).toFixed(6) }}</span>
           <span v-else class="text-muted">-</span>
         </template>
 
@@ -152,16 +161,28 @@
           </span>
           <span v-else class="text-muted">-</span>
         </a-descriptions-item>
-        <a-descriptions-item label="Token 用量">
-          <span>输入 {{ formatNumber(sel.input_tokens || 0) }}</span>
-          &nbsp;/&nbsp;
-          <span>输出 {{ formatNumber(sel.output_tokens || 0) }}</span>
-          &nbsp;/&nbsp;
-          <strong>合计 {{ formatNumber(sel.total_tokens || 0) }}</strong>
+        <a-descriptions-item :label="isImageRequest(sel) ? '图片计费' : 'Token 用量'">
+          <template v-if="isImageRequest(sel)">
+            <span>{{ formatNumber(sel.image_credits_charged || 0) }} 图片积分</span>
+            &nbsp;/&nbsp;
+            <strong>{{ sel.image_count || 1 }} 张图片</strong>
+          </template>
+          <template v-else>
+            <span>输入 {{ formatNumber(sel.input_tokens || 0) }}</span>
+            &nbsp;/&nbsp;
+            <span>输出 {{ formatNumber(sel.output_tokens || 0) }}</span>
+            &nbsp;/&nbsp;
+            <strong>合计 {{ formatNumber(sel.total_tokens || 0) }}</strong>
+          </template>
         </a-descriptions-item>
-        <a-descriptions-item label="费用">
-          <span v-if="sel.total_cost" class="total-cost">-${{ Math.abs(sel.total_cost).toFixed(6) }}</span>
-          <span v-else class="text-muted">-</span>
+        <a-descriptions-item :label="isImageRequest(sel) ? '计费方式' : '费用'">
+          <template v-if="isImageRequest(sel)">
+            <span class="image-credit-cost">{{ getBillingTypeText(sel) }}</span>
+          </template>
+          <template v-else>
+            <span v-if="sel.total_cost" class="total-cost">-${{ Math.abs(sel.total_cost).toFixed(6) }}</span>
+            <span v-else class="text-muted">-</span>
+          </template>
         </a-descriptions-item>
         <a-descriptions-item label="请求时间">{{ formatTime(sel.created_at) }}</a-descriptions-item>
         <a-descriptions-item v-if="hasPromptCacheUsage(sel)" label="上游 Prompt Cache">
@@ -234,8 +255,8 @@ export default {
       },
       columns: [
         { title: '模型', dataIndex: 'requested_model', key: 'model', width: 170, scopedSlots: { customRender: 'col_model' } },
-        { title: 'Token 用量', dataIndex: 'total_tokens', key: 'tokens', width: 300, scopedSlots: { customRender: 'col_tokens' } },
-        { title: '费用', dataIndex: 'total_cost', key: 'cost', width: 120, align: 'right', scopedSlots: { customRender: 'col_cost' } },
+        { title: '用量', dataIndex: 'total_tokens', key: 'tokens', width: 300, scopedSlots: { customRender: 'col_tokens' } },
+        { title: '计费', dataIndex: 'total_cost', key: 'cost', width: 120, align: 'right', scopedSlots: { customRender: 'col_cost' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 80, align: 'center', scopedSlots: { customRender: 'col_status' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'rt', width: 110, align: 'right', scopedSlots: { customRender: 'col_rt' } },
         { title: '时间', dataIndex: 'created_at', key: 'time', width: 160, scopedSlots: { customRender: 'col_time' } }
@@ -292,6 +313,20 @@ export default {
         .catch(() => this.$message.error('复制失败'))
     },
     // ---- helpers ----
+    isImageRequest(record) {
+      return record && (record.request_type === 'image_generation' || record.billing_type === 'image_credit')
+    },
+    getBillingTypeText(record) {
+      if (this.isImageRequest(record)) {
+        return `${this.formatNumber(record.image_credits_charged || 0)} 图片积分`
+      }
+      const map = {
+        token: '按 Token 计费',
+        subscription: '套餐计费',
+        free: '免费'
+      }
+      return map[String(record && record.billing_type || 'token')] || '按 Token 计费'
+    },
     getTokenPercent(part, total) {
       if (!total || !part) return '0%'
       return Math.round((part / total) * 100) + '%'
@@ -436,6 +471,9 @@ export default {
   }
 
   .total-cost { color: #f5222d; font-weight: 600; font-family: 'SFMono-Regular', Consolas, monospace; }
+  .image-credit-cost { color: #722ed1; font-weight: 600; font-family: 'SFMono-Regular', Consolas, monospace; }
+  .image-credit-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .image-credit-main { color: #722ed1; font-weight: 600; }
   .status-cell { cursor: pointer; }
   .response-time { font-family: 'SFMono-Regular', Consolas, monospace;
     &--fast   { color: #52c41a; }

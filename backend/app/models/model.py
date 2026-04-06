@@ -20,6 +20,8 @@ class UnifiedModel(Base):
     max_tokens = Column(Integer, nullable=True)
     input_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Input price per million tokens (USD)")
     output_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Output price per million tokens (USD)")
+    billing_type = Column(String(20), nullable=False, default="token", comment="Billing type: token/image_credit/free")
+    image_credit_multiplier = Column(Integer, nullable=False, default=1, comment="Image credits consumed per request")
     enabled = Column(SmallInteger, nullable=False, default=1)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())

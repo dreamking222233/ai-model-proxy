@@ -83,7 +83,8 @@ CREATE TABLE `channel` (
     `name` VARCHAR(128) NOT NULL,
     `base_url` VARCHAR(512) NOT NULL,
     `api_key` TEXT NOT NULL COMMENT '加密存储的API Key',
-    `protocol_type` ENUM('openai', 'anthropic') NOT NULL DEFAULT 'openai',
+    `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
+    `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `is_healthy` TINYINT NOT NULL DEFAULT 1,
@@ -111,10 +112,12 @@ CREATE TABLE `unified_model` (
     `model_name` VARCHAR(128) NOT NULL COMMENT '统一模型名称,用户请求时使用',
     `display_name` VARCHAR(128) DEFAULT NULL,
     `model_type` ENUM('chat', 'embedding', 'image') NOT NULL DEFAULT 'chat',
-    `protocol_type` ENUM('openai', 'anthropic') NOT NULL DEFAULT 'openai',
+    `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
     `max_tokens` INT DEFAULT NULL,
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
     `output_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输出Token单价(美元)',
+    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'token' COMMENT 'token/image_credit/free',
+    `image_credit_multiplier` INT NOT NULL DEFAULT 1 COMMENT '图片请求扣减倍率',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `description` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -189,11 +192,15 @@ CREATE TABLE `request_log` (
     `channel_name` VARCHAR(128) DEFAULT NULL,
     `requested_model` VARCHAR(128) DEFAULT NULL COMMENT '用户请求的模型名',
     `actual_model` VARCHAR(128) DEFAULT NULL COMMENT '实际发送的模型名',
-    `protocol_type` ENUM('openai', 'anthropic') DEFAULT NULL,
+    `protocol_type` ENUM('openai', 'anthropic', 'google') DEFAULT NULL,
+    `request_type` VARCHAR(32) DEFAULT 'chat',
+    `billing_type` VARCHAR(20) DEFAULT 'token',
     `is_stream` TINYINT DEFAULT 0,
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
+    `image_credits_charged` INT DEFAULT 0,
+    `image_count` INT DEFAULT 0,
     `response_time_ms` INT DEFAULT NULL,
     `cache_status` VARCHAR(20) DEFAULT NULL COMMENT 'Request body cache status',
     `cache_hit_segments` INT NOT NULL DEFAULT 0,
@@ -314,6 +321,21 @@ CREATE TABLE `user_balance` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户余额表';
 
 -- ============================================================
+-- 11.1 user_image_balance - 用户图片积分余额表
+-- ============================================================
+CREATE TABLE `user_image_balance` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `balance` INT NOT NULL DEFAULT 0 COMMENT '图片积分余额',
+    `total_recharged` INT NOT NULL DEFAULT 0 COMMENT '总充值图片积分',
+    `total_consumed` INT NOT NULL DEFAULT 0 COMMENT '总消耗图片积分',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_image_balance_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户图片积分余额表';
+
+-- ============================================================
 -- 12. consumption_record - 消费记录表
 -- ============================================================
 CREATE TABLE `consumption_record` (
@@ -340,6 +362,29 @@ CREATE TABLE `consumption_record` (
     KEY `idx_request_id` (`request_id`),
     KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
+
+-- ============================================================
+-- 12.1 image_credit_record - 图片积分流水表
+-- ============================================================
+CREATE TABLE `image_credit_record` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `request_id` VARCHAR(36) DEFAULT NULL,
+    `model_name` VARCHAR(128) DEFAULT NULL,
+    `change_amount` INT NOT NULL COMMENT '正数=充值，负数=扣减',
+    `balance_before` INT NOT NULL DEFAULT 0,
+    `balance_after` INT NOT NULL DEFAULT 0,
+    `multiplier` INT NOT NULL DEFAULT 1,
+    `action_type` VARCHAR(20) NOT NULL DEFAULT 'request' COMMENT 'request/recharge/deduct',
+    `operator_id` BIGINT UNSIGNED DEFAULT NULL,
+    `remark` VARCHAR(255) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_image_credit_user_id` (`user_id`),
+    KEY `idx_image_credit_request_id` (`request_id`),
+    KEY `idx_image_credit_operator_id` (`operator_id`),
+    KEY `idx_image_credit_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图片积分流水表';
 
 -- ============================================================
 -- 13. conversation_session - 会话状态表
@@ -402,6 +447,18 @@ VALUES ('admin', 'admin@example.com', '$2b$12$12TrajxYt22jQ3fm6EcpLOmOUZNhL676oo
 -- 管理员余额
 INSERT INTO `user_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
 VALUES (1, 100.000000, 100.000000, 0);
+
+-- 管理员图片积分余额
+INSERT INTO `user_image_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
+VALUES (1, 0, 0, 0);
+
+-- 预置 Gemini 图片模型
+INSERT INTO `unified_model` (
+    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+) VALUES
+('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 图片生成（按图片积分计费）'),
+('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini Pro 图片生成（按图片积分计费）');
 
 -- 预置系统配置
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES

@@ -31,6 +31,8 @@ class ModelService:
             "max_tokens": model.max_tokens,
             "input_price_per_million": float(model.input_price_per_million) if model.input_price_per_million is not None else 0,
             "output_price_per_million": float(model.output_price_per_million) if model.output_price_per_million is not None else 0,
+            "billing_type": model.billing_type,
+            "image_credit_multiplier": int(model.image_credit_multiplier or 1),
             "enabled": model.enabled,
             "description": model.description,
             "created_at": model.created_at.isoformat() if model.created_at else None,
@@ -85,6 +87,8 @@ class ModelService:
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
             output_price_per_million=d.get("output_price_per_million", 0),
+            billing_type=d.get("billing_type", "token"),
+            image_credit_multiplier=d.get("image_credit_multiplier", 1),
             enabled=d.get("enabled", 1),
             description=d.get("description"),
         )
@@ -104,7 +108,7 @@ class ModelService:
         updatable_fields = [
             "model_name", "display_name", "model_type", "protocol_type",
             "max_tokens", "input_price_per_million", "output_price_per_million",
-            "enabled", "description",
+            "billing_type", "image_credit_multiplier", "enabled", "description",
         ]
         for field in updatable_fields:
             value = d.get(field)

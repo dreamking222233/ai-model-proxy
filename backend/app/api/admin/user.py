@@ -5,8 +5,15 @@ from app.core.dependencies import require_admin
 from app.models.user import SysUser
 from app.services.auth_service import AuthService
 from app.services.balance_service import BalanceService
+from app.services.image_credit_service import ImageCreditService
 from app.services.log_service import LogService
-from app.schemas.user import UserUpdate, BalanceRechargeRequest, BalanceDeductRequest
+from app.schemas.user import (
+ UserUpdate,
+ BalanceRechargeRequest,
+ BalanceDeductRequest,
+ ImageCreditRechargeRequest,
+ ImageCreditDeductRequest,
+)
 from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/api/admin/users", tags=["管理-用户管理"])
@@ -82,6 +89,38 @@ def deduct_balance(
         db, current_user.id, current_user.username,
         "deduct", "user_balance", data.user_id,
         f"Deducted {data.amount} from user {data.user_id}" + (f": {data.reason}" if data.reason else ""),
+        None,
+    )
+    return ResponseModel(data=balance)
+
+
+@router.post("/image-credits/recharge", response_model=ResponseModel)
+def recharge_image_credits(
+    data: ImageCreditRechargeRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    balance = ImageCreditService.recharge(db, data.user_id, data.amount, current_user.id, data.reason)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "image_credit_recharge", "user_image_balance", data.user_id,
+        f"Recharged {data.amount} image credits for user {data.user_id}" + (f": {data.reason}" if data.reason else ""),
+        None,
+    )
+    return ResponseModel(data=balance)
+
+
+@router.post("/image-credits/deduct", response_model=ResponseModel)
+def deduct_image_credits(
+    data: ImageCreditDeductRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    balance = ImageCreditService.deduct(db, data.user_id, data.amount, current_user.id, data.reason)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "image_credit_deduct", "user_image_balance", data.user_id,
+        f"Deducted {data.amount} image credits from user {data.user_id}" + (f": {data.reason}" if data.reason else ""),
         None,
     )
     return ResponseModel(data=balance)

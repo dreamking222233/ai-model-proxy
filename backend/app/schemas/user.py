@@ -108,3 +108,19 @@ class BalanceDeductRequest(BaseModel):
     user_id: int
     amount: Decimal = Field(..., gt=0)
     reason: Optional[str] = Field(None, max_length=255)
+
+
+class ImageCreditRechargeRequest(BaseModel):
+    """Admin image credit recharge request."""
+
+    user_id: int
+    amount: int = Field(..., gt=0)
+    reason: Optional[str] = Field(None, max_length=255)
+
+
+class ImageCreditDeductRequest(BaseModel):
+    """Admin image credit deduct request."""
+
+    user_id: int
+    amount: int = Field(..., gt=0)
+    reason: Optional[str] = Field(None, max_length=255)

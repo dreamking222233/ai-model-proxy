@@ -115,8 +115,9 @@
           <span class="channel-cell">{{ text || '-' }}</span>
         </template>
 
-        <template slot="total_cost" slot-scope="text">
-          <span v-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
+        <template slot="total_cost" slot-scope="text, record">
+          <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(record.image_credits_charged || 0) }} 积分</span>
+          <span v-else-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
           <span v-else class="text-muted">$0.00</span>
         </template>
 
@@ -126,7 +127,18 @@
         </template>
 
         <template slot="tokens" slot-scope="text, record">
-          <div class="token-cell">
+          <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
+            <div class="image-credit-row">
+              <span class="image-credit-main">{{ formatNumber(record.image_credits_charged || 0) }} 图片积分</span>
+              <a-tag color="purple">{{ record.image_count || 1 }} 张图片</a-tag>
+            </div>
+            <div class="cache-detail">
+              <span class="cache-chip cache-chip--token">图片生成</span>
+              <span class="cache-chip cache-chip--hit">{{ getRequestTypeText(record) }}</span>
+              <span class="cache-chip cache-chip--miss">{{ getBillingTypeText(record) }}</span>
+            </div>
+          </div>
+          <div v-else class="token-cell">
             <div class="token-bar">
               <div class="token-bar-segment token-bar-segment--input" :style="{ width: getTokenPercent(record.input_tokens, record.total_tokens) }"></div>
               <div class="token-bar-segment token-bar-segment--output" :style="{ width: getTokenPercent(record.output_tokens, record.total_tokens) }"></div>
@@ -186,8 +198,9 @@
           <span v-else class="text-muted">-</span>
         </template>
 
-        <template slot="is_stream" slot-scope="text">
+        <template slot="is_stream" slot-scope="text, record">
           <a-tag v-if="text" color="blue" class="stream-tag">Stream</a-tag>
+          <a-tag v-else-if="isImageRequest(record)" color="purple" class="stream-tag">Non-stream</a-tag>
           <span v-else class="text-muted">-</span>
         </template>
 
@@ -240,6 +253,15 @@
           </a-descriptions-item>
           <a-descriptions-item label="请求时间">
             {{ selectedRecord.created_at ? formatDate(selectedRecord.created_at) : '-' }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="isImageRequest(selectedRecord) ? '图片计费' : '计费方式'">
+            <template v-if="isImageRequest(selectedRecord)">
+              <span class="image-credit-cost">{{ formatNumber(selectedRecord.image_credits_charged || 0) }} 图片积分</span>
+              <span style="margin-left: 8px;">/ {{ selectedRecord.image_count || 1 }} 张</span>
+            </template>
+            <template v-else>
+              <span>{{ getBillingTypeText(selectedRecord) }}</span>
+            </template>
           </a-descriptions-item>
           <a-descriptions-item label="真实上游缓存">
             <div v-if="hasPromptCacheUsage(selectedRecord)" class="modal-cache-summary">
@@ -365,7 +387,7 @@ export default {
           scopedSlots: { customRender: 'channel_name' }
         },
         {
-          title: 'Token 用量',
+          title: '用量',
           key: 'tokens',
           width: 260,
           scopedSlots: { customRender: 'tokens' }
@@ -387,7 +409,7 @@ export default {
           scopedSlots: { customRender: 'responseTime' }
         },
         {
-          title: '花费',
+          title: '计费',
           dataIndex: 'total_cost',
           key: 'total_cost',
           width: 100,
@@ -448,6 +470,28 @@ export default {
         timeout: 'orange'
       }
       return map[status] || 'default'
+    },
+    isImageRequest(record) {
+      return record && (record.request_type === 'image_generation' || record.billing_type === 'image_credit')
+    },
+    getRequestTypeText(record) {
+      const map = {
+        image_generation: '图片请求',
+        responses: 'Responses',
+        chat: '文本请求'
+      }
+      return map[String(record && record.request_type || 'chat')] || String(record && record.request_type || 'chat')
+    },
+    getBillingTypeText(record) {
+      if (this.isImageRequest(record)) {
+        return `${this.formatNumber(record.image_credits_charged || 0)} 图片积分`
+      }
+      const map = {
+        token: '按 Token 计费',
+        subscription: '套餐计费',
+        free: '免费'
+      }
+      return map[String(record && record.billing_type || 'token')] || '按 Token 计费'
     },
     getResponseTimeClass(ms) {
       if (ms <= 1000) return 'response-time--fast'

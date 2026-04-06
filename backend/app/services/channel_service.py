@@ -19,7 +19,14 @@ class ChannelService:
     @staticmethod
     def _resolve_default_auth_header_type(protocol_type: Optional[str]) -> str:
         """Choose the recommended upstream auth header for a protocol."""
-        return "authorization" if (protocol_type or "openai") == "openai" else "x-api-key"
+        protocol = (protocol_type or "openai").lower()
+        if protocol == "openai":
+            return "authorization"
+        if protocol == "anthropic":
+            return "anthropic-api-key"
+        if protocol == "google":
+            return "x-goog-api-key"
+        return "x-api-key"
 
     @staticmethod
     def _channel_to_dict(channel: Channel) -> dict:

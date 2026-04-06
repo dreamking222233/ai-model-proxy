@@ -76,6 +76,10 @@
           <span class="balance-text">$ {{ text != null ? parseFloat(text).toFixed(4) : '0.0000' }}</span>
         </template>
 
+        <template slot="imageCreditBalance" slot-scope="text">
+          <span class="image-credit-text">{{ text != null ? parseInt(text, 10) : 0 }} 积分</span>
+        </template>
+
         <template slot="subscription" slot-scope="text, record">
           <div v-if="record.subscription_type === 'unlimited'" style="font-size: 12px">
             <a-tag color="purple">
@@ -104,11 +108,18 @@
                 <a-icon type="edit" />
               </a-button>
             </a-tooltip>
-            <a-tooltip v-if="record.subscription_type === 'balance'" title="充值">
-              <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record)">
-                <a-icon type="dollar" />
-              </a-button>
-            </a-tooltip>
+            <template v-if="record.subscription_type === 'balance'">
+              <a-tooltip title="余额操作">
+                <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record, 'balance')">
+                  <a-icon type="dollar" />
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="图片积分操作">
+                <a-button type="link" size="small" style="color: #722ed1" @click="handleRecharge(record, 'image_credit')">
+                  <a-icon type="picture" />
+                </a-button>
+              </a-tooltip>
+            </template>
             <a-tooltip v-else title="套餐管理">
               <a-button type="link" size="small" style="color: #722ed1" @click="goToSubscription(record)">
                 <a-icon type="crown" />
@@ -168,7 +179,7 @@
 
     <!-- Recharge Modal -->
     <a-modal
-      :title="rechargeForm.type === 'recharge' ? '余额充值' : '余额扣除'"
+      :title="getRechargeModalTitle()"
       :visible="rechargeModalVisible"
       :confirm-loading="rechargeModalLoading"
       @ok="handleRechargeOk"
@@ -189,17 +200,17 @@
         <a-form-item label="用户">
           <a-input :value="rechargeForm.username" disabled />
         </a-form-item>
-        <a-form-item label="当前余额">
-          <a-input :value="'$ ' + rechargeForm.currentBalance" disabled />
+        <a-form-item :label="rechargeForm.target === 'image_credit' ? '当前图片积分' : '当前余额'">
+          <a-input :value="rechargeForm.target === 'image_credit' ? `${rechargeForm.currentImageCredits} 积分` : '$ ' + rechargeForm.currentBalance" disabled />
         </a-form-item>
-        <a-form-item :label="rechargeForm.type === 'recharge' ? '充值金额 ($)' : '扣除金额 ($)'">
+        <a-form-item :label="getRechargeAmountLabel()">
           <a-input-number
             v-model="rechargeForm.amount"
             :min="0"
-            :step="1"
-            :precision="4"
+            :step="rechargeForm.target === 'image_credit' ? 1 : 1"
+            :precision="rechargeForm.target === 'image_credit' ? 0 : 4"
             style="width: 100%;"
-            :placeholder="rechargeForm.type === 'recharge' ? '请输入充值金额' : '请输入扣除金额'"
+            :placeholder="getRechargeAmountPlaceholder()"
           />
         </a-form-item>
         <a-form-item v-if="rechargeForm.type === 'deduct'" label="扣除原因">
@@ -215,7 +226,15 @@
 </template>
 
 <script>
-import { listUsers, updateUser, toggleUserStatus, rechargeBalance, deductBalance } from '@/api/user'
+import {
+  listUsers,
+  updateUser,
+  toggleUserStatus,
+  rechargeBalance,
+  deductBalance,
+  rechargeImageCredits,
+  deductImageCredits
+} from '@/api/user'
 import { formatDate } from '@/utils'
 
 export default {
@@ -240,6 +259,7 @@ export default {
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
         { title: '计费模式', key: 'subscription', width: 140, scopedSlots: { customRender: 'subscription' } },
         { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, scopedSlots: { customRender: 'balance' } },
+        { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, scopedSlots: { customRender: 'lastLogin' } },
         { title: '操作', key: 'action', width: 160, align: 'center', scopedSlots: { customRender: 'action' } }
       ],
@@ -259,7 +279,9 @@ export default {
       rechargeForm: {
         userId: null,
         username: '',
+        target: 'balance',
         currentBalance: '',
+        currentImageCredits: 0,
         amount: 0,
         type: 'recharge',
         reason: ''
@@ -346,11 +368,25 @@ export default {
         console.error('Failed to toggle user status:', err)
       }
     },
-    handleRecharge(record) {
+    getRechargeModalTitle() {
+      const resource = this.rechargeForm.target === 'image_credit' ? '图片积分' : '余额'
+      return this.rechargeForm.type === 'recharge' ? `${resource}充值` : `${resource}扣除`
+    },
+    getRechargeAmountLabel() {
+      const action = this.rechargeForm.type === 'recharge' ? '充值' : '扣除'
+      return this.rechargeForm.target === 'image_credit' ? `${action}积分` : `${action}金额 ($)`
+    },
+    getRechargeAmountPlaceholder() {
+      const action = this.rechargeForm.type === 'recharge' ? '充值' : '扣除'
+      return this.rechargeForm.target === 'image_credit' ? `请输入${action}积分` : `请输入${action}金额`
+    },
+    handleRecharge(record, target = 'balance') {
       this.rechargeForm = {
         userId: record.id,
         username: record.username,
+        target,
         currentBalance: record.balance != null ? parseFloat(record.balance).toFixed(4) : '0.0000',
+        currentImageCredits: parseInt(record.image_credit_balance || 0, 10),
         amount: 0,
         type: 'recharge',
         reason: ''
@@ -359,23 +395,32 @@ export default {
     },
     async handleRechargeOk() {
       if (!this.rechargeForm.amount || this.rechargeForm.amount <= 0) {
-        this.$message.warning(`请输入有效的${this.rechargeForm.type === 'recharge' ? '充值' : '扣除'}金额`)
+        this.$message.warning(`请输入有效的${this.rechargeForm.type === 'recharge' ? '充值' : '扣除'}${this.rechargeForm.target === 'image_credit' ? '积分' : '金额'}`)
         return
       }
       this.rechargeModalLoading = true
       try {
-        if (this.rechargeForm.type === 'recharge') {
+        const payload = {
+          user_id: this.rechargeForm.userId,
+          amount: this.rechargeForm.amount,
+          reason: this.rechargeForm.reason || undefined
+        }
+        if (this.rechargeForm.target === 'image_credit') {
+          if (this.rechargeForm.type === 'recharge') {
+            await rechargeImageCredits(payload)
+            this.$message.success('图片积分充值成功')
+          } else {
+            await deductImageCredits(payload)
+            this.$message.success('图片积分扣除成功')
+          }
+        } else if (this.rechargeForm.type === 'recharge') {
           await rechargeBalance({
             user_id: this.rechargeForm.userId,
             amount: this.rechargeForm.amount
           })
           this.$message.success('余额充值成功')
         } else {
-          await deductBalance({
-            user_id: this.rechargeForm.userId,
-            amount: this.rechargeForm.amount,
-            reason: this.rechargeForm.reason || undefined
-          })
+          await deductBalance(payload)
           this.$message.success('余额扣除成功')
         }
         this.rechargeModalVisible = false
@@ -501,6 +546,12 @@ export default {
     font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
     font-weight: 500;
     color: #fa8c16;
+  }
+
+  .image-credit-text {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-weight: 600;
+    color: #722ed1;
   }
 
   .time-text {

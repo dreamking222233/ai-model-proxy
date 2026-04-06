@@ -36,10 +36,14 @@ class RequestLog(Base):
     requested_model = Column(String(128), nullable=True, index=True, comment="User-requested model name")
     actual_model = Column(String(128), nullable=True, comment="Actually dispatched model name")
     protocol_type = Column(String(20), nullable=True)
+    request_type = Column(String(32), nullable=True, default="chat", comment="chat/responses/image_generation")
+    billing_type = Column(String(20), nullable=True, default="token", comment="token/subscription/image_credit/free")
     is_stream = Column(SmallInteger, nullable=True, default=0)
     input_tokens = Column(Integer, nullable=True, default=0)
     output_tokens = Column(Integer, nullable=True, default=0)
     total_tokens = Column(Integer, nullable=True, default=0)
+    image_credits_charged = Column(Integer, nullable=True, default=0)
+    image_count = Column(Integer, nullable=True, default=0)
     response_time_ms = Column(Integer, nullable=True)
     cache_status = Column(String(20), nullable=True, comment="Request body cache status")
     cache_hit_segments = Column(Integer, nullable=True, default=0)
@@ -165,6 +169,39 @@ class ConsumptionRecord(Base):
     balance_after = Column(DECIMAL(12, 6), nullable=False, default=0)
     billing_mode = Column(String(20), nullable=True, index=True, comment="balance=按量计费, subscription=套餐计费")
     subscription_id = Column(BigInteger, nullable=True, index=True, comment="关联套餐ID")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class UserImageBalance(Base):
+    """User image credit balance tracking."""
+
+    __tablename__ = "user_image_balance"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, unique=True)
+    balance = Column(Integer, nullable=False, default=0, comment="Image credit balance")
+    total_recharged = Column(Integer, nullable=False, default=0, comment="Total image credits recharged")
+    total_consumed = Column(Integer, nullable=False, default=0, comment="Total image credits consumed")
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ImageCreditRecord(Base):
+    """Image credit ledger record."""
+
+    __tablename__ = "image_credit_record"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    request_id = Column(String(36), nullable=True, index=True)
+    model_name = Column(String(128), nullable=True)
+    change_amount = Column(Integer, nullable=False, comment="Positive for recharge, negative for deduction")
+    balance_before = Column(Integer, nullable=False, default=0)
+    balance_after = Column(Integer, nullable=False, default=0)
+    multiplier = Column(Integer, nullable=False, default=1)
+    action_type = Column(String(20), nullable=False, default="request", comment="request/recharge/deduct")
+    operator_id = Column(BigInteger, nullable=True, index=True)
+    remark = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

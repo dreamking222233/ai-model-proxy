@@ -28,7 +28,6 @@ def list_available_models(
 
     result = []
     for m in models:
-        # Count how many active channels support this model
         channel_count = (
             db.query(ModelChannelMapping)
             .filter(
@@ -46,6 +45,8 @@ def list_available_models(
             "max_tokens": m.max_tokens,
             "input_price": float(m.input_price_per_million) if m.input_price_per_million else 0,
             "output_price": float(m.output_price_per_million) if m.output_price_per_million else 0,
+            "billing_type": m.billing_type,
+            "image_credit_multiplier": int(m.image_credit_multiplier or 1),
             "channel_count": channel_count,
             "description": m.description,
         })
@@ -58,13 +59,7 @@ def list_chat_models(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """Return enabled chat-type models for the AI chat page.
-
-    Each model includes an ``api_type`` hint so the frontend knows which
-    endpoint to call:
-      * ``"openai"``    → use ``/v1/chat/completions``
-      * ``"anthropic"`` → use ``/v1/messages`` (Anthropic format)
-    """
+    """Return enabled chat-type models for the AI chat page."""
     models = (
         db.query(UnifiedModel)
         .filter(
@@ -77,8 +72,6 @@ def list_chat_models(
 
     result = []
     for m in models:
-        # Check if any active mapping can be served by /v1/chat/completions
-        # (i.e. actual_model_name does NOT start with "responses:")
         mappings = (
             db.query(ModelChannelMapping)
             .join(Channel, ModelChannelMapping.channel_id == Channel.id)
@@ -99,13 +92,9 @@ def list_chat_models(
                 break
 
         if not has_any:
-            continue  # skip models with no active channel
+            continue
 
-        # Determine the best API type for the frontend
-        if has_chat_completions:
-            api_type = "openai"
-        else:
-            api_type = "anthropic"
+        api_type = "openai" if has_chat_completions else "anthropic"
 
         result.append({
             "id": m.id,

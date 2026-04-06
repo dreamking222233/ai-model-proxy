@@ -21,7 +21,7 @@ class Channel(Base):
         String(32),
         nullable=False,
         default="x-api-key",
-        comment="Auth header type: x-api-key, anthropic-api-key, authorization"
+        comment="Auth header type: x-api-key, anthropic-api-key, x-goog-api-key, authorization"
     )
     priority = Column(Integer, nullable=False, default=10, comment="Priority, 1=highest")
     enabled = Column(SmallInteger, nullable=False, default=1)

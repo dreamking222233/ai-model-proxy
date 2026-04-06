@@ -11,6 +11,8 @@ from app.models.log import (
     OperationLog,
     UserBalance,
     ConsumptionRecord,
+    UserImageBalance,
+    ImageCreditRecord,
     ConversationSession,
     ConversationCheckpoint,
 )
@@ -30,6 +32,8 @@ __all__ = [
     "OperationLog",
     "UserBalance",
     "ConsumptionRecord",
+    "UserImageBalance",
+    "ImageCreditRecord",
     "ConversationSession",
     "ConversationCheckpoint",
     "RedemptionCode",

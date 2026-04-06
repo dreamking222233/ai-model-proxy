@@ -82,8 +82,8 @@
       @change="handleTableChange"
     >
       <template slot="protocol_type" slot-scope="text">
-        <a-tag :color="text === 'openai' ? 'blue' : 'purple'" class="protocol-tag">
-          {{ text === 'openai' ? 'OpenAI' : 'Anthropic' }}
+        <a-tag :color="getProtocolColor(text)" class="protocol-tag">
+          {{ getProtocolLabel(text) }}
         </a-tag>
       </template>
 
@@ -188,6 +188,7 @@
           >
             <a-select-option value="openai">OpenAI</a-select-option>
             <a-select-option value="anthropic">Anthropic</a-select-option>
+            <a-select-option value="google">Google</a-select-option>
           </a-select>
         </a-form-item>
         <a-form-item label="上游认证 Header 类型">
@@ -200,9 +201,10 @@
             <a-select-option value="authorization">Authorization: Bearer(OpenAI / Bearer Token)</a-select-option>
             <a-select-option value="x-api-key">x-api-key(Anthropic 官方 / 常见兼容网关)</a-select-option>
             <a-select-option value="anthropic-api-key">anthropic-api-key(少数 Anthropic 兼容网关)</a-select-option>
+            <a-select-option value="x-goog-api-key">x-goog-api-key(Google Gemini 官方)</a-select-option>
           </a-select>
           <div class="form-hint">
-            这是"中转访问上游"时使用的认证头。推荐:OpenAI 选 Authorization，Anthropic 选 x-api-key。系统会自动补发兼容头以提高 OpenClaw 兼容性。
+            这是"中转访问上游"时使用的认证头。推荐: OpenAI 选 Authorization，Anthropic 选 x-api-key，Google 选 x-goog-api-key。
           </div>
         </a-form-item>
         <a-form-item label="优先级">
@@ -351,6 +353,22 @@ export default {
     this.fetchList()
   },
   methods: {
+    getProtocolLabel(protocol) {
+      const map = {
+        openai: 'OpenAI',
+        anthropic: 'Anthropic',
+        google: 'Google'
+      }
+      return map[protocol] || protocol || '-'
+    },
+    getProtocolColor(protocol) {
+      const map = {
+        openai: 'blue',
+        anthropic: 'purple',
+        google: 'gold'
+      }
+      return map[protocol] || 'default'
+    },
     getScoreClass(score) {
       if (score == null) return ''
       if (score >= 80) return 'score-high'
@@ -403,7 +421,12 @@ export default {
       if (this.authHeaderTouched) {
         return
       }
-      const recommended = value === 'anthropic' ? 'x-api-key' : 'authorization'
+      const recommendedMap = {
+        openai: 'authorization',
+        anthropic: 'x-api-key',
+        google: 'x-goog-api-key'
+      }
+      const recommended = recommendedMap[value] || 'authorization'
       if (this.form.auth_header_type !== recommended) {
         this.form.auth_header_type = recommended
       }
@@ -454,7 +477,7 @@ export default {
         base_url: record.base_url,
         api_key: '',
         protocol_type: record.protocol_type,
-        auth_header_type: record.auth_header_type || (record.protocol_type === 'anthropic' ? 'x-api-key' : 'authorization'),
+        auth_header_type: record.auth_header_type || ({ anthropic: 'x-api-key', google: 'x-goog-api-key' }[record.protocol_type] || 'authorization'),
         priority: record.priority,
         enabled: record.enabled,
         description: record.description || ''

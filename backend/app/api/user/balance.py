@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import SysUser
 from app.services.balance_service import BalanceService
+from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
 from app.schemas.common import ResponseModel
 
@@ -16,7 +18,13 @@ def get_balance(
     current_user: SysUser = Depends(get_current_user),
 ):
     balance = BalanceService.get_balance(db, current_user.id)
-    return ResponseModel(data=balance)
+    image_balance = ImageCreditService.get_balance(db, current_user.id)
+    return ResponseModel(data={
+        **balance,
+        "image_credit_balance": image_balance["balance"],
+        "image_credit_total_recharged": image_balance["total_recharged"],
+        "image_credit_total_consumed": image_balance["total_consumed"],
+    })
 
 
 @router.get("/consumption", response_model=ResponseModel)

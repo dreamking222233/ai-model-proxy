@@ -108,21 +108,19 @@
                 <a-icon type="edit" />
               </a-button>
             </a-tooltip>
-            <template v-if="record.subscription_type === 'balance'">
-              <a-tooltip title="余额操作">
-                <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record, 'balance')">
-                  <a-icon type="dollar" />
-                </a-button>
-              </a-tooltip>
-              <a-tooltip title="图片积分操作">
-                <a-button type="link" size="small" style="color: #722ed1" @click="handleRecharge(record, 'image_credit')">
-                  <a-icon type="picture" />
-                </a-button>
-              </a-tooltip>
-            </template>
+            <a-tooltip v-if="record.subscription_type === 'balance'" title="余额操作">
+              <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record, 'balance')">
+                <a-icon type="dollar" />
+              </a-button>
+            </a-tooltip>
             <a-tooltip v-else title="套餐管理">
               <a-button type="link" size="small" style="color: #722ed1" @click="goToSubscription(record)">
                 <a-icon type="crown" />
+              </a-button>
+            </a-tooltip>
+            <a-tooltip title="图片积分操作">
+              <a-button type="link" size="small" style="color: #722ed1" @click="handleRecharge(record, 'image_credit')">
+                <a-icon type="picture" />
               </a-button>
             </a-tooltip>
             <a-tooltip :title="record.status === 1 ? '禁用' : '启用'">

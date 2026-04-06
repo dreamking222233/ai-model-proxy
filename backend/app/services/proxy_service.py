@@ -4998,53 +4998,77 @@ class ProxyService:
         )
 
     @staticmethod
+    def _should_use_responses_bridge(
+        channel: Channel,
+        request_data: dict,
+        protocol: str = "anthropic",
+    ) -> bool:
+        """Return whether the selected request should route through the Responses bridge."""
+        if str(protocol or "").lower() != "anthropic":
+         return False
+        upstream_protocol = str(getattr(channel, "protocol_type", "") or "").lower()
+        if upstream_protocol not in {"openai", "responses"}:
+         return False
+        base_url = str(getattr(channel, "base_url", "") or "").rstrip("/").lower()
+        if base_url.endswith("/responses") or "/v1/responses" in base_url:
+         return True
+        if ":8317" in base_url:
+         return True
+        return False
+
+    @staticmethod
     async def _stream_anthropic_request(
         db: Session,
         user: SysUser,
         api_key_record: UserApiKey,
-        channels: list[Channel],
+        channel: Channel,
         unified_model: UnifiedModel,
         request_data: dict,
         request_id: str,
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        force_compat: bool = False,
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
-        """Stream Anthropic request with channel failover and accounting."""
+        """Stream Anthropic request for a single selected channel."""
         use_responses_bridge = ProxyService._should_use_responses_bridge(
-            channels[0],
-            request_data,
-            protocol="anthropic",
+         channel,
+         request_data,
+         protocol="anthropic",
         )
         if use_responses_bridge:
-            return await ProxyService._stream_anthropic_via_responses_request(
-                db,
-                user,
-                api_key_record,
-                channels[0],
-                unified_model,
-                request_data,
-                request_id,
-                requested_model,
-                client_ip,
-                request_headers=request_headers,
-                conversation_shadow_info=conversation_shadow_info,
-            )
+         return await ProxyService._stream_anthropic_via_responses_request(
+         db,
+         user,
+         api_key_record,
+         channel,
+         unified_model,
+         request_data,
+         request_id,
+         requested_model,
+         client_ip,
+         request_headers=request_headers,
+         conversation_shadow_info=conversation_shadow_info,
+         )
 
         return await ProxyService._stream_anthropic_passthrough_request(
-            db,
-            user,
-            api_key_record,
-            channels[0],
-            unified_model,
-            request_data,
-            request_id,
-            requested_model,
-            client_ip,
-            request_headers=request_headers,
-            conversation_shadow_info=conversation_shadow_info,
+         db,
+         user,
+         api_key_record,
+         channel,
+         unified_model,
+         request_data,
+         request_id,
+         requested_model,
+         client_ip,
+         request_headers=request_headers,
+         force_compat=force_compat,
+         conversation_shadow_info=conversation_shadow_info,
         )
+
+
+
 
     @staticmethod
     async def _non_stream_anthropic_via_responses_request(

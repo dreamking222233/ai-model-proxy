@@ -460,6 +460,38 @@ INSERT INTO `unified_model` (
 ('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 图片生成（按图片积分计费）'),
 ('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini Pro 图片生成（按图片积分计费）');
 
+-- 可选：Google Gemini 官方渠道与模型映射
+-- 将 @google_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建渠道与映射。
+SET @google_api_key = NULL;
+SET @google_channel_name = 'Google Gemini Official';
+SET @google_base_url = 'https://generativelanguage.googleapis.com';
+
+INSERT INTO `channel` (
+    `name`, `base_url`, `api_key`, `protocol_type`, `auth_header_type`,
+    `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
+)
+SELECT
+    @google_channel_name, @google_base_url, @google_api_key, 'google', 'x-goog-api-key',
+    1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
+FROM DUAL
+WHERE @google_api_key IS NOT NULL;
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3-pro-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-preview';
+
+SET @google_api_key = NULL;
+SET @google_channel_name = NULL;
+SET @google_base_url = NULL;
+
 -- 预置系统配置
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES
 ('health_check_interval', '300', 'number', '健康检查间隔(秒)'),

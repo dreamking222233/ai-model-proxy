@@ -164,3 +164,55 @@ WHERE `model_name` = 'gemini-3.1-flash-image-preview';
 UPDATE `unified_model`
 SET `protocol_type` = 'google', `model_type` = 'image', `billing_type` = 'image_credit', `image_credit_multiplier` = 2
 WHERE `model_name` = 'gemini-3-pro-image-preview';
+
+-- Optional Google channel bootstrap.
+-- Replace NULL with your real Google API key before executing if you want to create
+-- the channel and model mappings automatically.
+SET @google_api_key = NULL;
+SET @google_channel_name = 'Google Gemini Official';
+SET @google_base_url = 'https://generativelanguage.googleapis.com';
+
+INSERT INTO `channel` (
+  `name`, `base_url`, `api_key`, `protocol_type`, `auth_header_type`,
+  `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
+)
+SELECT
+  @google_channel_name, @google_base_url, @google_api_key, 'google', 'x-goog-api-key',
+  1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
+FROM DUAL
+WHERE @google_api_key IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM `channel`
+    WHERE `protocol_type` = 'google' AND `base_url` = @google_base_url
+  );
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch
+  ON ch.`protocol_type` = 'google'
+ AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL
+  AND um.`model_name` = 'gemini-3.1-flash-image-preview'
+  AND NOT EXISTS (
+    SELECT 1 FROM `model_channel_mapping` m
+    WHERE m.`unified_model_id` = um.id AND m.`channel_id` = ch.id
+  );
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3-pro-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch
+  ON ch.`protocol_type` = 'google'
+ AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL
+  AND um.`model_name` = 'gemini-3-pro-image-preview'
+  AND NOT EXISTS (
+    SELECT 1 FROM `model_channel_mapping` m
+    WHERE m.`unified_model_id` = um.id AND m.`channel_id` = ch.id
+  );
+
+-- Reset placeholder variable.
+SET @google_api_key = NULL;
+SET @google_channel_name = NULL;
+SET @google_base_url = NULL;

@@ -86,13 +86,18 @@
         :pagination="pagination"
         row-key="id"
         @change="handleTableChange"
-        :scroll="{ x: 1300 }"
+        :scroll="{ x: 1480 }"
         size="middle"
       >
         <template slot="requestId" slot-scope="text">
-          <a-tooltip :title="text" placement="topLeft">
-            <code class="request-id-code">{{ text ? text.substring(0, 10) + '...' : '-' }}</code>
-          </a-tooltip>
+          <div class="request-id-cell">
+            <a-tooltip :title="text" placement="topLeft">
+              <code class="request-id-code">{{ text ? text.substring(0, 10) + '...' : '-' }}</code>
+            </a-tooltip>
+            <a-tooltip v-if="text" title="复制请求 ID">
+              <a-icon type="copy" class="copy-icon-inline" @click="copyText(text, '请求 ID')" />
+            </a-tooltip>
+          </div>
         </template>
 
         <template slot="username" slot-scope="text">
@@ -103,16 +108,22 @@
         </template>
 
         <template slot="requested_model" slot-scope="text">
-          <a-tag class="model-tag">{{ text || '-' }}</a-tag>
+          <a-tooltip :title="text || '-'" placement="topLeft">
+            <a-tag class="model-tag model-tag--ellipsis">{{ text || '-' }}</a-tag>
+          </a-tooltip>
         </template>
 
         <template slot="actual_model" slot-scope="text">
-          <a-tag v-if="text" class="actual-model-tag">{{ text }}</a-tag>
+          <a-tooltip v-if="text" :title="text" placement="topLeft">
+            <a-tag class="actual-model-tag actual-model-tag--ellipsis">{{ text }}</a-tag>
+          </a-tooltip>
           <span v-else class="text-muted">-</span>
         </template>
 
         <template slot="channel_name" slot-scope="text">
-          <span class="channel-cell">{{ text || '-' }}</span>
+          <a-tooltip :title="text || '-'" placement="topLeft">
+            <span class="channel-cell channel-cell--ellipsis">{{ text || '-' }}</span>
+          </a-tooltip>
         </template>
 
         <template slot="total_cost" slot-scope="text, record">
@@ -130,12 +141,11 @@
           <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
             <div class="image-credit-row">
               <span class="image-credit-main">{{ formatNumber(record.image_credits_charged || 0) }} 图片积分</span>
-              <a-tag color="purple">{{ record.image_count || 1 }} 张图片</a-tag>
+              <span class="image-credit-meta">{{ record.image_count || 1 }} 张 · {{ getRequestTypeText(record) }}</span>
             </div>
-            <div class="cache-detail">
+            <div class="cache-detail cache-detail--image">
               <span class="cache-chip cache-chip--token">图片生成</span>
-              <span class="cache-chip cache-chip--hit">{{ getRequestTypeText(record) }}</span>
-              <span class="cache-chip cache-chip--miss">{{ getBillingTypeText(record) }}</span>
+              <span class="cache-chip cache-chip--miss">Non-stream</span>
             </div>
           </div>
           <div v-else class="token-cell">
@@ -369,27 +379,30 @@ export default {
           title: '请求模型',
           dataIndex: 'requested_model',
           key: 'requested_model',
-          width: 150,
+          width: 140,
+          ellipsis: true,
           scopedSlots: { customRender: 'requested_model' }
         },
         {
           title: '实际模型',
           dataIndex: 'actual_model',
           key: 'actual_model',
-          width: 150,
+          width: 140,
+          ellipsis: true,
           scopedSlots: { customRender: 'actual_model' }
         },
         {
           title: '渠道',
           dataIndex: 'channel_name',
           key: 'channel_name',
-          width: 120,
+          width: 140,
+          ellipsis: true,
           scopedSlots: { customRender: 'channel_name' }
         },
         {
           title: '用量',
           key: 'tokens',
-          width: 260,
+          width: 300,
           scopedSlots: { customRender: 'tokens' }
         },
         {
@@ -628,6 +641,14 @@ export default {
           this.$message.error('复制失败')
         })
       }
+    },
+    copyText(text, label = '内容') {
+      if (!text) return
+      navigator.clipboard.writeText(text).then(() => {
+        this.$message.success(`${label}已复制到剪贴板`)
+      }).catch(() => {
+        this.$message.error('复制失败')
+      })
     }
   }
 }
@@ -807,6 +828,12 @@ export default {
     }
   }
 
+  .request-id-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   /* ===== Username Cell ===== */
   .username-cell {
     display: flex;
@@ -824,6 +851,15 @@ export default {
     border-radius: 4px;
     font-size: 12px;
     padding: 1px 8px;
+    max-width: 100%;
+
+    &--ellipsis {
+      display: inline-block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
   }
 
   .actual-model-tag {
@@ -833,12 +869,90 @@ export default {
     border-radius: 4px;
     font-size: 12px;
     padding: 1px 8px;
+    max-width: 100%;
+
+    &--ellipsis {
+      display: inline-block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
   }
 
   /* ===== Channel Cell ===== */
   .channel-cell {
     font-size: 13px;
     color: #595959;
+
+    &--ellipsis {
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+  }
+
+  .image-credit-meta {
+    font-size: 12px;
+    color: #8c8c8c;
+    white-space: nowrap;
+  }
+
+  .cache-detail--image {
+    margin-top: 4px;
+  }
+
+  .image-credit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .image-credit-main {
+    color: #722ed1;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .image-credit-cost {
+    color: #722ed1;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /deep/ .ant-table-tbody > tr > td {
+    vertical-align: top;
+  }
+
+  /deep/ .ant-table-tbody > tr > td .ant-tag {
+    white-space: nowrap;
+  }
+
+  .model-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .copy-icon-inline {
+    font-size: 12px;
+    color: #8c8c8c;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+
+    &:hover {
+      color: #667eea;
+      transform: scale(1.15);
+    }
+
+    &:active {
+      transform: scale(0.95);
+    }
   }
 
   /* ===== Cost Text ===== */

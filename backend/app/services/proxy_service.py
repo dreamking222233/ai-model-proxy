@@ -3387,13 +3387,29 @@ class ProxyService:
                                 request_headers=request_headers,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
-                        return await ProxyService._stream_anthropic_request(
-                            db, user, api_key_record, channel, unified_model,
-                            request_data_copy, request_id, requested_model, client_ip,
-                            request_headers=request_headers,
-                            force_compat=compat_mode,
-                            conversation_shadow_info=conversation_shadow_info,
-                        )
+                        try:
+                            return await ProxyService._stream_anthropic_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                force_compat=compat_mode,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
+                        except TypeError as exc:
+                            if "unexpected keyword argument 'force_compat'" not in str(exc):
+                                raise
+                            logger.warning(
+                                "Anthropic stream helper rejected force_compat; retrying without it. request_id=%s channel=%s channel_id=%s",
+                                request_id,
+                                channel.name,
+                                channel.id,
+                            )
+                            return await ProxyService._stream_anthropic_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
                     else:
                         if upstream_api == "responses":
                             return await ProxyService._non_stream_anthropic_via_responses_request(
@@ -3402,13 +3418,29 @@ class ProxyService:
                                 request_headers=request_headers,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
-                        return await ProxyService._non_stream_anthropic_request(
-                            db, user, api_key_record, channel, unified_model,
-                            request_data_copy, request_id, requested_model, client_ip,
-                            request_headers=request_headers,
-                            force_compat=compat_mode,
-                            conversation_shadow_info=conversation_shadow_info,
-                        )
+                        try:
+                            return await ProxyService._non_stream_anthropic_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                force_compat=compat_mode,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
+                        except TypeError as exc:
+                            if "unexpected keyword argument 'force_compat'" not in str(exc):
+                                raise
+                            logger.warning(
+                                "Anthropic non-stream helper rejected force_compat; retrying without it. request_id=%s channel=%s channel_id=%s",
+                                request_id,
+                                channel.name,
+                                channel.id,
+                            )
+                            return await ProxyService._non_stream_anthropic_request(
+                                db, user, api_key_record, channel, unified_model,
+                                request_data_copy, request_id, requested_model, client_ip,
+                                request_headers=request_headers,
+                                conversation_shadow_info=conversation_shadow_info,
+                            )
                 except ServiceException as exc:
                     if exc.error_code == "LEGACY_CLAUDE_TOOL_CONTEXT_LIMIT":
                         channel_request_error = exc

@@ -90,9 +90,6 @@ class ProxyService:
         "TaskGet",
         "TaskList",
     }
-    _ANTHROPIC_TOOL_ROUTE_MODEL_MAP = {
-        "claude-opus-4-6": "claude-sonnet-4-5",
-    }
 
     # ----- Model identity system prompt mapping -----
     _MODEL_VENDOR_MAP = [
@@ -2509,62 +2506,6 @@ class ProxyService:
         return risky_tool_names
 
     @staticmethod
-    def _has_anthropic_tools(request_data: dict) -> bool:
-        """Return whether an Anthropic request carries top-level tool definitions."""
-        raw_tools = request_data.get("tools")
-        return isinstance(raw_tools, list) and len(raw_tools) > 0
-
-    @staticmethod
-    def _resolve_anthropic_passthrough_channels_for_model(
-        db: Session,
-        route_model_name: str,
-    ) -> tuple[UnifiedModel | None, list[tuple[Channel, str]]]:
-        """Resolve only real Anthropic passthrough channels for one model alias."""
-        route_model = ModelService.resolve_model(db, route_model_name)
-        if not route_model:
-            return None, []
-
-        candidate_channels = ModelService.get_available_channels(db, route_model.id)
-        passthrough_channels: list[tuple[Channel, str]] = []
-        for channel, actual_model_name in candidate_channels:
-            _, upstream_api = ProxyService._resolve_mapped_upstream_target(
-                channel,
-                actual_model_name,
-            )
-            if upstream_api == "anthropic_messages":
-                passthrough_channels.append((channel, actual_model_name))
-        return route_model, passthrough_channels
-
-    @staticmethod
-    def _select_tool_routed_anthropic_channels(
-        db: Session,
-        requested_model: str,
-        request_data: dict,
-        default_unified_model: UnifiedModel,
-        default_channels: list[tuple[Channel, str]],
-    ) -> tuple[UnifiedModel, list[tuple[Channel, str]], Optional[str]]:
-        """Optionally reroute tool-heavy Anthropic requests onto real Anthropic channels."""
-        if not ProxyService._has_anthropic_tools(request_data):
-            return default_unified_model, default_channels, None
-
-        route_model_name = ProxyService._ANTHROPIC_TOOL_ROUTE_MODEL_MAP.get(
-            str(requested_model or "")
-        )
-        if not route_model_name:
-            return default_unified_model, default_channels, None
-
-        route_model, passthrough_channels = (
-            ProxyService._resolve_anthropic_passthrough_channels_for_model(
-                db,
-                route_model_name,
-            )
-        )
-        if not route_model or not passthrough_channels:
-            return default_unified_model, default_channels, None
-
-        return route_model, passthrough_channels, route_model_name
-
-    @staticmethod
     def _prepare_responses_request_body(model_name: str, request_data: dict) -> dict:
         """Apply compatibility normalization before forwarding to upstream ``/responses``."""
         prepared = copy.deepcopy(request_data)
@@ -3469,25 +3410,6 @@ class ProxyService:
         channels = ModelService.get_available_channels(db, unified_model.id)
         if not channels:
             raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
-
-        routed_unified_model, routed_channels, routed_model_name = (
-            ProxyService._select_tool_routed_anthropic_channels(
-                db,
-                requested_model,
-                request_data,
-                unified_model,
-                channels,
-            )
-        )
-        if routed_model_name:
-            logger.info(
-                "Anthropic tool request rerouted: requested_model=%s route_model=%s channel_count=%s",
-                requested_model,
-                routed_model_name,
-                len(routed_channels),
-            )
-            channels = routed_channels
-            unified_model = routed_unified_model
 
         # 4. Failover
         last_error: Exception | None = None

@@ -190,9 +190,10 @@ export default {
   display: flex;
   flex-direction: column;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  // 深色磨砂玻璃背景
-  background: linear-gradient(180deg, #0d0d1a 0%, #131328 40%, #0f1225 100%) !important;
-  border-right: 1px solid rgba(102, 126, 234, 0.08);
+  // 深色磨砂玻璃背景 - 调低不透明度以透出极光
+  background: linear-gradient(180deg, rgba(13, 13, 26, 0.85) 0%, rgba(19, 19, 40, 0.8) 40%, rgba(15, 18, 37, 0.85) 100%) !important;
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(102, 126, 234, 0.1);
   box-shadow:
     2px 0 24px rgba(0, 0, 0, 0.3),
     1px 0 0 rgba(102, 126, 234, 0.06);
@@ -219,7 +220,7 @@ export default {
     left: 16px;
     right: 16px;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.25), rgba(118, 75, 162, 0.25), transparent);
+    background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15), transparent);
   }
 
   &.logo-collapsed {
@@ -232,13 +233,13 @@ export default {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3));
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   position: relative;
-  border: 1px solid rgba(102, 126, 234, 0.15);
+  border: 1px solid rgba(102, 126, 234, 0.2);
   transition: all 0.3s ease;
 
   &::before {
@@ -262,10 +263,10 @@ export default {
 
 .logo-text {
   font-size: 15px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  font-weight: 700;
+  color: #fff;
   white-space: nowrap;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.8px;
 }
 
 .logo-text-fade-enter-active,
@@ -288,11 +289,11 @@ export default {
   margin: 12px 12px 4px;
   padding: 6px 12px;
   border-radius: 8px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.08));
-  border: 1px solid rgba(102, 126, 234, 0.15);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.1));
+  border: 1px solid rgba(102, 126, 234, 0.2);
   font-size: 11px;
   color: #a8b8ff;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.5px;
 
   /deep/ .anticon {
@@ -334,7 +335,7 @@ export default {
     padding-left: 20px !important;
     border-radius: 10px;
     background: transparent !important;
-    color: rgba(255, 255, 255, 0.5);
+    color: rgba(255, 255, 255, 0.6);
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     border: 1px solid transparent;
     overflow: hidden;
@@ -351,20 +352,20 @@ export default {
     }
 
     &:hover {
-      background: rgba(102, 126, 234, 0.08) !important;
-      color: rgba(255, 255, 255, 0.85);
-      border-color: rgba(102, 126, 234, 0.1);
+      background: rgba(255, 255, 255, 0.05) !important;
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.1);
 
       .anticon {
-        color: rgba(168, 184, 255, 0.8);
+        color: rgba(168, 184, 255, 0.9);
       }
     }
 
     &.ant-menu-item-selected {
-      background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.1)) !important;
+      background: rgba(102, 126, 234, 0.25) !important;
       color: #fff !important;
-      border-color: rgba(102, 126, 234, 0.2);
-      box-shadow: 0 2px 12px rgba(102, 126, 234, 0.12);
+      border-color: rgba(102, 126, 234, 0.3);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
 
       &::before {
         content: '';
@@ -378,19 +379,8 @@ export default {
         box-shadow: 0 0 8px rgba(102, 126, 234, 0.5);
       }
 
-      &::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        width: 60%;
-        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.03));
-        pointer-events: none;
-      }
-
       .anticon {
-        color: #a8b8ff;
+        color: #fff;
       }
     }
 
@@ -411,7 +401,7 @@ export default {
 .sider-footer-divider {
   height: 1px;
   margin: 0 4px 12px;
-  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2), transparent);
+  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15), transparent);
 }
 
 .sider-user-info {
@@ -422,12 +412,12 @@ export default {
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.25s ease;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 
   &:hover {
-    background: rgba(102, 126, 234, 0.08);
-    border-color: rgba(102, 126, 234, 0.12);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
 
     .sider-arrow {
       color: rgba(255, 255, 255, 0.6);
@@ -444,7 +434,8 @@ export default {
 .sider-username {
   flex: 1;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.65);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -464,6 +455,7 @@ export default {
   flex-direction: column;
   height: 100vh;
   transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: transparent;
 }
 
 .admin-header {
@@ -471,11 +463,11 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.97);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
   z-index: 9;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
   flex-shrink: 0;
 
   .header-left {
@@ -485,11 +477,11 @@ export default {
       padding: 8px 12px;
       border-radius: 8px;
       transition: all 0.25s ease;
-      color: rgba(0, 0, 0, 0.55);
+      color: #1a1a2e;
 
       &:hover {
         color: #667eea;
-        background: rgba(102, 126, 234, 0.06);
+        background: rgba(102, 126, 234, 0.08);
       }
     }
   }
@@ -502,11 +494,12 @@ export default {
       height: 64px;
       padding: 0 12px;
       transition: all 0.25s ease;
-      border-radius: 8px;
-      color: rgba(0, 0, 0, 0.65);
+      border-radius: 12px;
+      color: #1a1a2e;
+      font-weight: 600;
 
       &:hover {
-        background: rgba(102, 126, 234, 0.06);
+        background: rgba(102, 126, 234, 0.08);
         color: #667eea;
       }
     }
@@ -517,12 +510,12 @@ export default {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
-  background: #f0f2f5;
+  background: transparent;
 
   &--fullscreen {
     padding: 0;
     overflow: hidden;
-    background: #fff;
+    background: transparent;
   }
 }
 

@@ -116,206 +116,144 @@ export default {
 <style lang="less" scoped>
 .chat-message {
   display: flex;
-  gap: 12px;
-  padding: 16px 0;
-  max-width: 100%;
+  gap: 16px;
+  padding: 16px 24px;
+  max-width: 1000px;
+  margin: 0 auto;
+  width: 100%;
 
   &--user {
     flex-direction: row-reverse;
-
-    .message-body {
-      align-items: flex-end;
-    }
-
+    .message-body { align-items: flex-end; }
     .message-content {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: #fff;
-      border-radius: 18px 18px 4px 18px;
+      border-radius: 20px 20px 4px 20px;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
     }
-
-    .message-actions {
-      justify-content: flex-end;
-    }
+    .message-actions { justify-content: flex-end; }
   }
 
   &--assistant {
     .message-content {
-      background: #f7f7f8;
+      background: rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(10px);
       color: #1a1a2e;
-      border-radius: 18px 18px 18px 4px;
+      border-radius: 20px 20px 20px 4px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
     }
   }
 }
 
-.message-avatar {
-  flex-shrink: 0;
-}
+.message-avatar { flex-shrink: 0; padding-top: 4px; }
 
 .avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
+  width: 40px; height: 40px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; font-size: 18px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
 
   &--ai {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: #fff;
   }
-
   &--user {
-    background: #e8eaf6;
+    background: #fff;
     color: #667eea;
+    border: 1px solid rgba(102, 126, 234, 0.2);
   }
 }
 
 .message-body {
-  display: flex;
-  flex-direction: column;
-  max-width: 75%;
-  min-width: 0;
+  display: flex; flex-direction: column;
+  max-width: 85%; min-width: 0;
 }
 
 .message-content {
-  padding: 12px 16px;
-  font-size: 14px;
+  padding: 14px 20px;
+  font-size: 15px;
   line-height: 1.6;
   word-break: break-word;
   position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.message-text {
-  white-space: pre-wrap;
-}
+.message-text { white-space: pre-wrap; font-weight: 500; }
 
-// Markdown rendering styles (flattened /deep/ selectors for Less compatibility)
+// Markdown rendering styles
 .message-markdown /deep/ p {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   &:last-child { margin-bottom: 0; }
 }
 
 .message-markdown /deep/ pre {
   background: #1e1e2e;
   color: #cdd6f4;
-  padding: 12px 16px;
-  border-radius: 8px;
+  padding: 16px;
+  border-radius: 12px;
   overflow-x: auto;
-  margin: 8px 0;
-  font-size: 13px;
+  margin: 12px 0;
+  font-size: 13.5px;
   line-height: 1.5;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .message-markdown /deep/ code {
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
-  font-size: 13px;
+  font-family: 'MonoLisa', 'JetBrains Mono', 'Fira Code', monospace;
 }
 
 .message-markdown /deep/ :not(pre) > code {
   background: rgba(102, 126, 234, 0.1);
   color: #667eea;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 0.9em;
+  font-weight: 600;
 }
 
 .message-markdown /deep/ ul,
-.message-markdown /deep/ ol {
-  margin: 8px 0;
-  padding-left: 20px;
-}
-
-.message-markdown /deep/ li {
-  margin: 4px 0;
-}
-
-.message-markdown /deep/ strong {
-  font-weight: 600;
-}
+.message-markdown /deep/ ol { margin: 10px 0; padding-left: 24px; }
+.message-markdown /deep/ li { margin: 6px 0; }
 
 .message-markdown /deep/ blockquote {
-  border-left: 3px solid #667eea;
-  margin: 8px 0;
-  padding: 4px 12px;
-  color: #666;
-  background: rgba(102, 126, 234, 0.04);
-  border-radius: 0 6px 6px 0;
+  border-left: 4px solid #667eea;
+  margin: 12px 0;
+  padding: 8px 16px;
+  color: #4a5568;
+  background: rgba(102, 126, 234, 0.05);
+  border-radius: 0 10px 10px 0;
 }
 
-.message-markdown /deep/ table {
-  border-collapse: collapse;
-  margin: 8px 0;
-  width: 100%;
-}
-
-.message-markdown /deep/ th,
-.message-markdown /deep/ td {
-  border: 1px solid #e2e8f0;
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.message-markdown /deep/ th {
-  background: #f8fafc;
-  font-weight: 600;
-}
+.message-markdown /deep/ table { border-collapse: collapse; margin: 12px 0; width: 100%; border-radius: 10px; overflow: hidden; }
+.message-markdown /deep/ th, .message-markdown /deep/ td { border: 1px solid rgba(0, 0, 0, 0.05); padding: 10px 14px; text-align: left; }
+.message-markdown /deep/ th { background: rgba(102, 126, 234, 0.05); font-weight: 700; color: #1a1a2e; }
 
 .message-markdown /deep/ a {
-  color: #667eea;
-  text-decoration: none;
+  color: #667eea; text-decoration: none; font-weight: 600;
   &:hover { text-decoration: underline; }
 }
 
-.message-markdown /deep/ hr {
-  border: none;
-  border-top: 1px solid #e2e8f0;
-  margin: 12px 0;
-}
-
-// Typing cursor animation
+// Typing cursor
 .typing-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 16px;
-  background: #667eea;
-  margin-left: 2px;
-  vertical-align: text-bottom;
+  display: inline-block; width: 2px; height: 16px; background: #667eea;
+  margin-left: 2px; vertical-align: text-bottom;
   animation: blink 1s steps(1) infinite;
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-// Action buttons
 .message-actions {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-
-  .chat-message:hover & {
-    opacity: 1;
-  }
+  display: flex; gap: 8px; margin-top: 6px;
+  opacity: 0; transition: opacity 0.2s ease;
+  .chat-message:hover & { opacity: 1; }
 }
 
 .action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: #999;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background: rgba(102, 126, 234, 0.1);
-    color: #667eea;
-  }
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 8px;
+  cursor: pointer; color: #bfbfbf; transition: all 0.2s;
+  background: rgba(255, 255, 255, 0.5); border: 1px solid rgba(255, 255, 255, 0.8);
+  
+  &:hover { background: #fff; color: #667eea; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); }
 }
 </style>

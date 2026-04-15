@@ -480,9 +480,11 @@ export default {
 </script>
 
 <style lang="less" scoped>
+@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
+
 .dashboard-page {
-  padding: 24px;
-  background: #f0f2f5;
+  padding: 40px 24px;
+  background: transparent;
   min-height: calc(100vh - 64px);
 
   .dashboard-header {
@@ -490,23 +492,25 @@ export default {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 24px;
-    padding: 16px 24px;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    padding: 24px 32px;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(20px);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.03);
 
     .page-title {
       margin: 0;
-      font-size: 24px;
-      font-weight: 600;
-      color: #262626;
+      font-size: 26px;
+      font-weight: 800;
+      color: #1a1a2e;
       display: flex;
       align-items: center;
 
       .title-icon {
-        margin-right: 12px;
+        margin-right: 14px;
         color: #667eea;
-        font-size: 28px;
+        font-size: 30px;
       }
     }
 
@@ -514,10 +518,6 @@ export default {
       display: flex;
       gap: 16px;
       align-items: center;
-
-      .refresh-btn {
-        border-radius: 6px;
-      }
     }
   }
 
@@ -528,42 +528,45 @@ export default {
     }
 
     .stat-card {
-      border-radius: 16px;
-      border: none;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.75);
+      backdrop-filter: blur(15px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.02);
+      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
       position: relative;
       overflow: hidden;
       cursor: pointer;
-      height: 140px;
+      height: 150px;
 
       &:hover {
-        box-shadow: 0 12px 24px rgba(102, 126, 234, 0.2);
-        transform: translateY(-8px) scale(1.02);
+        box-shadow: 0 15px 45px rgba(102, 126, 234, 0.15);
+        transform: translateY(-8px);
+        background: #fff;
 
         .stat-card-bg {
-          transform: scale(1.1);
-          opacity: 0.15;
+          transform: scale(1.15);
+          opacity: 0.2;
         }
       }
 
       .stat-card-content {
         display: flex;
         align-items: center;
-        gap: 20px;
+        gap: 24px;
         position: relative;
-        z-index: 1;
+        z-index: 2;
 
         .stat-icon {
-          width: 64px;
-          height: 64px;
-          border-radius: 16px;
+          width: 70px;
+          height: 70px;
+          border-radius: 20px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 28px;
+          font-size: 30px;
           color: white;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
 
           .anticon {
             animation: pulse 2s ease-in-out infinite;
@@ -576,19 +579,24 @@ export default {
           .stat-title {
             color: #8c8c8c;
             font-size: 14px;
+            font-weight: 600;
             margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
           }
 
           .stat-value {
-            color: #262626;
-            font-size: 32px;
-            font-weight: 700;
+            color: #1a1a2e;
+            font-size: 36px;
+            font-weight: 800;
             line-height: 1;
             margin-bottom: 8px;
+            font-family: 'MonoLisa', monospace;
           }
 
           .stat-trend {
             font-size: 14px;
+            font-weight: 700;
             display: flex;
             align-items: center;
             gap: 4px;
@@ -598,107 +606,101 @@ export default {
 
       .stat-card-bg {
         position: absolute;
-        top: -50%;
-        right: -20%;
-        width: 200px;
-        height: 200px;
+        top: -40%;
+        right: -10%;
+        width: 180px;
+        height: 180px;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(102, 126, 234, 0.1) 0%, transparent 70%);
-        transition: all 0.5s ease;
+        background: radial-gradient(circle, rgba(102, 126, 234, 0.15) 0%, transparent 70%);
+        transition: all 0.6s ease;
         opacity: 0.1;
+        z-index: 1;
       }
     }
   }
 
   .secondary-stats {
     .progress-card {
-      border-radius: 12px;
-      border: none;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.02);
       transition: all 0.3s ease;
 
       &:hover {
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
         transform: translateY(-4px);
+        background: rgba(255, 255, 255, 0.85);
       }
 
       .progress-header {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         margin-bottom: 16px;
 
         .progress-icon {
-          font-size: 20px;
+          font-size: 22px;
           color: #667eea;
 
-          &.success {
-            color: #52c41a;
-          }
-
-          &.error {
-            color: #f5222d;
-          }
+          &.success { color: #52c41a; }
+          &.error { color: #f5222d; }
         }
 
         .progress-title {
           font-size: 14px;
+          font-weight: 600;
           color: #8c8c8c;
         }
       }
 
       .progress-value {
-        font-size: 28px;
-        font-weight: 700;
-        color: #262626;
+        font-size: 30px;
+        font-weight: 800;
+        color: #1a1a2e;
         margin-bottom: 12px;
+        font-family: 'MonoLisa', monospace;
       }
     }
   }
 
   .chart-card,
   .table-card {
-    border-radius: 12px;
-    border: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(20px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.03);
 
     /deep/ .ant-card-head {
-      border-bottom: 1px solid #f0f0f0;
-      font-weight: 600;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      padding: 0 24px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      .ant-card-head-title { font-size: 16px; font-weight: 800; color: #1a1a2e; }
     }
+    /deep/ .ant-card-body { padding: 24px; }
   }
 
   .table-card {
     /deep/ .ant-table {
-      .table-row-light {
-        background: #fafafa;
-      }
-
-      .table-number {
-        font-weight: 600;
-        color: #262626;
-      }
+      background: transparent;
+      .ant-table-thead > tr > th { background: rgba(102, 126, 234, 0.03); color: #8c8c8c; font-weight: 700; }
+      .ant-table-tbody > tr:hover > td { background: rgba(102, 126, 234, 0.04) !important; }
+      .table-number { font-weight: 700; color: #1a1a2e; font-family: 'MonoLisa', monospace; }
     }
   }
 }
 
 @keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes pulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
 }
 </style>

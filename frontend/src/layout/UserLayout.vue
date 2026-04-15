@@ -443,8 +443,8 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.97);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(20px);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   z-index: 9;
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
@@ -485,16 +485,23 @@ export default {
   }
 }
 
+.admin-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  background: transparent;
+}
+
 .user-content {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
-  background: #f0f2f5;
+  background: transparent;
 
   &--fullscreen {
     padding: 0;
     overflow: hidden;
-    background: #fff;
+    background: transparent;
   }
 }
 

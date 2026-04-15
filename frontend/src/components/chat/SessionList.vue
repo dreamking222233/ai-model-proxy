@@ -78,136 +78,102 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #1a1a2e;
+  background: transparent;
 }
 
 .new-chat-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 12px;
-  padding: 10px 16px;
-  border-radius: 10px;
-  border: 1px dashed rgba(102, 126, 234, 0.3);
-  color: rgba(255, 255, 255, 0.7);
+  gap: 10px;
+  margin: 16px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  color: #667eea;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.25s ease;
+  font-weight: 700;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   flex-shrink: 0;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
 
   &:hover {
-    background: rgba(102, 126, 234, 0.1);
-    border-color: rgba(102, 126, 234, 0.5);
-    color: #fff;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
+    border-color: rgba(102, 126, 234, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.1);
   }
 
-  .anticon {
-    font-size: 14px;
-  }
+  .anticon { font-size: 16px; }
 }
 
 .sessions-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  padding: 8px 12px;
 
-  &::-webkit-scrollbar {
-    width: 3px;
-  }
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  &::-webkit-scrollbar-thumb {
-    background: rgba(102, 126, 234, 0.2);
-    border-radius: 3px;
-  }
+  &::-webkit-scrollbar { width: 3px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: rgba(102, 126, 234, 0.1); border-radius: 10px; }
 }
 
 .session-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  margin: 2px 4px;
-  border-radius: 8px;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 12px;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.55);
-  transition: all 0.2s ease;
+  color: #595959;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
-  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
 
   &:hover {
-    background: rgba(102, 126, 234, 0.08);
-    color: rgba(255, 255, 255, 0.85);
-
-    .session-delete {
-      opacity: 1;
-    }
+    background: rgba(102, 126, 234, 0.06);
+    color: #667eea;
+    border-color: rgba(102, 126, 234, 0.15);
+    .session-delete { opacity: 1; }
   }
 
   &--active {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.1));
-    color: #fff;
-    border-color: rgba(102, 126, 234, 0.2);
+    background: #fff;
+    color: #1a1a2e;
+    font-weight: 700;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.04);
+    border-color: rgba(102, 126, 234, 0.3);
 
-    .session-icon {
-      color: #a8b8ff;
+    .session-icon { color: #667eea; }
+    &::before {
+      content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px;
+      background: linear-gradient(180deg, #667eea, #764ba2);
+      border-radius: 0 4px 4px 0;
     }
   }
 }
 
-.session-icon {
-  font-size: 14px;
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.35);
-}
-
-.session-title {
-  flex: 1;
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.session-icon { font-size: 15px; flex-shrink: 0; color: #bfbfbf; }
+.session-title { flex: 1; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .session-delete {
-  opacity: 0;
-  flex-shrink: 0;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.4);
-  padding: 4px;
-  border-radius: 4px;
-  transition: all 0.2s ease;
-
-  &:hover {
-    color: #ff6b6b;
-    background: rgba(255, 107, 107, 0.1);
-  }
+  opacity: 0; flex-shrink: 0; font-size: 14px; color: #bfbfbf; padding: 4px; border-radius: 6px; transition: all 0.2s;
+  &:hover { color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
 }
 
 .empty-tip {
-  text-align: center;
-  color: rgba(255, 255, 255, 0.25);
-  font-size: 13px;
-  padding: 24px 0;
+  text-align: center; color: #bfbfbf; font-size: 13px; padding: 40px 0;
+  font-weight: 500;
 }
 
 .clear-all-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 12px 12px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  color: rgba(255, 255, 255, 0.4);
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-
-  &:hover {
-    background: rgba(255, 107, 107, 0.08);
-    color: #ff6b6b;
-  }
+  display: flex; align-items: center; gap: 8px; margin: 12px; padding: 10px 16px;
+  border-radius: 10px; color: #8c8c8c; cursor: pointer; font-size: 12px; font-weight: 600;
+  transition: all 0.2s; flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.02);
+  
+  &:hover { background: rgba(255, 77, 79, 0.05); color: #ff4d4f; }
 }
 </style>

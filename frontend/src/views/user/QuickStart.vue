@@ -1,571 +1,275 @@
 <template>
-  <div class="quickstart-page">
-    <!-- Hero Section -->
-    <a-card class="hero-card" :bordered="false">
-      <div class="hero-content">
-        <div class="hero-icon">
-          <a-icon type="rocket" />
+  <div class="quick-start-page">
+    <div class="page-container">
+      <!-- Hero Section -->
+      <section class="hero-section animate__animated animate__fadeIn">
+        <div class="hero-glass">
+          <div class="hero-badge">Documentation</div>
+          <h1 class="hero-title">快速开始<span>指南</span></h1>
+          <p class="hero-desc">只需 4 个简单环节，助您在任何现代 AI 开发环境（OpenAI / Anthropic 兼容协议）中快速起飞。</p>
+          
         </div>
-        <h1 class="hero-title">快速开始</h1>
-        <p class="hero-desc">只需 4 步，即可在任何支持 OpenAI / Anthropic 协议的工具中使用本平台</p>
-      </div>
-      <div class="steps-bar">
-        <div class="step-item" :class="{ active: activeSection === 'key' }" @click="scrollTo('key')">
-          <div class="step-num">1</div>
-          <span>获取 API 密钥</span>
-        </div>
-        <div class="step-divider"></div>
-        <div class="step-item" :class="{ active: activeSection === 'config' }" @click="scrollTo('config')">
-          <div class="step-num">2</div>
-          <span>配置工具</span>
-        </div>
-        <div class="step-divider"></div>
-        <div class="step-item" :class="{ active: activeSection === 'protocol' }" @click="scrollTo('protocol')">
-          <div class="step-num">3</div>
-          <span>API 协议调用</span>
-        </div>
-        <div class="step-divider"></div>
-        <div class="step-item" :class="{ active: activeSection === 'test' }" @click="scrollTo('test')">
-          <div class="step-num">4</div>
-          <span>测试验证</span>
-        </div>
-      </div>
-    </a-card>
+      </section>
 
-    <!-- Step 1: Get API Key -->
-    <a-card class="section-card" :bordered="false" id="section-key">
-      <div class="section-header">
-        <div class="section-badge">1</div>
-        <h2 class="section-title">获取 API 密钥</h2>
-      </div>
-      <div class="section-body">
-        <p>前往 <a @click="$router.push('/user/api-keys')">API 密钥管理</a> 页面创建一个新密钥。创建成功后，请立即复制并妥善保存，密钥只会显示一次。</p>
-        <a-alert
-          type="warning"
-          show-icon
-          message="安全提示"
-          description="请勿将 API 密钥提交到代码仓库或分享给他人。如密钥泄露，请立即在密钥管理页面禁用并重新生成。"
-          style="margin-top: 12px;"
-        />
-        <div class="info-box" style="margin-top: 16px;">
-          <div class="info-row">
-            <span class="info-label">API 基础地址</span>
-            <div class="info-value copyable" @click="copyText(relayBase)">
-              <code>{{ relayBase }}</code>
-              <a-icon type="copy" class="copy-icon" />
+      <!-- Sticky Navigation Bar -->
+      <div class="sticky-nav-wrapper">
+        <div class="navigation-stepper">
+          <div 
+            v-for="(step, idx) in navigationSteps" 
+            :key="idx"
+            class="nav-step"
+            :class="{ active: activeSection === step.id }"
+            @click="scrollTo(step.id)"
+          >
+            <div class="nav-step-icon">
+              <a-icon :type="step.icon" />
             </div>
-          </div>
-          <div class="info-row">
-            <span class="info-label">认证方式</span>
-            <div class="info-value">
-              <code>Authorization: Bearer sk-xxxx</code> / <code>X-API-Key: sk-xxxx</code>
-            </div>
-          </div>
-          <div class="info-row">
-            <span class="info-label">支持协议</span>
-            <div class="info-value">
-              <a-tag color="green">OpenAI</a-tag>
-              <a-tag color="purple">Anthropic</a-tag>
-            </div>
+            <span class="nav-step-text">{{ step.name }}</span>
           </div>
         </div>
       </div>
-    </a-card>
 
-    <!-- Step 2: Configure Tools -->
-    <a-card class="section-card" :bordered="false" id="section-config">
-      <div class="section-header">
-        <div class="section-badge">2</div>
-        <h2 class="section-title">配置工具</h2>
-      </div>
-      <div class="section-body">
-        <p>本平台兼容 OpenAI 和 Anthropic 协议，以下是常用工具的配置方法。</p>
-
-        <a-tabs v-model="activeTab" class="config-tabs">
-          <!-- Claude Code -->
-          <a-tab-pane key="claude-code" tab="Claude Code" force-render>
-            <div class="tool-header">
-              <div class="tool-info">
-                <h3>Claude Code (CLI)</h3>
-                <p>Anthropic 官方命令行 AI 编程助手</p>
-              </div>
-            </div>
-            <div class="code-section">
-              <div class="code-title">
-                <span>设置环境变量</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(claudeCodeEnv)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ claudeCodeEnv }}</code></pre>
-            </div>
+      <!-- Step 1: Authentication -->
+      <section class="step-section animate__animated animate__fadeInUp" id="section-key" style="animation-delay: 0.1s">
+        <div class="section-card-glass">
+          <div class="section-badge">01</div>
+          <div class="section-content">
+            <h2 class="section-title">获取认证凭据</h2>
+            <p>在您的 <a @click="$router.push('/user/api-keys')" class="animated-link">密钥管理</a> 页面创建专属 API Key。请确保它已启用且余额充足。</p>
+            
             <a-alert
               type="info"
               show-icon
-              style="margin-top: 12px;"
-            >
-              <template slot="message">
-                <span>配置后直接运行 <code>claude</code> 即可使用。平台会自动将请求转发到对应的 Anthropic 渠道。</span>
-              </template>
-            </a-alert>
-            <div class="code-section" style="margin-top: 16px;">
-              <div class="code-title">
-                <span>永久生效（写入 Shell 配置）</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(claudeCodePersist)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ claudeCodePersist }}</code></pre>
-            </div>
-          </a-tab-pane>
+              message="安全加固"
+              description="平台采用动态转发机制，支持 OpenAI 与 Anthropic 两类标准化 Header 认证。"
+              class="custom-alert"
+            />
 
-          <!-- Codex -->
-          <a-tab-pane key="codex" tab="Codex">
-            <div class="tool-header">
-              <div class="tool-info">
-                <h3>Codex CLI</h3>
-                <p>强大的 AI 编程助手命令行工具</p>
-              </div>
-            </div>
-            <div class="code-section">
-              <div class="code-title">配置步骤</div>
-              <div class="step-list">
-                <div class="step-list-item">
-                  <div class="step-list-num">1</div>
-                  <span>打开 Codex 配置文件（通常在 <code>~/.codex/config.json</code>）</span>
+            <div class="config-display">
+              <div class="config-row">
+                <div class="config-label">
+                  <a-icon type="global" /> API Base
                 </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">2</div>
-                  <span>配置 API 基础地址和密钥</span>
+                <div class="config-value-group">
+                  <div class="config-code"><code>{{ relayBase }}</code></div>
+                  <a-button type="link" size="small" class="copy-btn-mini" @click="handleCopy(relayBase, 'base')">
+                    <a-icon :type="copyStates['base'] ? 'check' : 'copy'" :class="{ 'success-icon': copyStates['base'] }" />
+                  </a-button>
                 </div>
               </div>
-            </div>
-            <div class="code-section" style="margin-top: 16px;">
-              <div class="code-title">
-                <span>配置示例</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(codexConfig)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ codexConfig }}</code></pre>
-            </div>
-            <a-alert
-              type="info"
-              show-icon
-              style="margin-top: 12px;"
-            >
-              <template slot="message">
-                <span>配置后运行 <code>codex</code> 命令即可使用。支持所有 GPT 和 Claude 系列模型。</span>
-              </template>
-            </a-alert>
-          </a-tab-pane>
-
-          <!-- OpenClaw -->
-          <a-tab-pane key="openclaw" tab="OpenClaw" force-render>
-            <div class="tool-header">
-              <div class="tool-info">
-                <h3>OpenClaw</h3>
-                <p>开源 AI 编程助手，支持多种 AI 模型</p>
-              </div>
-            </div>
-            <div class="code-section">
-              <div class="code-title">配置步骤</div>
-              <div class="step-list">
-                <div class="step-list-item">
-                  <div class="step-list-num">1</div>
-                  <span>打开 OpenClaw 设置 → <strong>API 配置</strong></span>
+              <div class="config-row">
+                <div class="config-label">
+                  <a-icon type="safety" /> 认证方式
                 </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">2</div>
-                  <span>选择 API 类型：<strong>anthropic-messages</strong> 或 <strong>openai-completions</strong></span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">3</div>
-                  <span>Anthropic 填入：<code>{{ relayBase }}</code>；OpenAI 优先填入：<code>{{ relayOpenaiBase }}</code></span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">4</div>
-                  <span>API Key 填入你的密钥</span>
-                </div>
-                <div class="step-list-item">
-                  <div class="step-list-num">5</div>
-                  <span>选择模型并开始使用</span>
+                <div class="config-value-group">
+                  <div class="config-code"><code>Authorization: Bearer sk-xxxx</code></div>
                 </div>
               </div>
             </div>
-            <div class="code-section" style="margin-top: 16px;">
-              <div class="code-title">
-                <span>配置示例（Anthropic 协议）</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(openclawAnthropicConfig)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ openclawAnthropicConfig }}</code></pre>
-            </div>
-            <div class="code-section" style="margin-top: 16px;">
-              <div class="code-title">
-                <span>配置示例（OpenAI 协议）</span>
-                <a-button type="link" size="small" icon="copy" @click="copyText(openclawOpenaiConfig)">复制</a-button>
-              </div>
-              <pre class="code-block"><code>{{ openclawOpenaiConfig }}</code></pre>
-            </div>
-            <a-alert
-              type="warning"
-              show-icon
-              style="margin-top: 12px;"
-            >
-              <template slot="message">
-                <span><strong>重要：</strong>Anthropic 协议推荐不带 <code>/v1</code>；OpenAI 协议优先使用带 <code>/v1</code> 的地址。本平台同时兼容两种路径写法。</span>
-              </template>
-            </a-alert>
-          </a-tab-pane>
-        </a-tabs>
-      </div>
-    </a-card>
-
-    <!-- Step 3: API Protocol Calling -->
-    <a-card class="section-card" :bordered="false" id="section-protocol">
-      <div class="section-header">
-        <div class="section-badge">3</div>
-        <h2 class="section-title">API 协议调用</h2>
-      </div>
-      <div class="section-body">
-        <p>本平台支持三种 API 协议，以下是各协议的调用方法和代码示例。</p>
-
-        <a-tabs v-model="protocolTab" class="config-tabs">
-          <!-- OpenAI Chat Completions -->
-          <a-tab-pane key="openai" tab="OpenAI Chat Completions" force-render>
-            <div class="protocol-header">
-              <div class="protocol-info">
-                <h3>OpenAI Chat Completions API</h3>
-                <p>兼容 OpenAI 官方 API，适用于大多数第三方工具</p>
-              </div>
-            </div>
-            <div class="info-box" style="margin-bottom: 16px;">
-              <div class="info-row">
-                <span class="info-label">端点</span>
-                <div class="info-value copyable" @click="copyText(relayOpenaiBase + '/chat/completions')">
-                  <code>{{ relayOpenaiBase }}/chat/completions</code>
-                  <a-icon type="copy" class="copy-icon" />
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">认证</span>
-                <div class="info-value">
-                  <code>Authorization: Bearer sk-xxxx</code>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">流式输出</span>
-                <div class="info-value">
-                  <code>stream: true</code> (SSE)
-                </div>
-              </div>
-            </div>
-
-            <a-tabs size="small" class="code-example-tabs">
-              <a-tab-pane key="python-openai" tab="Python">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Python (OpenAI SDK)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiPythonCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ openaiPythonCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="node-openai" tab="Node.js">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Node.js (OpenAI SDK)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiNodeCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ openaiNodeCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="curl-openai" tab="cURL">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>cURL</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(openaiCurlCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ openaiCurlCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-            </a-tabs>
-          </a-tab-pane>
-
-          <!-- Anthropic Messages -->
-          <a-tab-pane key="anthropic" tab="Anthropic Messages" force-render>
-            <div class="protocol-header">
-              <div class="protocol-info">
-                <h3>Anthropic Messages API</h3>
-                <p>Anthropic 官方协议，适用于 Claude Code 等工具</p>
-              </div>
-            </div>
-            <div class="info-box" style="margin-bottom: 16px;">
-              <div class="info-row">
-                <span class="info-label">端点</span>
-                <div class="info-value copyable" @click="copyText(relayBase + '/v1/messages')">
-                  <code>{{ relayBase }}/v1/messages</code>
-                  <a-icon type="copy" class="copy-icon" />
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">认证</span>
-                <div class="info-value">
-                  <code>x-api-key: sk-xxxx</code>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">版本</span>
-                <div class="info-value">
-                  <code>anthropic-version: 2023-06-01</code>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">流式输出</span>
-                <div class="info-value">
-                  <code>stream: true</code> (SSE)
-                </div>
-              </div>
-            </div>
-
-            <a-tabs size="small" class="code-example-tabs">
-              <a-tab-pane key="python-anthropic" tab="Python">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Python (Anthropic SDK)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicPythonCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ anthropicPythonCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="node-anthropic" tab="Node.js">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Node.js (Anthropic SDK)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicNodeCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ anthropicNodeCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="curl-anthropic" tab="cURL">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>cURL</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(anthropicCurlCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ anthropicCurlCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-            </a-tabs>
-          </a-tab-pane>
-
-          <!-- OpenAI Responses (Codex) -->
-          <a-tab-pane key="responses" tab="OpenAI Responses (Codex)" force-render>
-            <div class="protocol-header">
-              <div class="protocol-info">
-                <h3>OpenAI Responses API</h3>
-                <p>用于 Codex 等交互式工具，支持 WebSocket</p>
-              </div>
-            </div>
-            <div class="info-box" style="margin-bottom: 16px;">
-              <div class="info-row">
-                <span class="info-label">HTTP 端点</span>
-                <div class="info-value copyable" @click="copyText(relayOpenaiBase + '/responses')">
-                  <code>{{ relayOpenaiBase }}/responses</code>
-                  <a-icon type="copy" class="copy-icon" />
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">WebSocket 端点</span>
-                <div class="info-value copyable" @click="copyText(relayWsBase + '/v1/responses')">
-                  <code>{{ relayWsBase }}/v1/responses</code>
-                  <a-icon type="copy" class="copy-icon" />
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">认证</span>
-                <div class="info-value">
-                  <code>Authorization: Bearer sk-xxxx</code>
-                </div>
-              </div>
-            </div>
-
-            <a-tabs size="small" class="code-example-tabs">
-              <a-tab-pane key="python-responses" tab="Python">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Python (HTTP)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesPythonCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ responsesPythonCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="node-responses" tab="Node.js">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Node.js (WebSocket)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesNodeCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ responsesNodeCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="curl-responses" tab="cURL">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>cURL (HTTP)</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(responsesCurlCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ responsesCurlCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-            </a-tabs>
-
-            <a-alert
-              type="info"
-              show-icon
-              style="margin-top: 12px;"
-            >
-              <template slot="message">
-                <span>Responses API 主要用于 Codex 等需要双向通信的工具。大多数场景推荐使用 OpenAI Chat Completions 或 Anthropic Messages API。</span>
-              </template>
-            </a-alert>
-          </a-tab-pane>
-
-          <a-tab-pane key="images" tab="Image Generations" force-render>
-            <div class="protocol-header">
-              <div class="protocol-info">
-                <h3>OpenAI Compatible Image Generation</h3>
-                <p>用于 Gemini 生图模型，返回 Base64 图片，不支持 stream</p>
-              </div>
-            </div>
-            <div class="info-box" style="margin-bottom: 16px;">
-              <div class="info-row">
-                <span class="info-label">端点</span>
-                <div class="info-value">
-                  <code>{{ relayOpenaiBase }}/images/generations</code>
-                  <br />
-                  <code>{{ relayBase }}/v1/image/created</code>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">认证</span>
-                <div class="info-value"><code>Authorization: Bearer sk-xxxx</code></div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">请求字段</span>
-                <div class="info-value"><code>model</code>、<code>prompt</code>、<code>size</code>/<code>aspect_ratio</code>、<code>response_format=b64_json</code>、<code>n=1</code></div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">返回格式</span>
-                <div class="info-value"><code>data[].b64_json</code> + <code>mime_type</code> + <code>usage.image_credits_charged</code></div>
-              </div>
-              <div class="info-row">
-                <span class="info-label">计费说明</span>
-                <div class="info-value">扣图片积分，不扣美元余额；不同模型倍率不同</div>
-              </div>
-            </div>
-
-            <a-tabs size="small" class="code-example-tabs">
-              <a-tab-pane key="curl-images" tab="cURL">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>cURL</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(imageCurlCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ imageCurlCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="python-images" tab="Python">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Python</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(imagePythonCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ imagePythonCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-              <a-tab-pane key="node-images" tab="Node.js">
-                <div class="code-section">
-                  <div class="code-title">
-                    <span>Node.js</span>
-                    <a-button type="link" size="small" icon="copy" @click="copyText(imageNodeCode)">复制</a-button>
-                  </div>
-                  <pre class="code-block"><code>{{ imageNodeCode }}</code></pre>
-                </div>
-              </a-tab-pane>
-            </a-tabs>
-
-            <a-alert type="warning" show-icon style="margin-top: 12px;">
-              <template slot="message">
-                <span>图片接口仅支持非流式调用。请在用户账单页或管理员日志页查看图片积分消耗。</span>
-              </template>
-            </a-alert>
-          </a-tab-pane>
-        </a-tabs>
-      </div>
-    </a-card>
-
-    <!-- Step 4: Test & Verify -->
-    <a-card class="section-card" :bordered="false" id="section-test">
-      <div class="section-header">
-        <div class="section-badge">4</div>
-        <h2 class="section-title">测试验证</h2>
-      </div>
-      <div class="section-body">
-        <p>配置完成后，运行以下命令快速验证连通性：</p>
-        <div class="code-section">
-          <div class="code-title">
-            <span>查看可用模型列表</span>
-            <a-button type="link" size="small" icon="copy" @click="copyText(curlModels)">复制</a-button>
           </div>
-          <pre class="code-block"><code>{{ curlModels }}</code></pre>
         </div>
-        <div class="code-section" style="margin-top: 16px;">
-          <div class="code-title">
-            <span>发送测试请求</span>
-            <a-button type="link" size="small" icon="copy" @click="copyText(curlTest)">复制</a-button>
-          </div>
-          <pre class="code-block"><code>{{ curlTest }}</code></pre>
-        </div>
-        <a-alert
-          type="success"
-          show-icon
-          message="如果收到正常的 AI 回复，说明配置成功！"
-          description="你可以在「账单记录」页面统一查看请求日志、消费明细和余额变化。"
-          style="margin-top: 16px;"
-        />
-      </div>
-    </a-card>
+      </section>
 
-    <!-- FAQ Section -->
-    <a-card class="section-card" :bordered="false">
-      <div class="section-header">
-        <div class="section-badge" style="background: #fa8c16;">?</div>
-        <h2 class="section-title">常见问题</h2>
-      </div>
-      <div class="section-body">
-        <a-collapse :bordered="false" class="faq-collapse">
-          <a-collapse-panel key="1" header="支持哪些模型？">
-            <p>平台支持管理员配置的所有统一模型。你可以通过调用 <code>GET /v1/models</code> 接口查看当前可用的模型列表。常见模型包括 Claude 系列、GPT 系列等。</p>
-          </a-collapse-panel>
-          <a-collapse-panel key="2" header="三种 API 协议有什么区别？">
-            <p>本平台支持三种 API 协议：</p>
-            <ul>
-              <li><strong>OpenAI Chat Completions</strong>：使用 <code>/v1/chat/completions</code> 端点，兼容性最好，适用于大多数第三方工具（Cursor、LobeChat、Continue 等）</li>
-              <li><strong>Anthropic Messages</strong>：使用 <code>/v1/messages</code> 端点，适用于 Claude Code、OpenClaw 等支持 Anthropic 协议的工具</li>
-              <li><strong>OpenAI Responses</strong>：使用 <code>/v1/responses</code> 端点，支持 HTTP 和 WebSocket，主要用于 Codex 等需要双向通信的工具</li>
-            </ul>
-            <p>三种协议都可以访问平台上的所有模型，系统会自动处理协议转换。大多数场景推荐使用 OpenAI Chat Completions 协议。</p>
-          </a-collapse-panel>
-          <a-collapse-panel key="3" header="请求失败怎么办？">
-            <p>请按以下步骤排查：</p>
-            <ol>
-              <li>检查 API 密钥是否正确且处于启用状态</li>
-              <li>检查账户余额是否充足</li>
-              <li>确认模型名称拼写正确（通过 <code>/v1/models</code> 确认）</li>
-              <li>查看「账单与使用」页面中的请求详情和错误信息</li>
-            </ol>
-          </a-collapse-panel>
-          <a-collapse-panel key="4" header="如何控制费用？">
-            <p>每次 API 调用会根据输入/输出的 Token 数量和模型定价计费。你可以在「账单与使用」页面查看详细的消费记录与请求明细。建议选择合适的模型以控制成本。</p>
-          </a-collapse-panel>
-        </a-collapse>
-      </div>
-    </a-card>
+      <!-- Step 2: Tool Configuration -->
+      <section class="step-section animate__animated animate__fadeInUp" id="section-config" style="animation-delay: 0.2s">
+        <div class="section-card-glass">
+          <div class="section-badge">02</div>
+          <div class="section-content">
+            <h2 class="section-title">配置开发工具</h2>
+            <p>本平台原生兼容各类顶级开源 AI 框架。选择您的常用工具，获取即插即用的配置代码。</p>
+
+            <a-tabs v-model="activeTab" class="modern-tabs">
+              <!-- Claude Code -->
+              <a-tab-pane key="claude-code" tab="Claude Code">
+                <div class="tool-content">
+                  <div class="tool-meta">
+                    <img src="https://img.icons8.com/ios-filled/50/667eea/terminal.png" width="24" height="24" alt="cli" />
+                    <span>Claude Code CLI 官方转发</span>
+                  </div>
+                  <div class="terminal-block">
+                    <div class="terminal-header">
+                      <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                      <span class="terminal-title">Environment Setup</span>
+                      <a-icon 
+                        :type="copyStates['claude-code'] ? 'check' : 'copy'" 
+                        class="terminal-copy" 
+                        @click="handleCopy(claudeCodeEnv, 'claude-code')" 
+                      />
+                    </div>
+                    <pre class="terminal-body"><code>{{ claudeCodeEnv }}</code></pre>
+                  </div>
+                </div>
+              </a-tab-pane>
+
+              <!-- Codex CLI -->
+              <a-tab-pane key="codex" tab="Codex CLI">
+                <div class="tool-content">
+                  <div class="tool-meta">
+                    <img src="https://img.icons8.com/ios-filled/50/764ba2/settings.png" width="24" height="24" alt="config" />
+                    <span>JSON 配置文件路径: <code>~/.codex/config.json</code></span>
+                  </div>
+                  <div class="terminal-block">
+                    <div class="terminal-header">
+                      <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                      <span class="terminal-title">config.json</span>
+                      <a-icon 
+                        :type="copyStates['codex'] ? 'check' : 'copy'" 
+                        class="terminal-copy" 
+                        @click="handleCopy(codexConfig, 'codex')" 
+                      />
+                    </div>
+                    <pre class="terminal-body"><code>{{ codexConfig }}</code></pre>
+                  </div>
+                </div>
+              </a-tab-pane>
+
+              <!-- OpenClaw -->
+              <a-tab-pane key="openclaw" tab="OpenClaw">
+                <div class="tool-content">
+                  <div class="tool-meta">
+                    <img src="https://img.icons8.com/ios-filled/50/36cfc9/claw.png" width="24" height="24" alt="app" />
+                    <span>OpenClaw 多模型配置示例</span>
+                  </div>
+                  <div class="terminal-block">
+                    <div class="terminal-header">
+                      <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                      <span class="terminal-title">OpenClaw Config</span>
+                      <a-icon 
+                        :type="copyStates['openclaw'] ? 'check' : 'copy'" 
+                        class="terminal-copy" 
+                        @click="handleCopy(openclawAnthropicConfig, 'openclaw')" 
+                      />
+                    </div>
+                    <pre class="terminal-body"><code>{{ openclawAnthropicConfig }}</code></pre>
+                  </div>
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 3: API Protocols -->
+      <section class="step-section animate__animated animate__fadeInUp" id="section-protocol" style="animation-delay: 0.3s">
+        <div class="section-card-glass">
+          <div class="section-badge">03</div>
+          <div class="section-content">
+            <h2 class="section-title">API 协议深度集成</h2>
+            <p>为您提供 OpenAI、Anthropic 官方 SDK 及 Websocket 流式协议的代码示例。</p>
+
+            <a-tabs v-model="protocolTab" class="glass-tabs">
+              <a-tab-pane key="openai" tab="OpenAI SDK">
+                <div class="protocol-box">
+                  <div class="endpoint-line">
+                    <span class="e-method">POST</span>
+                    <code class="e-url">{{ relayOpenaiBase }}/chat/completions</code>
+                  </div>
+                  <div class="code-editor-block">
+                    <a-tabs size="small" type="card" class="editor-tabs">
+                      <a-tab-pane key="py" tab="Python">
+                        <div class="editor-content">
+                          <a-icon :type="copyStates['p-openai'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(openaiPythonCode, 'p-openai')" />
+                          <pre><code>{{ openaiPythonCode }}</code></pre>
+                        </div>
+                      </a-tab-pane>
+                      <a-tab-pane key="js" tab="Node.js">
+                        <div class="editor-content">
+                          <a-icon :type="copyStates['n-openai'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(openaiNodeCode, 'n-openai')" />
+                          <pre><code>{{ openaiNodeCode }}</code></pre>
+                        </div>
+                      </a-tab-pane>
+                    </a-tabs>
+                  </div>
+                </div>
+              </a-tab-pane>
+
+              <a-tab-pane key="anthropic" tab="Anthropic SDK">
+                <div class="protocol-box">
+                  <div class="endpoint-line">
+                    <span class="e-method purple">POST</span>
+                    <code class="e-url">{{ relayBase }}/v1/messages</code>
+                  </div>
+                  <div class="code-editor-block">
+                    <a-tabs size="small" type="card" class="editor-tabs">
+                      <a-tab-pane key="py" tab="Python">
+                        <div class="editor-content">
+                          <a-icon :type="copyStates['p-anth'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(anthropicPythonCode, 'p-anth')" />
+                          <pre><code>{{ anthropicPythonCode }}</code></pre>
+                        </div>
+                      </a-tab-pane>
+                      <a-tab-pane key="curl" tab="cURL">
+                        <div class="editor-content">
+                          <a-icon :type="copyStates['c-anth'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(anthropicCurlCode, 'c-anth')" />
+                          <pre><code>{{ anthropicCurlCode }}</code></pre>
+                        </div>
+                      </a-tab-pane>
+                    </a-tabs>
+                  </div>
+                </div>
+              </a-tab-pane>
+
+              <a-tab-pane key="images" tab="生图接口">
+                <div class="protocol-box">
+                  <div class="endpoint-line">
+                    <span class="e-method green">POST</span>
+                    <code class="e-url">/v1/images/generations</code>
+                  </div>
+                  <div class="code-editor-block">
+                    <div class="editor-content">
+                      <a-icon :type="copyStates['img-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageCurlCode, 'img-curl')" />
+                      <pre><code>{{ imageCurlCode }}</code></pre>
+                    </div>
+                  </div>
+                  <a-alert message="注意" description="生图接口异步扣除图片积分，响应格式兼容 OpenAI 标准。" type="warning" class="mini-alert" />
+                </div>
+              </a-tab-pane>
+            </a-tabs>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 4: Verification -->
+      <section class="step-section animate__animated animate__fadeInUp" id="section-test" style="animation-delay: 0.4s">
+        <div class="section-card-glass">
+          <div class="section-badge" style="background: linear-gradient(135deg, #11998e, #38ef7d);">OK</div>
+          <div class="section-content">
+            <h2 class="section-title">验证并开启征程</h2>
+            <p>一切就绪，运行简单的 cURL 命令来确认连通性。如果收到回复，恭喜您，魔法生效了！</p>
+            
+            <div class="terminal-block dark">
+              <div class="terminal-header">
+                <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                <span class="terminal-title">Quick Test</span>
+                <a-icon :type="copyStates['test-curl'] ? 'check' : 'copy'" class="terminal-copy" @click="handleCopy(curlTest, 'test-curl')" />
+              </div>
+              <pre class="terminal-body"><code>{{ curlTest }}</code></pre>
+            </div>
+
+            <div class="success-footer">
+              <a-icon type="smile" class="smile-icon" />
+              <span>现在去 <a @click="$router.push('/user/models')" class="animated-link">模型广场</a> 挑选心仪的模型吧！</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FAQ -->
+      <section class="faq-section animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
+        <div class="section-header-centered">
+          <h2 class="faq-title">常见问题 <span>FAQ</span></h2>
+        </div>
+        <div class="faq-grid">
+          <a-collapse :bordered="false" class="premium-collapse">
+            <a-collapse-panel key="1" header="如何切换 OpenAI 和 Anthropic 协议？">
+              <p>平台会自动根据请求端点识别协议模型。如果您使用 <code>/v1/chat/completions</code>，系统会自动将任何模型转化为 OpenAI 格式返回；如果您使用 <code>/v1/messages</code>，则按 Anthropic 格式。这意味着您可以跨协议调用任何模型。</p>
+            </a-collapse-panel>
+            <a-collapse-panel key="2" header="API 地址是否强制要求 /v1 后缀？">
+              <p>大多数第三方工具可以自动处理后缀。为保险起见，建议 OpenAI 协议使用 <code>{{ relayOpenaiBase }}</code>，而 Claude Code 等 Anthropic 工具则使用不带 <code>/v1</code> 的 <code>{{ relayBase }}</code>。</p>
+            </a-collapse-panel>
+          </a-collapse>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -579,7 +283,14 @@ export default {
       activeTab: 'claude-code',
       protocolTab: 'openai',
       activeSection: 'key',
-      apiBase: ''
+      apiBase: '',
+      copyStates: {},
+      navigationSteps: [
+        { id: 'key', name: '获取认证', icon: 'key' },
+        { id: 'config', name: '常用配置', icon: 'appstore' },
+        { id: 'protocol', name: '代码开发', icon: 'code' },
+        { id: 'test', name: '集成测试', icon: 'rocket' }
+      ]
     }
   },
   created() {
@@ -596,27 +307,18 @@ export default {
       return this.relayBase.replace(/^https?:/, 'wss:')
     },
     claudeCodeEnv() {
-      return `# 设置 API 基础地址和密钥
+      return `# 设置环境变量并启动终端集成
 export ANTHROPIC_BASE_URL="${this.relayBase}"
 export ANTHROPIC_API_KEY="sk-你的密钥"
 
-# 启动 Claude Code
 claude`
-    },
-    claudeCodePersist() {
-      return `# 写入 ~/.bashrc 或 ~/.zshrc
-echo 'export ANTHROPIC_BASE_URL="${this.relayBase}"' >> ~/.zshrc
-echo 'export ANTHROPIC_API_KEY="sk-你的密钥"' >> ~/.zshrc
-
-# 重新加载配置
-source ~/.zshrc`
     },
     codexConfig() {
       return `{
   "baseUrl": "${this.relayOpenaiBase}",
   "apiKey": "sk-你的密钥",
-  "model": "gpt-5.4",
-  "temperature": 0.7
+  "model": "gpt-5.1-o1",
+  "temperature": 0.5
 }`
     },
     openclawAnthropicConfig() {
@@ -624,24 +326,9 @@ source ~/.zshrc`
   "api": "anthropic-messages",
   "baseUrl": "${this.relayBase}",
   "apiKey": "sk-你的密钥",
-  "headers": {
-    "User-Agent": "Mozilla/5.0"
-  },
-  "model": "claude-sonnet-4-5"
+  "model": "claude-3-7-sonnet"
 }`
     },
-    openclawOpenaiConfig() {
-      return `{
-  "api": "openai-completions",
-  "baseUrl": "${this.relayOpenaiBase}",
-  "apiKey": "sk-你的密钥",
-  "headers": {
-    "User-Agent": "Mozilla/5.0"
-  },
-  "model": "gpt-5.4"
-}`
-    },
-    // OpenAI Protocol Examples
     openaiPythonCode() {
       return `from openai import OpenAI
 
@@ -650,14 +337,11 @@ client = OpenAI(
     base_url="${this.relayOpenaiBase}",
 )
 
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Hello!"}
-    ]
+res = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
 )
-print(response.choices[0].message.content)`
+print(res.choices[0].message.content)`
     },
     openaiNodeCode() {
       return `import OpenAI from "openai";
@@ -667,28 +351,12 @@ const client = new OpenAI({
   baseURL: "${this.relayOpenaiBase}",
 });
 
-const response = await client.chat.completions.create({
-  model: "gpt-4",
-  messages: [
-    { role: "system", content: "You are a helpful assistant." },
-    { role: "user", content: "Hello!" },
-  ],
+const res = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hi!" }],
 });
-console.log(response.choices[0].message.content);`
+console.log(res.choices[0].message.content);`
     },
-    openaiCurlCode() {
-      return `curl -X POST "${this.relayOpenaiBase}/chat/completions" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Hello!"}
-    ]
-  }'`
-    },
-    // Anthropic Protocol Examples
     anthropicPythonCode() {
       return `from anthropic import Anthropic
 
@@ -697,152 +365,37 @@ client = Anthropic(
     base_url="${this.relayBase}",
 )
 
-message = client.messages.create(
-    model="claude-sonnet-4",
+msg = client.messages.create(
+    model="claude-3-5-sonnet",
     max_tokens=1024,
-    messages=[
-        {"role": "user", "content": "Hello!"}
-    ]
+    messages=[{"role": "user", "content": "Hi there!"}]
 )
-print(message.content[0].text)`
-    },
-    anthropicNodeCode() {
-      return `import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic({
-  apiKey: "sk-你的密钥",
-  baseURL: "${this.relayBase}",
-});
-
-const message = await client.messages.create({
-  model: "claude-sonnet-4",
-  max_tokens: 1024,
-  messages: [{ role: "user", content: "Hello!" }],
-});
-console.log(message.content[0].text);`
+print(msg.content[0].text)`
     },
     anthropicCurlCode() {
       return `curl -X POST "${this.relayBase}/v1/messages" \\
   -H "x-api-key: sk-你的密钥" \\
   -H "anthropic-version: 2023-06-01" \\
-  -H "Content-Type: application/json" \\
   -d '{
-    "model": "claude-sonnet-4",
+    "model": "claude-3-5-sonnet",
     "max_tokens": 1024,
-    "messages": [
-      {"role": "user", "content": "Hello!"}
-    ]
-  }'`
-    },
-    // Responses API Examples
-    responsesPythonCode() {
-      return `import requests
-
-url = "${this.relayOpenaiBase}/responses"
-headers = {
-    "Authorization": "Bearer sk-你的密钥",
-    "Content-Type": "application/json"
-}
-data = {
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}]
-}
-
-response = requests.post(url, headers=headers, json=data)
-print(response.json())`
-    },
-    responsesNodeCode() {
-      return `import WebSocket from 'ws';
-
-const ws = new WebSocket("${this.relayWsBase}/v1/responses", {
-  headers: {
-    "Authorization": "Bearer sk-你的密钥"
-  }
-});
-
-ws.on('open', () => {
-  ws.send(JSON.stringify({
-    model: "gpt-4",
-    messages: [{ role: "user", content: "Hello!" }]
-  }));
-});
-
-ws.on('message', (data) => {
-  console.log('Received:', data.toString());
-});`
-    },
-    responsesCurlCode() {
-      return `curl -X POST "${this.relayOpenaiBase}/responses" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {"role": "user", "content": "Hello!"}
-    ]
+    "messages": [{"role": "user", "content": "Hi!"}]
   }'`
     },
     imageCurlCode() {
       return `curl -X POST "${this.relayOpenaiBase}/images/generations" \\
   -H "Authorization: Bearer sk-你的密钥" \\
-  -H "Content-Type: application/json" \\
   -d '{
-    "model": "gemini-3.1-flash-image-preview",
-    "prompt": "生成一张赛博朋克风格的城市夜景",
-    "response_format": "b64_json",
-    "aspect_ratio": "1:1",
-    "n": 1
+    "model": "gemini-3.1-flash",
+    "prompt": "Cyberpunk city night",
+    "response_format": "b64_json"
   }'`
-    },
-    imagePythonCode() {
-      return `import requests
-
-url = "${this.relayOpenaiBase}/images/generations"
-headers = {
-    "Authorization": "Bearer sk-你的密钥",
-    "Content-Type": "application/json"
-}
-payload = {
-    "model": "gemini-3.1-flash-image-preview",
-    "prompt": "生成一张赛博朋克风格的城市夜景",
-    "response_format": "b64_json",
-    "aspect_ratio": "1:1",
-    "n": 1
-}
-
-resp = requests.post(url, headers=headers, json=payload)
-body = resp.json()
-print(body["usage"]["image_credits_charged"])
-print(body["data"][0]["b64_json"][:64])`
-    },
-    imageNodeCode() {
-      return `import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: "sk-你的密钥",
-  baseURL: "${this.relayOpenaiBase}",
-});
-
-const result = await client.images.generate({
-  model: "gemini-3.1-flash-image-preview",
-  prompt: "生成一张赛博朋克风格的城市夜景",
-  response_format: "b64_json",
-  aspect_ratio: "1:1",
-  n: 1,
-});
-
-console.log(result.usage.image_credits_charged);
-console.log(result.data[0].b64_json.slice(0, 64));`
-    },
-    curlModels() {
-      return `curl ${this.relayOpenaiBase}/models \\
-  -H "Authorization: Bearer sk-你的密钥"`
     },
     curlTest() {
       return `curl ${this.relayOpenaiBase}/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -d '{"model":"claude-4-sonnet","messages":[{"role":"user","content":"说你好"}]}'`
+  -H "Authorization: Bearer sk-xxxx" \\
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}'`
     }
   },
   methods: {
@@ -854,30 +407,46 @@ console.log(result.data[0].b64_json.slice(0, 64));`
           this.apiBase = config.api_base_url
         }
       } catch (e) {
-        // fallback: keep empty or use current origin
+        console.error('Failed to fetch site config:', e)
         this.apiBase = window.location.origin
       }
+    },
+    handleCopy(text, key) {
+      this.copyText(text)
+      this.$set(this.copyStates, key, true)
+      setTimeout(() => {
+        this.$set(this.copyStates, key, false)
+      }, 2000)
     },
     copyText(text) {
       if (navigator.clipboard) {
         navigator.clipboard.writeText(text).then(() => {
           this.$message.success('已复制到剪贴板')
+        }).catch(() => {
+          this.fallbackCopyText(text)
         })
       } else {
-        const textarea = document.createElement('textarea')
-        textarea.value = text
-        document.body.appendChild(textarea)
-        textarea.select()
-        document.execCommand('copy')
-        document.body.removeChild(textarea)
-        this.$message.success('已复制到剪贴板')
+        this.fallbackCopyText(text)
       }
+    },
+    fallbackCopyText(text) {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        document.execCommand('copy')
+        this.$message.success('已复制到剪贴板')
+      } catch (err) {
+        this.$message.error('复制失败，请手动选择复制')
+      }
+      document.body.removeChild(textarea)
     },
     scrollTo(section) {
       this.activeSection = section
       const el = document.getElementById('section-' + section)
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        el.scrollIntoView({ behavior: 'smooth' })
       }
     }
   }
@@ -885,408 +454,404 @@ console.log(result.data[0].b64_json.slice(0, 64));`
 </script>
 
 <style lang="less" scoped>
-.quickstart-page {
-  max-width: 960px;
-  margin: 0 auto;
+@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
 
-  // Hero Card
-  .hero-card {
-    border-radius: 16px;
-    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.12);
-    margin-bottom: 24px;
-    background: linear-gradient(135deg, #f8f9ff 0%, #f0f0ff 100%);
-    overflow: hidden;
+.quick-start-page {
+  position: relative;
+  min-height: 100vh;
+  padding: 40px 20px;
+  background: transparent;
+
+  .page-container {
     position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
 
-    &::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 4px;
-      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    }
-
-    .hero-content {
+  /* ===== Hero Section ===== */
+  .hero-section {
+    margin-bottom: 40px;
+    
+    .hero-glass {
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(20px);
+      border-radius: 32px;
+      padding: 60px 40px;
       text-align: center;
-      padding: 20px 0 24px;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
 
-      .hero-icon {
-        font-size: 40px;
-        color: #667eea;
-        margin-bottom: 12px;
+      .hero-badge {
+        display: inline-block;
+        padding: 4px 16px;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        color: #fff;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 24px;
       }
 
       .hero-title {
-        font-size: 26px;
-        font-weight: 700;
+        font-size: 48px;
+        font-weight: 800;
         color: #1a1a2e;
-        margin: 0 0 8px;
+        margin-bottom: 16px;
+        letter-spacing: -1px;
+        
+        span {
+          background: linear-gradient(135deg, #667eea, #764ba2);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
       }
 
       .hero-desc {
-        font-size: 15px;
-        color: #8c8c8c;
-        margin: 0;
-      }
-    }
-
-    .steps-bar {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px 0 8px;
-      gap: 12px;
-
-      .step-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 16px;
-        border-radius: 20px;
-        cursor: pointer;
-        transition: all 0.3s;
-        font-size: 14px;
-        color: #8c8c8c;
-
-        &:hover {
-          background: rgba(102, 126, 234, 0.08);
-        }
-
-        &.active {
-          background: rgba(102, 126, 234, 0.1);
-          color: #667eea;
-          font-weight: 500;
-
-          .step-num {
-            background: #667eea;
-            color: #fff;
-          }
-        }
-
-        .step-num {
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          background: #e0e0e0;
-          color: #999;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 600;
-          transition: all 0.3s;
-        }
-      }
-
-      .step-divider {
-        width: 32px;
-        height: 2px;
-        background: #e0e0e0;
-        border-radius: 1px;
+        font-size: 18px;
+        color: #595959;
+        max-width: 700px;
+        margin: 0 auto 40px;
+        line-height: 1.6;
       }
     }
   }
 
-  // Section Cards
-  .section-card {
-    border-radius: 12px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-    margin-bottom: 20px;
+  .sticky-nav-wrapper {
+    position: sticky;
+    top: -24px;
+    z-index: 100;
+    margin: 0 -24px 24px -24px;
+    padding: 16px 24px;
+    background: rgba(255, 255, 255, 0.4);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  }
 
-    .section-header {
+  .navigation-stepper {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    max-width: 1200px;
+    margin: 0 auto;
+
+    .nav-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 20px;
+      background: rgba(255, 255, 255, 0.6);
+      backdrop-filter: blur(10px);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+
+      &:hover {
+        transform: translateY(-2px);
+        background: rgba(255, 255, 255, 0.9);
+        border-color: #667eea;
+      }
+
+      &.active {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: #fff;
+        border-color: #667eea;
+        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+
+        .nav-step-icon { background: rgba(255,255,255,0.2); color: #fff; }
+      }
+
+      .nav-step-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        background: #f5f7ff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #667eea;
+        font-size: 14px;
+        transition: all 0.3s;
+      }
+
+      .nav-step-text { font-size: 14px; font-weight: 700; }
+    }
+  }
+
+  /* ===== Step Sections ===== */
+  .step-section {
+    margin-bottom: 32px;
+    scroll-margin-top: 100px;
+  }
+
+  .section-card-glass {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(20px);
+    border-radius: 28px;
+    padding: 40px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    display: flex;
+    gap: 32px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.02);
+
+    .section-badge {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: #f5f7ff;
+      color: #667eea;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+      flex-shrink: 0;
+      border: 1px solid rgba(102, 126, 234, 0.1);
+    }
+
+    .section-content {
+      flex: 1;
+      
+      .section-title { font-size: 24px; font-weight: 700; color: #1a1a2e; margin-bottom: 12px; }
+      p { font-size: 15px; color: #595959; line-height: 1.7; margin-bottom: 24px; }
+    }
+  }
+
+  .animated-link {
+    color: #667eea;
+    font-weight: 600;
+    position: relative;
+    cursor: pointer;
+    &::after {
+      content: '';
+      position: absolute;
+      bottom: -2px; left: 0; width: 0; height: 2px;
+      background: #667eea; transition: width 0.3s;
+    }
+    &:hover::after { width: 100%; }
+  }
+
+  .custom-alert {
+    border-radius: 16px;
+    border: none;
+    background: rgba(102, 126, 234, 0.06);
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    /deep/ .ant-alert-message { font-weight: 700; color: #1a1a2e; }
+  }
+
+  /* ===== Config Display ===== */
+  .config-display {
+    background: #f8fafc;
+    border-radius: 20px;
+    padding: 8px;
+    border: 1px solid #f1f5f9;
+
+    .config-row {
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      gap: 20px;
+
+      & + .config-row { border-top: 1px solid #f1f5f9; }
+
+      .config-label {
+        width: 100px;
+        font-size: 14px;
+        color: #8c8c8c;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      .config-value-group {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        
+        .config-code {
+          background: rgba(255, 255, 255, 0.5);
+          backdrop-filter: blur(10px);
+          padding: 6px 14px;
+          border-radius: 10px;
+          border: 1px solid #e2e8f0;
+          font-family: monospace;
+          font-size: 13px;
+          color: #1a1a2e;
+        }
+      }
+    }
+  }
+
+  .copy-btn-mini {
+    color: #bfbfbf;
+    &:hover { color: #667eea; }
+    .success-icon { color: #52c41a; }
+  }
+
+  /* ===== Tabs & Tool Content ===== */
+  .modern-tabs {
+    /deep/ .ant-tabs-nav { margin-bottom: 24px; }
+    /deep/ .ant-tabs-tab { font-size: 15px; font-weight: 600; }
+    /deep/ .ant-tabs-ink-bar { height: 3px; border-radius: 3px; background: #667eea; }
+  }
+
+  .tool-content {
+    .tool-meta {
       display: flex;
       align-items: center;
       gap: 12px;
       margin-bottom: 20px;
-
-      .section-badge {
-        width: 32px;
-        height: 32px;
-        border-radius: 10px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: #fff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 15px;
-        font-weight: 700;
-        flex-shrink: 0;
-      }
-
-      .section-title {
-        font-size: 18px;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 0;
-      }
-    }
-
-    .section-body {
-      p {
-        font-size: 14px;
-        color: #595959;
-        line-height: 1.8;
-        margin-bottom: 12px;
-
-        a {
-          color: #667eea;
-          font-weight: 500;
-          cursor: pointer;
-
-          &:hover {
-            text-decoration: underline;
-          }
-        }
-
-        code {
-          background: #f5f5f5;
-          padding: 2px 6px;
-          border-radius: 4px;
-          font-size: 13px;
-          color: #d4380d;
-        }
-      }
+      span { font-size: 14px; font-weight: 600; color: #1a1a2e; }
+      code { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
     }
   }
 
-  // Info Box
-  .info-box {
-    background: #fafafa;
-    border: 1px solid #f0f0f0;
-    border-radius: 10px;
-    padding: 16px 20px;
+  /* ===== Terminal Block ===== */
+  .terminal-block {
+    background: #1e1e2e;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.1);
 
-    .info-row {
+    &.dark { background: #0c0c14; }
+
+    .terminal-header {
+      background: rgba(255,255,255,0.05);
+      padding: 12px 20px;
       display: flex;
       align-items: center;
-      padding: 10px 0;
+      gap: 8px;
 
-      & + .info-row {
-        border-top: 1px solid #f0f0f0;
-      }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #333; }
+      .dot.red { background: #ff5f56; }
+      .dot.yellow { background: #ffbd2e; }
+      .dot.green { background: #27c93f; }
 
-      .info-label {
-        width: 120px;
-        font-size: 13px;
-        color: #8c8c8c;
-        flex-shrink: 0;
-      }
-
-      .info-value {
-        font-size: 14px;
-
-        code {
-          background: #f5f5f5;
-          padding: 4px 10px;
-          border-radius: 6px;
-          font-size: 13px;
-          color: #1a1a2e;
-        }
-
-        &.copyable {
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-
-          .copy-icon {
-            color: #bfbfbf;
-            transition: color 0.3s;
-          }
-
-          &:hover {
-            code {
-              background: #e8e8ff;
-            }
-
-            .copy-icon {
-              color: #667eea;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Config Tabs
-  .config-tabs {
-    /deep/ .ant-tabs-tab {
-      font-weight: 500;
+      .terminal-title { margin-left: 12px; font-size: 12px; color: #888; font-weight: 500; font-family: monospace; }
+      .terminal-copy { margin-left: auto; color: #666; cursor: pointer; transition: color 0.3s; &:hover { color: #fff; } }
     }
 
-    /deep/ .ant-tabs-ink-bar {
-      background: linear-gradient(90deg, #667eea, #764ba2);
-    }
-  }
-
-  .protocol-header {
-    display: flex;
-    align-items: center;
-    margin-bottom: 16px;
-
-    .protocol-info {
-      h3 {
-        font-size: 16px;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 0 0 4px;
-      }
-
-      p {
-        font-size: 13px;
-        color: #8c8c8c;
-        margin: 0;
-      }
-    }
-  }
-
-  .code-example-tabs {
-    /deep/ .ant-tabs-nav {
-      margin-bottom: 12px;
-    }
-
-    /deep/ .ant-tabs-tab {
-      padding: 6px 12px;
-      font-size: 13px;
-    }
-  }
-
-  .tool-header {
-    display: flex;
-    align-items: center;
-    margin-bottom: 16px;
-
-    .tool-info {
-      h3 {
-        font-size: 16px;
-        font-weight: 600;
-        color: #1a1a2e;
-        margin: 0 0 4px;
-      }
-
-      p {
-        font-size: 13px;
-        color: #8c8c8c;
-        margin: 0;
-      }
-    }
-  }
-
-  // Code Section
-  .code-section {
-    .code-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      color: #595959;
-    }
-
-    .code-block {
-      background: #1e1e2e;
-      border-radius: 10px;
-      padding: 16px 20px;
+    .terminal-body {
+      padding: 24px;
       margin: 0;
-      overflow-x: auto;
-
       code {
         color: #cdd6f4;
-        font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
-        font-size: 13px;
-        line-height: 1.7;
-        white-space: pre;
+        font-family: 'MonoLisa', 'Fira Code', 'JetBrains Mono', monospace;
+        font-size: 14px;
+        line-height: 1.6;
       }
     }
   }
 
-  // Step List
-  .step-list {
-    .step-list-item {
+  /* ===== API Integration Section ===== */
+  .protocol-box {
+    background: #fafbff;
+    border-radius: 20px;
+    padding: 24px;
+    border: 1px solid #f0f3ff;
+
+    .endpoint-line {
       display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 12px 0;
-
-      & + .step-list-item {
-        border-top: 1px solid #f5f5f5;
-      }
-
-      .step-list-num {
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: #fff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+      
+      .e-method {
+        padding: 4px 12px;
+        background: #e6f7ff;
+        color: #1890ff;
+        border-radius: 6px;
+        font-weight: 800;
         font-size: 12px;
-        font-weight: 600;
-        flex-shrink: 0;
-        margin-top: 1px;
+        &.purple { background: #f9f0ff; color: #722ed1; }
+        &.green { background: #f6ffed; color: #52c41a; }
       }
+      .e-url { font-family: monospace; font-size: 14px; color: #1a1a2e; font-weight: 600; }
+    }
+  }
 
-      span {
-        font-size: 14px;
-        color: #595959;
-        line-height: 1.7;
-
-        code {
-          background: #f5f5f5;
-          padding: 2px 6px;
-          border-radius: 4px;
-          font-size: 13px;
-          color: #d4380d;
-        }
-
-        strong {
-          color: #1a1a2e;
-        }
+  .code-editor-block {
+    .editor-tabs {
+      /deep/ .ant-tabs-nav-container { background: transparent; }
+      /deep/ .ant-tabs-tab { background: transparent; border: none; font-size: 13px; color: #8c8c8c; }
+      /deep/ .ant-tabs-tab-active { color: #667eea; font-weight: 700; }
+    }
+    
+    .editor-content {
+      position: relative;
+      background: #0d1117;
+      border-radius: 12px;
+      padding: 24px;
+      pre { margin: 0; }
+      code { color: #e6edf3; font-family: monospace; font-size: 13px; line-height: 1.7; }
+      .editor-copy {
+        position: absolute; top: 16px; right: 16px; color: #484f58; cursor: pointer; transition: all 0.3s;
+        &:hover { color: #fff; transform: scale(1.1); }
       }
     }
   }
 
-  // FAQ
-  .faq-collapse {
-    background: transparent;
+  .mini-alert { margin-top: 20px; border-radius: 12px; border: none; background: #fffbe6; }
 
-    /deep/ .ant-collapse-item {
-      border-bottom: 1px solid #f0f0f0;
+  /* ===== Success Footer ===== */
+  .success-footer {
+    margin-top: 32px;
+    padding: 24px;
+    background: #f6ffed;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    color: #52c41a;
+    font-weight: 600;
+    
+    .smile-icon { font-size: 24px; }
+  }
 
-      .ant-collapse-header {
-        font-size: 14px;
-        font-weight: 500;
+  /* ===== FAQ Section ===== */
+  .faq-section {
+    margin-top: 60px;
+    padding: 0 24px;
+
+    .section-header-centered {
+      text-align: center;
+      margin-bottom: 40px;
+      .faq-title {
+        font-size: 32px;
+        font-weight: 800;
         color: #1a1a2e;
-        padding: 14px 0 14px 24px;
-      }
-
-      .ant-collapse-content-box {
-        padding: 0 0 16px 24px;
-
-        p, li {
-          font-size: 14px;
-          color: #595959;
-          line-height: 1.8;
-        }
-
-        code {
-          background: #f5f5f5;
-          padding: 2px 6px;
-          border-radius: 4px;
-          font-size: 13px;
-          color: #d4380d;
-        }
-
-        ul, ol {
-          padding-left: 20px;
-          margin: 8px 0;
-        }
+        span { opacity: 0.1; font-size: 48px; position: absolute; margin-left: 20px; }
       }
     }
+  }
+
+  .premium-collapse {
+    background: transparent;
+    /deep/ .ant-collapse-item {
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(10px);
+      border-radius: 16px !important;
+      margin-bottom: 12px;
+      border: 1px solid #f0f0f0;
+      overflow: hidden;
+      
+      .ant-collapse-header { padding: 20px 24px; font-weight: 700; font-size: 16px; color: #1a1a2e; }
+      .ant-collapse-content { border-top: 1px solid #f8f8f8; }
+      .ant-collapse-content-box { padding: 20px 24px; color: #595959; font-size: 14px; line-height: 1.8; }
+    }
+  }
+
+  @media (max-width: 900px) {
+    .section-card-glass { flex-direction: column; gap: 20px; padding: 24px; }
+    .hero-glass { padding: 40px 20px; .hero-title { font-size: 32px; } }
   }
 }
 </style>

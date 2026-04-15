@@ -48,6 +48,53 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
     return raw_target, "openai_chat"
 
 
+def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
+    """Choose a stable mapped model for channel health checks."""
+    mappings = (
+        db.query(ModelChannelMapping)
+        .filter(
+            ModelChannelMapping.channel_id == channel.id,
+            ModelChannelMapping.enabled == 1,
+        )
+        .all()
+    )
+    if not mappings:
+        return None
+
+    actual_model_names = [
+        str(mapping.actual_model_name or "").strip()
+        for mapping in mappings
+        if str(mapping.actual_model_name or "").strip()
+    ]
+    if not actual_model_names:
+        return None
+
+    preferred_exact_targets = (
+        "responses:gpt-5.4",
+        "responses:gpt-oss-120b-medium",
+        "responses:gpt-5.3-codex-spark",
+        "responses:gpt-5.4-mini",
+        "responses:gpt-5.3-codex",
+        "responses:gpt-5.2",
+        "gpt-4o-mini",
+        "claude-sonnet-4.5",
+        "claude-haiku-4.5",
+    )
+    for preferred_target in preferred_exact_targets:
+        if preferred_target in actual_model_names:
+            return preferred_target
+
+    non_codex_targets = [
+        actual_model_name
+        for actual_model_name in actual_model_names
+        if "codex" not in actual_model_name.lower()
+    ]
+    if non_codex_targets:
+        return non_codex_targets[0]
+
+    return actual_model_names[0]
+
+
 class HealthService:
     """Concurrent health checks for all enabled channels."""
 
@@ -68,16 +115,7 @@ class HealthService:
 
         tasks = []
         for channel in channels:
-            # Find a model name to test with
-            mapping = (
-                db.query(ModelChannelMapping)
-                .filter(
-                    ModelChannelMapping.channel_id == channel.id,
-                    ModelChannelMapping.enabled == 1,
-                )
-                .first()
-            )
-            actual_model_name = mapping.actual_model_name if mapping else None
+            actual_model_name = _select_health_check_model(db, channel)
             tasks.append(HealthService._check_and_record(db, channel, actual_model_name))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -114,15 +152,7 @@ class HealthService:
         if not channel:
             raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
 
-        mapping = (
-            db.query(ModelChannelMapping)
-            .filter(
-                ModelChannelMapping.channel_id == channel_id,
-                ModelChannelMapping.enabled == 1,
-            )
-            .first()
-        )
-        actual_model_name = mapping.actual_model_name if mapping else None
+        actual_model_name = _select_health_check_model(db, channel)
 
         return await HealthService._check_and_record(db, channel, actual_model_name)
 

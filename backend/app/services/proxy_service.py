@@ -1517,16 +1517,22 @@ class ProxyService:
             return str(arguments)
 
     @staticmethod
-    def _normalize_responses_content_part(part: Any) -> Optional[dict[str, Any]]:
+    def _normalize_responses_content_part(
+        part: Any,
+        *,
+        role: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         """Normalize one Responses message content part into a stable upstream schema."""
+        normalized_role = str(role or "").strip().lower()
+        text_part_type = "output_text" if normalized_role == "assistant" else "input_text"
         if part is None:
             return None
         if isinstance(part, str):
             if part == "":
                 return None
-            return {"type": "input_text", "text": part}
+            return {"type": text_part_type, "text": part}
         if not isinstance(part, dict):
-            return {"type": "input_text", "text": str(part)}
+            return {"type": text_part_type, "text": str(part)}
 
         normalized = copy.deepcopy(part)
         part_type = str(normalized.get("type", "") or "")
@@ -1534,7 +1540,17 @@ class ProxyService:
             text_value = str(normalized.get("text", "") or "")
             if text_value == "":
                 return None
-            return {"type": "input_text", "text": text_value}
+            return {"type": text_part_type, "text": text_value}
+
+        if part_type == "refusal":
+            refusal_value = str(
+                normalized.get("refusal")
+                or normalized.get("text")
+                or ""
+            ).strip()
+            if refusal_value == "":
+                return None
+            return {"type": "refusal", "refusal": refusal_value}
 
         if part_type == "input_image":
             image_url = normalized.get("image_url")
@@ -2426,15 +2442,22 @@ class ProxyService:
 
             item = copy.deepcopy(raw_item)
             if item.get("type") == "message":
+                role = str(item.get("role", "") or "").strip().lower()
                 content = item.get("content")
                 normalized_content: list[dict[str, Any]] = []
                 if isinstance(content, list):
                     for part in content:
-                        normalized_part = ProxyService._normalize_responses_content_part(part)
+                        normalized_part = ProxyService._normalize_responses_content_part(
+                            part,
+                            role=role,
+                        )
                         if normalized_part is not None:
                             normalized_content.append(normalized_part)
                 else:
-                    normalized_part = ProxyService._normalize_responses_content_part(content)
+                    normalized_part = ProxyService._normalize_responses_content_part(
+                        content,
+                        role=role,
+                    )
                     if normalized_part is not None:
                         normalized_content.append(normalized_part)
                 item["content"] = normalized_content

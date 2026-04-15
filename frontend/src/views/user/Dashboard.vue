@@ -63,6 +63,7 @@
                         :end-val="card.value"
                         :duration="1600"
                         :decimals="card.decimals || 0"
+                        separator=","
                         class="count-val"
                       />
                       <span v-if="card.suffix" class="unit">{{ card.suffix }}</span>
@@ -523,27 +524,31 @@ export default {
 
   /* ===== Stats Grid ===== */
   .stats-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px;
     
     .premium-stat-card {
       position: relative; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(10px); border-radius: 24px;
       padding: 24px; border: 1px solid rgba(255, 255, 255, 0.6); overflow: hidden; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
       &:hover { transform: translateY(-8px); background: rgba(255, 255, 255, 0.9); box-shadow: 0 20px 40px rgba(0,0,0,0.06); }
 
-      .stat-inner { position: relative; z-index: 2; display: flex; gap: 16px; }
+      .stat-inner { position: relative; z-index: 2; display: flex; gap: 16px; align-items: center; }
+      .stat-body { flex: 1; min-width: 0; }
       .stat-icon-wrapper {
         width: 52px; height: 52px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 24px; color: #fff; flex-shrink: 0;
         box-shadow: 0 8px 16px rgba(0,0,0,0.1);
       }
       
-      .stat-label { font-size: 13px; color: #8c8c8c; font-weight: 600; margin-bottom: 4px; }
+      .stat-label { font-size: 13px; color: #8c8c8c; font-weight: 600; margin-bottom: 2px; }
       .stat-main {
-        display: flex; align-items: baseline; gap: 4px; margin-bottom: 8px;
-        .symbol { font-size: 16px; font-weight: 700; color: #595959; }
-        .count-val { font-size: 28px; font-weight: 800; color: #1a1a2e; font-family: 'MonoLisa', monospace; }
-        .unit { font-size: 12px; color: #bfbfbf; font-weight: 500; margin-left: 2px; }
+        display: flex; align-items: baseline; gap: 4px; margin-bottom: 4px; flex-wrap: wrap;
+        .symbol { font-size: 14px; font-weight: 700; color: #595959; }
+        .count-val { 
+          font-size: 24px; font-weight: 800; color: #1a1a2e; font-family: 'MonoLisa', monospace;
+          letter-spacing: -0.5px; line-height: 1.2;
+        }
+        .unit { font-size: 12px; color: #bfbfbf; font-weight: 600; margin-left: 2px; }
       }
-      .stat-footer-text { font-size: 12px; color: #bfbfbf; line-height: 1.4; }
+      .stat-footer-text { font-size: 11px; color: #bfbfbf; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       
       .card-glow { position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; opacity: 0.15; filter: blur(30px); pointer-events: none; }
     }

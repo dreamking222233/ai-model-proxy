@@ -43,6 +43,13 @@
             <div class="stat-l">成功率</div>
           </div>
         </div>
+        <div class="stat-mini-card animate__animated animate__fadeInUp" style="animation-delay: 0.4s">
+          <div class="stat-icon tok"><a-icon type="fire" /></div>
+          <div class="stat-body">
+            <div class="stat-v">{{ formatNumber(userInfo.total_tokens || summary.total_tokens) }}</div>
+            <div class="stat-l">累计 Token</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -496,18 +503,20 @@ export default {
     position: relative;
     z-index: 1;
     display: flex;
+    justify-content: center;
+    align-items: stretch;
     gap: 24px;
     padding: 0 24px;
     margin-bottom: 32px;
   }
 
   .wallet-main-card {
-    flex: 1;
-    min-width: 400px;
+    flex: 0 1 520px;
+    min-width: 380px;
     background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(20px);
     border-radius: 24px;
-    padding: 32px;
+    padding: 20px 24px;
     position: relative;
     overflow: hidden;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
@@ -526,8 +535,11 @@ export default {
 
   .wallet-content {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+    justify-content: center;
     align-items: center;
+    text-align: center;
+    gap: 16px;
     position: relative;
     z-index: 1;
   }
@@ -537,7 +549,7 @@ export default {
       font-size: 14px;
       color: #8c8c8c;
       font-weight: 500;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
     }
     .wallet-balance {
       display: flex;
@@ -545,12 +557,12 @@ export default {
       gap: 6px;
       
       .currency {
-        font-size: 24px;
+        font-size: 18px;
         font-weight: 700;
         color: #667eea;
       }
       .amount {
-        font-size: 44px;
+        font-size: 32px;
         font-weight: 800;
         color: #1a1a2e;
         letter-spacing: -1px;
@@ -560,8 +572,8 @@ export default {
   }
 
   .topup-btn {
-    height: 52px;
-    padding: 0 32px;
+    height: 40px;
+    padding: 0 24px;
     border-radius: 16px;
     font-size: 16px;
     font-weight: 700;
@@ -578,10 +590,10 @@ export default {
   }
 
   .stats-grid {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, 220px);
     gap: 12px;
-    width: 280px;
+    align-content: center;
   }
 
   .stat-mini-card {
@@ -602,11 +614,12 @@ export default {
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
+      font-size: 16px;
       
       &.req { background: rgba(54, 207, 201, 0.1); color: #36cfc9; }
       &.cost { background: rgba(245, 34, 45, 0.1); color: #f5222d; }
       &.rate { background: rgba(102, 126, 234, 0.1); color: #667eea; }
+      &.tok { background: rgba(250, 140, 22, 0.1); color: #fa8c16; }
     }
 
     .stat-body {
@@ -781,14 +794,14 @@ export default {
 
   .custom-spin { /deep/ .ant-spin-dot-item { background: #667eea; } }
 
-  @media (max-width: 1100px) {
+  @media (max-width: 1200px) {
     .wallet-header { flex-direction: column; }
-    .stats-grid { width: 100%; flex-direction: row; }
+    .stats-grid { width: 100%; grid-template-columns: repeat(2, 1fr); }
     .stat-mini-card { flex: 1; }
   }
 
   @media (max-width: 768px) {
-    .stats-grid { flex-direction: column; }
+    .stats-grid { grid-template-columns: 1fr; }
     .wallet-main-card { min-width: auto; }
     .filter-toolbar { flex-direction: column; align-items: stretch; }
   }

@@ -63,6 +63,12 @@ const routes = [
         meta: { title: '请求日志' }
       },
       {
+        path: 'ranking',
+        name: 'AdminUsageRanking',
+        component: () => import('@/views/user/UsageRanking.vue'),
+        meta: { title: '使用排行' }
+      },
+      {
         path: 'health',
         name: 'HealthMonitor',
         component: () => import('@/views/admin/HealthMonitor.vue'),
@@ -145,6 +151,12 @@ const routes = [
         name: 'UsageStats',
         component: () => import('@/views/user/UsageStats.vue'),
         meta: { title: '用量统计' }
+      },
+      {
+        path: 'ranking',
+        name: 'UsageRanking',
+        component: () => import('@/views/user/UsageRanking.vue'),
+        meta: { title: '使用排行' }
       },
       {
         path: 'quickstart',

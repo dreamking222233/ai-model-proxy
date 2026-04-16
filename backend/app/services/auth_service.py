@@ -7,11 +7,13 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.models.cache_log import CacheLog
+from app.models.log import ConversationCheckpoint, ConversationSession, UserBalance, UserImageBalance, UserSubscription
 from app.models.user import SysUser
-from app.models.log import UserBalance, UserImageBalance
+from app.models.user import UserApiKey
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.exceptions import ServiceException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 
 class AuthService:
@@ -156,16 +158,38 @@ class AuthService:
         }
 
     @staticmethod
-    def list_users(db: Session, page: int = 1, page_size: int = 20, keyword: str = None) -> tuple:
-        query = db.query(SysUser)
+    def list_users(
+        db: Session,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str = None,
+        sort_by: str = "id",
+        sort_order: str = "desc",
+    ) -> tuple:
+        query = db.query(SysUser, UserBalance.balance.label("balance")).outerjoin(
+            UserBalance, UserBalance.user_id == SysUser.id
+        )
         if keyword:
             like = f"%{keyword}%"
             query = query.filter(or_(SysUser.username.like(like), SysUser.email.like(like)))
+        sort_dir = sort_order.lower() if sort_order else "desc"
+        if sort_by == "balance":
+            order_column = func.coalesce(UserBalance.balance, 0)
+        elif sort_by == "last_login":
+            order_column = SysUser.last_login_at
+        else:
+            order_column = SysUser.id
+            sort_dir = "desc"
+
+        if sort_dir == "asc":
+            query = query.order_by(order_column.asc(), SysUser.id.asc())
+        else:
+            query = query.order_by(order_column.desc(), SysUser.id.desc())
+
         total = query.count()
-        users = query.order_by(SysUser.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        users = query.offset((page - 1) * page_size).limit(page_size).all()
         result = []
-        for u in users:
-            bal = db.query(UserBalance).filter(UserBalance.user_id == u.id).first()
+        for u, balance in users:
             image_bal = db.query(UserImageBalance).filter(UserImageBalance.user_id == u.id).first()
             result.append({
                 "id": u.id, "username": u.username, "email": u.email,
@@ -173,7 +197,7 @@ class AuthService:
                 "last_login": u.last_login_at.isoformat() if u.last_login_at else None,
                 "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
-                "balance": float(bal.balance) if bal else 0,
+                "balance": float(balance) if balance is not None else 0,
                 "image_credit_balance": int(image_bal.balance) if image_bal else 0,
                 "subscription_type": u.subscription_type,
                 "subscription_expires_at": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
@@ -206,6 +230,31 @@ class AuthService:
         db.commit()
         db.refresh(user)
         return user
+
+    @staticmethod
+    def delete_user(db: Session, user_id: int, operator_user_id: int) -> None:
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+        if user.id == operator_user_id:
+            raise ServiceException(403, "You cannot delete your own account", "DELETE_SELF_FORBIDDEN")
+
+        db.query(CacheLog).filter(CacheLog.user_id == user_id).delete(synchronize_session=False)
+        session_ids = [
+            row[0]
+            for row in db.query(ConversationSession.session_id).filter(ConversationSession.user_id == user_id).all()
+        ]
+        if session_ids:
+            db.query(ConversationCheckpoint).filter(ConversationCheckpoint.session_id.in_(session_ids)).delete(
+                synchronize_session=False
+            )
+        db.query(ConversationSession).filter(ConversationSession.user_id == user_id).delete(synchronize_session=False)
+        db.query(UserSubscription).filter(UserSubscription.user_id == user_id).delete(synchronize_session=False)
+        db.query(UserApiKey).filter(UserApiKey.user_id == user_id).delete(synchronize_session=False)
+        db.query(UserImageBalance).filter(UserImageBalance.user_id == user_id).delete(synchronize_session=False)
+        db.query(UserBalance).filter(UserBalance.user_id == user_id).delete(synchronize_session=False)
+        db.delete(user)
+        db.commit()
 
     @staticmethod
     def change_password(db: Session, user_id: int, old_password: str, new_password: str):

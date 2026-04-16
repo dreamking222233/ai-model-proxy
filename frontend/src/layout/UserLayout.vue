@@ -54,6 +54,10 @@
             <a-icon type="pie-chart" />
             <span>用量统计</span>
           </a-menu-item>
+          <a-menu-item key="/user/ranking">
+            <a-icon type="trophy" />
+            <span>使用排行</span>
+          </a-menu-item>
           <a-menu-item key="/user/quickstart">
             <a-icon type="rocket" />
             <span>快速开始</span>

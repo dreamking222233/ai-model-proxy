@@ -139,6 +139,24 @@
                 </a-button>
               </a-popconfirm>
             </a-tooltip>
+            <a-tooltip :title="record.id === currentUser.id ? '不能删除当前账号' : '删除'">
+              <a-popconfirm
+                :disabled="record.id === currentUser.id"
+                title="确定删除此用户？删除后将清理其账户数据。"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="handleDeleteUser(record)"
+              >
+                <a-button
+                  type="link"
+                  size="small"
+                  :disabled="record.id === currentUser.id"
+                  :style="{ color: record.id === currentUser.id ? '#d9d9d9' : '#f5222d' }"
+                >
+                  <a-icon type="delete" />
+                </a-button>
+              </a-popconfirm>
+            </a-tooltip>
           </a-space>
         </template>
       </a-table>
@@ -228,6 +246,7 @@ import {
   listUsers,
   updateUser,
   toggleUserStatus,
+  deleteUser,
   rechargeBalance,
   deductBalance,
   rechargeImageCredits,
@@ -242,6 +261,8 @@ export default {
       loading: false,
       userList: [],
       searchKeyword: '',
+      sortField: 'id',
+      sortOrder: 'desc',
       pagination: {
         current: 1,
         pageSize: 10,
@@ -256,10 +277,10 @@ export default {
         { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
         { title: '计费模式', key: 'subscription', width: 140, scopedSlots: { customRender: 'subscription' } },
-        { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, scopedSlots: { customRender: 'balance' } },
+        { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, sorter: true, scopedSlots: { customRender: 'balance' } },
         { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
-        { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, scopedSlots: { customRender: 'lastLogin' } },
-        { title: '操作', key: 'action', width: 160, align: 'center', scopedSlots: { customRender: 'action' } }
+        { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, sorter: true, scopedSlots: { customRender: 'lastLogin' } },
+        { title: '操作', key: 'action', width: 220, align: 'center', scopedSlots: { customRender: 'action' } }
       ],
       // Edit Modal
       editModalVisible: false,
@@ -287,6 +308,9 @@ export default {
     }
   },
   computed: {
+    currentUser() {
+      return this.$store.getters.currentUser || {}
+    },
     activeCount() {
       return this.userList.filter(u => u.status === 1).length
     },
@@ -307,7 +331,9 @@ export default {
       try {
         const params = {
           page: this.pagination.current,
-          page_size: this.pagination.pageSize
+          page_size: this.pagination.pageSize,
+          sort_by: this.sortField,
+          sort_order: this.sortOrder
         }
         if (this.searchKeyword) {
           params.keyword = this.searchKeyword
@@ -326,9 +352,13 @@ export default {
       this.pagination.current = 1
       this.fetchList()
     },
-    handleTableChange(pagination) {
+    handleTableChange(pagination, filters, sorter) {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
+      if (sorter && sorter.field) {
+        this.sortField = sorter.field === 'lastLogin' ? 'last_login' : sorter.field
+        this.sortOrder = sorter.order === 'ascend' ? 'asc' : 'desc'
+      }
       this.fetchList()
     },
     handleEdit(record) {
@@ -364,6 +394,20 @@ export default {
         this.fetchList()
       } catch (err) {
         console.error('Failed to toggle user status:', err)
+      }
+    },
+    async handleDeleteUser(record) {
+      if (this.currentUser.id === record.id) {
+        this.$message.warning('不能删除当前登录账号')
+        return
+      }
+      try {
+        await deleteUser(record.id)
+        this.$message.success('用户删除成功')
+        this.fetchList()
+      } catch (err) {
+        console.error('Failed to delete user:', err)
+        this.$message.error(err.message || '删除失败')
       }
     },
     getRechargeModalTitle() {

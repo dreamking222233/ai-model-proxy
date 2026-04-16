@@ -20,3 +20,16 @@ def get_model_usage_stats(
 ):
     stats = LogService.get_user_model_stats(db, current_user.id, days)
     return ResponseModel(data=stats)
+
+
+@router.get("/token-ranking", response_model=ResponseModel)
+def get_token_ranking(
+    days: int = Query(1, ge=1, le=30),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    ranking = LogService.get_token_ranking(db, days, 5)
+    return ResponseModel(data={
+        "days": days,
+        "ranking": ranking,
+    })

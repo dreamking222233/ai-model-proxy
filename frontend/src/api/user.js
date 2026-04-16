@@ -32,6 +32,13 @@ export function toggleUserStatus(id) {
   })
 }
 
+export function deleteUser(id) {
+  return request({
+    url: `/api/admin/users/${id}`,
+    method: 'delete'
+  })
+}
+
 export function rechargeBalance(data) {
   return request({
     url: '/api/admin/users/recharge',
@@ -114,6 +121,14 @@ export function revealApiKey(id) {
 export function getModelUsageStats(params) {
   return request({
     url: '/api/user/stats/model-usage',
+    method: 'get',
+    params
+  })
+}
+
+export function getTokenRanking(params) {
+  return request({
+    url: '/api/user/stats/token-ranking',
     method: 'get',
     params
   })

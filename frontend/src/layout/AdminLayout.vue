@@ -68,6 +68,10 @@
             <a-icon type="file-text" />
             <span>请求日志</span>
           </a-menu-item>
+          <a-menu-item key="/admin/ranking">
+            <a-icon type="trophy" />
+            <span>使用排行</span>
+          </a-menu-item>
           <a-menu-item key="/admin/config">
             <a-icon type="setting" />
             <span>系统配置</span>

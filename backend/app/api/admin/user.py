@@ -24,10 +24,12 @@ def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query(None),
+    sort_by: str = Query("id"),
+    sort_order: str = Query("desc"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    items, total = AuthService.list_users(db, page, page_size, keyword)
+    items, total = AuthService.list_users(db, page, page_size, keyword, sort_by, sort_order)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 
@@ -60,6 +62,22 @@ def toggle_user_status(
 ):
     user = AuthService.toggle_user_status(db, user_id)
     return ResponseModel(data={"id": user.id, "status": user.status})
+
+
+@router.delete("/{user_id}", response_model=ResponseModel)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    AuthService.delete_user(db, user_id, current_user.id)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "delete", "user", user_id,
+        f"Deleted user {user_id}",
+        None,
+    )
+    return ResponseModel(message="User deleted")
 
 
 @router.post("/recharge", response_model=ResponseModel)

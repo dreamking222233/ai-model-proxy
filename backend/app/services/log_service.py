@@ -364,6 +364,57 @@ class LogService:
         }
 
     @staticmethod
+    def get_token_ranking(db: Session, days: int = 1, limit: int = 5) -> list[dict]:
+        """
+        Get top users by token usage within the given time window.
+        """
+        now = datetime.utcnow()
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        rows = (
+            db.query(
+                SysUser.id.label("user_id"),
+                SysUser.username,
+                SysUser.role,
+                SysUser.avatar,
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(RequestLog.input_tokens), 0).label("input_tokens"),
+                func.coalesce(func.sum(RequestLog.output_tokens), 0).label("output_tokens"),
+                func.count(RequestLog.id).label("request_count"),
+                func.max(RequestLog.created_at).label("last_used_at"),
+            )
+            .join(SysUser, SysUser.id == RequestLog.user_id)
+            .filter(
+                RequestLog.user_id.isnot(None),
+                RequestLog.created_at >= since,
+            )
+            .group_by(SysUser.id, SysUser.username, SysUser.role, SysUser.avatar)
+            .order_by(
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).desc(),
+                func.count(RequestLog.id).desc(),
+                func.max(RequestLog.created_at).desc(),
+                SysUser.id.asc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
+        return [
+            {
+                "rank": index + 1,
+                "user_id": row.user_id,
+                "username": row.username,
+                "role": row.role,
+                "avatar": row.avatar,
+                "total_tokens": int(row.total_tokens or 0),
+                "input_tokens": int(row.input_tokens or 0),
+                "output_tokens": int(row.output_tokens or 0),
+                "request_count": int(row.request_count or 0),
+                "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            }
+            for index, row in enumerate(rows)
+        ]
+
+    @staticmethod
     def list_consumption_records(
         db: Session, page: int = 1, page_size: int = 20, user_id: int = None,
     ) -> tuple[list[dict], int]:

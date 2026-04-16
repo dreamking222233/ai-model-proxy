@@ -34,6 +34,7 @@
             placeholder="状态"
             allowClear
             style="width: 100%;"
+            @change="handleStatusChange"
           >
             <a-select-option value="success">
               <a-badge status="success" text="成功" />
@@ -52,6 +53,7 @@
             format="YYYY-MM-DD"
             :placeholder="['开始日期', '结束日期']"
             style="width: 100%;"
+            @change="handleDateRangeChange"
           />
         </a-col>
         <a-col :xs="24" :sm="12" :md="4">
@@ -71,6 +73,102 @@
           </div>
         </a-col>
       </a-row>
+    </div>
+
+    <div v-if="hasUserFilter" class="summary-card">
+      <div class="summary-header">
+        <div class="summary-title-wrap">
+          <h3 class="section-title">用户汇总</h3>
+          <span class="summary-subtitle">按当前用户和时间筛选条件统计</span>
+        </div>
+        <div v-if="userSummary && userSummary.user" class="summary-user">
+          <a-avatar :size="36" icon="user" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);" />
+          <div class="summary-user-meta">
+            <div class="summary-user-name-row">
+              <span class="summary-user-name">{{ userSummary.user.username || `用户 ${userSummary.user.id}` }}</span>
+              <a-tag :color="userSummary.user.role === 'admin' ? 'purple' : 'blue'">
+                {{ userSummary.user.role === 'admin' ? '管理员' : '用户' }}
+              </a-tag>
+              <a-tag :color="userSummary.user.status === 1 ? 'green' : 'red'">
+                {{ userSummary.user.status === 1 ? '正常' : '禁用' }}
+              </a-tag>
+            </div>
+            <div class="summary-user-desc">
+              <span>ID: {{ userSummary.user.id }}</span>
+              <span v-if="userSummary.user.email">{{ userSummary.user.email }}</span>
+              <span>统计范围：{{ getSummaryRangeText() }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <a-spin :spinning="userSummaryLoading">
+        <a-row :gutter="[16, 16]" class="summary-stats" v-if="userSummary && userSummary.summary">
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-stat-card">
+              <div class="summary-stat-label">请求数</div>
+              <div class="summary-stat-value">{{ formatNumber(userSummary.summary.request_count) }}</div>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-stat-card">
+              <div class="summary-stat-label">总 Token</div>
+              <div class="summary-stat-value">{{ formatNumber(userSummary.summary.total_tokens) }}</div>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-stat-card">
+              <div class="summary-stat-label">消费金额</div>
+              <div class="summary-stat-value summary-stat-value--cost">${{ formatCurrency(userSummary.summary.total_cost) }}</div>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-stat-card">
+              <div class="summary-stat-label">成功率</div>
+              <div class="summary-stat-value">{{ formatPercent(userSummary.summary.success_rate) }}%</div>
+            </div>
+          </a-col>
+        </a-row>
+
+        <a-row :gutter="[16, 12]" class="summary-metrics" v-if="userSummary && userSummary.summary">
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">输入 Token</span>
+              <span class="summary-metric-value">{{ formatNumber(userSummary.summary.input_tokens) }}</span>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">输出 Token</span>
+              <span class="summary-metric-value">{{ formatNumber(userSummary.summary.output_tokens) }}</span>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">图片积分</span>
+              <span class="summary-metric-value">{{ formatNumber(userSummary.summary.image_credits) }}</span>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="6">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">平均响应</span>
+              <span class="summary-metric-value">{{ formatDuration(userSummary.summary.avg_response_time_ms) }}</span>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="12">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">最近请求时间</span>
+              <span class="summary-metric-value">{{ userSummary.summary.last_request_at ? formatDate(userSummary.summary.last_request_at) : '-' }}</span>
+            </div>
+          </a-col>
+          <a-col :xs="24" :sm="12" :md="12">
+            <div class="summary-metric-item">
+              <span class="summary-metric-key">最后登录</span>
+              <span class="summary-metric-value">{{ userSummary && userSummary.user && userSummary.user.last_login_at ? formatDate(userSummary.user.last_login_at) : '从未登录' }}</span>
+            </div>
+          </a-col>
+        </a-row>
+      </a-spin>
     </div>
 
     <!-- Table Section -->
@@ -335,7 +433,7 @@
 </template>
 
 <script>
-import { listRequestLogs } from '@/api/system'
+import { getRequestUserSummary, listRequestLogs } from '@/api/system'
 import { formatDate } from '@/utils'
 
 export default {
@@ -343,7 +441,9 @@ export default {
   data() {
     return {
       loading: false,
+      userSummaryLoading: false,
       logList: [],
+      userSummary: null,
       filters: {
         model: '',
         status: undefined,
@@ -455,6 +555,9 @@ export default {
     }
   },
   computed: {
+    hasUserFilter() {
+      return String(this.filters.user_id || '').trim() !== ''
+    },
     errorModalTitle() {
       if (!this.selectedRecord.status) return '请求详情'
       const statusMap = {
@@ -476,6 +579,26 @@ export default {
   },
   methods: {
     formatDate,
+    buildRequestParams() {
+      const params = {
+        page: this.pagination.current,
+        page_size: this.pagination.pageSize
+      }
+      if (this.filters.model) {
+        params.model = this.filters.model
+      }
+      if (this.filters.status) {
+        params.status = this.filters.status
+      }
+      if (this.hasUserFilter) {
+        params.user_id = String(this.filters.user_id).trim()
+      }
+      if (this.filters.dateRange && this.filters.dateRange.length === 2) {
+        params.start_date = this.filters.dateRange[0].format('YYYY-MM-DD')
+        params.end_date = this.filters.dateRange[1].format('YYYY-MM-DD')
+      }
+      return params
+    },
     getStatusColor(status) {
       const map = {
         success: 'green',
@@ -521,6 +644,22 @@ export default {
     formatNumber(num) {
       if (num === null || num === undefined) return '0'
       return Number(num).toLocaleString()
+    },
+    formatCurrency(amount) {
+      return Number(amount || 0).toFixed(6)
+    },
+    formatPercent(value) {
+      return Number(value || 0).toFixed(1)
+    },
+    formatDuration(ms) {
+      if (!ms) return '-'
+      return `${(Number(ms) / 1000).toFixed(2)} s`
+    },
+    getSummaryRangeText() {
+      if (this.filters.dateRange && this.filters.dateRange.length === 2) {
+        return `${this.filters.dateRange[0].format('YYYY-MM-DD')} 至 ${this.filters.dateRange[1].format('YYYY-MM-DD')}`
+      }
+      return '全部时间'
     },
     hasCacheSummary(record) {
       if (!record) return false
@@ -583,36 +722,53 @@ export default {
     async fetchList() {
       this.loading = true
       try {
-        const params = {
-          page: this.pagination.current,
-          page_size: this.pagination.pageSize
-        }
-        if (this.filters.model) {
-          params.model = this.filters.model
-        }
-        if (this.filters.status) {
-          params.status = this.filters.status
-        }
-        if (this.filters.user_id) {
-          params.user_id = this.filters.user_id
-        }
-        if (this.filters.dateRange && this.filters.dateRange.length === 2) {
-          params.start_date = this.filters.dateRange[0].format('YYYY-MM-DD')
-          params.end_date = this.filters.dateRange[1].format('YYYY-MM-DD')
+        const params = this.buildRequestParams()
+        if (this.hasUserFilter) {
+          this.userSummary = null
+        } else {
+          this.userSummary = null
+          this.userSummaryLoading = false
         }
         const res = await listRequestLogs(params)
         const data = res.data || {}
         this.logList = data.list || []
         this.pagination.total = data.total || 0
+        if (this.hasUserFilter) {
+          await this.fetchUserSummary(params)
+        } else {
+          this.userSummary = null
+        }
       } catch (err) {
         console.error('Failed to fetch request logs:', err)
       } finally {
         this.loading = false
       }
     },
+    async fetchUserSummary(params) {
+      this.userSummaryLoading = true
+      try {
+        const res = await getRequestUserSummary({
+          user_id: params.user_id,
+          start_date: params.start_date,
+          end_date: params.end_date
+        })
+        this.userSummary = res.data || null
+      } catch (err) {
+        this.userSummary = null
+        console.error('Failed to fetch user summary:', err)
+      } finally {
+        this.userSummaryLoading = false
+      }
+    },
     handleFilter() {
       this.pagination.current = 1
       this.fetchList()
+    },
+    handleDateRangeChange() {
+      this.handleFilter()
+    },
+    handleStatusChange() {
+      this.handleFilter()
     },
     handleReset() {
       this.filters = {
@@ -621,6 +777,7 @@ export default {
         dateRange: [],
         user_id: ''
       }
+      this.userSummary = null
       this.pagination.current = 1
       this.fetchList()
     },
@@ -656,6 +813,15 @@ export default {
 
 <style lang="less" scoped>
 .request-log-page {
+  .section-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1a1a2e;
+    margin: 0;
+    padding-left: 12px;
+    border-left: 3px solid #667eea;
+  }
+
   /* ===== Page Header ===== */
   .page-header {
     display: flex;
@@ -759,6 +925,116 @@ export default {
   }
 
   /* ===== Table Card ===== */
+  .summary-card {
+    margin-bottom: 20px;
+    padding: 20px 24px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+    .summary-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .summary-title-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .summary-subtitle {
+      font-size: 13px;
+      color: #8c8c8c;
+    }
+
+    .summary-user {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .summary-user-meta {
+      min-width: 0;
+    }
+
+    .summary-user-name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+
+    .summary-user-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    .summary-user-desc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 12px;
+      color: #8c8c8c;
+    }
+
+    .summary-stats {
+      margin-bottom: 12px;
+    }
+
+    .summary-stat-card {
+      height: 100%;
+      padding: 16px 18px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #fafbff 0%, #f5f7ff 100%);
+      border: 1px solid #edf0ff;
+    }
+
+    .summary-stat-label {
+      font-size: 12px;
+      color: #8c8c8c;
+      margin-bottom: 8px;
+    }
+
+    .summary-stat-value {
+      font-size: 24px;
+      line-height: 1.1;
+      font-weight: 700;
+      color: #1a1a2e;
+
+      &--cost {
+        color: #fa8c16;
+      }
+    }
+
+    .summary-metric-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #f5f5f5;
+    }
+
+    .summary-metric-key {
+      font-size: 13px;
+      color: #8c8c8c;
+    }
+
+    .summary-metric-value {
+      font-size: 13px;
+      color: #1a1a2e;
+      font-weight: 500;
+      text-align: right;
+    }
+  }
+
   .table-card {
     background: #fff;
     border-radius: 12px;
@@ -770,15 +1046,6 @@ export default {
       justify-content: space-between;
       align-items: center;
       margin-bottom: 16px;
-    }
-
-    .section-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: #1a1a2e;
-      margin: 0;
-      padding-left: 12px;
-      border-left: 3px solid #667eea;
     }
 
     .table-total {
@@ -1190,6 +1457,14 @@ export default {
 
       a {
         color: #667eea;
+      }
+    }
+  }
+
+  @media (max-width: 992px) {
+    .summary-card {
+      .summary-header {
+        flex-direction: column;
       }
     }
   }

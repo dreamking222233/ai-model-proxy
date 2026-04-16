@@ -27,6 +27,18 @@ def list_request_logs(
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/requests/user-summary", response_model=ResponseModel)
+def get_request_user_summary(
+    user_id: int = Query(...),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    summary = LogService.get_admin_user_usage_summary(db, user_id, start_date, end_date)
+    return ResponseModel(data=summary)
+
+
 @router.get("/requests/stats", response_model=ResponseModel)
 def get_request_stats(
     days: int = Query(7, ge=1, le=90),

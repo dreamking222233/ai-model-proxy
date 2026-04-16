@@ -18,6 +18,28 @@ class LogService:
     """Query and create log records, compute aggregated statistics."""
 
     @staticmethod
+    def _parse_date_filters(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> tuple[Optional[datetime], Optional[datetime]]:
+        start_dt: Optional[datetime] = None
+        end_dt: Optional[datetime] = None
+
+        if start_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            except ValueError:
+                start_dt = None
+
+        if end_date:
+            try:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            except ValueError:
+                end_dt = None
+
+        return start_dt, end_dt
+
+    @staticmethod
     def _load_cache_details(details_json: Optional[str]) -> Optional[dict]:
         """Parse cached request-summary JSON safely."""
         if not details_json:
@@ -66,18 +88,11 @@ class LogService:
             query = query.filter(RequestLog.requested_model == model)
         if status:
             query = query.filter(RequestLog.status == status)
-        if start_date:
-            try:
-                dt = datetime.strptime(start_date, "%Y-%m-%d")
-                query = query.filter(RequestLog.created_at >= dt)
-            except ValueError:
-                pass
-        if end_date:
-            try:
-                dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                query = query.filter(RequestLog.created_at < dt)
-            except ValueError:
-                pass
+        start_dt, end_dt = LogService._parse_date_filters(start_date, end_date)
+        if start_dt:
+            query = query.filter(RequestLog.created_at >= start_dt)
+        if end_dt:
+            query = query.filter(RequestLog.created_at < end_dt)
 
         total = query.count()
         rows = (
@@ -144,6 +159,81 @@ class LogService:
             for log, username, total_cost, cache_details in rows
         ]
         return result, total
+
+    @staticmethod
+    def get_admin_user_usage_summary(
+        db: Session,
+        user_id: int,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> dict:
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+
+        start_dt, end_dt = LogService._parse_date_filters(start_date, end_date)
+
+        request_query = db.query(RequestLog).filter(RequestLog.user_id == user_id)
+        if start_dt:
+            request_query = request_query.filter(RequestLog.created_at >= start_dt)
+        if end_dt:
+            request_query = request_query.filter(RequestLog.created_at < end_dt)
+
+        stats = request_query.with_entities(
+            func.count(RequestLog.id).label("request_count"),
+            func.coalesce(func.sum(RequestLog.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(RequestLog.output_tokens), 0).label("output_tokens"),
+            func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+            func.coalesce(func.sum(RequestLog.image_credits_charged), 0).label("image_credits"),
+            func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+            func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_count"),
+            func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
+            func.max(RequestLog.created_at).label("last_request_at"),
+        ).first()
+
+        cost_query = db.query(func.coalesce(func.sum(ConsumptionRecord.total_cost), 0)).filter(
+            ConsumptionRecord.user_id == user_id,
+            ConsumptionRecord.total_cost > 0,
+            ConsumptionRecord.model_name.isnot(None),
+        )
+        if start_dt:
+            cost_query = cost_query.filter(ConsumptionRecord.created_at >= start_dt)
+        if end_dt:
+            cost_query = cost_query.filter(ConsumptionRecord.created_at < end_dt)
+        total_cost = cost_query.scalar() or 0
+
+        request_count = int(stats.request_count or 0)
+        success_count = int(stats.success_count or 0)
+        failed_count = int(stats.failed_count or 0)
+
+        return {
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "status": user.status,
+                "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+            },
+            "summary": {
+                "request_count": request_count,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "success_rate": round((success_count / request_count) * 100, 1) if request_count > 0 else 100.0,
+                "input_tokens": int(stats.input_tokens or 0),
+                "output_tokens": int(stats.output_tokens or 0),
+                "total_tokens": int(stats.total_tokens or 0),
+                "image_credits": int(stats.image_credits or 0),
+                "total_cost": float(total_cost),
+                "avg_response_time_ms": float(stats.avg_response_time_ms or 0),
+                "last_request_at": stats.last_request_at.isoformat() if stats.last_request_at else None,
+            },
+            "range": {
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        }
 
     @staticmethod
     def get_request_stats(db: Session, days: int = 7) -> list[dict]:

@@ -67,6 +67,14 @@ export function listRequestLogs(params) {
   })
 }
 
+export function getRequestUserSummary(params) {
+  return request({
+    url: '/api/admin/logs/requests/user-summary',
+    method: 'get',
+    params
+  })
+}
+
 export function getRequestStats(days) {
   return request({
     url: '/api/admin/logs/requests/stats',

@@ -2008,6 +2008,64 @@ class ProxyService:
         return json.dumps(payload, ensure_ascii=False)
 
     @staticmethod
+    def _rewrite_openai_payload_model(payload: dict[str, Any], requested_model: str) -> dict[str, Any]:
+        """Rewrite OpenAI-compatible payloads to the client-requested model alias."""
+        rewritten = copy.deepcopy(payload)
+        if requested_model and isinstance(rewritten, dict):
+            rewritten["model"] = requested_model
+        return rewritten
+
+    @staticmethod
+    def _rewrite_anthropic_payload_model(payload: dict[str, Any], requested_model: str) -> dict[str, Any]:
+        """Rewrite Anthropic-compatible payloads to the client-requested model alias."""
+        rewritten = copy.deepcopy(payload)
+        if not requested_model or not isinstance(rewritten, dict):
+            return rewritten
+
+        if isinstance(rewritten.get("message"), dict):
+            rewritten["message"]["model"] = requested_model
+        elif rewritten.get("type") == "message" or "model" in rewritten:
+            rewritten["model"] = requested_model
+
+        return rewritten
+
+    @staticmethod
+    def _sanitize_visible_model_text(
+        value: Any,
+        requested_model: str,
+        actual_model: Optional[str] = None,
+    ) -> str:
+        """Replace mapped upstream model names in user-visible text with the requested alias."""
+        text = str(value or "")
+        if not requested_model:
+            return text
+
+        raw_actual_model = str(actual_model or "").strip()
+        if raw_actual_model and raw_actual_model != requested_model:
+            text = text.replace(raw_actual_model, requested_model)
+            if raw_actual_model.startswith("responses:"):
+                text = text.replace(raw_actual_model.split(":", 1)[1], requested_model)
+
+        return text
+
+    @staticmethod
+    def _sanitize_user_visible_service_exception(
+        exc: ServiceException,
+        requested_model: str,
+        actual_model: Optional[str] = None,
+    ) -> ServiceException:
+        """Return a new user-visible exception with mapped model names redacted."""
+        return ServiceException(
+            exc.status_code,
+            ProxyService._sanitize_visible_model_text(
+                exc.detail,
+                requested_model,
+                actual_model,
+            ),
+            exc.error_code,
+        )
+
+    @staticmethod
     def _extract_upstream_error_message(error_detail: str) -> str:
         """Unwrap nested upstream JSON error bodies into a short readable string."""
         message = str(error_detail or "").strip()
@@ -2132,6 +2190,7 @@ class ProxyService:
         )
 
         last_error: Exception | None = None
+        last_error_model: str | None = None
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
@@ -2174,14 +2233,19 @@ class ProxyService:
                     request_cache_info = error_cache_info
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
                 if mapped_request_error:
-                    request_error = mapped_request_error
+                    request_error = ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        upstream_model_name,
+                    )
                     logger.info(
                         "Responses channel %s (%d) rejected request without counting channel failure: %s",
-                        channel.name, channel.id, mapped_request_error.detail,
+                        channel.name, channel.id, request_error.detail,
                     )
                     continue
 
                 last_error = exc
+                last_error_model = upstream_model_name
                 logger.warning(
                     "Responses channel %s (%d) failed for model %s: %s",
                     channel.name, channel.id, actual_model_name, exc,
@@ -2192,7 +2256,15 @@ class ProxyService:
         if request_error:
             error_detail = request_error.detail
         else:
-            error_detail = str(last_error) if last_error else "Unknown error"
+            error_detail = (
+                ProxyService._sanitize_visible_model_text(
+                    str(last_error),
+                    requested_model,
+                    last_error_model,
+                )
+                if last_error
+                else "Unknown error"
+            )
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
@@ -2796,7 +2868,19 @@ class ProxyService:
             except Exception as exc:
                 stream_error = exc
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
-                error_message = mapped_request_error.detail if mapped_request_error else str(exc)
+                error_message = (
+                    ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        request_data.get("model"),
+                    ).detail
+                    if mapped_request_error
+                    else ProxyService._sanitize_visible_model_text(
+                        str(exc),
+                        requested_model,
+                        request_data.get("model"),
+                    )
+                )
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
                 yield ProxyService._payload_to_sse(
                     ProxyService._build_responses_error_payload(
@@ -2812,10 +2896,23 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
+                        sanitized_error_detail = (
+                            ProxyService._sanitize_user_visible_service_exception(
+                                mapped_request_error,
+                                requested_model,
+                                request_data.get("model"),
+                            ).detail
+                            if mapped_request_error
+                            else ProxyService._sanitize_visible_model_text(
+                                str(stream_error),
+                                requested_model,
+                                request_data.get("model"),
+                            )
+                        )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            sanitized_error_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -3220,6 +3317,7 @@ class ProxyService:
 
         # 4. Try each channel (failover)
         last_error: Exception | None = None
+        last_error_model: str | None = None
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
@@ -3313,14 +3411,19 @@ class ProxyService:
                             )
                             continue
 
-                        channel_request_error = mapped_request_error
+                        channel_request_error = ProxyService._sanitize_user_visible_service_exception(
+                            mapped_request_error,
+                            requested_model,
+                            upstream_model_name,
+                        )
                         logger.info(
                             "Channel %s (%d) rejected request without counting channel failure: %s",
-                            channel.name, channel.id, mapped_request_error.detail,
+                            channel.name, channel.id, channel_request_error.detail,
                         )
                         break
 
                     last_error = e
+                    last_error_model = upstream_model_name
                     logger.warning(
                         "Channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, upstream_model_name, e,
@@ -3337,7 +3440,15 @@ class ProxyService:
         if request_error:
             error_detail = request_error.detail
         else:
-            error_detail = str(last_error) if last_error else "Unknown error"
+            error_detail = (
+                ProxyService._sanitize_visible_model_text(
+                    str(last_error),
+                    requested_model,
+                    last_error_model,
+                )
+                if last_error
+                else "Unknown error"
+            )
         # Log the failure
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
@@ -3413,6 +3524,7 @@ class ProxyService:
 
         # 4. Failover
         last_error: Exception | None = None
+        last_error_model: str | None = None
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
@@ -3564,14 +3676,19 @@ class ProxyService:
                             )
                             continue
 
-                        channel_request_error = mapped_request_error
+                        channel_request_error = ProxyService._sanitize_user_visible_service_exception(
+                            mapped_request_error,
+                            requested_model,
+                            upstream_model_name,
+                        )
                         logger.info(
                             "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
-                            channel.name, channel.id, mapped_request_error.detail,
+                            channel.name, channel.id, channel_request_error.detail,
                         )
                         break
 
                     last_error = e
+                    last_error_model = upstream_model_name
                     logger.warning(
                         "Channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, upstream_model_name, e,
@@ -3587,7 +3704,15 @@ class ProxyService:
         if request_error:
             error_detail = request_error.detail
         else:
-            error_detail = str(last_error) if last_error else "Unknown error"
+            error_detail = (
+                ProxyService._sanitize_visible_model_text(
+                    str(last_error),
+                    requested_model,
+                    last_error_model,
+                )
+                if last_error
+                else "Unknown error"
+            )
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
@@ -3721,9 +3846,10 @@ class ProxyService:
                                         if finish_reason:
                                             collector.add_chunk("", finish_reason)
                             except (json.JSONDecodeError, TypeError):
-                                pass
+                                yield f"data: {data_str}\n\n"
+                                continue
 
-                            yield f"data: {data_str}\n\n"
+                            yield f"data: {json.dumps(ProxyService._rewrite_openai_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
                         else:
                             yield f"{line}\n"
 
@@ -3762,7 +3888,19 @@ class ProxyService:
             except Exception as e:
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
-                error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
+                error_message = (
+                    ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        request_data.get("model"),
+                    ).detail
+                    if mapped_request_error
+                    else ProxyService._sanitize_visible_model_text(
+                        f"Stream error: {str(e)}",
+                        requested_model,
+                        request_data.get("model"),
+                    )
+                )
                 logger.error("OpenAI stream error on channel %s: %s", channel.name, e)
                 error_payload = json.dumps({
                     "error": {
@@ -3781,10 +3919,23 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
+                        sanitized_error_detail = (
+                            ProxyService._sanitize_user_visible_service_exception(
+                                mapped_request_error,
+                                requested_model,
+                                request_data.get("model"),
+                            ).detail
+                            if mapped_request_error
+                            else ProxyService._sanitize_visible_model_text(
+                                str(stream_error),
+                                requested_model,
+                                request_data.get("model"),
+                            )
+                        )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            sanitized_error_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -3880,6 +4031,10 @@ class ProxyService:
                 usage = response_body.get("usage", {})
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
+            response_body = ProxyService._rewrite_openai_payload_model(
+                response_body,
+                requested_model,
+            )
 
             # Return standardized response format for the shared middleware contract
             return {
@@ -3968,6 +4123,7 @@ class ProxyService:
         )
         anthropic_request = ProxyService._convert_openai_request_to_anthropic(request_data)
         anthropic_request["stream"] = True
+        client_model_name = requested_model or model_name
 
         billing_input_tokens = 0
         billing_output_tokens = 0
@@ -4026,7 +4182,7 @@ class ProxyService:
                             if not role_sent:
                                 role_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={"role": "assistant"},
                                 )
@@ -4046,7 +4202,7 @@ class ProxyService:
                             if not role_sent:
                                 role_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={"role": "assistant"},
                                 )
@@ -4055,7 +4211,7 @@ class ProxyService:
                             if block_type == "tool_use":
                                 tool_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={
                                         "tool_calls": [{
@@ -4084,7 +4240,7 @@ class ProxyService:
                             if not role_sent:
                                 role_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={"role": "assistant"},
                                 )
@@ -4097,7 +4253,7 @@ class ProxyService:
                                     collected_usage["_first_stream_output_time"] = time.time()
                                 text_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={"content": str(text_value)},
                                 )
@@ -4108,7 +4264,7 @@ class ProxyService:
                                 collector.add_chunk(str(thinking_value))
                                 thinking_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={"reasoning_content": str(thinking_value)},
                                 )
@@ -4118,7 +4274,7 @@ class ProxyService:
                             if partial_json is not None and meta.get("type") == "tool_use":
                                 tool_delta_chunk = ProxyService._build_openai_stream_chunk(
                                     chunk_id=message_id,
-                                    model_name=upstream_model,
+                                    model_name=client_model_name,
                                     created_at=created_at,
                                     delta={
                                         "tool_calls": [{
@@ -4147,7 +4303,7 @@ class ProxyService:
                         if chunk_type == "message_stop":
                             final_chunk = ProxyService._build_openai_stream_chunk(
                                 chunk_id=message_id,
-                                model_name=upstream_model,
+                                model_name=client_model_name,
                                 created_at=created_at,
                                 delta={},
                                 finish_reason=ProxyService._convert_anthropic_stop_reason_to_openai(
@@ -4161,7 +4317,7 @@ class ProxyService:
                             yield f"data: {final_chunk}\n\n"
                             usage_chunk = ProxyService._build_openai_stream_chunk(
                                 chunk_id=message_id,
-                                model_name=upstream_model,
+                                model_name=client_model_name,
                                 created_at=created_at,
                                 usage={
                                     "prompt_tokens": input_tokens,
@@ -4204,7 +4360,19 @@ class ProxyService:
             except Exception as e:
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
-                error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
+                error_message = (
+                    ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        request_data.get("model"),
+                    ).detail
+                    if mapped_request_error
+                    else ProxyService._sanitize_visible_model_text(
+                        f"Stream error: {str(e)}",
+                        requested_model,
+                        request_data.get("model"),
+                    )
+                )
                 logger.error("OpenAI->Anthropic stream error on channel %s: %s", channel.name, e)
                 error_payload = json.dumps({
                     "error": {
@@ -4223,10 +4391,23 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
+                        sanitized_error_detail = (
+                            ProxyService._sanitize_user_visible_service_exception(
+                                mapped_request_error,
+                                requested_model,
+                                request_data.get("model"),
+                            ).detail
+                            if mapped_request_error
+                            else ProxyService._sanitize_visible_model_text(
+                                str(stream_error),
+                                requested_model,
+                                request_data.get("model"),
+                            )
+                        )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            sanitized_error_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -4310,9 +4491,17 @@ class ProxyService:
                 usage = anthropic_response.get("usage", {})
                 input_tokens = usage.get("input_tokens", 0)
                 output_tokens = usage.get("output_tokens", 0)
+            anthropic_response = ProxyService._rewrite_anthropic_payload_model(
+                anthropic_response,
+                requested_model,
+            )
 
             openai_response = ProxyService._convert_anthropic_response_to_openai(
                 anthropic_response
+            )
+            openai_response = ProxyService._rewrite_openai_payload_model(
+                openai_response,
+                requested_model,
             )
             return {
                 "response": openai_response,
@@ -5040,7 +5229,19 @@ class ProxyService:
             except Exception as exc:
                 stream_error = exc
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
-                error_message = mapped_request_error.detail if mapped_request_error else str(exc)
+                error_message = (
+                    ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        request_data.get("model"),
+                    ).detail
+                    if mapped_request_error
+                    else ProxyService._sanitize_visible_model_text(
+                        str(exc),
+                        requested_model,
+                        request_data.get("model"),
+                    )
+                )
                 logger.error("Anthropic->Responses stream error on channel %s: %s", channel.name, exc)
                 yield build_client_event(
                     "error",
@@ -5065,10 +5266,23 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
+                        sanitized_error_detail = (
+                            ProxyService._sanitize_user_visible_service_exception(
+                                mapped_request_error,
+                                requested_model,
+                                request_data.get("model"),
+                            ).detail
+                            if mapped_request_error
+                            else ProxyService._sanitize_visible_model_text(
+                                str(stream_error),
+                                requested_model,
+                                request_data.get("model"),
+                            )
+                        )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            sanitized_error_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -5535,9 +5749,10 @@ class ProxyService:
                                             stream_debug_extra["completed"] = True
 
                                     except (json.JSONDecodeError, TypeError):
-                                        pass
+                                        yield f"data: {data_str}\n\n"
+                                        continue
 
-                                    yield f"data: {data_str}\n\n"
+                                    yield f"data: {json.dumps(ProxyService._rewrite_anthropic_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
 
                                     if current_event == "message_stop":
                                         break
@@ -5594,7 +5809,19 @@ class ProxyService:
             except Exception as e:
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
-                error_message = mapped_request_error.detail if mapped_request_error else f"Stream error: {str(e)}"
+                error_message = (
+                    ProxyService._sanitize_user_visible_service_exception(
+                        mapped_request_error,
+                        requested_model,
+                        request_data.get("model"),
+                    ).detail
+                    if mapped_request_error
+                    else ProxyService._sanitize_visible_model_text(
+                        f"Stream error: {str(e)}",
+                        requested_model,
+                        request_data.get("model"),
+                    )
+                )
                 logger.error("Anthropic stream error on channel %s: %s", channel.name, e)
                 ProxyService._record_stream_debug_event(
                     stream_event_sequence,
@@ -5626,10 +5853,23 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
+                        sanitized_error_detail = (
+                            ProxyService._sanitize_user_visible_service_exception(
+                                mapped_request_error,
+                                requested_model,
+                                request_data.get("model"),
+                            ).detail
+                            if mapped_request_error
+                            else ProxyService._sanitize_visible_model_text(
+                                str(stream_error),
+                                requested_model,
+                                request_data.get("model"),
+                            )
+                        )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            mapped_request_error.detail if mapped_request_error else str(stream_error),
+                            sanitized_error_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -5812,6 +6052,10 @@ class ProxyService:
                             usage = response_body.get("usage", {})
                             input_tokens = usage.get("input_tokens", 0)
                             output_tokens = usage.get("output_tokens", 0)
+                        response_body = ProxyService._rewrite_anthropic_payload_model(
+                            response_body,
+                            requested_model,
+                        )
 
                         usage_summary = AnthropicPromptCacheService.extract_usage_summary(
                             response_body.get("usage") or {},

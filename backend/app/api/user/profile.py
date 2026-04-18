@@ -46,6 +46,8 @@ def get_usage_logs(
         db, page, page_size, user_id=current_user.id,
         start_date=start_date, end_date=end_date
     )
+    for item in items:
+        item["actual_model"] = None
 
     # Calculate summary statistics for the filtered date range
     summary = LogService.get_usage_summary(

@@ -31,6 +31,14 @@ export function updateChannel(id, data) {
   })
 }
 
+export function updateChannelHealthCheckModel(id, data) {
+  return request({
+    url: `/api/admin/channels/${id}/health-check-model`,
+    method: 'put',
+    data
+  })
+}
+
 export function deleteChannel(id) {
   return request({
     url: `/api/admin/channels/${id}`,

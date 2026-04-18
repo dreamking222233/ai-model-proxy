@@ -42,10 +42,11 @@ export function triggerHealthCheck() {
   })
 }
 
-export function checkSingleChannel(id) {
+export function checkSingleChannel(id, data) {
   return request({
     url: `/api/admin/health/check/${id}`,
-    method: 'post'
+    method: 'post',
+    data
   })
 }
 

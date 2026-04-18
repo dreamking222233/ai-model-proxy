@@ -29,6 +29,7 @@ class Channel(Base):
     health_score = Column(Integer, nullable=False, default=100, comment="Health score 0-100")
     failure_count = Column(Integer, nullable=False, default=0, comment="Consecutive failure count")
     circuit_breaker_until = Column(DateTime, nullable=True, comment="Circuit breaker expiry")
+    health_check_model = Column(String(128), nullable=True, comment="Preferred model used for health checks")
     last_health_check_at = Column(DateTime, nullable=True)
     last_success_at = Column(DateTime, nullable=True)
     last_failure_at = Column(DateTime, nullable=True)

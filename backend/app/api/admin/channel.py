@@ -4,7 +4,7 @@ from app.database import get_db
 from app.core.dependencies import get_current_user, require_admin
 from app.models.user import SysUser
 from app.services.channel_service import ChannelService
-from app.schemas.channel import ChannelCreate, ChannelUpdate
+from app.schemas.channel import ChannelCreate, ChannelHealthCheckModelUpdate, ChannelUpdate
 from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/api/admin/channels", tags=["管理-渠道管理"])
@@ -50,6 +50,21 @@ def update_channel(
     current_user: SysUser = Depends(require_admin),
 ):
     channel = ChannelService.update_channel(db, channel_id, data)
+    return ResponseModel(data=channel)
+
+
+@router.put("/{channel_id}/health-check-model", response_model=ResponseModel)
+def update_channel_health_check_model(
+    channel_id: int,
+    data: ChannelHealthCheckModelUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    channel = ChannelService.update_channel_health_check_model(
+        db,
+        channel_id,
+        data.health_check_model,
+    )
     return ResponseModel(data=channel)
 
 

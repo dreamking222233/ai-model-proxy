@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 
 
+def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
+    """Normalize an optional health-check model name."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 def get_system_config(db: Session, key: str, default=None):
     """Read a typed value from the system_config table."""
     config = db.query(SystemConfig).filter(SystemConfig.config_key == key).first()
@@ -50,6 +58,10 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
 
 def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
     """Choose a stable mapped model for channel health checks."""
+    explicit_model = _normalize_health_check_model(getattr(channel, "health_check_model", None))
+    if explicit_model:
+        return explicit_model
+
     mappings = (
         db.query(ModelChannelMapping)
         .filter(
@@ -141,7 +153,11 @@ class HealthService:
         return output
 
     @staticmethod
-    async def check_single_channel(db: Session, channel_id: int) -> dict:
+    async def check_single_channel(
+        db: Session,
+        channel_id: int,
+        override_model_name: Optional[str] = None,
+    ) -> dict:
         """
         Run a health check on a single channel.
 
@@ -152,7 +168,10 @@ class HealthService:
         if not channel:
             raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
 
-        actual_model_name = _select_health_check_model(db, channel)
+        actual_model_name = (
+            _normalize_health_check_model(override_model_name)
+            or _select_health_check_model(db, channel)
+        )
 
         return await HealthService._check_and_record(db, channel, actual_model_name)
 
@@ -330,6 +349,8 @@ class HealthService:
                 "is_healthy": bool(ch.is_healthy),
                 "health_score": ch.health_score,
                 "failure_count": ch.failure_count,
+                "health_check_model": _normalize_health_check_model(ch.health_check_model),
+                "effective_health_check_model": _select_health_check_model(db, ch),
                 "circuit_breaker_until": (
                     ch.circuit_breaker_until.isoformat() if ch.circuit_breaker_until else None
                 ),

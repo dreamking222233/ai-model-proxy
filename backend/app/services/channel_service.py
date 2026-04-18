@@ -17,6 +17,14 @@ class ChannelService:
     """CRUD and health summary for channels."""
 
     @staticmethod
+    def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
+        """Normalize the stored health-check model name."""
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @staticmethod
     def _resolve_default_auth_header_type(protocol_type: Optional[str]) -> str:
         """Choose the recommended upstream auth header for a protocol."""
         protocol = (protocol_type or "openai").lower()
@@ -49,6 +57,7 @@ class ChannelService:
             "health_score": channel.health_score,
             "failure_count": channel.failure_count,
             "circuit_breaker_until": channel.circuit_breaker_until.isoformat() if channel.circuit_breaker_until else None,
+            "health_check_model": ChannelService._normalize_health_check_model(channel.health_check_model),
             "last_health_check_at": channel.last_health_check_at.isoformat() if channel.last_health_check_at else None,
             "last_success_at": channel.last_success_at.isoformat() if channel.last_success_at else None,
             "last_failure_at": channel.last_failure_at.isoformat() if channel.last_failure_at else None,
@@ -78,6 +87,7 @@ class ChannelService:
                 d.get("auth_header_type")
                 or ChannelService._resolve_default_auth_header_type(d.get("protocol_type"))
             ),
+            health_check_model=ChannelService._normalize_health_check_model(d.get("health_check_model")),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
             description=d.get("description"),
@@ -118,8 +128,32 @@ class ChannelService:
                     value = value.rstrip("/")
                 setattr(channel, field, value)
 
+        if "health_check_model" in d:
+            channel.health_check_model = ChannelService._normalize_health_check_model(
+                d.get("health_check_model")
+            )
+
         if "protocol_type" in d and "auth_header_type" not in d:
             channel.auth_header_type = ChannelService._resolve_default_auth_header_type(protocol_value)
+
+        db.commit()
+        db.refresh(channel)
+        return ChannelService._channel_to_dict(channel)
+
+    @staticmethod
+    def update_channel_health_check_model(
+        db: Session,
+        channel_id: int,
+        health_check_model: Optional[str],
+    ) -> dict:
+        """Update only the persisted health-check model for a channel."""
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
+
+        channel.health_check_model = ChannelService._normalize_health_check_model(
+            health_check_model
+        )
 
         db.commit()
         db.refresh(channel)

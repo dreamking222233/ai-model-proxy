@@ -101,6 +101,21 @@
           </div>
         </template>
 
+        <template slot="healthCheckModel" slot-scope="text, record">
+          <div class="model-editor">
+            <a-auto-complete
+              :value="record._healthCheckModelDraft"
+              :data-source="getChannelModelOptions(record.channel_id)"
+              placeholder="输入或选择测试模型"
+              class="model-editor-input"
+              @change="value => handleHealthCheckModelChange(record, value)"
+            />
+            <div class="model-editor-hint" :class="{ 'is-dirty': isHealthCheckModelDirty(record) }">
+              {{ getHealthCheckModelHint(record) }}
+            </div>
+          </div>
+        </template>
+
         <template slot="healthScore" slot-scope="text">
           <div class="score-cell">
             <a-progress
@@ -132,16 +147,26 @@
         </template>
 
         <template slot="action" slot-scope="text, record">
-          <a-button
-            type="link"
-            size="small"
-            :loading="record._checking"
-            @click="handleCheckSingle(record)"
-            icon="reload"
-            class="check-btn"
-          >
-            检查
-          </a-button>
+          <div class="action-group">
+            <a-button
+              size="small"
+              :loading="record._savingModel"
+              :disabled="!isHealthCheckModelDirty(record)"
+              @click="handleSaveHealthCheckModel(record)"
+            >
+              保存
+            </a-button>
+            <a-button
+              type="link"
+              size="small"
+              :loading="record._checking"
+              @click="handleCheckSingle(record)"
+              icon="reload"
+              class="check-btn"
+            >
+              检查
+            </a-button>
+          </div>
         </template>
       </a-table>
     </a-card>
@@ -205,6 +230,8 @@
 
 <script>
 import { getHealthStatus, triggerHealthCheck, checkSingleChannel, getHealthLogs } from '@/api/system'
+import { updateChannelHealthCheckModel } from '@/api/channel'
+import { getChannelsModels } from '@/api/chat'
 import { formatDate } from '@/utils'
 
 export default {
@@ -214,12 +241,20 @@ export default {
       healthLoading: false,
       checkAllLoading: false,
       healthList: [],
+      channelModelOptions: {},
       cardAnimated: false,
       autoRefresh: false,
       autoRefreshTimer: null,
       showUpdateNotification: false,
       healthColumns: [
         { title: '渠道', dataIndex: 'channel_name', key: 'channelName', scopedSlots: { customRender: 'channelName' } },
+        {
+          title: '测试模型',
+          dataIndex: 'health_check_model',
+          key: 'healthCheckModel',
+          width: 280,
+          scopedSlots: { customRender: 'healthCheckModel' }
+        },
         {
           title: '健康分数',
           dataIndex: 'health_score',
@@ -245,7 +280,7 @@ export default {
         {
           title: '操作',
           key: 'action',
-          width: 90,
+          width: 140,
           align: 'center',
           scopedSlots: { customRender: 'action' }
         }
@@ -309,6 +344,7 @@ export default {
   },
   mounted() {
     this.fetchHealthStatus()
+    this.fetchChannelModelOptions()
     this.fetchHealthLogs()
     // Trigger card animation
     setTimeout(() => {
@@ -320,6 +356,34 @@ export default {
   },
   methods: {
     formatDate,
+    normalizeHealthCheckModel(value) {
+      if (value == null) return ''
+      return String(value).trim()
+    },
+    getChannelModelOptions(channelId) {
+      return this.channelModelOptions[channelId] || []
+    },
+    getHealthCheckModelHint(record) {
+      if (this.isHealthCheckModelDirty(record)) {
+        return '当前输入未保存，检查时会优先使用当前输入值'
+      }
+      if (record.health_check_model) {
+        return '已保存渠道测试模型'
+      }
+      if (record.effective_health_check_model) {
+        return `未单独设置，当前默认使用：${record.effective_health_check_model}`
+      }
+      return '未配置映射时将使用默认兜底模型'
+    },
+    isHealthCheckModelDirty(record) {
+      return this.normalizeHealthCheckModel(record._healthCheckModelDraft) !== this.normalizeHealthCheckModel(record.health_check_model)
+    },
+    handleHealthCheckModelChange(record, value) {
+      const index = this.healthList.findIndex(item => item.channel_id === record.channel_id)
+      if (index >= 0) {
+        this.$set(this.healthList[index], '_healthCheckModelDraft', value || '')
+      }
+    },
     getScoreGradient(score) {
       if (score >= 80) {
         return {
@@ -369,7 +433,25 @@ export default {
       try {
         const res = await getHealthStatus()
         const list = res.data || []
-        this.healthList = list.map(item => ({ ...item, _checking: false }))
+        const existingRows = {}
+        this.healthList.forEach(item => {
+          existingRows[item.channel_id] = item
+        })
+        this.healthList = list.map(item => {
+          const previous = existingRows[item.channel_id]
+          const savedModel = this.normalizeHealthCheckModel(item.health_check_model)
+          const previousDraft = previous ? this.normalizeHealthCheckModel(previous._healthCheckModelDraft) : ''
+          const nextDraft = previous && !previous._savingModel && previousDraft !== this.normalizeHealthCheckModel(previous.health_check_model)
+            ? previous._healthCheckModelDraft
+            : savedModel
+
+          return {
+            ...item,
+            _checking: previous ? !!previous._checking : false,
+            _savingModel: previous ? !!previous._savingModel : false,
+            _healthCheckModelDraft: nextDraft
+          }
+        })
         if (silent) {
           this.showNotification()
         }
@@ -380,6 +462,22 @@ export default {
         }
       } finally {
         this.healthLoading = false
+      }
+    },
+    async fetchChannelModelOptions() {
+      try {
+        const res = await getChannelsModels()
+        const channels = res.data || []
+        const options = {}
+        channels.forEach(channel => {
+          const modelNames = (channel.models || [])
+            .map(item => this.normalizeHealthCheckModel(item.actual_model_name))
+            .filter(Boolean)
+          options[channel.channel_id] = Array.from(new Set(modelNames))
+        })
+        this.channelModelOptions = options
+      } catch (err) {
+        console.error('Failed to fetch channel model options:', err)
       }
     },
     async handleCheckAll() {
@@ -403,7 +501,10 @@ export default {
         this.$set(this.healthList[index], '_checking', true)
       }
       try {
-        await checkSingleChannel(record.channel_id)
+        const modelName = this.normalizeHealthCheckModel(record._healthCheckModelDraft)
+        await checkSingleChannel(record.channel_id, {
+          model_name: modelName || null
+        })
         this.$message.success(`已触发 ${record.channel_name} 的健康检查`)
         setTimeout(() => {
           this.fetchHealthStatus()
@@ -414,6 +515,27 @@ export default {
       } finally {
         if (index >= 0) {
           this.$set(this.healthList[index], '_checking', false)
+        }
+      }
+    },
+    async handleSaveHealthCheckModel(record) {
+      const index = this.healthList.findIndex(h => h.channel_id === record.channel_id)
+      if (index < 0) return
+
+      this.$set(this.healthList[index], '_savingModel', true)
+      try {
+        const healthCheckModel = this.normalizeHealthCheckModel(record._healthCheckModelDraft)
+        await updateChannelHealthCheckModel(record.channel_id, {
+          health_check_model: healthCheckModel || ''
+        })
+        this.$message.success(`已保存 ${record.channel_name} 的测试模型`)
+        await this.fetchHealthStatus(true)
+      } catch (err) {
+        console.error('Failed to save channel health check model:', err)
+        this.$message.error('保存测试模型失败')
+      } finally {
+        if (this.healthList[index]) {
+          this.$set(this.healthList[index], '_savingModel', false)
         }
       }
     },
@@ -744,6 +866,33 @@ export default {
     &:hover {
       transform: scale(1.05);
     }
+  }
+
+  .model-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .model-editor-input {
+      width: 100%;
+    }
+
+    .model-editor-hint {
+      font-size: 12px;
+      line-height: 1.4;
+      color: #8c8c8c;
+
+      &.is-dirty {
+        color: #fa8c16;
+      }
+    }
+  }
+
+  .action-group {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
   }
 
   .health-table {

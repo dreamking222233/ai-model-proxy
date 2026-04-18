@@ -91,6 +91,7 @@ CREATE TABLE `channel` (
     `health_score` INT NOT NULL DEFAULT 100 COMMENT '健康分0-100',
     `failure_count` INT NOT NULL DEFAULT 0 COMMENT '连续失败次数',
     `circuit_breaker_until` DATETIME DEFAULT NULL COMMENT '熔断截止时间',
+    `health_check_model` VARCHAR(128) DEFAULT NULL COMMENT '健康检查优先使用的模型名',
     `last_health_check_at` DATETIME DEFAULT NULL,
     `last_success_at` DATETIME DEFAULT NULL,
     `last_failure_at` DATETIME DEFAULT NULL,

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import require_admin
@@ -8,6 +9,12 @@ from app.tasks.health_check import trigger_manual_check
 from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/api/admin/health", tags=["管理-健康监控"])
+
+
+class SingleChannelHealthCheckRequest(BaseModel):
+    """Optional payload for overriding the model used in a single health check."""
+
+    model_name: str | None = Field(default=None, max_length=128)
 
 
 @router.get("/status", response_model=ResponseModel)
@@ -32,10 +39,15 @@ async def trigger_health_check(
 @router.post("/check/{channel_id}", response_model=ResponseModel)
 async def check_single_channel(
     channel_id: int,
+    data: SingleChannelHealthCheckRequest | None = None,
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    result = await HealthService.check_single_channel(db, channel_id)
+    result = await HealthService.check_single_channel(
+        db,
+        channel_id,
+        data.model_name if data else None,
+    )
     return ResponseModel(data=result)
 
 

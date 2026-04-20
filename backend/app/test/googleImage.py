@@ -8,7 +8,7 @@ import os
 from google import genai
 
 
-api_key = os.getenv("GOOGLE_API_KEY")
+api_key = "AIzaSyCTsIcWU-Ck2v4TXF_xadkYauR1_UlJUEI"
 if not api_key:
     raise RuntimeError("Set GOOGLE_API_KEY before running this manual test")
 

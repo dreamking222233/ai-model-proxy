@@ -360,7 +360,7 @@ export default {
               ]),
               h('div', { class: 'box-row highlight' }, [
                 h('span', { class: 'dot green' }),
-                h('span', '新用户注册，立即赠送 $10 体验额度')
+                h('span', '新用户注册，立即赠送 $5 体验额度')
               ])
             ]),
             h('div', { class: 'dialog-contact' }, [

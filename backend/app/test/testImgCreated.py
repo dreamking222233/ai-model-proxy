@@ -8,11 +8,13 @@ import urllib.request
 from pathlib import Path
 
 
-BASE_URL = "https://api.xiaoleai.team"
-API_KEY = "sk-8a5a983b619a63dd0e5ce6542b14b0f5ac3dd4d4d98b6a2e"
+# BASE_URL = "https://api.xiaoleai.team"
+# API_KEY = "sk-8a5a983b619a63dd0e5ce6542b14b0f5ac3dd4d4d98b6a2e"
+BASE_URL = "http://localhost:8085"
+API_KEY = "sk-1b5300bc0b9dfe59769e499b86f3335a2c6fbc298cc3e1b4"
 ENDPOINT = "/v1/image/created"
 MODEL = "gemini-3.1-flash-image-preview"
-PROMPT = "生成一张一位程序员在咖啡厅里认真使用 Claude Code 编程的场景"
+PROMPT = "生成一张抖音首页女主播直播的截图"
 ASPECT_RATIO = "1:1"
 OUTPUT_DIR = Path("backend/app/test/output")
 

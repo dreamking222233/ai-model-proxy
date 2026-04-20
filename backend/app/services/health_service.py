@@ -12,12 +12,14 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.channel import Channel
-from app.models.model import ModelChannelMapping
+from app.models.model import ModelChannelMapping, UnifiedModel
 from app.models.log import HealthCheckLog, SystemConfig
 from app.core.exceptions import ServiceException
 
 logger = logging.getLogger(__name__)
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
+_DEFAULT_GOOGLE_HEALTH_CHECK_MODEL = "gemini-2.5-flash"
+_IMAGE_CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
@@ -53,6 +55,8 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
     protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
     if protocol == "anthropic":
         return raw_target, "anthropic_messages"
+    if protocol == "google":
+        return raw_target, "google_generate_content"
     return raw_target, "openai_chat"
 
 
@@ -81,6 +85,19 @@ def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
     if not actual_model_names:
         return None
 
+    protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
+    if protocol == "google":
+        non_image_targets = [
+            actual_model_name
+            for actual_model_name in actual_model_names
+            if "image" not in actual_model_name.lower()
+        ]
+        if non_image_targets:
+            return non_image_targets[0]
+        # Google image-only channels should still be checked with a lightweight text model
+        # unless an explicit health_check_model is configured on the channel.
+        return _DEFAULT_GOOGLE_HEALTH_CHECK_MODEL
+
     preferred_exact_targets = (
         "responses:gpt-5.4",
         "responses:gpt-oss-120b-medium",
@@ -107,6 +124,39 @@ def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
     return actual_model_names[0]
 
 
+def _is_image_only_channel(db: Session, channel: Channel) -> bool:
+    """Return True when all enabled mappings on the channel target image models."""
+    mapped_models = (
+        db.query(UnifiedModel.model_type)
+        .join(ModelChannelMapping, ModelChannelMapping.unified_model_id == UnifiedModel.id)
+        .filter(
+            ModelChannelMapping.channel_id == channel.id,
+            ModelChannelMapping.enabled == 1,
+            UnifiedModel.enabled == 1,
+        )
+        .all()
+    )
+    if not mapped_models:
+        return False
+    return all(str(model_type or "") == "image" for model_type, in mapped_models)
+
+
+def _should_skip_scheduled_check(db: Session, channel: Channel, now: datetime) -> bool:
+    """Image-only channels are checked much less frequently to avoid noisy probes."""
+    if not _is_image_only_channel(db, channel):
+        return False
+
+    interval_seconds = get_system_config(
+        db,
+        "image_channel_health_check_interval",
+        _IMAGE_CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS,
+    )
+    last_checked = channel.last_health_check_at
+    if last_checked is None:
+        return False
+    return (now - last_checked).total_seconds() < int(interval_seconds)
+
+
 class HealthService:
     """Concurrent health checks for all enabled channels."""
 
@@ -126,24 +176,45 @@ class HealthService:
             return []
 
         tasks = []
+        task_channels: list[Channel] = []
+        output: list[dict] = []
+        now = datetime.utcnow()
         for channel in channels:
+            if _should_skip_scheduled_check(db, channel, now):
+                logger.info(
+                    "Skipping scheduled health check for image-only channel %s (%d); last checked at %s",
+                    channel.name,
+                    channel.id,
+                    channel.last_health_check_at.isoformat() if channel.last_health_check_at else None,
+                )
+                output.append({
+                    "channel_id": channel.id,
+                    "channel_name": channel.name,
+                    "is_healthy": bool(channel.is_healthy),
+                    "response_time_ms": None,
+                    "error": None,
+                    "health_score": channel.health_score,
+                    "failure_count": channel.failure_count,
+                    "skipped": True,
+                })
+                continue
             actual_model_name = _select_health_check_model(db, channel)
             tasks.append(HealthService._check_and_record(db, channel, actual_model_name))
+            task_channels.append(channel)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results -- gather may return exceptions for individual tasks
-        output = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(
                     "Health check task failed for channel %s: %s",
-                    channels[i].name,
+                    task_channels[i].name,
                     result,
                 )
                 output.append({
-                    "channel_id": channels[i].id,
-                    "channel_name": channels[i].name,
+                    "channel_id": task_channels[i].id,
+                    "channel_name": task_channels[i].name,
                     "is_healthy": False,
                     "error": str(result),
                 })
@@ -249,7 +320,12 @@ class HealthService:
         base_url = channel.base_url.rstrip("/")
         protocol = channel.protocol_type
         upstream_model_name, upstream_api = _resolve_health_target(channel, actual_model_name)
-        header_protocol = "anthropic" if upstream_api == "anthropic_messages" else "openai"
+        if upstream_api == "anthropic_messages":
+            header_protocol = "anthropic"
+        elif upstream_api == "google_generate_content":
+            header_protocol = "google"
+        else:
+            header_protocol = "openai"
 
         if upstream_api == "responses":
             url = f"{base_url}/responses"
@@ -275,6 +351,12 @@ class HealthService:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": 5,
             }
+        elif protocol == "google":
+            url = f"{base_url}/v1beta/models/{upstream_model_name}:generateContent"
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": "Reply with OK only."}]}],
+                "generationConfig": {"maxOutputTokens": 5},
+            }
         else:
             return False, None, f"Unsupported protocol type: {protocol}"
 
@@ -290,7 +372,9 @@ class HealthService:
         if header_protocol == "anthropic":
             headers["anthropic-version"] = "2023-06-01"
 
-        if auth_header_type == "authorization":
+        if header_protocol == "google" and auth_header_type in {"x-goog-api-key", "x-api-key"}:
+            headers["x-goog-api-key"] = channel.api_key
+        elif auth_header_type == "authorization":
             headers["Authorization"] = f"Bearer {channel.api_key}"
         elif header_protocol == "openai" and auth_header_type == "x-api-key":
             headers["x-api-key"] = channel.api_key

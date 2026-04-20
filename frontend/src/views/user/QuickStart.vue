@@ -212,15 +212,65 @@
                 <div class="protocol-box">
                   <div class="endpoint-line">
                     <span class="e-method green">POST</span>
-                    <code class="e-url">/v1/images/generations</code>
+                    <code class="e-url">{{ relayOpenaiBase }}/images/generations</code>
                   </div>
+                  <div class="endpoint-line endpoint-line-secondary">
+                    <span class="e-method green">POST</span>
+                    <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
+                  </div>
+                  <p class="api-doc-intro">
+                    两个接口都可用于调用 Gemini 生图模型，均为非流式 HTTP 调用。推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>aspect_ratio</code>。
+                  </p>
                   <div class="code-editor-block">
                     <div class="editor-content">
                       <a-icon :type="copyStates['img-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageCurlCode, 'img-curl')" />
                       <pre><code>{{ imageCurlCode }}</code></pre>
                     </div>
                   </div>
-                  <a-alert message="注意" description="生图接口异步扣除图片积分，响应格式兼容 OpenAI 标准。" type="warning" class="mini-alert" />
+
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">请求参数</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-req">
+                        <span>参数</span>
+                        <span>必填</span>
+                        <span>说明</span>
+                      </div>
+                      <div v-for="item in imageRequestFields" :key="item.name" class="api-doc-row api-doc-row-req">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.required }}</span>
+                        <span>{{ item.description }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">返回参数</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-res">
+                        <span>字段</span>
+                        <span>说明</span>
+                        <span>示例</span>
+                      </div>
+                      <div v-for="item in imageResponseFields" :key="item.name" class="api-doc-row api-doc-row-res">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.description }}</span>
+                        <span>{{ item.example }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">响应示例</div>
+                    <div class="code-editor-block">
+                      <div class="editor-content">
+                        <a-icon :type="copyStates['img-res'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageResponseCode, 'img-res')" />
+                        <pre><code>{{ imageResponseCode }}</code></pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <a-alert message="注意" description="生图接口不支持 stream；图片以 b64_json 返回，需要业务侧自行 base64 解码保存。每次调用会按模型倍率扣除图片积分。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -384,12 +434,56 @@ print(msg.content[0].text)`
     },
     imageCurlCode() {
       return `curl -X POST "${this.relayOpenaiBase}/images/generations" \\
+  -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{
-    "model": "gemini-3.1-flash",
-    "prompt": "Cyberpunk city night",
-    "response_format": "b64_json"
+    "model": "gemini-3.1-flash-image-preview",
+    "prompt": "生成一张赛博朋克风格的城市夜景海报",
+    "response_format": "b64_json",
+    "aspect_ratio": "1:1",
+    "n": 1
   }'`
+    },
+    imageRequestFields() {
+      return [
+        { name: 'model', required: '是', description: '要调用的生图模型名称，例如 gemini-3.1-flash-image-preview 或 gemini-3-pro-image-preview。' },
+        { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
+        { name: 'response_format', required: '否', description: '返回格式，当前仅支持 b64_json。建议固定传 b64_json。' },
+        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16。' },
+        { name: 'size', required: '否', description: '可选尺寸映射参数，系统会尝试映射为对应 aspect_ratio。' },
+        { name: 'n', required: '否', description: '期望图片数量。建议传 1。' },
+        { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
+      ]
+    },
+    imageResponseFields() {
+      return [
+        { name: 'created', description: '响应创建时间戳。', example: '1710000000' },
+        { name: 'model', description: '本次请求使用的模型名。', example: 'gemini-3.1-flash-image-preview' },
+        { name: 'request_id', description: '平台生成的请求 ID，可用于排查日志。', example: 'uuid' },
+        { name: 'data[].b64_json', description: '图片的 Base64 内容，需要业务侧自行解码。', example: 'iVBORw0KGgoAAA...' },
+        { name: 'data[].mime_type', description: '图片 MIME 类型。', example: 'image/png' },
+        { name: 'usage.billing_type', description: '计费类型。生图接口为 image_credit。', example: 'image_credit' },
+        { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分次数。', example: '1' },
+        { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '1' }
+      ]
+    },
+    imageResponseCode() {
+      return `{
+  "created": 1710000000,
+  "model": "gemini-3.1-flash-image-preview",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...",
+      "mime_type": "image/png"
+    }
+  ],
+  "usage": {
+    "billing_type": "image_credit",
+    "image_credits_charged": 1,
+    "model_multiplier": 1
+  }
+}`
     },
     curlTest() {
       return `curl ${this.relayOpenaiBase}/chat/completions \\
@@ -616,6 +710,7 @@ print(msg.content[0].text)`
 
     .section-content {
       flex: 1;
+      min-width: 0;
       
       .section-title { font-size: 24px; font-weight: 700; color: #1a1a2e; margin-bottom: 12px; }
       p { font-size: 15px; color: #595959; line-height: 1.7; margin-bottom: 24px; }
@@ -757,10 +852,13 @@ print(msg.content[0].text)`
     border-radius: 20px;
     padding: 24px;
     border: 1px solid #f0f3ff;
+    overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
 
     .endpoint-line {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 16px;
       margin-bottom: 24px;
       
@@ -774,7 +872,14 @@ print(msg.content[0].text)`
         &.purple { background: #f9f0ff; color: #722ed1; }
         &.green { background: #f6ffed; color: #52c41a; }
       }
-      .e-url { font-family: monospace; font-size: 14px; color: #1a1a2e; font-weight: 600; }
+      .e-url { 
+        font-family: monospace; 
+        font-size: 14px; 
+        color: #1a1a2e; 
+        font-weight: 600;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+      }
     }
   }
 
@@ -784,19 +889,103 @@ print(msg.content[0].text)`
       /deep/ .ant-tabs-tab { background: transparent; border: none; font-size: 13px; color: #8c8c8c; }
       /deep/ .ant-tabs-tab-active { color: #667eea; font-weight: 700; }
     }
-    
+
     .editor-content {
       position: relative;
       background: #0d1117;
       border-radius: 12px;
       padding: 24px;
+      overflow-x: auto;
       pre { margin: 0; }
-      code { color: #e6edf3; font-family: monospace; font-size: 13px; line-height: 1.7; }
+      code {
+        color: #e6edf3;
+        font-family: monospace;
+        font-size: 13px;
+        line-height: 1.7;
+        white-space: pre;
+        word-break: normal;
+      }
       .editor-copy {
         position: absolute; top: 16px; right: 16px; color: #484f58; cursor: pointer; transition: all 0.3s;
         &:hover { color: #fff; transform: scale(1.1); }
       }
     }
+  }
+
+  .api-doc-intro {
+    margin-bottom: 20px;
+    color: #475569;
+  }
+
+  .api-doc-card {
+    margin-top: 20px;
+    padding: 18px 20px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid #edf2ff;
+    border-radius: 16px;
+
+    .code-editor-block .editor-content {
+      overflow-x: auto;
+      pre {
+        margin: 0;
+        white-space: pre;
+      }
+      code {
+        white-space: pre;
+        word-break: normal;
+      }
+    }
+  }
+
+  .api-doc-title {
+    margin-bottom: 14px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .api-doc-table {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .api-doc-row {
+    display: grid;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 13px;
+    line-height: 1.7;
+    overflow-x: auto; /* Allow internal scrolling if content is still too wide */
+
+    &.api-doc-row-req {
+      grid-template-columns: minmax(100px, 160px) 72px 1fr;
+    }
+
+    &.api-doc-row-res {
+      grid-template-columns: minmax(100px, 160px) 1.5fr 1fr;
+    }
+
+    code {
+      color: #4c1d95;
+      background: #f5f3ff;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    &.api-doc-head {
+      background: #eef2ff;
+      color: #4338ca;
+      font-weight: 700;
+    }
+  }
+
+  .endpoint-line-secondary {
+    margin-top: -12px;
+    margin-bottom: 16px;
   }
 
   .mini-alert { margin-top: 20px; border-radius: 12px; border: none; background: #fffbe6; }

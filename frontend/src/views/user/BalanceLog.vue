@@ -51,6 +51,16 @@
           </div>
         </div>
       </div>
+
+      <div class="image-credit-tip animate__animated animate__fadeInUp" style="animation-delay: 0.45s">
+        <a-alert
+          type="info"
+          show-icon
+          message="图片积分说明"
+          description="生图模型采用图片积分独立计费，不消耗账户余额。调用成功后会按模型倍率扣除图片积分；你可以在下方账单与明细中查看每次生图请求的积分扣除记录。"
+        />
+        <div class="image-credit-balance">当前图片积分余额：<strong>{{ formatNumber(userInfo.image_credit_balance || 0) }}</strong></div>
+      </div>
     </div>
 
     <!-- Main Content Section -->
@@ -294,7 +304,7 @@ export default {
       logs: [],
       dateRange: [],
       statusFilter: undefined,
-      userInfo: { balance: 0 },
+      userInfo: { balance: 0, image_credit_balance: 0 },
       summary: {
         total_requests: 0,
         total_tokens: 0,
@@ -625,6 +635,28 @@ export default {
     .stat-body {
       .stat-v { font-size: 18px; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
       .stat-l { font-size: 12px; color: #8c8c8c; }
+    }
+  }
+
+  .image-credit-tip {
+    margin: 20px 24px 0;
+
+    /deep/ .ant-alert {
+      border-radius: 16px;
+      border: none;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.03);
+    }
+
+    .image-credit-balance {
+      margin-top: 12px;
+      color: #475569;
+      font-size: 14px;
+
+      strong {
+        color: #7c3aed;
+        font-size: 18px;
+      }
     }
   }
 

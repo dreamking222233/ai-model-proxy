@@ -31,6 +31,12 @@ class Channel(Base):
     )
     priority = Column(Integer, nullable=False, default=10, comment="Priority, 1=highest")
     enabled = Column(SmallInteger, nullable=False, default=1)
+    health_check_enabled = Column(
+        SmallInteger,
+        nullable=False,
+        default=1,
+        comment="Whether this channel participates in health monitoring",
+    )
     is_healthy = Column(SmallInteger, nullable=False, default=1)
     health_score = Column(Integer, nullable=False, default=100, comment="Health score 0-100")
     failure_count = Column(Integer, nullable=False, default=0, comment="Consecutive failure count")

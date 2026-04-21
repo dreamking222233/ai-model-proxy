@@ -173,6 +173,17 @@ class HealthService:
     """Concurrent health checks for all enabled channels."""
 
     @staticmethod
+    def _list_health_monitored_channels(db: Session) -> list[Channel]:
+        return (
+            db.query(Channel)
+            .filter(
+                Channel.enabled == 1,
+                Channel.health_check_enabled == 1,
+            )
+            .all()
+        )
+
+    @staticmethod
     async def check_all_channels(db: Session) -> list[dict]:
         """
         Check all enabled channels concurrently.
@@ -183,7 +194,7 @@ class HealthService:
         Returns:
             List of dicts with check results per channel.
         """
-        channels = db.query(Channel).filter(Channel.enabled == 1).all()
+        channels = HealthService._list_health_monitored_channels(db)
         if not channels:
             return []
 
@@ -438,7 +449,7 @@ class HealthService:
         Returns:
             List of dicts with channel health information.
         """
-        channels = db.query(Channel).filter(Channel.enabled == 1).all()
+        channels = HealthService._list_health_monitored_channels(db)
 
         result = []
         for ch in channels:
@@ -453,6 +464,7 @@ class HealthService:
                 "channel_id": ch.id,
                 "channel_name": ch.name,
                 "protocol_type": ch.protocol_type,
+                "health_check_enabled": bool(ch.health_check_enabled),
                 "is_healthy": bool(ch.is_healthy),
                 "health_score": ch.health_score,
                 "failure_count": ch.failure_count,

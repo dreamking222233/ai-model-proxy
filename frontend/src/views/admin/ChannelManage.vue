@@ -99,6 +99,12 @@
         </a-tag>
       </template>
 
+      <template slot="health_check_enabled" slot-scope="text">
+        <a-tag :color="text ? 'blue' : 'default'" class="protocol-tag">
+          {{ text ? '监控开启' : '不监控' }}
+        </a-tag>
+      </template>
+
       <template slot="health" slot-scope="text, record">
         <a-badge
           :status="record.is_healthy ? 'success' : 'error'"
@@ -242,6 +248,16 @@
             class="form-switch"
           />
         </a-form-item>
+        <a-form-item label="参与健康监控">
+          <a-switch
+            :checked="form.health_check_enabled"
+            @change="val => form.health_check_enabled = val"
+            class="form-switch"
+          />
+          <div class="form-hint">
+            关闭后，该渠道不会参与定时健康检查和“全部检查”，但仍可用于实际请求转发。
+          </div>
+        </a-form-item>
         <a-form-item label="描述">
           <a-textarea
             v-model="form.description"
@@ -312,6 +328,13 @@ export default {
           scopedSlots: { customRender: 'enabled' }
         },
         {
+          title: '健康监控',
+          dataIndex: 'health_check_enabled',
+          key: 'health_check_enabled',
+          width: 110,
+          scopedSlots: { customRender: 'health_check_enabled' }
+        },
+        {
           title: '健康状态',
           dataIndex: 'is_healthy',
           key: 'health',
@@ -347,6 +370,7 @@ export default {
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
+        health_check_enabled: true,
         description: ''
       },
       formErrors: {
@@ -536,6 +560,7 @@ export default {
         auth_header_type: record.auth_header_type || ({ anthropic: 'x-api-key', google: 'x-goog-api-key' }[record.protocol_type] || 'authorization'),
         priority: record.priority,
         enabled: record.enabled,
+        health_check_enabled: Boolean(record.health_check_enabled),
         description: record.description || ''
       }
       this.authHeaderTouched = true
@@ -616,6 +641,7 @@ export default {
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
+        health_check_enabled: true,
         description: ''
       }
       this.formErrors = {

@@ -77,6 +77,7 @@ class ChannelService:
             ),
             "priority": channel.priority,
             "enabled": channel.enabled,
+            "health_check_enabled": int(getattr(channel, "health_check_enabled", 1) or 0),
             "is_healthy": bool(channel.is_healthy),
             "health_score": channel.health_score,
             "failure_count": channel.failure_count,
@@ -118,6 +119,7 @@ class ChannelService:
             health_check_model=ChannelService._normalize_health_check_model(d.get("health_check_model")),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
+            health_check_enabled=d.get("health_check_enabled", 1),
             description=d.get("description"),
         )
         db.add(channel)
@@ -147,7 +149,7 @@ class ChannelService:
         protocol_value = d.get("protocol_type", channel.protocol_type)
         updatable_fields = [
             "name", "base_url", "api_key", "protocol_type", "auth_header_type",
-            "priority", "enabled", "description",
+            "priority", "enabled", "health_check_enabled", "description",
         ]
         for field in updatable_fields:
             value = d.get(field)

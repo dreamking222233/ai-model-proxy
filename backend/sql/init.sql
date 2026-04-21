@@ -88,6 +88,7 @@ CREATE TABLE `channel` (
     `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
+    `health_check_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT '是否参与健康监控',
     `is_healthy` TINYINT NOT NULL DEFAULT 1,
     `health_score` INT NOT NULL DEFAULT 100 COMMENT '健康分0-100',
     `failure_count` INT NOT NULL DEFAULT 0 COMMENT '连续失败次数',
@@ -630,11 +631,11 @@ SET @google_base_url = 'https://generativelanguage.googleapis.com';
 
 INSERT INTO `channel` (
     `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,
-    `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
+    `priority`, `enabled`, `health_check_enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
 )
 SELECT
     @google_channel_name, @google_base_url, @google_api_key, 'google', 'google-official', 'x-goog-api-key',
-    1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
+    1, 1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
 FROM DUAL
 WHERE @google_api_key IS NOT NULL;
 
@@ -668,11 +669,11 @@ SET @vertex_base_url = 'https://aiplatform.googleapis.com';
 
 INSERT INTO `channel` (
     `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,
-    `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `health_check_model`, `description`
+    `priority`, `enabled`, `health_check_enabled`, `is_healthy`, `health_score`, `failure_count`, `health_check_model`, `description`
 )
 SELECT
     @vertex_channel_name, @vertex_base_url, @vertex_api_key, 'google', 'google-vertex-image', 'x-goog-api-key',
-    2, 1, 1, 100, 0, 'gemini-2.5-flash', 'Google Vertex 图片生成渠道'
+    2, 1, 1, 1, 100, 0, 'gemini-2.5-flash', 'Google Vertex 图片生成渠道'
 FROM DUAL
 WHERE @vertex_api_key IS NOT NULL;
 

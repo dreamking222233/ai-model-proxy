@@ -87,6 +87,12 @@
         </a-tag>
       </template>
 
+      <template slot="provider_variant" slot-scope="text, record">
+        <a-tag :color="getProviderVariantColor(record.protocol_type, text)" class="protocol-tag">
+          {{ getProviderVariantLabel(record.protocol_type, text) }}
+        </a-tag>
+      </template>
+
       <template slot="enabled" slot-scope="text">
         <a-tag :color="text ? 'green' : 'red'" class="status-tag">
           {{ text ? '已启用' : '已禁用' }}
@@ -191,6 +197,19 @@
             <a-select-option value="google">Google</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item v-if="form.protocol_type === 'google'" label="Google 渠道类型">
+          <a-select
+            v-model="form.provider_variant"
+            placeholder="选择 Google 渠道类型"
+            class="form-select"
+          >
+            <a-select-option value="google-official">Google Official Image</a-select-option>
+            <a-select-option value="google-vertex-image">Google Vertex Image</a-select-option>
+          </a-select>
+          <div class="form-hint">
+            Official 走当前 Google 官方图片接口；Vertex 走 Vertex SDK 图片链路，对用户接口保持无感。
+          </div>
+        </a-form-item>
         <a-form-item label="上游认证 Header 类型">
           <a-select
             v-model="form.auth_header_type"
@@ -277,6 +296,13 @@ export default {
           width: 100,
           scopedSlots: { customRender: 'protocol_type' }
         },
+        {
+          title: '渠道类型',
+          dataIndex: 'provider_variant',
+          key: 'provider_variant',
+          width: 170,
+          scopedSlots: { customRender: 'provider_variant' }
+        },
         { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
         {
           title: '状态',
@@ -317,6 +343,7 @@ export default {
         base_url: '',
         api_key: '',
         protocol_type: 'openai',
+        provider_variant: 'default',
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
@@ -369,6 +396,27 @@ export default {
       }
       return map[protocol] || 'default'
     },
+    getProviderVariantLabel(protocol, providerVariant) {
+      const normalized = (providerVariant || '').toLowerCase()
+      if (protocol !== 'google') {
+        return 'Default'
+      }
+      const map = {
+        'google-official': 'Google Official Image',
+        'google-vertex-image': 'Google Vertex Image'
+      }
+      return map[normalized] || 'Google Official Image'
+    },
+    getProviderVariantColor(protocol, providerVariant) {
+      if (protocol !== 'google') {
+        return 'default'
+      }
+      const normalized = (providerVariant || '').toLowerCase()
+      if (normalized === 'google-vertex-image') {
+        return 'cyan'
+      }
+      return 'gold'
+    },
     getScoreClass(score) {
       if (score == null) return ''
       if (score >= 80) return 'score-high'
@@ -418,6 +466,13 @@ export default {
       }
     },
     handleProtocolTypeChange(value) {
+      if (value === 'google') {
+        if (!['google-official', 'google-vertex-image'].includes(this.form.provider_variant)) {
+          this.form.provider_variant = 'google-official'
+        }
+      } else {
+        this.form.provider_variant = 'default'
+      }
       if (this.authHeaderTouched) {
         return
       }
@@ -477,6 +532,7 @@ export default {
         base_url: record.base_url,
         api_key: '',
         protocol_type: record.protocol_type,
+        provider_variant: record.provider_variant || (record.protocol_type === 'google' ? 'google-official' : 'default'),
         auth_header_type: record.auth_header_type || ({ anthropic: 'x-api-key', google: 'x-goog-api-key' }[record.protocol_type] || 'authorization'),
         priority: record.priority,
         enabled: record.enabled,
@@ -556,6 +612,7 @@ export default {
         base_url: '',
         api_key: '',
         protocol_type: 'openai',
+        provider_variant: 'default',
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,

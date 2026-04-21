@@ -17,6 +17,7 @@ class ChannelCreate(BaseModel):
     base_url: str = Field(..., min_length=1, max_length=512)
     api_key: str = Field(..., min_length=1)
     protocol_type: str = Field(default="openai", max_length=20)
+    provider_variant: Optional[str] = Field(None, max_length=32)
     auth_header_type: Optional[str] = Field(None, max_length=32)
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: int = Field(default=10, ge=1)
@@ -31,6 +32,7 @@ class ChannelUpdate(BaseModel):
     base_url: Optional[str] = Field(None, min_length=1, max_length=512)
     api_key: Optional[str] = Field(None, min_length=1)
     protocol_type: Optional[str] = Field(None, max_length=20)
+    provider_variant: Optional[str] = Field(None, max_length=32)
     auth_header_type: Optional[str] = Field(None, max_length=32)
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: Optional[int] = Field(None, ge=1)
@@ -61,6 +63,7 @@ class ChannelInfo(BaseModel):
         description="Masked API key, e.g. sk-****xxxx",
     )
     protocol_type: str
+    provider_variant: str
     priority: int
     enabled: int
     is_healthy: int

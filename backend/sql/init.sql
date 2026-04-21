@@ -84,6 +84,7 @@ CREATE TABLE `channel` (
     `base_url` VARCHAR(512) NOT NULL,
     `api_key` TEXT NOT NULL COMMENT '加密存储的API Key',
     `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
+    `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/google-official/google-vertex-image',
     `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
@@ -628,11 +629,11 @@ SET @google_channel_name = 'Google Gemini Official';
 SET @google_base_url = 'https://generativelanguage.googleapis.com';
 
 INSERT INTO `channel` (
-    `name`, `base_url`, `api_key`, `protocol_type`, `auth_header_type`,
+    `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,
     `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
 )
 SELECT
-    @google_channel_name, @google_base_url, @google_api_key, 'google', 'x-goog-api-key',
+    @google_channel_name, @google_base_url, @google_api_key, 'google', 'google-official', 'x-goog-api-key',
     1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
 FROM DUAL
 WHERE @google_api_key IS NOT NULL;
@@ -658,6 +659,44 @@ WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-prev
 SET @google_api_key = NULL;
 SET @google_channel_name = NULL;
 SET @google_base_url = NULL;
+
+-- 可选：Google Vertex 图片渠道与模型映射
+-- 将 @vertex_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建 Vertex 渠道与推荐映射。
+SET @vertex_api_key = NULL;
+SET @vertex_channel_name = 'Google Vertex Image';
+SET @vertex_base_url = 'https://aiplatform.googleapis.com';
+
+INSERT INTO `channel` (
+    `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,
+    `priority`, `enabled`, `is_healthy`, `health_score`, `failure_count`, `health_check_model`, `description`
+)
+SELECT
+    @vertex_channel_name, @vertex_base_url, @vertex_api_key, 'google', 'google-vertex-image', 'x-goog-api-key',
+    2, 1, 1, 100, 0, 'gemini-2.5-flash', 'Google Vertex 图片生成渠道'
+FROM DUAL
+WHERE @vertex_api_key IS NOT NULL;
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'imagen-3.0-fast-generate-001|imagen-3.0-generate-001|imagen-3.0-generate-002', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-2.5-flash-image';
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-3-pro-image-preview', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-preview';
+
+SET @vertex_api_key = NULL;
+SET @vertex_channel_name = NULL;
+SET @vertex_base_url = NULL;
 
 -- 预置系统配置
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES

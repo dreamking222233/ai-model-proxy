@@ -17,6 +17,12 @@ class Channel(Base):
     base_url = Column(String(512), nullable=False)
     api_key = Column(Text, nullable=False, comment="Encrypted API key")
     protocol_type = Column(String(20), nullable=False, default="openai")
+    provider_variant = Column(
+        String(32),
+        nullable=False,
+        default="default",
+        comment="Provider subtype such as default/google-official/google-vertex-image",
+    )
     auth_header_type = Column(
         String(32),
         nullable=False,

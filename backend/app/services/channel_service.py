@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -15,6 +15,10 @@ from app.core.exceptions import ServiceException
 
 class ChannelService:
     """CRUD and health summary for channels."""
+
+    PROVIDER_VARIANT_DEFAULT = "default"
+    PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
+    PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
 
     @staticmethod
     def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
@@ -37,6 +41,22 @@ class ChannelService:
         return "x-api-key"
 
     @staticmethod
+    def _normalize_provider_variant(
+        protocol_type: Optional[str],
+        provider_variant: Optional[str],
+    ) -> str:
+        protocol = (protocol_type or "openai").lower()
+        raw_variant = str(provider_variant or "").strip().lower()
+        if protocol == "google":
+            if raw_variant in {
+                ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,
+                ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE,
+            }:
+                return raw_variant
+            return ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL
+        return ChannelService.PROVIDER_VARIANT_DEFAULT
+
+    @staticmethod
     def _channel_to_dict(channel: Channel) -> dict:
         """Convert a Channel ORM instance to a serializable dict."""
         api_key = channel.api_key or ""
@@ -47,6 +67,10 @@ class ChannelService:
             "base_url": channel.base_url,
             "api_key_display": masked_key,
             "protocol_type": channel.protocol_type,
+            "provider_variant": ChannelService._normalize_provider_variant(
+                channel.protocol_type,
+                getattr(channel, "provider_variant", None),
+            ),
             "auth_header_type": (
                 getattr(channel, "auth_header_type", None)
                 or ChannelService._resolve_default_auth_header_type(channel.protocol_type)
@@ -83,6 +107,10 @@ class ChannelService:
             base_url=d["base_url"].rstrip("/"),
             api_key=d["api_key"],
             protocol_type=d.get("protocol_type", "openai"),
+            provider_variant=ChannelService._normalize_provider_variant(
+                d.get("protocol_type", "openai"),
+                d.get("provider_variant"),
+            ),
             auth_header_type=(
                 d.get("auth_header_type")
                 or ChannelService._resolve_default_auth_header_type(d.get("protocol_type"))
@@ -131,6 +159,12 @@ class ChannelService:
         if "health_check_model" in d:
             channel.health_check_model = ChannelService._normalize_health_check_model(
                 d.get("health_check_model")
+            )
+
+        if "protocol_type" in d or "provider_variant" in d:
+            channel.provider_variant = ChannelService._normalize_provider_variant(
+                protocol_value,
+                d.get("provider_variant", getattr(channel, "provider_variant", None)),
             )
 
         if "protocol_type" in d and "auth_header_type" not in d:

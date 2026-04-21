@@ -35,6 +35,8 @@ from app.models.log import (
     ConsumptionRecord,
     SystemConfig,
 )
+from app.services.channel_service import ChannelService
+from app.services.google_vertex_image_service import GoogleVertexImageService
 from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
@@ -7033,6 +7035,12 @@ class ProxyService:
         return payload
 
     @staticmethod
+    def _resolve_requested_aspect_ratio(request_data: dict) -> Optional[str]:
+        return request_data.get("aspect_ratio") or ProxyService._map_image_size_to_aspect_ratio(
+            request_data.get("size")
+        )
+
+    @staticmethod
     def _parse_google_image_response(response_body: dict) -> tuple[list[dict], Optional[str]]:
         images: list[dict] = []
         text_output: list[str] = []
@@ -7049,6 +7057,31 @@ class ProxyService:
                 elif part.get("text"):
                     text_output.append(str(part.get("text")))
         return images, "\n".join(text_output).strip() or None
+
+    @staticmethod
+    def _build_image_response_payload(
+        requested_model: str,
+        request_id: str,
+        images: list[dict],
+        charged_credits: Decimal,
+        image_size: Optional[str],
+        extra_text: Optional[str] = None,
+    ) -> dict:
+        response_payload = {
+            "created": int(time.time()),
+            "model": requested_model,
+            "request_id": request_id,
+            "data": images,
+            "usage": {
+                "billing_type": "image_credit",
+                "image_credits_charged": float(charged_credits),
+                "model_multiplier": float(charged_credits),
+                "image_size": image_size,
+            },
+        }
+        if extra_text:
+            response_payload["text"] = extra_text
+        return response_payload
 
     @staticmethod
     def _deduct_image_credits_and_log(
@@ -7105,7 +7138,7 @@ class ProxyService:
         db.flush()
 
     @staticmethod
-    async def _non_stream_image_request(
+    async def _non_stream_google_image_request(
         db: Session,
         user: SysUser,
         api_key_record: UserApiKey,
@@ -7180,21 +7213,140 @@ class ProxyService:
                 "IMAGE_BILLING_FAILED",
             ) from exc
 
-        response_payload = {
-            "created": int(time.time()),
-            "model": requested_model,
-            "request_id": request_id,
-            "data": images,
-            "usage": {
-                "billing_type": "image_credit",
-                "image_credits_charged": float(charged_credits),
-                "model_multiplier": float(charged_credits),
-                "image_size": image_size,
-            },
-        }
-        if extra_text:
-            response_payload["text"] = extra_text
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            charged_credits,
+            image_size,
+            extra_text=extra_text,
+        )
         return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_vertex_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+    ) -> JSONResponse:
+        start_time = time.time()
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
+        images, extra_text, actual_used_model = await GoogleVertexImageService.generate_images(
+            channel.api_key,
+            upstream_model_name,
+            prompt,
+            aspect_ratio=aspect_ratio,
+            image_size=image_size,
+        )
+        if not images:
+            raise ServiceException(
+                503,
+                "Vertex image generation returned no image data",
+                "VERTEX_IMAGE_GENERATION_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                actual_used_model,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=charged_credits,
+                image_size=image_size,
+                image_count=len(images),
+            )
+            db.commit()
+        except ServiceException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.error("Vertex image billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片生成成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
+
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            charged_credits,
+            image_size,
+            extra_text=extra_text,
+        )
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        provider_variant = ChannelService._normalize_provider_variant(
+            getattr(channel, "protocol_type", None),
+            getattr(channel, "provider_variant", None),
+        )
+        if provider_variant == ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE:
+            return await ProxyService._non_stream_vertex_image_request(
+                db,
+                user,
+                api_key_record,
+                channel,
+                unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                client_ip,
+                charged_credits,
+                image_size=image_size,
+            )
+        return await ProxyService._non_stream_google_image_request(
+            db,
+            user,
+            api_key_record,
+            channel,
+            unified_model,
+            request_data,
+            request_id,
+            requested_model,
+            upstream_model_name,
+            client_ip,
+            charged_credits,
+            image_size=image_size,
+            request_headers=request_headers,
+        )
 
     @staticmethod
     async def handle_image_request(
@@ -7270,7 +7422,14 @@ class ProxyService:
                     request_headers=request_headers,
                 )
             except ServiceException as exc:
-                if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG", "GOOGLE_IMAGE_GENERATION_FAILED"}:
+                if exc.error_code in {
+                    "UPSTREAM_INVALID_REQUEST",
+                    "CONTENT_TOO_LONG",
+                    "GOOGLE_IMAGE_GENERATION_FAILED",
+                    "VERTEX_IMAGE_GENERATION_FAILED",
+                    "VERTEX_IMAGE_MODEL_NOT_CONFIGURED",
+                    "VERTEX_IMAGE_DEPENDENCY_MISSING",
+                }:
                     request_error = exc
                     logger.info(
                         "Image channel %s (%d) rejected request without counting channel failure: %s",

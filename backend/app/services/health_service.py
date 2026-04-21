@@ -15,6 +15,8 @@ from app.models.channel import Channel
 from app.models.model import ModelChannelMapping, UnifiedModel
 from app.models.log import HealthCheckLog, SystemConfig
 from app.core.exceptions import ServiceException
+from app.services.channel_service import ChannelService
+from app.services.google_vertex_image_service import GoogleVertexImageService
 
 logger = logging.getLogger(__name__)
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
@@ -56,6 +58,12 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
     if protocol == "anthropic":
         return raw_target, "anthropic_messages"
     if protocol == "google":
+        provider_variant = ChannelService._normalize_provider_variant(
+            protocol,
+            getattr(channel, "provider_variant", None),
+        )
+        if provider_variant == ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE:
+            return raw_target, "google_vertex_sdk"
         return raw_target, "google_generate_content"
     return raw_target, "openai_chat"
 
@@ -90,7 +98,11 @@ def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
         non_image_targets = [
             actual_model_name
             for actual_model_name in actual_model_names
-            if "image" not in actual_model_name.lower()
+            if not GoogleVertexImageService.looks_like_image_model(
+                GoogleVertexImageService.parse_model_candidates(actual_model_name)[0]
+                if GoogleVertexImageService.parse_model_candidates(actual_model_name)
+                else actual_model_name
+            )
         ]
         if non_image_targets:
             return non_image_targets[0]
@@ -322,11 +334,22 @@ class HealthService:
         upstream_model_name, upstream_api = _resolve_health_target(channel, actual_model_name)
         if upstream_api == "anthropic_messages":
             header_protocol = "anthropic"
+        elif upstream_api == "google_vertex_sdk":
+            header_protocol = "google"
         elif upstream_api == "google_generate_content":
             header_protocol = "google"
         else:
             header_protocol = "openai"
 
+        if upstream_api == "google_vertex_sdk":
+            start = time.time()
+            try:
+                await GoogleVertexImageService.health_check(channel.api_key, upstream_model_name)
+                elapsed_ms = int((time.time() - start) * 1000)
+                return True, elapsed_ms, None
+            except Exception as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                return False, elapsed_ms, str(exc)
         if upstream_api == "responses":
             url = f"{base_url}/responses"
             payload = {

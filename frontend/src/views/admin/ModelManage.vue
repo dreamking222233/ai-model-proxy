@@ -191,8 +191,39 @@
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="图片积分倍率">
-          <a-input-number v-model="modelForm.image_credit_multiplier" :min="1" :step="1" style="width: 100%;" />
+        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="默认图片积分倍率">
+          <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
+        </a-form-item>
+        <a-form-item v-if="showImageResolutionConfig" label="Google 生图分辨率计费">
+          <div class="resolution-config-list">
+            <div
+              v-for="rule in modelForm.image_resolution_rules"
+              :key="rule.resolution_code"
+              class="resolution-config-row"
+            >
+              <div class="resolution-config-label">
+                <div class="resolution-title">{{ rule.resolution_code }}</div>
+                <div class="resolution-hint">官方支持档位</div>
+              </div>
+              <a-switch :checked="!!rule.enabled" @change="val => handleResolutionEnabledChange(rule.resolution_code, val)" />
+              <a-input-number
+                :value="rule.credit_cost"
+                :min="0.001"
+                :step="0.001"
+                :precision="3"
+                style="width: 120px;"
+                @change="val => handleResolutionCreditChange(rule.resolution_code, val)"
+              />
+              <a-radio
+                :checked="!!rule.is_default"
+                :disabled="!rule.enabled"
+                @change="() => setDefaultResolution(rule.resolution_code)"
+              >
+                默认
+              </a-radio>
+            </div>
+          </div>
+          <div class="resolution-config-tip">仅允许配置当前模型官方支持的分辨率；默认档位必须是已启用分辨率。</div>
         </a-form-item>
         <a-row :gutter="16">
           <a-col :span="12">
@@ -299,11 +330,28 @@
 
 <script>
 import {
-  listModels, createModel, updateModel, deleteModel,
+  listModels, getModel, createModel, updateModel, deleteModel,
   listMappings, createMapping, deleteMapping,
   listOverrideRules, createOverrideRule, updateOverrideRule, deleteOverrideRule
 } from '@/api/model'
 import { listChannels } from '@/api/channel'
+
+const GOOGLE_IMAGE_RULE_PRESETS = {
+  'gemini-2.5-flash-image': [
+    { resolution_code: '1K', enabled: 1, credit_cost: 1, is_default: 1, sort_order: 10 }
+  ],
+  'gemini-3.1-flash-image-preview': [
+    { resolution_code: '512', enabled: 1, credit_cost: 1, is_default: 0, sort_order: 10 },
+    { resolution_code: '1K', enabled: 1, credit_cost: 2, is_default: 1, sort_order: 20 },
+    { resolution_code: '2K', enabled: 1, credit_cost: 3, is_default: 0, sort_order: 30 },
+    { resolution_code: '4K', enabled: 1, credit_cost: 4, is_default: 0, sort_order: 40 }
+  ],
+  'gemini-3-pro-image-preview': [
+    { resolution_code: '1K', enabled: 1, credit_cost: 3, is_default: 1, sort_order: 10 },
+    { resolution_code: '2K', enabled: 1, credit_cost: 4.5, is_default: 0, sort_order: 20 },
+    { resolution_code: '4K', enabled: 1, credit_cost: 6, is_default: 0, sort_order: 30 }
+  ]
+}
 
 export default {
   name: 'ModelManage',
@@ -348,6 +396,7 @@ export default {
         protocol_type: 'openai',
         billing_type: 'token',
         image_credit_multiplier: 1,
+        image_resolution_rules: [],
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
@@ -412,6 +461,29 @@ export default {
     },
     ruleModalTitle() {
       return this.isRuleEdit ? '编辑覆盖规则' : '添加覆盖规则'
+    },
+    showImageResolutionConfig() {
+      return this.modelForm.model_type === 'image' &&
+        this.modelForm.protocol_type === 'google' &&
+        this.modelForm.billing_type === 'image_credit' &&
+        this.supportedImageResolutionPresets.length > 0
+    },
+    supportedImageResolutionPresets() {
+      return GOOGLE_IMAGE_RULE_PRESETS[this.modelForm.model_name] || []
+    }
+  },
+  watch: {
+    'modelForm.model_name'() {
+      this.syncImageResolutionRules()
+    },
+    'modelForm.model_type'() {
+      this.syncImageResolutionRules()
+    },
+    'modelForm.protocol_type'() {
+      this.syncImageResolutionRules()
+    },
+    'modelForm.billing_type'() {
+      this.syncImageResolutionRules()
     }
   },
   mounted() {
@@ -419,6 +491,61 @@ export default {
     this.fetchChannelOptions()
   },
   methods: {
+    syncImageResolutionRules() {
+      if (!this.showImageResolutionConfig) {
+        this.modelForm.image_resolution_rules = []
+        return
+      }
+      const existing = Array.isArray(this.modelForm.image_resolution_rules)
+        ? this.modelForm.image_resolution_rules
+        : []
+      const existingMap = existing.reduce((acc, item) => {
+        acc[item.resolution_code] = item
+        return acc
+      }, {})
+      const merged = this.supportedImageResolutionPresets.map(preset => {
+        const current = existingMap[preset.resolution_code] || {}
+        return {
+          resolution_code: preset.resolution_code,
+          enabled: current.enabled != null ? Number(current.enabled) : Number(preset.enabled),
+          credit_cost: current.credit_cost != null ? Number(current.credit_cost) : Number(preset.credit_cost),
+          is_default: current.is_default != null ? Number(current.is_default) : Number(preset.is_default),
+          sort_order: current.sort_order != null ? Number(current.sort_order) : Number(preset.sort_order)
+        }
+      })
+      const enabledRules = merged.filter(item => item.enabled)
+      const hasDefault = enabledRules.some(item => item.is_default)
+      if (!hasDefault && enabledRules.length > 0) {
+        merged.forEach(item => {
+          item.is_default = item.resolution_code === enabledRules[0].resolution_code ? 1 : 0
+        })
+      }
+      this.modelForm.image_resolution_rules = merged
+    },
+    handleResolutionEnabledChange(code, checked) {
+      this.modelForm.image_resolution_rules = this.modelForm.image_resolution_rules.map(item => ({
+        ...item,
+        enabled: item.resolution_code === code ? (checked ? 1 : 0) : item.enabled,
+        is_default: !checked && item.resolution_code === code ? 0 : item.is_default
+      }))
+      const enabledRules = this.modelForm.image_resolution_rules.filter(item => item.enabled)
+      if (enabledRules.length > 0 && !enabledRules.some(item => item.is_default)) {
+        this.setDefaultResolution(enabledRules[0].resolution_code)
+      }
+    },
+    handleResolutionCreditChange(code, value) {
+      this.modelForm.image_resolution_rules = this.modelForm.image_resolution_rules.map(item => (
+        item.resolution_code === code
+          ? { ...item, credit_cost: value != null ? Number(value) : item.credit_cost }
+          : item
+      ))
+    },
+    setDefaultResolution(code) {
+      this.modelForm.image_resolution_rules = this.modelForm.image_resolution_rules.map(item => ({
+        ...item,
+        is_default: item.resolution_code === code ? 1 : 0
+      }))
+    },
     // ==================== Models ====================
     async fetchModels() {
       this.modelLoading = true
@@ -472,6 +599,7 @@ export default {
         protocol_type: 'openai',
         billing_type: 'token',
         image_credit_multiplier: 1,
+        image_resolution_rules: [],
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
@@ -479,22 +607,41 @@ export default {
       }
       this.modelModalVisible = true
     },
-    handleEditModel(record) {
+    async handleEditModel(record) {
       this.isModelEdit = true
       this.modelEditId = record.id
-      this.modelForm = {
-        model_name: record.model_name,
-        display_name: record.display_name || '',
-        model_type: record.model_type || 'chat',
-        protocol_type: record.protocol_type || 'openai',
-        billing_type: record.billing_type || 'token',
-        image_credit_multiplier: record.image_credit_multiplier || 1,
-        input_price_per_million: record.input_price_per_million || 0,
-        output_price_per_million: record.output_price_per_million || 0,
-        max_tokens: record.max_tokens || 4096,
-        enabled: record.enabled
+      this.modelModalLoading = true
+      try {
+        const res = await getModel(record.id)
+        const data = res.data || {}
+        const model = data.model || record
+        this.modelForm = {
+          model_name: model.model_name,
+          display_name: model.display_name || '',
+          model_type: model.model_type || 'chat',
+          protocol_type: model.protocol_type || 'openai',
+          billing_type: model.billing_type || 'token',
+          image_credit_multiplier: Number(model.image_credit_multiplier || 1),
+          image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
+            resolution_code: item.resolution_code,
+            enabled: Number(item.enabled || 0),
+            credit_cost: Number(item.credit_cost || 0),
+            is_default: Number(item.is_default || 0),
+            sort_order: Number(item.sort_order || 0)
+          })) : [],
+          input_price_per_million: model.input_price_per_million || 0,
+          output_price_per_million: model.output_price_per_million || 0,
+          max_tokens: model.max_tokens || 4096,
+          enabled: model.enabled
+        }
+        this.syncImageResolutionRules()
+        this.modelModalVisible = true
+      } catch (err) {
+        console.error('Failed to fetch model detail:', err)
+        this.$message.error('读取模型详情失败')
+      } finally {
+        this.modelModalLoading = false
       }
-      this.modelModalVisible = true
     },
     async handleDeleteModel(id) {
       try {
@@ -514,14 +661,38 @@ export default {
         this.$message.warning('请输入模型名称')
         return
       }
+      this.syncImageResolutionRules()
+      if (this.showImageResolutionConfig) {
+        const enabledRules = this.modelForm.image_resolution_rules.filter(item => item.enabled)
+        if (!enabledRules.length) {
+          this.$message.warning('请至少启用一个分辨率')
+          return
+        }
+        if (!enabledRules.some(item => item.is_default)) {
+          this.$message.warning('请设置一个默认分辨率')
+          return
+        }
+      }
 
       this.modelModalLoading = true
       try {
+        const payload = {
+          ...this.modelForm,
+          image_resolution_rules: this.showImageResolutionConfig
+            ? this.modelForm.image_resolution_rules.map(item => ({
+              resolution_code: item.resolution_code,
+              enabled: Number(item.enabled || 0),
+              credit_cost: Number(item.credit_cost || 0),
+              is_default: Number(item.is_default || 0),
+              sort_order: Number(item.sort_order || 0)
+            }))
+            : []
+        }
         if (this.isModelEdit) {
-          await updateModel(this.modelEditId, this.modelForm)
+          await updateModel(this.modelEditId, payload)
           this.$message.success('模型更新成功')
         } else {
-          await createModel(this.modelForm)
+          await createModel(payload)
           this.$message.success('模型创建成功')
         }
         this.modelModalVisible = false
@@ -725,6 +896,42 @@ export default {
       border-radius: 12px;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
     }
+  }
+
+  .resolution-config-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .resolution-config-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) auto 120px auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px;
+    background: #fafafa;
+    border: 1px solid #f0f0f0;
+    border-radius: 10px;
+  }
+
+  .resolution-config-label {
+    .resolution-title {
+      font-weight: 600;
+      color: #262626;
+    }
+
+    .resolution-hint {
+      margin-top: 2px;
+      font-size: 12px;
+      color: #8c8c8c;
+    }
+  }
+
+  .resolution-config-tip {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #8c8c8c;
   }
 
   /deep/ .ant-tabs {

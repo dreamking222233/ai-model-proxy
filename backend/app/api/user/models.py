@@ -9,6 +9,7 @@ from app.models.user import SysUser
 from app.models.model import UnifiedModel, ModelChannelMapping
 from app.models.channel import Channel
 from app.schemas.common import ResponseModel
+from app.services.model_service import ModelService
 
 router = APIRouter(prefix="/api/user", tags=["用户-模型列表"])
 
@@ -46,7 +47,8 @@ def list_available_models(
             "input_price": float(m.input_price_per_million) if m.input_price_per_million else 0,
             "output_price": float(m.output_price_per_million) if m.output_price_per_million else 0,
             "billing_type": m.billing_type,
-            "image_credit_multiplier": int(m.image_credit_multiplier or 1),
+            "image_credit_multiplier": float(m.image_credit_multiplier or 1),
+            "image_resolution_rules": ModelService.list_image_resolution_rules(db, m.id) if m.model_type == "image" and m.protocol_type == "google" else [],
             "channel_count": channel_count,
             "description": m.description,
         })

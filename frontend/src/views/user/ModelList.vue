@@ -342,6 +342,12 @@ export default {
       return n
     },
     getImageCreditText(model) {
+      const rules = Array.isArray(model.image_resolution_rules) ? model.image_resolution_rules.filter(item => Number(item.enabled) === 1) : []
+      if (rules.length) {
+        const sorted = [...rules].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+        const defaultRule = sorted.find(item => Number(item.is_default) === 1) || sorted[0]
+        return `${defaultRule.resolution_code} 起 ${Number(defaultRule.credit_cost || 0)} 积分/次`
+      }
       const credits = Number(model.image_credit_multiplier || 1)
       return `${credits} 积分/次`
     },

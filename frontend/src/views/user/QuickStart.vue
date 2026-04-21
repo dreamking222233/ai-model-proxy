@@ -219,7 +219,11 @@
                     <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
                   </div>
                   <p class="api-doc-intro">
-                    两个接口都可用于调用 Gemini 生图模型，均为非流式 HTTP 调用。推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>aspect_ratio</code>。
+                    两个接口都可用于调用 Gemini 生图模型，均为非流式 HTTP 调用。推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
+                  </p>
+                  <p class="api-doc-intro">
+                    当前支持的模型为 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、<code>gemini-3-pro-image-preview</code>，
+                    分别按 <code>1</code>、<code>2</code>、<code>3</code> 积分/次计费。
                   </p>
                   <div class="code-editor-block">
                     <div class="editor-content">
@@ -437,20 +441,23 @@ print(msg.content[0].text)`
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{
-    "model": "gemini-3.1-flash-image-preview",
+    "model": "gemini-2.5-flash-image",
     "prompt": "生成一张赛博朋克风格的城市夜景海报",
     "response_format": "b64_json",
+    "image_size": "1K",
     "aspect_ratio": "1:1",
     "n": 1
   }'`
     },
     imageRequestFields() {
       return [
-        { name: 'model', required: '是', description: '要调用的生图模型名称，例如 gemini-3.1-flash-image-preview 或 gemini-3-pro-image-preview。' },
+        { name: 'model', required: '是', description: '要调用的生图模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview 或 gemini-3-pro-image-preview。' },
         { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
         { name: 'response_format', required: '否', description: '返回格式，当前仅支持 b64_json。建议固定传 b64_json。' },
+        { name: 'image_size', required: '否', description: 'Google 官方分辨率参数，支持 512、1K、2K、4K；不同模型支持档位不同。' },
         { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16。' },
-        { name: 'size', required: '否', description: '可选尺寸映射参数，系统会尝试映射为对应 aspect_ratio。' },
+        { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，系统会透传为 Google imageSize。' },
+        { name: 'size', required: '否', description: '兼容参数。若传 512/1K/2K/4K，会按分辨率处理；若传 1024x1024 等旧尺寸，会尝试映射为 aspect_ratio。' },
         { name: 'n', required: '否', description: '期望图片数量。建议传 1。' },
         { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
       ]
@@ -458,10 +465,11 @@ print(msg.content[0].text)`
     imageResponseFields() {
       return [
         { name: 'created', description: '响应创建时间戳。', example: '1710000000' },
-        { name: 'model', description: '本次请求使用的模型名。', example: 'gemini-3.1-flash-image-preview' },
+        { name: 'model', description: '本次请求使用的模型名。', example: 'gemini-2.5-flash-image' },
         { name: 'request_id', description: '平台生成的请求 ID，可用于排查日志。', example: 'uuid' },
         { name: 'data[].b64_json', description: '图片的 Base64 内容，需要业务侧自行解码。', example: 'iVBORw0KGgoAAA...' },
         { name: 'data[].mime_type', description: '图片 MIME 类型。', example: 'image/png' },
+        { name: 'usage.image_size', description: '本次请求生效的图片分辨率档位。', example: '1K' },
         { name: 'usage.billing_type', description: '计费类型。生图接口为 image_credit。', example: 'image_credit' },
         { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分次数。', example: '1' },
         { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '1' }
@@ -470,7 +478,7 @@ print(msg.content[0].text)`
     imageResponseCode() {
       return `{
   "created": 1710000000,
-  "model": "gemini-3.1-flash-image-preview",
+  "model": "gemini-2.5-flash-image",
   "request_id": "550e8400-e29b-41d4-a716-446655440000",
   "data": [
     {
@@ -479,6 +487,7 @@ print(msg.content[0].text)`
     }
   ],
   "usage": {
+    "image_size": "1K",
     "billing_type": "image_credit",
     "image_credits_charged": 1,
     "model_multiplier": 1

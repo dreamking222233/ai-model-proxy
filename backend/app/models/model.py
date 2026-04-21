@@ -1,7 +1,7 @@
 """ORM models for unified_model, model_channel_mapping, and model_override_rule tables."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, func,
+    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -21,7 +21,7 @@ class UnifiedModel(Base):
     input_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Input price per million tokens (USD)")
     output_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Output price per million tokens (USD)")
     billing_type = Column(String(20), nullable=False, default="token", comment="Billing type: token/image_credit/free")
-    image_credit_multiplier = Column(Integer, nullable=False, default=1, comment="Image credits consumed per request")
+    image_credit_multiplier = Column(DECIMAL(12, 3), nullable=False, default=1, comment="Default image credits consumed per request")
     enabled = Column(SmallInteger, nullable=False, default=1)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
@@ -39,6 +39,25 @@ class ModelChannelMapping(Base):
     actual_model_name = Column(String(128), nullable=False, comment="Actual model name in this channel")
     enabled = Column(SmallInteger, nullable=False, default=1)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class ModelImageResolutionRule(Base):
+    """Per-model Google image resolution billing rule."""
+
+    __tablename__ = "model_image_resolution_rule"
+    __table_args__ = (
+        UniqueConstraint("unified_model_id", "resolution_code", name="uk_model_resolution_code"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    unified_model_id = Column(BigInteger, nullable=False, index=True)
+    resolution_code = Column(String(16), nullable=False, comment="512/1K/2K/4K")
+    enabled = Column(SmallInteger, nullable=False, default=1)
+    credit_cost = Column(DECIMAL(12, 3), nullable=False, default=1, comment="Image credits consumed for this resolution")
+    is_default = Column(SmallInteger, nullable=False, default=0)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class ModelOverrideRule(Base):

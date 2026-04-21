@@ -22,9 +22,10 @@ class UnifiedModelCreate(BaseModel):
     input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
     output_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
     billing_type: str = Field(default="token", max_length=20)
-    image_credit_multiplier: int = Field(default=1, ge=1)
+    image_credit_multiplier: Decimal = Field(default=Decimal("1"), ge=0)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
+    image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
 
 
 class UnifiedModelUpdate(BaseModel):
@@ -38,9 +39,10 @@ class UnifiedModelUpdate(BaseModel):
     input_price_per_million: Optional[Decimal] = Field(None, ge=0)
     output_price_per_million: Optional[Decimal] = Field(None, ge=0)
     billing_type: Optional[str] = Field(None, max_length=20)
-    image_credit_multiplier: Optional[int] = Field(None, ge=1)
+    image_credit_multiplier: Optional[Decimal] = Field(None, ge=0)
     enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
+    image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
 
 
 class UnifiedModelInfo(BaseModel):
@@ -55,9 +57,32 @@ class UnifiedModelInfo(BaseModel):
     input_price_per_million: Decimal
     output_price_per_million: Decimal
     billing_type: str
-    image_credit_multiplier: int
+    image_credit_multiplier: Decimal
     enabled: int
     description: Optional[str] = None
+    image_resolution_rules: Optional[List["ModelImageResolutionRuleInfo"]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ModelImageResolutionRuleInput(BaseModel):
+    resolution_code: str = Field(..., min_length=1, max_length=16)
+    enabled: int = Field(default=1, ge=0, le=1)
+    credit_cost: Decimal = Field(..., gt=0)
+    is_default: int = Field(default=0, ge=0, le=1)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class ModelImageResolutionRuleInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int
+    unified_model_id: int
+    resolution_code: str
+    enabled: int
+    credit_cost: Decimal
+    is_default: int
+    sort_order: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -120,3 +145,8 @@ class ModelOverrideRuleInfo(BaseModel):
     target_model_name: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+UnifiedModelCreate.model_rebuild()
+UnifiedModelUpdate.model_rebuild()
+UnifiedModelInfo.model_rebuild()

@@ -225,7 +225,7 @@
         </template>
 
         <template slot="total_cost" slot-scope="text, record">
-          <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(record.image_credits_charged || 0) }} 积分</span>
+          <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
           <span v-else-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
           <span v-else class="text-muted">$0.00</span>
         </template>
@@ -238,8 +238,8 @@
         <template slot="tokens" slot-scope="text, record">
           <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
             <div class="image-credit-row">
-              <span class="image-credit-main">{{ formatNumber(record.image_credits_charged || 0) }} 图片积分</span>
-              <span class="image-credit-meta">{{ record.image_count || 1 }} 张 · {{ getRequestTypeText(record) }}</span>
+              <span class="image-credit-main">{{ formatNumber(getImageCreditsDisplay(record)) }} 图片积分</span>
+              <span class="image-credit-meta">{{ getImageCountDisplay(record) }} 张<span v-if="getImageSizeText(record)"> · {{ getImageSizeText(record) }}</span> · {{ getRequestTypeText(record) }}</span>
             </div>
             <div class="cache-detail cache-detail--image">
               <span class="cache-chip cache-chip--token">图片生成</span>
@@ -364,12 +364,18 @@
           </a-descriptions-item>
           <a-descriptions-item :label="isImageRequest(selectedRecord) ? '图片计费' : '计费方式'">
             <template v-if="isImageRequest(selectedRecord)">
-              <span class="image-credit-cost">{{ formatNumber(selectedRecord.image_credits_charged || 0) }} 图片积分</span>
-              <span style="margin-left: 8px;">/ {{ selectedRecord.image_count || 1 }} 张</span>
+              <span class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 图片积分</span>
+              <span style="margin-left: 8px;">/ {{ getImageCountDisplay(selectedRecord) }} 张</span>
+              <span v-if="getImageSizeText(selectedRecord)" style="margin-left: 8px;">/ {{ getImageSizeText(selectedRecord) }}</span>
             </template>
             <template v-else>
               <span>{{ getBillingTypeText(selectedRecord) }}</span>
             </template>
+          </a-descriptions-item>
+          <a-descriptions-item v-if="selectedRecord.quota_metric" label="套餐额度结算">
+            <span>{{ formatQuotaAmount(selectedRecord.quota_consumed_amount, selectedRecord.quota_metric) }}</span>
+            <span v-if="selectedRecord.quota_cycle_date" style="margin-left: 8px;">/ 周期 {{ selectedRecord.quota_cycle_date }}</span>
+            <span v-if="selectedRecord.quota_used_after" style="margin-left: 8px;">/ 累计后 {{ formatQuotaAmount(selectedRecord.quota_used_after, selectedRecord.quota_metric) }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="真实上游缓存">
             <div v-if="hasPromptCacheUsage(selectedRecord)" class="modal-cache-summary">
@@ -610,6 +616,25 @@ export default {
     isImageRequest(record) {
       return record && (record.request_type === 'image_generation' || record.billing_type === 'image_credit')
     },
+    isRequestSuccess(record) {
+      return !!record && String(record.status || '') === 'success'
+    },
+    getImageCreditsDisplay(record) {
+      if (!this.isImageRequest(record)) return 0
+      if (!this.isRequestSuccess(record)) return 0
+      return Math.max(0, Number(record && record.image_credits_charged || 0))
+    },
+    getImageCountDisplay(record) {
+      if (!this.isImageRequest(record)) return 0
+      if (!this.isRequestSuccess(record)) return 0
+      const imageCount = Number(record && record.image_count)
+      if (Number.isFinite(imageCount) && imageCount > 0) return imageCount
+      return 1
+    },
+    getImageSizeText(record) {
+      if (!this.isImageRequest(record)) return ''
+      return String(record && record.image_size || '').trim()
+    },
     getRequestTypeText(record) {
       const map = {
         image_generation: '图片请求',
@@ -620,7 +645,10 @@ export default {
     },
     getBillingTypeText(record) {
       if (this.isImageRequest(record)) {
-        return `${this.formatNumber(record.image_credits_charged || 0)} 图片积分`
+        if (!this.isRequestSuccess(record)) {
+          return '未扣积分'
+        }
+        return `${this.formatNumber(this.getImageCreditsDisplay(record))} 图片积分`
       }
       const map = {
         token: '按 Token 计费',
@@ -628,6 +656,12 @@ export default {
         free: '免费'
       }
       return map[String(record && record.billing_type || 'token')] || '按 Token 计费'
+    },
+    formatQuotaAmount(value, metric) {
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}`
+      }
+      return `${this.formatNumber(value)} Token`
     },
     getResponseTimeClass(ms) {
       if (ms <= 1000) return 'response-time--fast'

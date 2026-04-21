@@ -1,7 +1,7 @@
 """ORM models for health_check_log, request_log, system_config, operation_log, user_balance, consumption_record."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, func,
+    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, Date, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -42,8 +42,12 @@ class RequestLog(Base):
     input_tokens = Column(Integer, nullable=True, default=0)
     output_tokens = Column(Integer, nullable=True, default=0)
     total_tokens = Column(Integer, nullable=True, default=0)
-    image_credits_charged = Column(Integer, nullable=True, default=0)
+    raw_input_tokens = Column(Integer, nullable=True, default=0)
+    raw_output_tokens = Column(Integer, nullable=True, default=0)
+    raw_total_tokens = Column(Integer, nullable=True, default=0)
+    image_credits_charged = Column(DECIMAL(12, 3), nullable=True, default=0)
     image_count = Column(Integer, nullable=True, default=0)
+    image_size = Column(String(16), nullable=True, comment="Google image size such as 1K/2K/4K")
     response_time_ms = Column(Integer, nullable=True)
     cache_status = Column(String(20), nullable=True, comment="Request body cache status")
     cache_hit_segments = Column(Integer, nullable=True, default=0)
@@ -74,6 +78,12 @@ class RequestLog(Base):
     status = Column(String(10), nullable=False, default="success")
     error_message = Column(Text, nullable=True)
     client_ip = Column(String(45), nullable=True)
+    subscription_cycle_id = Column(BigInteger, nullable=True, index=True)
+    quota_metric = Column(String(20), nullable=True, comment="total_tokens/cost_usd")
+    quota_consumed_amount = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_limit_snapshot = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_cycle_date = Column(Date, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
@@ -157,6 +167,9 @@ class ConsumptionRecord(Base):
     input_tokens = Column(Integer, nullable=True, default=0)
     output_tokens = Column(Integer, nullable=True, default=0)
     total_tokens = Column(Integer, nullable=True, default=0)
+    raw_input_tokens = Column(Integer, nullable=True, default=0)
+    raw_output_tokens = Column(Integer, nullable=True, default=0)
+    raw_total_tokens = Column(Integer, nullable=True, default=0)
     logical_input_tokens = Column(Integer, nullable=True, default=0)
     upstream_input_tokens = Column(Integer, nullable=True, default=0)
     upstream_cache_read_input_tokens = Column(Integer, nullable=True, default=0)
@@ -169,6 +182,12 @@ class ConsumptionRecord(Base):
     balance_after = Column(DECIMAL(12, 6), nullable=False, default=0)
     billing_mode = Column(String(20), nullable=True, index=True, comment="balance=按量计费, subscription=套餐计费")
     subscription_id = Column(BigInteger, nullable=True, index=True, comment="关联套餐ID")
+    subscription_cycle_id = Column(BigInteger, nullable=True, index=True, comment="关联套餐周期ID")
+    quota_metric = Column(String(20), nullable=True, comment="total_tokens/cost_usd")
+    quota_consumed_amount = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_limit_snapshot = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
+    quota_cycle_date = Column(Date, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 
@@ -179,9 +198,9 @@ class UserImageBalance(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, unique=True)
-    balance = Column(Integer, nullable=False, default=0, comment="Image credit balance")
-    total_recharged = Column(Integer, nullable=False, default=0, comment="Total image credits recharged")
-    total_consumed = Column(Integer, nullable=False, default=0, comment="Total image credits consumed")
+    balance = Column(DECIMAL(12, 3), nullable=False, default=0, comment="Image credit balance")
+    total_recharged = Column(DECIMAL(12, 3), nullable=False, default=0, comment="Total image credits recharged")
+    total_consumed = Column(DECIMAL(12, 3), nullable=False, default=0, comment="Total image credits consumed")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -195,10 +214,11 @@ class ImageCreditRecord(Base):
     user_id = Column(BigInteger, nullable=False, index=True)
     request_id = Column(String(36), nullable=True, index=True)
     model_name = Column(String(128), nullable=True)
-    change_amount = Column(Integer, nullable=False, comment="Positive for recharge, negative for deduction")
-    balance_before = Column(Integer, nullable=False, default=0)
-    balance_after = Column(Integer, nullable=False, default=0)
-    multiplier = Column(Integer, nullable=False, default=1)
+    change_amount = Column(DECIMAL(12, 3), nullable=False, comment="Positive for recharge, negative for deduction")
+    balance_before = Column(DECIMAL(12, 3), nullable=False, default=0)
+    balance_after = Column(DECIMAL(12, 3), nullable=False, default=0)
+    multiplier = Column(DECIMAL(12, 3), nullable=False, default=1)
+    image_size = Column(String(16), nullable=True, comment="Google image size such as 1K/2K/4K")
     action_type = Column(String(20), nullable=False, default="request", comment="request/recharge/deduct")
     operator_id = Column(BigInteger, nullable=True, index=True)
     remark = Column(String(255), nullable=True)
@@ -255,11 +275,66 @@ class UserSubscription(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    plan_code_snapshot = Column(String(64), nullable=True, comment="套餐编码快照")
     plan_name = Column(String(64), nullable=False, comment="套餐名称")
     plan_type = Column(String(20), nullable=False, comment="套餐类型: monthly/quarterly/yearly/custom")
+    plan_kind_snapshot = Column(String(20), nullable=True, comment="unlimited/daily_quota")
+    duration_days_snapshot = Column(Integer, nullable=True, default=0)
+    quota_metric = Column(String(20), nullable=True, comment="total_tokens/cost_usd")
+    quota_value = Column(DECIMAL(20, 6), nullable=True, default=0)
+    reset_period = Column(String(20), nullable=True, default="day")
+    reset_timezone = Column(String(64), nullable=True, default="Asia/Shanghai")
+    activation_mode = Column(String(20), nullable=True, default="append")
     start_time = Column(DateTime, nullable=False, comment="开始时间")
     end_time = Column(DateTime, nullable=False, comment="结束时间")
     status = Column(String(10), nullable=False, default="active", comment="状态: active/expired/cancelled")
     created_by = Column(BigInteger, nullable=True, comment="创建者（管理员ID）")
+    activated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class SubscriptionPlan(Base):
+    """Subscription plan template managed by admins."""
+
+    __tablename__ = "subscription_plan"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    plan_code = Column(String(64), nullable=False, unique=True, index=True, comment="套餐编码")
+    plan_name = Column(String(64), nullable=False, comment="套餐名称")
+    plan_kind = Column(String(20), nullable=False, default="unlimited", comment="unlimited/daily_quota")
+    duration_mode = Column(String(20), nullable=False, default="custom", comment="day/month/custom")
+    duration_days = Column(Integer, nullable=False, default=1, comment="套餐时长（天）")
+    quota_metric = Column(String(20), nullable=True, comment="total_tokens/cost_usd")
+    quota_value = Column(DECIMAL(20, 6), nullable=True, default=0)
+    reset_period = Column(String(20), nullable=False, default="day")
+    reset_timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    sort_order = Column(Integer, nullable=False, default=0)
+    status = Column(String(10), nullable=False, default="active", comment="active/inactive")
+    description = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class SubscriptionUsageCycle(Base):
+    """Daily quota usage ledger for a subscription."""
+
+    __tablename__ = "subscription_usage_cycle"
+    __table_args__ = (
+        UniqueConstraint("subscription_id", "cycle_date", name="uk_subscription_cycle_date"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    subscription_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    cycle_date = Column(Date, nullable=False, index=True)
+    cycle_start_at = Column(DateTime, nullable=False)
+    cycle_end_at = Column(DateTime, nullable=False)
+    quota_metric = Column(String(20), nullable=False)
+    quota_limit = Column(DECIMAL(20, 6), nullable=False, default=0)
+    used_amount = Column(DECIMAL(20, 6), nullable=False, default=0)
+    request_count = Column(Integer, nullable=False, default=0)
+    last_request_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

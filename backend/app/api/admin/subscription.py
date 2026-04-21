@@ -1,4 +1,6 @@
 """Admin API for subscription management."""
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -15,6 +17,27 @@ class ActivateSubscriptionRequest(BaseModel):
     plan_name: str = Field(..., min_length=1, max_length=64, description="套餐名称")
     plan_type: str = Field(..., description="套餐类型: monthly/quarterly/yearly/custom")
     duration_days: int = Field(..., gt=0, description="套餐时长（天）")
+
+
+class SubscriptionPlanRequest(BaseModel):
+    plan_code: str = Field(..., min_length=2, max_length=64, description="套餐编码")
+    plan_name: str = Field(..., min_length=1, max_length=64, description="套餐名称")
+    plan_kind: str = Field(..., description="套餐模式: unlimited/daily_quota")
+    duration_mode: str = Field("custom", description="时长模式")
+    duration_days: int = Field(..., gt=0, description="套餐时长（天）")
+    quota_metric: Optional[str] = Field(None, description="限额口径: total_tokens/cost_usd")
+    quota_value: Optional[float] = Field(None, description="每日额度值")
+    reset_period: Optional[str] = Field("day", description="刷新周期")
+    reset_timezone: Optional[str] = Field("Asia/Shanghai", description="刷新时区")
+    sort_order: Optional[int] = Field(0, description="排序")
+    status: Optional[str] = Field("active", description="状态")
+    description: Optional[str] = Field(None, max_length=255, description="描述")
+
+
+class ActivatePlanSubscriptionRequest(BaseModel):
+    user_id: int = Field(..., description="用户ID")
+    plan_id: int = Field(..., description="套餐模板ID")
+    activation_mode: str = Field("append", description="生效方式: append/override")
 
 
 router = APIRouter(prefix="/api/admin/subscription", tags=["管理员-套餐管理"])
@@ -46,6 +69,55 @@ def activate_subscription(
         operator_id=current_user.id,
     )
     return ResponseModel(data=result, message="套餐开通成功")
+
+
+@router.get("/plans", response_model=ResponseModel)
+def list_subscription_plans(
+    status: str = Query(None, description="状态筛选: active/inactive"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    items, total = SubscriptionService.list_plans(db, status, page, page_size)
+    return ResponseModel(data=_build_page_payload(items, total, page, page_size))
+
+
+@router.post("/plans", response_model=ResponseModel)
+def create_subscription_plan(
+    data: SubscriptionPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    result = SubscriptionService.create_plan(db, data.model_dump())
+    return ResponseModel(data=result, message="套餐模板创建成功")
+
+
+@router.put("/plans/{plan_id}", response_model=ResponseModel)
+def update_subscription_plan(
+    plan_id: int,
+    data: SubscriptionPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    result = SubscriptionService.update_plan(db, plan_id, data.model_dump())
+    return ResponseModel(data=result, message="套餐模板更新成功")
+
+
+@router.post("/activate-plan", response_model=ResponseModel)
+def activate_plan_subscription(
+    data: ActivatePlanSubscriptionRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    result = SubscriptionService.activate_plan_subscription(
+        db,
+        user_id=data.user_id,
+        plan_id=data.plan_id,
+        operator_id=current_user.id,
+        activation_mode=data.activation_mode,
+    )
+    return ResponseModel(data=result, message="套餐发放成功")
 
 
 @router.post("/cancel/{user_id}", response_model=ResponseModel)

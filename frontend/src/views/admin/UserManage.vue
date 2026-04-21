@@ -77,7 +77,7 @@
         </template>
 
         <template slot="imageCreditBalance" slot-scope="text">
-          <span class="image-credit-text">{{ text != null ? parseInt(text, 10) : 0 }} 积分</span>
+          <span class="image-credit-text">{{ formatImageCredits(text) }} 积分</span>
         </template>
 
         <template slot="subscription" slot-scope="text, record">
@@ -86,6 +86,24 @@
               <a-icon type="crown" />
               时间套餐
             </a-tag>
+            <div v-if="record.subscription_summary && record.subscription_summary.plan_name" style="margin-top: 4px; color: #8c8c8c">
+              {{ record.subscription_summary.plan_name }}
+            </div>
+            <div v-if="record.subscription_expires_at" style="margin-top: 4px; color: #8c8c8c">
+              {{ getSubscriptionStatus(record.subscription_expires_at) }}
+            </div>
+          </div>
+          <div v-else-if="record.subscription_type === 'quota'" style="font-size: 12px">
+            <a-tag color="blue">
+              <a-icon type="dashboard" />
+              每日限额套餐
+            </a-tag>
+            <div v-if="record.subscription_summary && record.subscription_summary.plan_name" style="margin-top: 4px; color: #8c8c8c">
+              {{ record.subscription_summary.plan_name }}
+            </div>
+            <div v-if="record.subscription_summary && record.subscription_summary.current_cycle" style="margin-top: 4px; color: #8c8c8c">
+              剩余 {{ formatSubscriptionCycle(record.subscription_summary.current_cycle.remaining_amount, record.subscription_summary.quota_metric) }}
+            </div>
             <div v-if="record.subscription_expires_at" style="margin-top: 4px; color: #8c8c8c">
               {{ getSubscriptionStatus(record.subscription_expires_at) }}
             </div>
@@ -217,14 +235,14 @@
           <a-input :value="rechargeForm.username" disabled />
         </a-form-item>
         <a-form-item :label="rechargeForm.target === 'image_credit' ? '当前图片积分' : '当前余额'">
-          <a-input :value="rechargeForm.target === 'image_credit' ? `${rechargeForm.currentImageCredits} 积分` : '$ ' + rechargeForm.currentBalance" disabled />
+          <a-input :value="rechargeForm.target === 'image_credit' ? `${formatImageCredits(rechargeForm.currentImageCredits)} 积分` : '$ ' + rechargeForm.currentBalance" disabled />
         </a-form-item>
         <a-form-item :label="getRechargeAmountLabel()">
           <a-input-number
             v-model="rechargeForm.amount"
             :min="0"
-            :step="rechargeForm.target === 'image_credit' ? 1 : 1"
-            :precision="rechargeForm.target === 'image_credit' ? 0 : 4"
+            :step="rechargeForm.target === 'image_credit' ? 0.001 : 1"
+            :precision="rechargeForm.target === 'image_credit' ? 3 : 4"
             style="width: 100%;"
             :placeholder="getRechargeAmountPlaceholder()"
           />
@@ -276,7 +294,7 @@ export default {
         { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
         { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
-        { title: '计费模式', key: 'subscription', width: 140, scopedSlots: { customRender: 'subscription' } },
+        { title: '计费模式', key: 'subscription', width: 190, scopedSlots: { customRender: 'subscription' } },
         { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, sorter: true, scopedSlots: { customRender: 'balance' } },
         { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, sorter: true, scopedSlots: { customRender: 'lastLogin' } },
@@ -422,13 +440,24 @@ export default {
       const action = this.rechargeForm.type === 'recharge' ? '充值' : '扣除'
       return this.rechargeForm.target === 'image_credit' ? `请输入${action}积分` : `请输入${action}金额`
     },
+    formatImageCredits(value) {
+      const num = Number(value || 0)
+      if (!Number.isFinite(num)) return '0'
+      return num.toFixed(3).replace(/\.?0+$/, '')
+    },
+    formatSubscriptionCycle(value, metric) {
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}`
+      }
+      return `${Number(value || 0).toLocaleString('zh-CN')} Token`
+    },
     handleRecharge(record, target = 'balance') {
       this.rechargeForm = {
         userId: record.id,
         username: record.username,
         target,
         currentBalance: record.balance != null ? parseFloat(record.balance).toFixed(4) : '0.0000',
-        currentImageCredits: parseInt(record.image_credit_balance || 0, 10),
+        currentImageCredits: Number(record.image_credit_balance || 0),
         amount: 0,
         type: 'recharge',
         reason: ''

@@ -118,7 +118,7 @@ CREATE TABLE `unified_model` (
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
     `output_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输出Token单价(美元)',
     `billing_type` VARCHAR(20) NOT NULL DEFAULT 'token' COMMENT 'token/image_credit/free',
-    `image_credit_multiplier` INT NOT NULL DEFAULT 1 COMMENT '图片请求扣减倍率',
+    `image_credit_multiplier` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '图片请求默认扣减倍率',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `description` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -144,6 +144,24 @@ CREATE TABLE `model_channel_mapping` (
     KEY `idx_channel_id` (`channel_id`),
     KEY `idx_enabled` (`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型-渠道映射表';
+
+-- ============================================================
+-- 5.1 model_image_resolution_rule - 模型图片分辨率计费规则
+-- ============================================================
+CREATE TABLE `model_image_resolution_rule` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `unified_model_id` BIGINT UNSIGNED NOT NULL,
+    `resolution_code` VARCHAR(16) NOT NULL COMMENT '512/1K/2K/4K',
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `credit_cost` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '该分辨率对应图片积分',
+    `is_default` TINYINT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_model_resolution_code` (`unified_model_id`, `resolution_code`),
+    KEY `idx_resolution_model_id` (`unified_model_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型图片分辨率计费规则表';
 
 -- ============================================================
 -- 6. model_override_rule - 模型覆盖规则表
@@ -200,8 +218,12 @@ CREATE TABLE `request_log` (
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
-    `image_credits_charged` INT DEFAULT 0,
+    `raw_input_tokens` INT DEFAULT 0,
+    `raw_output_tokens` INT DEFAULT 0,
+    `raw_total_tokens` INT DEFAULT 0,
+    `image_credits_charged` DECIMAL(12, 3) DEFAULT 0,
     `image_count` INT DEFAULT 0,
+    `image_size` VARCHAR(16) DEFAULT NULL COMMENT 'Google 生图分辨率档位',
     `response_time_ms` INT DEFAULT NULL,
     `cache_status` VARCHAR(20) DEFAULT NULL COMMENT 'Request body cache status',
     `cache_hit_segments` INT NOT NULL DEFAULT 0,
@@ -232,6 +254,12 @@ CREATE TABLE `request_log` (
     `status` ENUM('success', 'error', 'timeout') NOT NULL DEFAULT 'success',
     `error_message` TEXT DEFAULT NULL,
     `client_ip` VARCHAR(45) DEFAULT NULL,
+    `subscription_cycle_id` BIGINT UNSIGNED DEFAULT NULL,
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_consumed_amount` DECIMAL(20, 6) DEFAULT 0,
+    `quota_limit_snapshot` DECIMAL(20, 6) DEFAULT 0,
+    `quota_used_after` DECIMAL(20, 6) DEFAULT 0,
+    `quota_cycle_date` DATE DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_request_id` (`request_id`),
@@ -327,9 +355,9 @@ CREATE TABLE `user_balance` (
 CREATE TABLE `user_image_balance` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
-    `balance` INT NOT NULL DEFAULT 0 COMMENT '图片积分余额',
-    `total_recharged` INT NOT NULL DEFAULT 0 COMMENT '总充值图片积分',
-    `total_consumed` INT NOT NULL DEFAULT 0 COMMENT '总消耗图片积分',
+    `balance` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '图片积分余额',
+    `total_recharged` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '总充值图片积分',
+    `total_consumed` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '总消耗图片积分',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
@@ -347,6 +375,9 @@ CREATE TABLE `consumption_record` (
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
+    `raw_input_tokens` INT DEFAULT 0,
+    `raw_output_tokens` INT DEFAULT 0,
+    `raw_total_tokens` INT DEFAULT 0,
     `logical_input_tokens` INT DEFAULT 0,
     `upstream_input_tokens` INT DEFAULT 0,
     `upstream_cache_read_input_tokens` INT DEFAULT 0,
@@ -357,25 +388,113 @@ CREATE TABLE `consumption_record` (
     `total_cost` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `balance_before` DECIMAL(12, 6) NOT NULL DEFAULT 0,
     `balance_after` DECIMAL(12, 6) NOT NULL DEFAULT 0,
+    `billing_mode` VARCHAR(20) DEFAULT NULL COMMENT 'balance=按量计费, subscription=套餐计费',
+    `subscription_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '关联套餐ID',
+    `subscription_cycle_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '关联套餐周期ID',
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_consumed_amount` DECIMAL(20, 6) DEFAULT 0,
+    `quota_limit_snapshot` DECIMAL(20, 6) DEFAULT 0,
+    `quota_used_after` DECIMAL(20, 6) DEFAULT 0,
+    `quota_cycle_date` DATE DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
     KEY `idx_request_id` (`request_id`),
+    KEY `idx_billing_mode` (`billing_mode`),
+    KEY `idx_subscription_id` (`subscription_id`),
+    KEY `idx_subscription_cycle_id` (`subscription_cycle_id`),
     KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ============================================================
--- 12.1 image_credit_record - 图片积分流水表
+-- 12.1 subscription_plan - 套餐模板表
+-- ============================================================
+CREATE TABLE `subscription_plan` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `plan_code` VARCHAR(64) NOT NULL COMMENT '套餐编码',
+    `plan_name` VARCHAR(64) NOT NULL COMMENT '套餐名称',
+    `plan_kind` VARCHAR(20) NOT NULL DEFAULT 'unlimited' COMMENT 'unlimited/daily_quota',
+    `duration_mode` VARCHAR(20) NOT NULL DEFAULT 'custom',
+    `duration_days` INT NOT NULL DEFAULT 1,
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_value` DECIMAL(20, 6) DEFAULT 0,
+    `reset_period` VARCHAR(20) NOT NULL DEFAULT 'day',
+    `reset_timezone` VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `status` VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/inactive',
+    `description` VARCHAR(255) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_subscription_plan_code` (`plan_code`),
+    KEY `idx_subscription_plan_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐模板表';
+
+-- ============================================================
+-- 12.2 user_subscription - 用户套餐记录表
+-- ============================================================
+CREATE TABLE `user_subscription` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `plan_id` BIGINT UNSIGNED DEFAULT NULL,
+    `plan_code_snapshot` VARCHAR(64) DEFAULT NULL COMMENT '套餐编码快照',
+    `plan_name` VARCHAR(64) NOT NULL COMMENT '套餐名称',
+    `plan_type` VARCHAR(20) NOT NULL COMMENT '套餐类型',
+    `plan_kind_snapshot` VARCHAR(20) DEFAULT NULL COMMENT 'unlimited/daily_quota',
+    `duration_days_snapshot` INT DEFAULT 0,
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_value` DECIMAL(20, 6) DEFAULT 0,
+    `reset_period` VARCHAR(20) DEFAULT 'day',
+    `reset_timezone` VARCHAR(64) DEFAULT 'Asia/Shanghai',
+    `activation_mode` VARCHAR(20) DEFAULT 'append',
+    `start_time` DATETIME NOT NULL COMMENT '开始时间',
+    `end_time` DATETIME NOT NULL COMMENT '结束时间',
+    `status` VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/expired/cancelled',
+    `created_by` BIGINT UNSIGNED DEFAULT NULL COMMENT '创建者（管理员ID）',
+    `activated_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_subscription_user_id` (`user_id`),
+    KEY `idx_user_subscription_plan_id` (`plan_id`),
+    KEY `idx_user_subscription_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户套餐记录表';
+
+-- ============================================================
+-- 12.3 subscription_usage_cycle - 套餐每日额度周期表
+-- ============================================================
+CREATE TABLE `subscription_usage_cycle` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `subscription_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `cycle_date` DATE NOT NULL COMMENT '业务日期',
+    `cycle_start_at` DATETIME NOT NULL,
+    `cycle_end_at` DATETIME NOT NULL,
+    `quota_metric` VARCHAR(20) NOT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_limit` DECIMAL(20, 6) NOT NULL DEFAULT 0,
+    `used_amount` DECIMAL(20, 6) NOT NULL DEFAULT 0,
+    `request_count` INT NOT NULL DEFAULT 0,
+    `last_request_id` VARCHAR(36) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_subscription_cycle_date` (`subscription_id`, `cycle_date`),
+    KEY `idx_subscription_usage_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐每日额度周期表';
+
+-- ============================================================
+-- 12.4 image_credit_record - 图片积分流水表
 -- ============================================================
 CREATE TABLE `image_credit_record` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT UNSIGNED NOT NULL,
     `request_id` VARCHAR(36) DEFAULT NULL,
     `model_name` VARCHAR(128) DEFAULT NULL,
-    `change_amount` INT NOT NULL COMMENT '正数=充值，负数=扣减',
-    `balance_before` INT NOT NULL DEFAULT 0,
-    `balance_after` INT NOT NULL DEFAULT 0,
-    `multiplier` INT NOT NULL DEFAULT 1,
+    `change_amount` DECIMAL(12, 3) NOT NULL COMMENT '正数=充值，负数=扣减',
+    `balance_before` DECIMAL(12, 3) NOT NULL DEFAULT 0,
+    `balance_after` DECIMAL(12, 3) NOT NULL DEFAULT 0,
+    `multiplier` DECIMAL(12, 3) NOT NULL DEFAULT 1,
+    `image_size` VARCHAR(16) DEFAULT NULL COMMENT 'Google 生图分辨率档位',
     `action_type` VARCHAR(20) NOT NULL DEFAULT 'request' COMMENT 'request/recharge/deduct',
     `operator_id` BIGINT UNSIGNED DEFAULT NULL,
     `remark` VARCHAR(255) DEFAULT NULL,
@@ -451,15 +570,56 @@ VALUES (1, 100.000000, 100.000000, 0);
 
 -- 管理员图片积分余额
 INSERT INTO `user_image_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
-VALUES (1, 0, 0, 0);
+VALUES (1, 0.000, 0.000, 0.000);
 
 -- 预置 Gemini 图片模型
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
     `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 图片生成（按图片积分计费）'),
-('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini Pro 图片生成（按图片积分计费）');
+('gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'),
+('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
+('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '1K', 1, 1.000, 1, 10
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-2.5-flash-image';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '512', 1, 1.000, 0, 10
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '1K', 1, 2.000, 1, 20
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '2K', 1, 3.000, 0, 30
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '4K', 1, 4.000, 0, 40
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3.1-flash-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '1K', 1, 3.000, 1, 10
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3-pro-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '2K', 1, 4.500, 0, 20
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3-pro-image-preview';
+
+INSERT INTO `model_image_resolution_rule` (`unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`)
+SELECT um.id, '4K', 1, 6.000, 0, 30
+FROM `unified_model` um
+WHERE um.`model_name` = 'gemini-3-pro-image-preview';
 
 -- 可选：Google Gemini 官方渠道与模型映射
 -- 将 @google_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建渠道与映射。
@@ -476,6 +636,12 @@ SELECT
     1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
 FROM DUAL
 WHERE @google_api_key IS NOT NULL;
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-2.5-flash-image', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-2.5-flash-image';
 
 INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
 SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1

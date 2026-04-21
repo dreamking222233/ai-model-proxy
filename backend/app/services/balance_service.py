@@ -190,6 +190,9 @@ class BalanceService:
                 "input_tokens": r.input_tokens,
                 "output_tokens": r.output_tokens,
                 "total_tokens": r.total_tokens,
+                "raw_input_tokens": r.raw_input_tokens or 0,
+                "raw_output_tokens": r.raw_output_tokens or 0,
+                "raw_total_tokens": r.raw_total_tokens or 0,
                 "logical_input_tokens": r.logical_input_tokens or 0,
                 "upstream_input_tokens": r.upstream_input_tokens or 0,
                 "upstream_cache_read_input_tokens": r.upstream_cache_read_input_tokens or 0,
@@ -200,6 +203,13 @@ class BalanceService:
                 "total_cost": float(r.total_cost),
                 "balance_before": float(r.balance_before),
                 "balance_after": float(r.balance_after),
+                "subscription_id": r.subscription_id,
+                "subscription_cycle_id": r.subscription_cycle_id,
+                "quota_metric": r.quota_metric,
+                "quota_consumed_amount": float(r.quota_consumed_amount or 0),
+                "quota_limit_snapshot": float(r.quota_limit_snapshot or 0),
+                "quota_used_after": float(r.quota_used_after or 0),
+                "quota_cycle_date": r.quota_cycle_date.isoformat() if r.quota_cycle_date else None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in records

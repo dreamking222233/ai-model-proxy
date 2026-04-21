@@ -50,6 +50,15 @@
                     </div>
                   </div>
                   <div class="detail-item">
+                    <div class="d-icon"><a-icon :type="userInfo.subscription_summary && userInfo.subscription_summary.plan_kind === 'daily_quota' ? 'dashboard' : 'crown'" /></div>
+                    <div class="d-body">
+                      <div class="d-label">当前套餐</div>
+                      <div class="d-val">
+                        {{ subscriptionTitle }}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="detail-item">
                     <div class="d-icon"><a-icon type="clock-circle" /></div>
                     <div class="d-body">
                       <div class="d-label">最后活跃</div>
@@ -202,6 +211,16 @@ export default {
         String(d.getHours()).padStart(2, '0') + ':' +
         String(d.getMinutes()).padStart(2, '0') + ':' +
         String(d.getSeconds()).padStart(2, '0')
+    }
+  },
+  computed: {
+    subscriptionTitle() {
+      const summary = this.userInfo.subscription_summary || {}
+      if (!summary.subscription_type || summary.subscription_type === 'balance') return '按量余额模式'
+      if (summary.plan_kind === 'daily_quota' && summary.current_cycle) {
+        return `${summary.plan_name || '每日限额套餐'} / 今日剩余 ${Number(summary.current_cycle.remaining_amount || 0).toLocaleString('zh-CN')} ${summary.quota_metric === 'cost_usd' ? '美元' : 'Token'}`
+      }
+      return summary.plan_name || '时间套餐'
     }
   }
 }

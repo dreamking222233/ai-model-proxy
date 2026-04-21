@@ -6,6 +6,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import SysUser
 from app.services.balance_service import BalanceService
 from app.services.image_credit_service import ImageCreditService
+from app.services.subscription_service import SubscriptionService
 from app.services.health_service import get_system_config
 from app.schemas.common import ResponseModel
 
@@ -24,6 +25,7 @@ def get_balance(
         "image_credit_balance": image_balance["balance"],
         "image_credit_total_recharged": image_balance["total_recharged"],
         "image_credit_total_consumed": image_balance["total_consumed"],
+        "subscription_summary": SubscriptionService.get_current_subscription_summary(db, current_user.id),
     })
 
 

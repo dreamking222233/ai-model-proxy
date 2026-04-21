@@ -12,7 +12,7 @@
               
               <div class="hero-summary-mini">
                 <div class="mini-tag">
-                  <a-icon :type="userProfile.subscription_type === 'unlimited' ? 'crown' : 'wallet'" />
+                  <a-icon :type="userProfile.subscription_type === 'unlimited' ? 'crown' : (userProfile.subscription_type === 'quota' ? 'dashboard' : 'wallet')" />
                   {{ accountModeTitle }}
                 </div>
                 <div class="mini-tag">
@@ -128,6 +128,24 @@
                     <div class="timer-main">
                       <span class="timer-val">{{ subscriptionStatus.isExpired ? '已过期' : subscriptionStatus.daysRemaining }}</span>
                       <span class="timer-unit">{{ subscriptionStatus.isExpired ? '' : '天后到期' }}</span>
+                    </div>
+                    <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else-if="userProfile.subscription_type === 'quota'" class="glass-feature-card subscription-card animate__animated animate__fadeInLeft" style="animation-delay: 0.2s">
+                <div class="f-card-icon crown">
+                  <a-icon type="dashboard" />
+                </div>
+                <div class="f-card-body">
+                  <h3 class="f-title">{{ (userProfile.subscription_summary && userProfile.subscription_summary.plan_name) || '每日限额套餐' }}</h3>
+                  <p class="f-desc">当前套餐按每日额度刷新，额度用尽后次日自动重置。</p>
+
+                  <div class="subscription-timer">
+                    <div class="timer-main">
+                      <span class="timer-val">{{ quotaRemainingLabel }}</span>
+                      <span class="timer-unit">{{ quotaUnitLabel }}</span>
                     </div>
                     <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
                   </div>
@@ -315,14 +333,38 @@ export default {
         }
       ]
     },
+    quotaCycle() {
+      return this.userProfile.subscription_summary && this.userProfile.subscription_summary.current_cycle
+        ? this.userProfile.subscription_summary.current_cycle
+        : null
+    },
+    quotaRemainingLabel() {
+      if (!this.quotaCycle) return '0'
+      if (this.userProfile.subscription_summary && this.userProfile.subscription_summary.quota_metric === 'cost_usd') {
+        return `$${Number(this.quotaCycle.remaining_amount || 0).toFixed(2)}`
+      }
+      return Number(this.quotaCycle.remaining_amount || 0).toLocaleString('zh-CN')
+    },
+    quotaUnitLabel() {
+      if (!this.quotaCycle) return ''
+      return this.userProfile.subscription_summary && this.userProfile.subscription_summary.quota_metric === 'cost_usd'
+        ? '今日剩余额度'
+        : 'Token 今日剩余'
+    },
     accountModeTitle() {
-      return this.userProfile.subscription_type === 'unlimited' ? '时间套餐' : '余额模式'
+      if (this.userProfile.subscription_type === 'unlimited') return '时间套餐'
+      if (this.userProfile.subscription_type === 'quota') return '每日限额套餐'
+      return '余额模式'
     },
     accountModeDetail() {
       if (this.profileLoading) return '读取中...'
       if (this.userProfile.subscription_type === 'unlimited') {
         if (this.subscriptionStatus.isExpired) return '已过期'
         return `有效期至 ${this.formatDate(this.userProfile.subscription_expires_at)}`
+      }
+      if (this.userProfile.subscription_type === 'quota') {
+        if (!this.quotaCycle) return '每日额度读取中'
+        return `今日剩余 ${this.quotaRemainingLabel}`
       }
       return '按余额模式消费'
     }

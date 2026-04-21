@@ -1,6 +1,7 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.database import SessionLocal
 from app.services.health_service import HealthService
+from app.services.subscription_service import SubscriptionService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,21 @@ async def health_check_job():
         db.close()
 
 
+async def subscription_maintenance_job():
+    """Periodic subscription status sync for expiring plans."""
+    logger.info("Starting scheduled subscription maintenance...")
+    db = SessionLocal()
+    try:
+        expired_count = SubscriptionService.check_and_expire_subscriptions(db)
+        logger.info("Subscription maintenance completed: expired=%s", expired_count)
+    except Exception as e:
+        logger.error(f"Subscription maintenance job failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler(interval_seconds: int = 300):
-    """Start the health check scheduler"""
+    """Start background schedulers."""
     scheduler.add_job(
         health_check_job,
         'interval',
@@ -32,8 +46,16 @@ def start_scheduler(interval_seconds: int = 300):
         replace_existing=True,
         max_instances=1,
     )
+    scheduler.add_job(
+        subscription_maintenance_job,
+        'interval',
+        seconds=max(300, interval_seconds),
+        id='subscription_maintenance',
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.start()
-    logger.info(f"Health check scheduler started (interval: {interval_seconds}s)")
+    logger.info(f"Schedulers started (health interval: {interval_seconds}s)")
 
 
 async def run_startup_health_check():

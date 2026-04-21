@@ -1,20 +1,114 @@
 """Subscription management service."""
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
-from app.models.user import SysUser
-from app.models.log import ConsumptionRecord, UserSubscription
 from app.core.exceptions import ServiceException
+from app.models.log import (
+    ConsumptionRecord,
+    SubscriptionPlan,
+    SubscriptionUsageCycle,
+    UserSubscription,
+)
+from app.models.user import SysUser
 
 
 class SubscriptionService:
     """User subscription management operations."""
+
+    PLAN_KIND_UNLIMITED = "unlimited"
+    PLAN_KIND_DAILY_QUOTA = "daily_quota"
+    QUOTA_METRIC_TOKENS = "total_tokens"
+    QUOTA_METRIC_COST = "cost_usd"
+    DEFAULT_TIMEZONE = "Asia/Shanghai"
+    DEFAULT_RESET_PERIOD = "day"
+
+    BUILTIN_PLANS = [
+        {
+            "plan_code": "daily-unlimited",
+            "plan_name": "日度无限包",
+            "plan_kind": PLAN_KIND_UNLIMITED,
+            "duration_mode": "day",
+            "duration_days": 1,
+            "quota_metric": None,
+            "quota_value": Decimal("0"),
+            "sort_order": 10,
+            "description": "1 天无限额度套餐",
+        },
+        {
+            "plan_code": "weekly-unlimited",
+            "plan_name": "周度无限包",
+            "plan_kind": PLAN_KIND_UNLIMITED,
+            "duration_mode": "custom",
+            "duration_days": 7,
+            "quota_metric": None,
+            "quota_value": Decimal("0"),
+            "sort_order": 20,
+            "description": "7 天无限额度套餐",
+        },
+        {
+            "plan_code": "monthly-unlimited",
+            "plan_name": "月度无限包",
+            "plan_kind": PLAN_KIND_UNLIMITED,
+            "duration_mode": "month",
+            "duration_days": 30,
+            "quota_metric": None,
+            "quota_value": Decimal("0"),
+            "sort_order": 30,
+            "description": "30 天无限额度套餐",
+        },
+        {
+            "plan_code": "daily-10m-token",
+            "plan_name": "日度畅享包",
+            "plan_kind": PLAN_KIND_DAILY_QUOTA,
+            "duration_mode": "day",
+            "duration_days": 1,
+            "quota_metric": QUOTA_METRIC_TOKENS,
+            "quota_value": Decimal("10000000"),
+            "sort_order": 40,
+            "description": "1 天有效，每天 1000 万 Token",
+        },
+        {
+            "plan_code": "weekly-10m-token",
+            "plan_name": "周度畅享包",
+            "plan_kind": PLAN_KIND_DAILY_QUOTA,
+            "duration_mode": "custom",
+            "duration_days": 7,
+            "quota_metric": QUOTA_METRIC_TOKENS,
+            "quota_value": Decimal("10000000"),
+            "sort_order": 50,
+            "description": "7 天有效，每天 1000 万 Token",
+        },
+        {
+            "plan_code": "monthly-10m-token",
+            "plan_name": "月度畅享包",
+            "plan_kind": PLAN_KIND_DAILY_QUOTA,
+            "duration_mode": "month",
+            "duration_days": 30,
+            "quota_metric": QUOTA_METRIC_TOKENS,
+            "quota_value": Decimal("10000000"),
+            "sort_order": 60,
+            "description": "30 天有效，每天 1000 万 Token",
+        },
+    ]
+
+    @staticmethod
+    def _normalize_decimal(value, default: str = "0") -> Decimal:
+        if value is None or value == "":
+            return Decimal(default)
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ServiceException(400, "Invalid decimal value", "INVALID_DECIMAL") from exc
 
     @staticmethod
     def _empty_usage_summary() -> dict:
@@ -27,23 +121,251 @@ class SubscriptionService:
         }
 
     @staticmethod
+    def _default_subscription_summary() -> dict:
+        return {
+            "subscription_type": "balance",
+            "plan_name": None,
+            "plan_code": None,
+            "plan_kind": None,
+            "start_time": None,
+            "end_time": None,
+            "quota_metric": None,
+            "quota_value": 0.0,
+            "current_cycle": None,
+        }
+
+    @staticmethod
+    def _resolve_zoneinfo(tz_name: Optional[str]) -> ZoneInfo:
+        try:
+            return ZoneInfo(tz_name or SubscriptionService.DEFAULT_TIMEZONE)
+        except Exception:
+            return ZoneInfo(SubscriptionService.DEFAULT_TIMEZONE)
+
+    @staticmethod
+    def _get_cycle_window(
+        now_utc: datetime,
+        tz_name: Optional[str],
+    ) -> tuple[date, datetime, datetime]:
+        zone = SubscriptionService._resolve_zoneinfo(tz_name)
+        aware_now = now_utc.replace(tzinfo=timezone.utc)
+        local_now = aware_now.astimezone(zone)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_end = local_start + timedelta(days=1)
+        start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+        return local_now.date(), start_utc, end_utc
+
+    @staticmethod
+    def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
+        payload = dict(data)
+        plan_kind = str(payload.get("plan_kind") or "").strip() or None
+        if not is_update or plan_kind is not None:
+            if plan_kind not in {SubscriptionService.PLAN_KIND_UNLIMITED, SubscriptionService.PLAN_KIND_DAILY_QUOTA}:
+                raise ServiceException(400, "Invalid plan kind", "INVALID_PLAN_KIND")
+
+        duration_days = payload.get("duration_days")
+        if duration_days is not None and int(duration_days) <= 0:
+            raise ServiceException(400, "Duration must be positive", "INVALID_DURATION")
+
+        quota_metric = payload.get("quota_metric")
+        quota_value = payload.get("quota_value")
+        effective_plan_kind = plan_kind
+
+        if effective_plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED:
+            payload["quota_metric"] = None
+            payload["quota_value"] = Decimal("0")
+        elif effective_plan_kind == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            if quota_metric not in {SubscriptionService.QUOTA_METRIC_TOKENS, SubscriptionService.QUOTA_METRIC_COST}:
+                raise ServiceException(400, "Invalid quota metric", "INVALID_QUOTA_METRIC")
+            normalized_quota = SubscriptionService._normalize_decimal(quota_value)
+            if normalized_quota <= 0:
+                raise ServiceException(400, "Quota value must be positive", "INVALID_QUOTA_VALUE")
+            payload["quota_value"] = normalized_quota
+
+        if "status" in payload and payload["status"] not in {"active", "inactive"}:
+            raise ServiceException(400, "Invalid plan status", "INVALID_PLAN_STATUS")
+
+        if "reset_period" not in payload or not payload.get("reset_period"):
+            payload["reset_period"] = SubscriptionService.DEFAULT_RESET_PERIOD
+        if "reset_timezone" not in payload or not payload.get("reset_timezone"):
+            payload["reset_timezone"] = SubscriptionService.DEFAULT_TIMEZONE
+
+        return payload
+
+    @staticmethod
+    def ensure_default_plans(db: Session) -> None:
+        existing_count = db.query(func.count(SubscriptionPlan.id)).scalar() or 0
+        if existing_count > 0:
+            return
+
+        for plan_data in SubscriptionService.BUILTIN_PLANS:
+            db.add(
+                SubscriptionPlan(
+                    plan_code=plan_data["plan_code"],
+                    plan_name=plan_data["plan_name"],
+                    plan_kind=plan_data["plan_kind"],
+                    duration_mode=plan_data["duration_mode"],
+                    duration_days=plan_data["duration_days"],
+                    quota_metric=plan_data["quota_metric"],
+                    quota_value=plan_data["quota_value"],
+                    reset_period=SubscriptionService.DEFAULT_RESET_PERIOD,
+                    reset_timezone=SubscriptionService.DEFAULT_TIMEZONE,
+                    sort_order=plan_data["sort_order"],
+                    status="active",
+                    description=plan_data["description"],
+                )
+            )
+        db.commit()
+
+    @staticmethod
+    def _serialize_plan(plan: SubscriptionPlan) -> dict:
+        return {
+            "id": plan.id,
+            "plan_code": plan.plan_code,
+            "plan_name": plan.plan_name,
+            "plan_kind": plan.plan_kind,
+            "duration_mode": plan.duration_mode,
+            "duration_days": plan.duration_days,
+            "quota_metric": plan.quota_metric,
+            "quota_value": float(plan.quota_value or 0),
+            "reset_period": plan.reset_period,
+            "reset_timezone": plan.reset_timezone,
+            "sort_order": plan.sort_order,
+            "status": plan.status,
+            "description": plan.description,
+            "created_at": plan.created_at.isoformat() if plan.created_at else None,
+            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+        }
+
+    @staticmethod
+    def list_plans(
+        db: Session,
+        status: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[dict], int]:
+        SubscriptionService.ensure_default_plans(db)
+        query = db.query(SubscriptionPlan)
+        if status:
+            query = query.filter(SubscriptionPlan.status == status)
+        total = query.count()
+        plans = (
+            query.order_by(SubscriptionPlan.sort_order.asc(), SubscriptionPlan.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        return [SubscriptionService._serialize_plan(plan) for plan in plans], total
+
+    @staticmethod
+    def create_plan(db: Session, data: dict) -> dict:
+        payload = SubscriptionService._validate_plan_payload(data)
+        existing = db.query(SubscriptionPlan).filter(SubscriptionPlan.plan_code == payload["plan_code"]).first()
+        if existing:
+            raise ServiceException(400, "Plan code already exists", "DUPLICATE_PLAN_CODE")
+
+        plan = SubscriptionPlan(
+            plan_code=payload["plan_code"],
+            plan_name=payload["plan_name"],
+            plan_kind=payload["plan_kind"],
+            duration_mode=payload.get("duration_mode") or "custom",
+            duration_days=int(payload["duration_days"]),
+            quota_metric=payload.get("quota_metric"),
+            quota_value=payload.get("quota_value") or Decimal("0"),
+            reset_period=payload.get("reset_period") or SubscriptionService.DEFAULT_RESET_PERIOD,
+            reset_timezone=payload.get("reset_timezone") or SubscriptionService.DEFAULT_TIMEZONE,
+            sort_order=int(payload.get("sort_order") or 0),
+            status=payload.get("status") or "active",
+            description=payload.get("description"),
+        )
+        db.add(plan)
+        db.commit()
+        db.refresh(plan)
+        return SubscriptionService._serialize_plan(plan)
+
+    @staticmethod
+    def update_plan(db: Session, plan_id: int, data: dict) -> dict:
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
+        if not plan:
+            raise ServiceException(404, "Plan not found", "PLAN_NOT_FOUND")
+
+        payload = SubscriptionService._validate_plan_payload(data, is_update=True)
+        if "plan_code" in payload and payload["plan_code"] != plan.plan_code:
+            duplicate = db.query(SubscriptionPlan).filter(SubscriptionPlan.plan_code == payload["plan_code"]).first()
+            if duplicate:
+                raise ServiceException(400, "Plan code already exists", "DUPLICATE_PLAN_CODE")
+
+        for field in (
+            "plan_code",
+            "plan_name",
+            "plan_kind",
+            "duration_mode",
+            "duration_days",
+            "quota_metric",
+            "quota_value",
+            "reset_period",
+            "reset_timezone",
+            "sort_order",
+            "status",
+            "description",
+        ):
+            if field in payload and payload[field] is not None:
+                setattr(plan, field, payload[field])
+
+        db.commit()
+        db.refresh(plan)
+        return SubscriptionService._serialize_plan(plan)
+
+    @staticmethod
+    def _serialize_cycle(cycle: Optional[SubscriptionUsageCycle], quota_limit: Decimal | None = None) -> Optional[dict]:
+        if cycle is None:
+            return None
+        limit_value = SubscriptionService._normalize_decimal(quota_limit if quota_limit is not None else cycle.quota_limit)
+        used_value = SubscriptionService._normalize_decimal(cycle.used_amount)
+        remaining_value = max(Decimal("0"), limit_value - used_value)
+        return {
+            "id": cycle.id,
+            "cycle_date": cycle.cycle_date.isoformat() if cycle.cycle_date else None,
+            "cycle_start_at": cycle.cycle_start_at.isoformat() if cycle.cycle_start_at else None,
+            "cycle_end_at": cycle.cycle_end_at.isoformat() if cycle.cycle_end_at else None,
+            "quota_metric": cycle.quota_metric,
+            "quota_limit": float(limit_value),
+            "used_amount": float(used_value),
+            "remaining_amount": float(remaining_value),
+            "request_count": int(cycle.request_count or 0),
+            "last_request_id": cycle.last_request_id,
+        }
+
+    @staticmethod
     def _serialize_subscription(
         subscription: UserSubscription,
         user: Optional[SysUser] = None,
         usage_summary: Optional[dict] = None,
+        current_cycle: Optional[object] = None,
     ) -> dict:
         result = {
             "id": subscription.id,
             "user_id": subscription.user_id,
+            "plan_id": subscription.plan_id,
+            "plan_code": subscription.plan_code_snapshot,
             "plan_name": subscription.plan_name,
             "plan_type": subscription.plan_type,
+            "plan_kind": subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED,
+            "duration_days": int(subscription.duration_days_snapshot or 0),
+            "quota_metric": subscription.quota_metric,
+            "quota_value": float(subscription.quota_value or 0),
+            "reset_period": subscription.reset_period,
+            "reset_timezone": subscription.reset_timezone,
+            "activation_mode": subscription.activation_mode,
             "start_time": subscription.start_time.isoformat() if subscription.start_time else None,
             "end_time": subscription.end_time.isoformat() if subscription.end_time else None,
             "status": subscription.status,
             "created_by": subscription.created_by,
+            "activated_at": subscription.activated_at.isoformat() if subscription.activated_at else None,
             "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
             "updated_at": subscription.updated_at.isoformat() if subscription.updated_at else None,
             "usage_summary": usage_summary or SubscriptionService._empty_usage_summary(),
+            "current_cycle": current_cycle if isinstance(current_cycle, dict) else SubscriptionService._serialize_cycle(current_cycle, subscription.quota_value),
         }
         if user is not None:
             result["username"] = user.username
@@ -80,10 +402,7 @@ class SubscriptionService:
         if not subscriptions:
             return {}
 
-        summary_map = {
-            subscription.id: SubscriptionService._empty_usage_summary()
-            for subscription in subscriptions
-        }
+        summary_map = {subscription.id: SubscriptionService._empty_usage_summary() for subscription in subscriptions}
         subscription_ids = [subscription.id for subscription in subscriptions]
 
         linked_rows = (
@@ -147,6 +466,9 @@ class SubscriptionService:
             "input_tokens": record.input_tokens,
             "output_tokens": record.output_tokens,
             "total_tokens": record.total_tokens,
+            "raw_input_tokens": record.raw_input_tokens or 0,
+            "raw_output_tokens": record.raw_output_tokens or 0,
+            "raw_total_tokens": record.raw_total_tokens or 0,
             "logical_input_tokens": record.logical_input_tokens or 0,
             "upstream_input_tokens": record.upstream_input_tokens or 0,
             "upstream_cache_read_input_tokens": record.upstream_cache_read_input_tokens or 0,
@@ -159,8 +481,272 @@ class SubscriptionService:
             "balance_after": float(record.balance_after),
             "billing_mode": record.billing_mode,
             "subscription_id": record.subscription_id,
+            "subscription_cycle_id": record.subscription_cycle_id,
+            "quota_metric": record.quota_metric,
+            "quota_consumed_amount": float(record.quota_consumed_amount or 0),
+            "quota_limit_snapshot": float(record.quota_limit_snapshot or 0),
+            "quota_used_after": float(record.quota_used_after or 0),
+            "quota_cycle_date": record.quota_cycle_date.isoformat() if record.quota_cycle_date else None,
             "created_at": record.created_at.isoformat() if record.created_at else None,
         }
+
+    @staticmethod
+    def _expire_due_subscriptions(db: Session, now: datetime) -> int:
+        expired_subs = (
+            db.query(UserSubscription)
+            .filter(
+                UserSubscription.status == "active",
+                UserSubscription.end_time < now,
+            )
+            .all()
+        )
+        for sub in expired_subs:
+            sub.status = "expired"
+        return len(expired_subs)
+
+    @staticmethod
+    def resolve_active_subscription(
+        db: Session,
+        user_id: int,
+        now: Optional[datetime] = None,
+    ) -> Optional[UserSubscription]:
+        usage_now = now or datetime.utcnow()
+        SubscriptionService._expire_due_subscriptions(db, usage_now)
+        return (
+            db.query(UserSubscription)
+            .filter(
+                UserSubscription.user_id == user_id,
+                UserSubscription.status == "active",
+                UserSubscription.start_time <= usage_now,
+                UserSubscription.end_time >= usage_now,
+            )
+            .order_by(UserSubscription.end_time.desc(), UserSubscription.id.desc())
+            .first()
+        )
+
+    @staticmethod
+    def refresh_user_subscription_state(
+        db: Session,
+        user_id: int,
+        now: Optional[datetime] = None,
+    ) -> Optional[UserSubscription]:
+        usage_now = now or datetime.utcnow()
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+
+        active_subscription = SubscriptionService.resolve_active_subscription(db, user_id, usage_now)
+        if not active_subscription:
+            user.subscription_type = "balance"
+            user.subscription_expires_at = None
+            return None
+
+        plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
+        user.subscription_type = (
+            "quota"
+            if plan_kind == SubscriptionService.PLAN_KIND_DAILY_QUOTA
+            else "unlimited"
+        )
+        user.subscription_expires_at = active_subscription.end_time
+        return active_subscription
+
+    @staticmethod
+    def _get_or_create_cycle(
+        db: Session,
+        subscription: UserSubscription,
+        now: Optional[datetime] = None,
+        lock: bool = False,
+    ) -> SubscriptionUsageCycle:
+        usage_now = now or datetime.utcnow()
+        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
+            usage_now,
+            subscription.reset_timezone,
+        )
+        query = db.query(SubscriptionUsageCycle).filter(
+            SubscriptionUsageCycle.subscription_id == subscription.id,
+            SubscriptionUsageCycle.cycle_date == cycle_date,
+        )
+        if lock:
+            query = query.with_for_update()
+        cycle = query.first()
+        if cycle:
+            return cycle
+
+        cycle = SubscriptionUsageCycle(
+            subscription_id=subscription.id,
+            user_id=subscription.user_id,
+            cycle_date=cycle_date,
+            cycle_start_at=cycle_start_at,
+            cycle_end_at=cycle_end_at,
+            quota_metric=subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS,
+            quota_limit=subscription.quota_value or Decimal("0"),
+            used_amount=Decimal("0"),
+            request_count=0,
+            last_request_id=None,
+        )
+        db.add(cycle)
+        db.flush()
+        return cycle
+
+    @staticmethod
+    def _get_cycle_for_summary(
+        db: Session,
+        subscription: UserSubscription,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        usage_now = now or datetime.utcnow()
+        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
+            usage_now,
+            subscription.reset_timezone,
+        )
+        cycle = (
+            db.query(SubscriptionUsageCycle)
+            .filter(
+                SubscriptionUsageCycle.subscription_id == subscription.id,
+                SubscriptionUsageCycle.cycle_date == cycle_date,
+            )
+            .first()
+        )
+        if cycle:
+            return SubscriptionService._serialize_cycle(cycle, subscription.quota_value)
+        quota_limit = SubscriptionService._normalize_decimal(subscription.quota_value)
+        return {
+            "id": None,
+            "cycle_date": cycle_date.isoformat(),
+            "cycle_start_at": cycle_start_at.isoformat(),
+            "cycle_end_at": cycle_end_at.isoformat(),
+            "quota_metric": subscription.quota_metric,
+            "quota_limit": float(quota_limit),
+            "used_amount": 0.0,
+            "remaining_amount": float(quota_limit),
+            "request_count": 0,
+            "last_request_id": None,
+        }
+
+    @staticmethod
+    def get_current_subscription_summary(
+        db: Session,
+        user_id: int,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        usage_now = now or datetime.utcnow()
+        active_subscription = SubscriptionService.resolve_active_subscription(db, user_id, usage_now)
+        if not active_subscription:
+            return SubscriptionService._default_subscription_summary()
+
+        current_cycle = None
+        if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            current_cycle = SubscriptionService._get_cycle_for_summary(db, active_subscription, usage_now)
+
+        return {
+            "subscription_type": "quota"
+            if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA
+            else "unlimited",
+            "plan_name": active_subscription.plan_name,
+            "plan_code": active_subscription.plan_code_snapshot,
+            "plan_kind": active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED,
+            "start_time": active_subscription.start_time.isoformat() if active_subscription.start_time else None,
+            "end_time": active_subscription.end_time.isoformat() if active_subscription.end_time else None,
+            "quota_metric": active_subscription.quota_metric,
+            "quota_value": float(active_subscription.quota_value or 0),
+            "current_cycle": current_cycle,
+        }
+
+    @staticmethod
+    def check_quota_before_request(
+        db: Session,
+        user: SysUser,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        usage_now = now or datetime.utcnow()
+        active_subscription = SubscriptionService.resolve_active_subscription(db, user.id, usage_now)
+        if not active_subscription:
+            raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
+
+        plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
+        if plan_kind != SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            return {"subscription": active_subscription, "cycle": None}
+
+        cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now, lock=False)
+        quota_limit = SubscriptionService._normalize_decimal(active_subscription.quota_value)
+        used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
+        if used_amount >= quota_limit:
+            raise ServiceException(
+                403,
+                "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
+                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+            )
+        return {"subscription": active_subscription, "cycle": cycle}
+
+    @staticmethod
+    def consume_quota_after_request(
+        db: Session,
+        subscription: UserSubscription,
+        request_id: str,
+        raw_total_tokens: int,
+        total_cost: float,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        usage_now = now or datetime.utcnow()
+        cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now, lock=True)
+
+        quota_metric = subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            consumed_amount = SubscriptionService._normalize_decimal(total_cost)
+        else:
+            consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
+
+        cycle.used_amount = SubscriptionService._normalize_decimal(cycle.used_amount) + consumed_amount
+        cycle.request_count = int(cycle.request_count or 0) + 1
+        cycle.last_request_id = request_id
+        db.flush()
+
+        return {
+            "subscription_cycle_id": cycle.id,
+            "quota_metric": quota_metric,
+            "quota_consumed_amount": consumed_amount,
+            "quota_limit_snapshot": SubscriptionService._normalize_decimal(subscription.quota_value),
+            "quota_used_after": SubscriptionService._normalize_decimal(cycle.used_amount),
+            "quota_cycle_date": cycle.cycle_date,
+        }
+
+    @staticmethod
+    def _build_subscription_record(
+        user_id: int,
+        operator_id: int,
+        plan_name: str,
+        plan_type: str,
+        plan_kind: str,
+        duration_days: int,
+        start_time: datetime,
+        end_time: datetime,
+        activation_mode: str = "append",
+        plan_id: Optional[int] = None,
+        plan_code: Optional[str] = None,
+        quota_metric: Optional[str] = None,
+        quota_value: Decimal | int | float | None = None,
+        reset_period: str = DEFAULT_RESET_PERIOD,
+        reset_timezone: str = DEFAULT_TIMEZONE,
+    ) -> UserSubscription:
+        return UserSubscription(
+            user_id=user_id,
+            plan_id=plan_id,
+            plan_code_snapshot=plan_code,
+            plan_name=plan_name,
+            plan_type=plan_type,
+            plan_kind_snapshot=plan_kind,
+            duration_days_snapshot=duration_days,
+            quota_metric=quota_metric,
+            quota_value=SubscriptionService._normalize_decimal(quota_value),
+            reset_period=reset_period,
+            reset_timezone=reset_timezone,
+            activation_mode=activation_mode,
+            start_time=start_time,
+            end_time=end_time,
+            status="active",
+            created_by=operator_id,
+            activated_at=start_time if start_time <= datetime.utcnow() else None,
+        )
 
     @staticmethod
     def activate_subscription(
@@ -171,22 +757,6 @@ class SubscriptionService:
         duration_days: int,
         operator_id: int,
     ) -> dict:
-        """
-        Activate a subscription for a user.
-
-        Args:
-            user_id: target user.
-            plan_name: subscription plan name (e.g., "月卡", "季卡", "年卡").
-            plan_type: plan type (monthly/quarterly/yearly/custom).
-            duration_days: subscription duration in days.
-            operator_id: admin user performing the operation.
-
-        Returns:
-            dict with subscription info.
-
-        Raises:
-            ServiceException: if user not found or invalid parameters.
-        """
         if duration_days <= 0:
             raise ServiceException(400, "Duration must be positive", "INVALID_DURATION")
 
@@ -194,79 +764,104 @@ class SubscriptionService:
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-        # Calculate start and end time
         start_time = datetime.utcnow()
-
-        # If user already has an active subscription, extend from current expiration
-        if user.subscription_type == "unlimited" and user.subscription_expires_at:
-            if user.subscription_expires_at > start_time:
-                start_time = user.subscription_expires_at
-
+        current_active = SubscriptionService.resolve_active_subscription(db, user_id, start_time)
+        if current_active and current_active.end_time > start_time:
+            start_time = current_active.end_time
         end_time = start_time + timedelta(days=duration_days)
 
-        # Update user subscription info
-        user.subscription_type = "unlimited"
-        user.subscription_expires_at = end_time
-
-        # Create subscription record
-        subscription = UserSubscription(
+        subscription = SubscriptionService._build_subscription_record(
             user_id=user_id,
+            operator_id=operator_id,
             plan_name=plan_name,
             plan_type=plan_type,
+            plan_kind=SubscriptionService.PLAN_KIND_UNLIMITED,
+            duration_days=duration_days,
             start_time=start_time,
             end_time=end_time,
-            status="active",
-            created_by=operator_id,
+            activation_mode="append",
+            quota_metric=None,
+            quota_value=Decimal("0"),
         )
         db.add(subscription)
+        SubscriptionService.refresh_user_subscription_state(db, user_id, datetime.utcnow())
         db.commit()
         db.refresh(subscription)
-
-        return {
-            "id": subscription.id,
-            "user_id": subscription.user_id,
-            "plan_name": subscription.plan_name,
-            "plan_type": subscription.plan_type,
-            "start_time": subscription.start_time.isoformat(),
-            "end_time": subscription.end_time.isoformat(),
-            "status": subscription.status,
-            "created_by": subscription.created_by,
-        }
+        return SubscriptionService._serialize_subscription(subscription)
 
     @staticmethod
-    def cancel_subscription(db: Session, user_id: int) -> dict:
-        """
-        Cancel a user's subscription and switch to balance mode.
-
-        Args:
-            user_id: target user.
-
-        Returns:
-            dict with updated user info.
-
-        Raises:
-            ServiceException: if user not found.
-        """
+    def activate_plan_subscription(
+        db: Session,
+        user_id: int,
+        plan_id: int,
+        operator_id: int,
+        activation_mode: str = "append",
+    ) -> dict:
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-        # Switch to balance mode
-        user.subscription_type = "balance"
-        user.subscription_expires_at = None
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
+        if not plan:
+            raise ServiceException(404, "Plan not found", "PLAN_NOT_FOUND")
+        if plan.status != "active":
+            raise ServiceException(400, "Plan is inactive", "PLAN_INACTIVE")
+        if activation_mode not in {"append", "override"}:
+            raise ServiceException(400, "Invalid activation mode", "INVALID_ACTIVATION_MODE")
 
-        # Mark active subscriptions as cancelled
+        now = datetime.utcnow()
+        current_active = SubscriptionService.resolve_active_subscription(db, user_id, now)
+        start_time = now
+        if activation_mode == "append" and current_active and current_active.end_time > now:
+            start_time = current_active.end_time
+        elif activation_mode == "override" and current_active:
+            current_active.status = "cancelled"
+
+        end_time = start_time + timedelta(days=int(plan.duration_days))
+        subscription = SubscriptionService._build_subscription_record(
+            user_id=user_id,
+            operator_id=operator_id,
+            plan_id=plan.id,
+            plan_code=plan.plan_code,
+            plan_name=plan.plan_name,
+            plan_type=plan.duration_mode,
+            plan_kind=plan.plan_kind,
+            duration_days=int(plan.duration_days),
+            start_time=start_time,
+            end_time=end_time,
+            activation_mode=activation_mode,
+            quota_metric=plan.quota_metric,
+            quota_value=plan.quota_value,
+            reset_period=plan.reset_period,
+            reset_timezone=plan.reset_timezone,
+        )
+        db.add(subscription)
+        db.flush()
+        SubscriptionService.refresh_user_subscription_state(db, user_id, now)
+        db.commit()
+        db.refresh(subscription)
+        return SubscriptionService._serialize_subscription(subscription)
+
+    @staticmethod
+    def cancel_subscription(db: Session, user_id: int) -> dict:
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+
+        now = datetime.utcnow()
         active_subs = (
             db.query(UserSubscription)
             .filter(
                 UserSubscription.user_id == user_id,
                 UserSubscription.status == "active",
+                UserSubscription.end_time >= now,
             )
             .all()
         )
         for sub in active_subs:
             sub.status = "cancelled"
 
+        SubscriptionService.refresh_user_subscription_state(db, user_id, now)
         db.commit()
 
         return {
@@ -282,14 +877,7 @@ class SubscriptionService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:
-        """
-        List subscription records for a user with pagination.
-
-        Returns:
-            Tuple of (list of subscription dicts, total count).
-        """
         query = db.query(UserSubscription).filter(UserSubscription.user_id == user_id)
-
         total = query.count()
         subscriptions = (
             query.order_by(UserSubscription.id.desc())
@@ -297,15 +885,21 @@ class SubscriptionService:
             .limit(page_size)
             .all()
         )
-
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
-        result = [
-            SubscriptionService._serialize_subscription(
-                s,
-                usage_summary=usage_summary_map.get(s.id),
+        usage_now = datetime.utcnow()
+        result = []
+        for subscription in subscriptions:
+            current_cycle = None
+            if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+                if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+                    current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
+            result.append(
+                SubscriptionService._serialize_subscription(
+                    subscription,
+                    usage_summary=usage_summary_map.get(subscription.id),
+                    current_cycle=current_cycle,
+                )
             )
-            for s in subscriptions
-        ]
         return result, total
 
     @staticmethod
@@ -315,36 +909,33 @@ class SubscriptionService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:
-        """
-        List all subscription records with optional status filter.
-
-        Returns:
-            Tuple of (list of subscription dicts with user info, total count).
-        """
-        query = db.query(UserSubscription, SysUser).join(
-            SysUser, UserSubscription.user_id == SysUser.id
-        )
-
+        query = db.query(UserSubscription, SysUser).join(SysUser, UserSubscription.user_id == SysUser.id)
         if status:
             query = query.filter(UserSubscription.status == status)
-
         total = query.count()
-        results = (
+        rows = (
             query.order_by(UserSubscription.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
         )
-        subscriptions = [sub for sub, _ in results]
+        subscriptions = [sub for sub, _ in rows]
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
-        result = [
-            SubscriptionService._serialize_subscription(
-                sub,
-                user=user,
-                usage_summary=usage_summary_map.get(sub.id),
+        usage_now = datetime.utcnow()
+        result = []
+        for subscription, user in rows:
+            current_cycle = None
+            if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+                if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+                    current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
+            result.append(
+                SubscriptionService._serialize_subscription(
+                    subscription,
+                    user=user,
+                    usage_summary=usage_summary_map.get(subscription.id),
+                    current_cycle=current_cycle,
+                )
             )
-            for sub, user in results
-        ]
         return result, total
 
     @staticmethod
@@ -354,20 +945,25 @@ class SubscriptionService:
         page: int = 1,
         page_size: int = 20,
     ) -> dict:
-        subscription_row = (
+        row = (
             db.query(UserSubscription, SysUser)
             .join(SysUser, UserSubscription.user_id == SysUser.id)
             .filter(UserSubscription.id == subscription_id)
             .first()
         )
-        if not subscription_row:
+        if not row:
             raise ServiceException(404, "Subscription not found", "SUBSCRIPTION_NOT_FOUND")
 
-        subscription, user = subscription_row
+        subscription, user = row
         usage_summary = SubscriptionService._build_usage_summary_map(db, [subscription]).get(
             subscription.id,
             SubscriptionService._empty_usage_summary(),
         )
+        current_cycle = None
+        if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            usage_now = datetime.utcnow()
+            if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+                current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
 
         query = db.query(ConsumptionRecord).filter(
             SubscriptionService._subscription_usage_filter(subscription),
@@ -386,12 +982,10 @@ class SubscriptionService:
                 subscription,
                 user=user,
                 usage_summary=usage_summary,
+                current_cycle=current_cycle,
             ),
             "summary": usage_summary,
-            "records": [
-                SubscriptionService._serialize_consumption_record(record)
-                for record in records
-            ],
+            "records": [SubscriptionService._serialize_consumption_record(record) for record in records],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -399,16 +993,7 @@ class SubscriptionService:
 
     @staticmethod
     def check_and_expire_subscriptions(db: Session) -> int:
-        """
-        Check and expire subscriptions that have passed their end_time.
-        This should be called by a scheduled task.
-
-        Returns:
-            Number of subscriptions expired.
-        """
         now = datetime.utcnow()
-
-        # Find active subscriptions that have expired
         expired_subs = (
             db.query(UserSubscription)
             .filter(
@@ -417,34 +1002,14 @@ class SubscriptionService:
             )
             .all()
         )
-
-        count = 0
-        for sub in expired_subs:
-            sub.status = "expired"
-
-            # Recalculate the user's remaining subscription window after expiring this record.
-            user = db.query(SysUser).filter(SysUser.id == sub.user_id).first()
-            if user:
-                latest_active_subscription = (
-                    db.query(UserSubscription)
-                    .filter(
-                        UserSubscription.user_id == sub.user_id,
-                        UserSubscription.status == "active",
-                        UserSubscription.end_time >= now,
-                    )
-                    .order_by(UserSubscription.end_time.desc(), UserSubscription.id.desc())
-                    .first()
-                )
-                if latest_active_subscription:
-                    user.subscription_type = "unlimited"
-                    user.subscription_expires_at = latest_active_subscription.end_time
-                else:
-                    user.subscription_type = "balance"
-                    user.subscription_expires_at = None
-
-            count += 1
-
-        if count > 0:
-            db.commit()
-
-        return count
+        expired_user_ids = {sub.user_id for sub in expired_subs}
+        expired_count = SubscriptionService._expire_due_subscriptions(db, now)
+        user_ids = {
+            row[0]
+            for row in db.query(UserSubscription.user_id).filter(UserSubscription.status == "active").distinct().all()
+        }
+        user_ids.update(expired_user_ids)
+        for user_id in user_ids:
+            SubscriptionService.refresh_user_subscription_state(db, user_id, now)
+        db.commit()
+        return expired_count

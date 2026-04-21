@@ -61,6 +61,19 @@
         />
         <div class="image-credit-balance">当前图片积分余额：<strong>{{ formatNumber(userInfo.image_credit_balance || 0) }}</strong></div>
       </div>
+
+      <div v-if="subscriptionSummary.subscription_type && subscriptionSummary.subscription_type !== 'balance'" class="package-summary animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
+        <div class="package-summary__title">
+          <a-icon :type="subscriptionSummary.plan_kind === 'daily_quota' ? 'dashboard' : 'crown'" />
+          <span>{{ subscriptionSummary.plan_name || '当前套餐' }}</span>
+        </div>
+        <div class="package-summary__meta">
+          <span>模式：{{ subscriptionSummary.plan_kind === 'daily_quota' ? '每日额度刷新' : '时间无限套餐' }}</span>
+          <span v-if="subscriptionSummary.end_time">到期：{{ formatTime(subscriptionSummary.end_time) }}</span>
+          <span v-if="subscriptionSummary.current_cycle">今日已用 {{ formatQuotaAmount(subscriptionSummary.current_cycle.used_amount, subscriptionSummary.quota_metric) }}</span>
+          <span v-if="subscriptionSummary.current_cycle">今日剩余 {{ formatQuotaAmount(subscriptionSummary.current_cycle.remaining_amount, subscriptionSummary.quota_metric) }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- Main Content Section -->
@@ -129,8 +142,8 @@
           <template slot="col_tokens" slot-scope="text, record">
             <div v-if="isImageRequest(record)" class="token-viz image-viz">
               <div class="viz-row">
-                <span class="viz-main">{{ formatNumber(record.image_credits_charged || 0) }} 积分</span>
-                <span class="viz-sub">{{ record.image_count || 1 }} 图</span>
+                <span class="viz-main">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
+                <span class="viz-sub">{{ getImageCountDisplay(record) }} 图</span>
               </div>
               <div class="viz-tags">
                 <span class="v-tag purple">IMAGE</span>
@@ -146,6 +159,10 @@
                 <span class="viz-item"><i class="dot i"></i> 输入 {{ formatNumber(record.input_tokens || 0) }}</span>
                 <span class="viz-item"><i class="dot o"></i> 输出 {{ formatNumber(record.output_tokens || 0) }}</span>
                 <span class="viz-total">{{ formatNumber(record.total_tokens || 0) }} <small>Token</small></span>
+              </div>
+              <div v-if="record.quota_metric" class="quota-usage-row">
+                套餐累计 {{ formatQuotaAmount(record.quota_consumed_amount, record.quota_metric) }}
+                <span v-if="record.quota_cycle_date"> / 周期 {{ record.quota_cycle_date }}</span>
               </div>
               <!-- Technology Badges (Cache/Compression) -->
               <div class="tech-badges" v-if="hasPromptCacheUsage(record) || hasCacheSummary(record) || hasConversationShadow(record)">
@@ -165,7 +182,7 @@
           <!-- 计费列 -->
           <template slot="col_cost" slot-scope="text, record">
             <div class="cost-cell">
-              <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(record.image_credits_charged || 0) }} 💰</span>
+              <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 💰</span>
               <span v-else-if="text" class="price token">-${{ Math.abs(text || 0).toFixed(6) }}</span>
               <span v-else class="price free">FREE</span>
             </div>
@@ -222,9 +239,13 @@
         </a-descriptions-item>
         <a-descriptions-item :label="isImageRequest(sel) ? '图片计费' : 'Token 用量'">
           <template v-if="isImageRequest(sel)">
-            <span>{{ formatNumber(sel.image_credits_charged || 0) }} 图片积分</span>
+            <span>{{ formatNumber(getImageCreditsDisplay(sel)) }} 图片积分</span>
             &nbsp;/&nbsp;
-            <strong>{{ sel.image_count || 1 }} 张图片</strong>
+            <strong>{{ getImageCountDisplay(sel) }} 张图片</strong>
+            <template v-if="getImageSizeText(sel)">
+              &nbsp;/&nbsp;
+              <span>{{ getImageSizeText(sel) }}</span>
+            </template>
           </template>
           <template v-else>
             <span>输入 {{ formatNumber(sel.input_tokens || 0) }}</span>
@@ -242,6 +263,11 @@
             <span v-if="sel.total_cost" class="total-cost">-${{ Math.abs(sel.total_cost).toFixed(6) }}</span>
             <span v-else class="text-muted">-</span>
           </template>
+        </a-descriptions-item>
+        <a-descriptions-item v-if="sel.quota_metric" label="套餐额度结算">
+          <span>{{ formatQuotaAmount(sel.quota_consumed_amount, sel.quota_metric) }}</span>
+          <span v-if="sel.quota_cycle_date"> / 周期 {{ sel.quota_cycle_date }}</span>
+          <span v-if="sel.quota_used_after"> / 累计后 {{ formatQuotaAmount(sel.quota_used_after, sel.quota_metric) }}</span>
         </a-descriptions-item>
         <a-descriptions-item label="请求时间">{{ formatTime(sel.created_at) }}</a-descriptions-item>
         <a-descriptions-item v-if="hasPromptCacheUsage(sel)" label="上游 Prompt 缓存">
@@ -340,6 +366,9 @@ export default {
     successRate() {
       if (!this.summary.total_requests) return '100'
       return ((this.summary.total_success / this.summary.total_requests) * 100).toFixed(1)
+    },
+    subscriptionSummary() {
+      return this.userInfo.subscription_summary || {}
     }
   },
   created() {
@@ -429,9 +458,31 @@ export default {
     isImageRequest(record) {
       return record && (record.request_type === 'image_generation' || record.billing_type === 'image_credit')
     },
+    isRequestSuccess(record) {
+      return !!record && String(record.status || '') === 'success'
+    },
+    getImageCreditsDisplay(record) {
+      if (!this.isImageRequest(record)) return 0
+      if (!this.isRequestSuccess(record)) return 0
+      return Math.max(0, Number(record && record.image_credits_charged || 0))
+    },
+    getImageCountDisplay(record) {
+      if (!this.isImageRequest(record)) return 0
+      if (!this.isRequestSuccess(record)) return 0
+      const imageCount = Number(record && record.image_count)
+      if (Number.isFinite(imageCount) && imageCount > 0) return imageCount
+      return 1
+    },
+    getImageSizeText(record) {
+      if (!this.isImageRequest(record)) return ''
+      return String(record && record.image_size || '').trim()
+    },
     getBillingTypeText(record) {
       if (this.isImageRequest(record)) {
-        return `${this.formatNumber(record.image_credits_charged || 0)} 图片积分`
+        if (!this.isRequestSuccess(record)) {
+          return '未扣积分'
+        }
+        return `${this.formatNumber(this.getImageCreditsDisplay(record))} 图片积分`
       }
       const map = {
         token: '按 Token 计费',
@@ -462,6 +513,12 @@ export default {
     formatNumber(n) {
       if (n == null) return '0'
       return Number(n).toLocaleString()
+    },
+    formatQuotaAmount(value, metric) {
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}`
+      }
+      return `${Number(value || 0).toLocaleString()} Token`
     },
     formatTime(t) {
       if (!t) return '-'
@@ -660,6 +717,32 @@ export default {
     }
   }
 
+  .package-summary {
+    margin: 16px 24px 0;
+    padding: 16px 20px;
+    border-radius: 18px;
+    background: rgba(102, 126, 234, 0.08);
+    border: 1px solid rgba(102, 126, 234, 0.15);
+  }
+
+  .package-summary__title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #1f2d3d;
+  }
+
+  .package-summary__meta {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    color: #5c6b77;
+    font-size: 13px;
+  }
+
   /* ===== Content Section ===== */
   .content-section {
     position: relative;
@@ -757,6 +840,13 @@ export default {
         &.orange { background: rgba(250,140,22,0.1); color: #fa8c16; }
       }
     }
+  }
+
+  .quota-usage-row {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #597ef7;
+    font-weight: 600;
   }
 
   .image-viz {

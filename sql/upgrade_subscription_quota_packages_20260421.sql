@@ -1,0 +1,92 @@
+ALTER TABLE `request_log`
+    ADD COLUMN `request_type` VARCHAR(32) DEFAULT 'chat' AFTER `protocol_type`,
+    ADD COLUMN `billing_type` VARCHAR(20) DEFAULT 'token' AFTER `request_type`,
+    ADD COLUMN `raw_input_tokens` INT DEFAULT 0 AFTER `total_tokens`,
+    ADD COLUMN `raw_output_tokens` INT DEFAULT 0 AFTER `raw_input_tokens`,
+    ADD COLUMN `raw_total_tokens` INT DEFAULT 0 AFTER `raw_output_tokens`,
+    ADD COLUMN `subscription_cycle_id` BIGINT UNSIGNED DEFAULT NULL AFTER `client_ip`,
+    ADD COLUMN `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd' AFTER `subscription_cycle_id`,
+    ADD COLUMN `quota_consumed_amount` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_metric`,
+    ADD COLUMN `quota_limit_snapshot` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_consumed_amount`,
+    ADD COLUMN `quota_used_after` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_limit_snapshot`,
+    ADD COLUMN `quota_cycle_date` DATE DEFAULT NULL AFTER `quota_used_after`,
+    ADD KEY `idx_request_log_subscription_cycle_id` (`subscription_cycle_id`);
+
+ALTER TABLE `consumption_record`
+    ADD COLUMN `raw_input_tokens` INT DEFAULT 0 AFTER `total_tokens`,
+    ADD COLUMN `raw_output_tokens` INT DEFAULT 0 AFTER `raw_input_tokens`,
+    ADD COLUMN `raw_total_tokens` INT DEFAULT 0 AFTER `raw_output_tokens`,
+    ADD COLUMN `subscription_cycle_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '关联套餐周期ID' AFTER `subscription_id`,
+    ADD COLUMN `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd' AFTER `subscription_cycle_id`,
+    ADD COLUMN `quota_consumed_amount` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_metric`,
+    ADD COLUMN `quota_limit_snapshot` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_consumed_amount`,
+    ADD COLUMN `quota_used_after` DECIMAL(20, 6) DEFAULT 0 AFTER `quota_limit_snapshot`,
+    ADD COLUMN `quota_cycle_date` DATE DEFAULT NULL AFTER `quota_used_after`,
+    ADD KEY `idx_subscription_cycle_id` (`subscription_cycle_id`);
+
+CREATE TABLE IF NOT EXISTS `subscription_plan` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `plan_code` VARCHAR(64) NOT NULL COMMENT '套餐编码',
+    `plan_name` VARCHAR(64) NOT NULL COMMENT '套餐名称',
+    `plan_kind` VARCHAR(20) NOT NULL DEFAULT 'unlimited' COMMENT 'unlimited/daily_quota',
+    `duration_mode` VARCHAR(20) NOT NULL DEFAULT 'custom',
+    `duration_days` INT NOT NULL DEFAULT 1,
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_value` DECIMAL(20, 6) DEFAULT 0,
+    `reset_period` VARCHAR(20) NOT NULL DEFAULT 'day',
+    `reset_timezone` VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `status` VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/inactive',
+    `description` VARCHAR(255) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_subscription_plan_code` (`plan_code`),
+    KEY `idx_subscription_plan_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐模板表';
+
+CREATE TABLE IF NOT EXISTS `user_subscription` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `plan_id` BIGINT UNSIGNED DEFAULT NULL,
+    `plan_code_snapshot` VARCHAR(64) DEFAULT NULL COMMENT '套餐编码快照',
+    `plan_name` VARCHAR(64) NOT NULL COMMENT '套餐名称',
+    `plan_type` VARCHAR(20) NOT NULL COMMENT '套餐类型',
+    `plan_kind_snapshot` VARCHAR(20) DEFAULT NULL COMMENT 'unlimited/daily_quota',
+    `duration_days_snapshot` INT DEFAULT 0,
+    `quota_metric` VARCHAR(20) DEFAULT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_value` DECIMAL(20, 6) DEFAULT 0,
+    `reset_period` VARCHAR(20) DEFAULT 'day',
+    `reset_timezone` VARCHAR(64) DEFAULT 'Asia/Shanghai',
+    `activation_mode` VARCHAR(20) DEFAULT 'append',
+    `start_time` DATETIME NOT NULL COMMENT '开始时间',
+    `end_time` DATETIME NOT NULL COMMENT '结束时间',
+    `status` VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/expired/cancelled',
+    `created_by` BIGINT UNSIGNED DEFAULT NULL COMMENT '创建者（管理员ID）',
+    `activated_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_user_subscription_user_id` (`user_id`),
+    KEY `idx_user_subscription_plan_id` (`plan_id`),
+    KEY `idx_user_subscription_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户套餐记录表';
+
+CREATE TABLE IF NOT EXISTS `subscription_usage_cycle` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `subscription_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `cycle_date` DATE NOT NULL COMMENT '业务日期',
+    `cycle_start_at` DATETIME NOT NULL,
+    `cycle_end_at` DATETIME NOT NULL,
+    `quota_metric` VARCHAR(20) NOT NULL COMMENT 'total_tokens/cost_usd',
+    `quota_limit` DECIMAL(20, 6) NOT NULL DEFAULT 0,
+    `used_amount` DECIMAL(20, 6) NOT NULL DEFAULT 0,
+    `request_count` INT NOT NULL DEFAULT 0,
+    `last_request_id` VARCHAR(36) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_subscription_cycle_date` (`subscription_id`, `cycle_date`),
+    KEY `idx_subscription_usage_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐每日额度周期表';

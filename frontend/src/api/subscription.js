@@ -10,6 +10,38 @@ export function activateSubscription(data) {
   })
 }
 
+export function listSubscriptionPlans(params) {
+  return request({
+    url: '/api/admin/subscription/plans',
+    method: 'get',
+    params
+  })
+}
+
+export function createSubscriptionPlan(data) {
+  return request({
+    url: '/api/admin/subscription/plans',
+    method: 'post',
+    data
+  })
+}
+
+export function updateSubscriptionPlan(planId, data) {
+  return request({
+    url: `/api/admin/subscription/plans/${planId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function activatePlanSubscription(data) {
+  return request({
+    url: '/api/admin/subscription/activate-plan',
+    method: 'post',
+    data
+  })
+}
+
 export function cancelSubscription(userId) {
   return request({
     url: `/api/admin/subscription/cancel/${userId}`,

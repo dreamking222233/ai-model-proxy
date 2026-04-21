@@ -34,7 +34,6 @@ from app.models.log import (
     UserBalance,
     ConsumptionRecord,
     SystemConfig,
-    UserSubscription,
 )
 from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
@@ -46,6 +45,7 @@ from app.services.compression_guard_service import CompressionGuardService
 from app.services.upstream_session_strategy_service import UpstreamSessionStrategyService
 from app.services.request_body_cache_service import RequestBodyCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
+from app.services.subscription_service import SubscriptionService
 from app.core.exceptions import ServiceException
 from app.middleware.cache_middleware import CacheMiddleware
 from app.middleware.stream_cache_middleware import StreamCacheMiddleware
@@ -103,6 +103,18 @@ class ProxyService:
         ("deepseek", "DeepSeek"),
         ("qwen", "Alibaba"),
     ]
+
+    @staticmethod
+    def _assert_text_request_allowed(db: Session, user: SysUser) -> None:
+        """Validate whether a text request can proceed under the user's current billing mode."""
+        if user.subscription_type == "balance":
+            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+            if not balance or balance.balance <= 0:
+                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+            return
+
+        if user.subscription_type == "quota":
+            SubscriptionService.check_quota_before_request(db, user)
 
     @staticmethod
     def _build_model_identity_prompt(requested_model: str) -> str:
@@ -2461,10 +2473,7 @@ class ProxyService:
         requested_model: str,
     ) -> tuple[UnifiedModel, list[tuple[Channel, str]]]:
         """Resolve a Responses request into a model plus channel candidates."""
-        if user.subscription_type == "balance":
-            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-            if not balance or balance.balance <= 0:
-                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        ProxyService._assert_text_request_allowed(db, user)
 
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
@@ -3295,12 +3304,8 @@ class ProxyService:
         # Inject model identity system prompt
         ProxyService._inject_model_identity(request_data, requested_model, "openai")
 
-        # 1. Check user balance (only for balance mode users)
-        if user.subscription_type == "balance":
-            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-            if not balance or balance.balance <= 0:
-                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
-        # For unlimited mode users, subscription expiration is already checked in verify_api_key
+        # 1. Check user entitlement before request
+        ProxyService._assert_text_request_allowed(db, user)
 
         # 2. Validate request content length
         ProxyService._validate_request_length(db, request_data)
@@ -3502,12 +3507,8 @@ class ProxyService:
             is_stream=bool(is_stream),
         )
 
-        # 1. Check user balance (only for balance mode users)
-        if user.subscription_type == "balance":
-            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-            if not balance or balance.balance <= 0:
-                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
-        # For unlimited mode users, subscription expiration is already checked in verify_api_key
+        # 1. Check user entitlement before request
+        ProxyService._assert_text_request_allowed(db, user)
 
         # 2. Validate request content length
         ProxyService._validate_request_length(db, request_data)
@@ -6508,25 +6509,31 @@ class ProxyService:
             db.rollback()
 
     @staticmethod
-    def _record_success(db: Session, channel: Channel) -> None:
+    def _record_success(
+        db: Session,
+        channel: Channel,
+        *,
+        auto_commit: bool = True,
+    ) -> None:
         """
         Record a successful request on a channel.
 
         Resets ``failure_count`` and ``circuit_breaker_until``, marks healthy.
         """
-        try:
-            channel.failure_count = 0
-            channel.last_success_at = datetime.utcnow()
-            channel.is_healthy = 1
-            channel.circuit_breaker_until = None
+        channel.failure_count = 0
+        channel.last_success_at = datetime.utcnow()
+        channel.is_healthy = 1
+        channel.circuit_breaker_until = None
 
-            # Increase health score
-            channel.health_score = min(100, channel.health_score + 5)
+        # Increase health score
+        channel.health_score = min(100, channel.health_score + 5)
 
-            db.commit()
-        except Exception as e:
-            logger.error("Failed to record channel success: %s", e)
-            db.rollback()
+        if auto_commit:
+            try:
+                db.commit()
+            except Exception as e:
+                logger.error("Failed to record channel success: %s", e)
+                db.rollback()
 
     # ===================================================================
     # Helper: balance deduction and logging
@@ -6556,11 +6563,14 @@ class ProxyService:
         """
         try:
             usage_now = datetime.utcnow()
+            raw_input_tokens = int(input_tokens or 0)
+            raw_output_tokens = int(output_tokens or 0)
+            raw_total_tokens = raw_input_tokens + raw_output_tokens
 
             # Apply token multiplier
             token_multiplier = get_system_config(db, "token_multiplier", 1.0)
-            input_tokens = int(input_tokens * token_multiplier)
-            output_tokens = int(output_tokens * token_multiplier)
+            input_tokens = int(raw_input_tokens * token_multiplier)
+            output_tokens = int(raw_output_tokens * token_multiplier)
             total_tokens = input_tokens + output_tokens
 
             # Calculate cost with price multiplier
@@ -6572,6 +6582,12 @@ class ProxyService:
             # Handle balance deduction based on subscription type
             billing_mode = "balance"
             subscription_id: int | None = None
+            subscription_cycle_id: int | None = None
+            quota_metric: str | None = None
+            quota_consumed_amount = Decimal("0")
+            quota_limit_snapshot = Decimal("0")
+            quota_used_after = Decimal("0")
+            quota_cycle_date = None
             if user.subscription_type == "balance":
                 # Balance mode: deduct from user balance (with row lock)
                 balance = (
@@ -6589,20 +6605,25 @@ class ProxyService:
                     balance_before = 0.0
                     balance_after = 0.0
             else:
-                # Unlimited mode: no balance deduction, just record usage.
+                # Subscription mode: no balance deduction, but daily quota plans still need usage settlement.
                 billing_mode = "subscription"
-                active_subscription = (
-                    db.query(UserSubscription)
-                    .filter(
-                        UserSubscription.user_id == user.id,
-                        UserSubscription.status == "active",
-                        UserSubscription.start_time <= usage_now,
-                        UserSubscription.end_time >= usage_now,
-                    )
-                    .order_by(UserSubscription.id.desc())
-                    .first()
-                )
+                active_subscription = SubscriptionService.resolve_active_subscription(db, user.id, usage_now)
                 subscription_id = active_subscription.id if active_subscription else None
+                if active_subscription and (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
+                    quota_usage = SubscriptionService.consume_quota_after_request(
+                        db,
+                        active_subscription,
+                        request_id=request_id,
+                        raw_total_tokens=raw_total_tokens,
+                        total_cost=total_cost,
+                        now=usage_now,
+                    )
+                    subscription_cycle_id = quota_usage["subscription_cycle_id"]
+                    quota_metric = quota_usage["quota_metric"]
+                    quota_consumed_amount = quota_usage["quota_consumed_amount"]
+                    quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
+                    quota_used_after = quota_usage["quota_used_after"]
+                    quota_cycle_date = quota_usage["quota_cycle_date"]
 
                 balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
                 if balance:
@@ -6648,6 +6669,9 @@ class ProxyService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
+                raw_input_tokens=raw_input_tokens,
+                raw_output_tokens=raw_output_tokens,
+                raw_total_tokens=raw_total_tokens,
                 logical_input_tokens=logical_input_tokens,
                 upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
                 upstream_cache_read_input_tokens=int(
@@ -6664,6 +6688,12 @@ class ProxyService:
                 balance_after=Decimal(str(balance_after)),
                 billing_mode=billing_mode,
                 subscription_id=subscription_id,
+                subscription_cycle_id=subscription_cycle_id,
+                quota_metric=quota_metric,
+                quota_consumed_amount=quota_consumed_amount,
+                quota_limit_snapshot=quota_limit_snapshot,
+                quota_used_after=quota_used_after,
+                quota_cycle_date=quota_cycle_date,
             )
             db.add(consumption)
 
@@ -6683,6 +6713,9 @@ class ProxyService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
+                raw_input_tokens=raw_input_tokens,
+                raw_output_tokens=raw_output_tokens,
+                raw_total_tokens=raw_total_tokens,
                 image_credits_charged=0,
                 image_count=0,
                 response_time_ms=response_time_ms,
@@ -6715,6 +6748,12 @@ class ProxyService:
                 status="success",
                 error_message=None,
                 client_ip=client_ip,
+                subscription_cycle_id=subscription_cycle_id,
+                quota_metric=quota_metric,
+                quota_consumed_amount=quota_consumed_amount,
+                quota_limit_snapshot=quota_limit_snapshot,
+                quota_used_after=quota_used_after,
+                quota_cycle_date=quota_cycle_date,
             )
             db.add(req_log)
 
@@ -6759,8 +6798,9 @@ class ProxyService:
         cache_info: Optional[dict[str, Any]] = None,
         request_type: str = "chat",
         billing_type: str = "token",
-        image_credits_charged: int = 0,
+        image_credits_charged: Decimal | int | float = Decimal("0"),
         image_count: int = 0,
+        image_size: Optional[str] = None,
     ) -> None:
         """Log a failed request without deducting balance."""
         try:
@@ -6780,8 +6820,9 @@ class ProxyService:
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
-                image_credits_charged=int(image_credits_charged or 0),
+                image_credits_charged=Decimal(str(image_credits_charged or 0)).quantize(Decimal("0.001")),
                 image_count=int(image_count or 0),
+                image_size=image_size,
                 response_time_ms=response_time_ms,
                 cache_status=cache_log_fields["cache_status"],
                 cache_hit_segments=cache_log_fields["cache_hit_segments"],
@@ -6911,7 +6952,68 @@ class ProxyService:
         return mapping.get(str(size_value).lower())
 
     @staticmethod
-    def _build_google_image_payload(request_data: dict) -> dict:
+    def _extract_requested_google_image_size(request_data: dict) -> Optional[str]:
+        return (
+            ModelService.normalize_google_image_size(request_data.get("image_size"))
+            or ModelService.normalize_google_image_size(request_data.get("imageSize"))
+            or ModelService.normalize_google_image_size(request_data.get("size"))
+        )
+
+    @staticmethod
+    def _resolve_image_billing_rule(
+        db: Session,
+        unified_model: UnifiedModel,
+        request_data: dict,
+    ) -> tuple[Optional[str], Decimal]:
+        explicit_image_size = request_data.get("image_size")
+        if explicit_image_size is None:
+            explicit_image_size = request_data.get("imageSize")
+        legacy_size_value = request_data.get("size")
+        requested_image_size = ProxyService._extract_requested_google_image_size(request_data)
+        if explicit_image_size is not None and requested_image_size is None:
+            raise ServiceException(400, "Invalid image_size, supported values are 512/1K/2K/4K", "INVALID_IMAGE_SIZE")
+        if (
+            explicit_image_size is None
+            and legacy_size_value not in (None, "")
+            and requested_image_size is None
+            and ProxyService._map_image_size_to_aspect_ratio(legacy_size_value) is None
+        ):
+            raise ServiceException(400, "Invalid size parameter", "INVALID_IMAGE_SIZE")
+        requested_rule = ModelService.resolve_image_resolution_rule(db, unified_model.id, requested_image_size)
+        default_rule = ModelService.resolve_image_resolution_rule(db, unified_model.id, None)
+
+        if requested_image_size and not requested_rule:
+            allowed_sizes = ModelService.get_google_image_resolution_capabilities(unified_model.model_name)
+            if requested_image_size not in allowed_sizes:
+                raise ServiceException(
+                    400,
+                    f"Image size '{requested_image_size}' is not supported by model '{unified_model.model_name}'",
+                    "IMAGE_SIZE_NOT_SUPPORTED",
+                )
+            raise ServiceException(
+                400,
+                f"Image size '{requested_image_size}' is not enabled for model '{unified_model.model_name}'",
+                "IMAGE_SIZE_NOT_ENABLED",
+            )
+
+        selected_rule = requested_rule or default_rule
+        if selected_rule:
+            return selected_rule["resolution_code"], Decimal(str(selected_rule["credit_cost"])).quantize(Decimal("0.001"))
+
+        if requested_image_size:
+            allowed_sizes = ModelService.get_google_image_resolution_capabilities(unified_model.model_name)
+            if requested_image_size not in allowed_sizes:
+                raise ServiceException(
+                    400,
+                    f"Image size '{requested_image_size}' is not supported by model '{unified_model.model_name}'",
+                    "IMAGE_SIZE_NOT_SUPPORTED",
+                )
+            return requested_image_size, Decimal(str(unified_model.image_credit_multiplier or 1)).quantize(Decimal("0.001"))
+
+        return None, Decimal(str(unified_model.image_credit_multiplier or 1)).quantize(Decimal("0.001"))
+
+    @staticmethod
+    def _build_google_image_payload(request_data: dict, image_size: Optional[str] = None) -> dict:
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = request_data.get("aspect_ratio") or ProxyService._map_image_size_to_aspect_ratio(
             request_data.get("size")
@@ -6919,6 +7021,8 @@ class ProxyService:
         image_config: dict[str, Any] = {}
         if aspect_ratio:
             image_config["aspectRatio"] = aspect_ratio
+        if image_size:
+            image_config["imageSize"] = image_size
 
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -6958,48 +7062,47 @@ class ProxyService:
         channel: Channel,
         client_ip: str,
         response_time_ms: int,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
         image_count: int = 1,
     ) -> None:
-        try:
-            charged_credits = int(unified_model.image_credit_multiplier or 1)
-            ImageCreditService.deduct_for_request(
-                db,
-                user_id=user.id,
-                request_id=request_id,
-                model_name=requested_model,
-                amount=charged_credits,
-                multiplier=charged_credits,
-                remark=f"Image generation: {image_count} image(s)",
-            )
-            req_log = RequestLog(
-                request_id=request_id,
-                user_id=user.id,
-                user_api_key_id=api_key_record.id,
-                channel_id=channel.id,
-                channel_name=channel.name,
-                requested_model=requested_model,
-                actual_model=actual_model,
-                protocol_type=channel.protocol_type,
-                request_type="image_generation",
-                billing_type="image_credit",
-                is_stream=0,
-                input_tokens=0,
-                output_tokens=0,
-                total_tokens=0,
-                image_credits_charged=charged_credits,
-                image_count=image_count,
-                response_time_ms=response_time_ms,
-                status="success",
-                error_message=None,
-                client_ip=client_ip,
-            )
-            db.add(req_log)
-            api_key_record.total_requests += 1
-            api_key_record.last_used_at = datetime.utcnow()
-            db.commit()
-        except Exception as e:
-            logger.error("Image credit deduction / logging failed: %s", e)
-            db.rollback()
+        ImageCreditService.deduct_for_request(
+            db,
+            user_id=user.id,
+            request_id=request_id,
+            model_name=requested_model,
+            amount=charged_credits,
+            multiplier=charged_credits,
+            image_size=image_size,
+            remark=f"Image generation: {image_count} image(s)",
+        )
+        req_log = RequestLog(
+            request_id=request_id,
+            user_id=user.id,
+            user_api_key_id=api_key_record.id,
+            channel_id=channel.id,
+            channel_name=channel.name,
+            requested_model=requested_model,
+            actual_model=actual_model,
+            protocol_type=channel.protocol_type,
+            request_type="image_generation",
+            billing_type="image_credit",
+            is_stream=0,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            image_credits_charged=charged_credits,
+            image_count=image_count,
+            image_size=image_size,
+            response_time_ms=response_time_ms,
+            status="success",
+            error_message=None,
+            client_ip=client_ip,
+        )
+        db.add(req_log)
+        api_key_record.total_requests += 1
+        api_key_record.last_used_at = datetime.utcnow()
+        db.flush()
 
     @staticmethod
     async def _non_stream_image_request(
@@ -7013,13 +7116,15 @@ class ProxyService:
         requested_model: str,
         upstream_model_name: str,
         client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/v1beta/models/{upstream_model_name}:generateContent"
         headers = ProxyService._build_headers(channel, "google", request_headers=request_headers)
-        payload = ProxyService._build_google_image_payload(request_data)
+        payload = ProxyService._build_google_image_payload(request_data, image_size=image_size)
 
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -7042,20 +7147,38 @@ class ProxyService:
             )
 
         response_time_ms = int((time.time() - start_time) * 1000)
+
+        # Channel health should track upstream availability, not local billing success.
         ProxyService._record_success(db, channel)
-        ProxyService._deduct_image_credits_and_log(
-            db,
-            user,
-            api_key_record,
-            unified_model,
-            request_id,
-            requested_model,
-            upstream_model_name,
-            channel,
-            client_ip,
-            response_time_ms,
-            image_count=len(images),
-        )
+
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=charged_credits,
+                image_size=image_size,
+                image_count=len(images),
+            )
+            db.commit()
+        except ServiceException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.error("Image billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片生成成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
 
         response_payload = {
             "created": int(time.time()),
@@ -7064,8 +7187,9 @@ class ProxyService:
             "data": images,
             "usage": {
                 "billing_type": "image_credit",
-                "image_credits_charged": int(unified_model.image_credit_multiplier or 1),
-                "model_multiplier": int(unified_model.image_credit_multiplier or 1),
+                "image_credits_charged": float(charged_credits),
+                "model_multiplier": float(charged_credits),
+                "image_size": image_size,
             },
         }
         if extra_text:
@@ -7112,7 +7236,7 @@ class ProxyService:
                 "IMAGE_MODEL_NOT_SUPPORTED",
             )
 
-        image_credit_cost = int(unified_model.image_credit_multiplier or 1)
+        image_size, image_credit_cost = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
         channels = ModelService.get_available_channels(db, unified_model.id)
@@ -7121,6 +7245,12 @@ class ProxyService:
 
         last_error: Exception | None = None
         request_error: ServiceException | None = None
+        non_retryable_request_error_codes = {
+            "INSUFFICIENT_IMAGE_CREDITS",
+            "IMAGE_CREDIT_BALANCE_NOT_FOUND",
+            "INVALID_IMAGE_CREDIT_AMOUNT",
+            "IMAGE_BILLING_FAILED",
+        }
         for channel, actual_model_name in channels:
             try:
                 upstream_model_name = actual_model_name or requested_model
@@ -7135,6 +7265,8 @@ class ProxyService:
                     requested_model,
                     upstream_model_name,
                     client_ip,
+                    image_credit_cost,
+                    image_size=image_size,
                     request_headers=request_headers,
                 )
             except ServiceException as exc:
@@ -7147,6 +7279,15 @@ class ProxyService:
                         exc.detail,
                     )
                     continue
+                if exc.error_code in non_retryable_request_error_codes:
+                    request_error = exc
+                    logger.warning(
+                        "Image request aborted after upstream success or local validation failure on channel %s (%d): %s",
+                        channel.name,
+                        channel.id,
+                        exc.detail,
+                    )
+                    break
                 raise
             except Exception as exc:
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
@@ -7182,8 +7323,9 @@ class ProxyService:
             error_detail,
             request_type="image_generation",
             billing_type="image_credit",
-            image_credits_charged=image_credit_cost,
-            image_count=1,
+            image_credits_charged=0,
+            image_count=0,
+            image_size=image_size,
         )
         if request_error:
             raise request_error

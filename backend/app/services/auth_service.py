@@ -133,6 +133,7 @@ class AuthService:
         # Fetch balances
         balance = db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
         image_balance = db.query(UserImageBalance).filter(UserImageBalance.user_id == user_id).first()
+        from app.services.subscription_service import SubscriptionService
 
         # Calculate total tokens from request logs
         total_tokens = db.query(
@@ -151,10 +152,11 @@ class AuthService:
             "balance": float(balance.balance) if balance else 0,
             "total_consumed": float(balance.total_consumed) if balance else 0,
             "total_recharged": float(balance.total_recharged) if balance else 0,
-            "image_credit_balance": int(image_balance.balance) if image_balance else 0,
-            "image_credit_total_consumed": int(image_balance.total_consumed) if image_balance else 0,
-            "image_credit_total_recharged": int(image_balance.total_recharged) if image_balance else 0,
+            "image_credit_balance": float(image_balance.balance) if image_balance else 0,
+            "image_credit_total_consumed": float(image_balance.total_consumed) if image_balance else 0,
+            "image_credit_total_recharged": float(image_balance.total_recharged) if image_balance else 0,
             "total_tokens": int(total_tokens),
+            "subscription_summary": SubscriptionService.get_current_subscription_summary(db, user_id),
         }
 
     @staticmethod
@@ -191,6 +193,8 @@ class AuthService:
         result = []
         for u, balance in users:
             image_bal = db.query(UserImageBalance).filter(UserImageBalance.user_id == u.id).first()
+            from app.services.subscription_service import SubscriptionService
+            subscription_summary = SubscriptionService.get_current_subscription_summary(db, u.id)
             result.append({
                 "id": u.id, "username": u.username, "email": u.email,
                 "role": u.role, "status": u.status, "avatar": u.avatar,
@@ -198,9 +202,10 @@ class AuthService:
                 "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "balance": float(balance) if balance is not None else 0,
-                "image_credit_balance": int(image_bal.balance) if image_bal else 0,
+                "image_credit_balance": float(image_bal.balance) if image_bal else 0,
                 "subscription_type": u.subscription_type,
                 "subscription_expires_at": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
+                "subscription_summary": subscription_summary,
             })
         return result, total
 

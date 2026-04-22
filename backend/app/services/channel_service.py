@@ -41,6 +41,23 @@ class ChannelService:
         return "x-api-key"
 
     @staticmethod
+    def _resolve_default_health_check_enabled(
+        protocol_type: Optional[str],
+        provider_variant: Optional[str],
+    ) -> int:
+        protocol = (protocol_type or "openai").lower()
+        normalized_variant = ChannelService._normalize_provider_variant(
+            protocol,
+            provider_variant,
+        )
+        if protocol == "google" and normalized_variant in {
+            ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,
+            ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE,
+        }:
+            return 0
+        return 1
+
+    @staticmethod
     def _normalize_provider_variant(
         protocol_type: Optional[str],
         provider_variant: Optional[str],
@@ -103,23 +120,28 @@ class ChannelService:
             The created Channel ORM instance.
         """
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
+        protocol_value = d.get("protocol_type", "openai")
+        provider_variant = ChannelService._normalize_provider_variant(
+            protocol_value,
+            d.get("provider_variant"),
+        )
         channel = Channel(
             name=d["name"],
             base_url=d["base_url"].rstrip("/"),
             api_key=d["api_key"],
-            protocol_type=d.get("protocol_type", "openai"),
-            provider_variant=ChannelService._normalize_provider_variant(
-                d.get("protocol_type", "openai"),
-                d.get("provider_variant"),
-            ),
+            protocol_type=protocol_value,
+            provider_variant=provider_variant,
             auth_header_type=(
                 d.get("auth_header_type")
-                or ChannelService._resolve_default_auth_header_type(d.get("protocol_type"))
+                or ChannelService._resolve_default_auth_header_type(protocol_value)
             ),
             health_check_model=ChannelService._normalize_health_check_model(d.get("health_check_model")),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
-            health_check_enabled=d.get("health_check_enabled", 1),
+            health_check_enabled=d.get(
+                "health_check_enabled",
+                ChannelService._resolve_default_health_check_enabled(protocol_value, provider_variant),
+            ),
             description=d.get("description"),
         )
         db.add(channel)
@@ -167,6 +189,15 @@ class ChannelService:
             channel.provider_variant = ChannelService._normalize_provider_variant(
                 protocol_value,
                 d.get("provider_variant", getattr(channel, "provider_variant", None)),
+            )
+
+        if (
+            "health_check_enabled" not in d
+            and ("protocol_type" in d or "provider_variant" in d)
+        ):
+            channel.health_check_enabled = ChannelService._resolve_default_health_check_enabled(
+                protocol_value,
+                channel.provider_variant,
             )
 
         if "protocol_type" in d and "auth_header_type" not in d:

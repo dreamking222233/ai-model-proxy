@@ -20,3 +20,13 @@ DEALLOCATE PREPARE stmt;
 UPDATE `channel`
 SET `health_check_enabled` = 1
 WHERE `health_check_enabled` IS NULL;
+
+UPDATE `channel`
+SET `health_check_enabled` = 0
+WHERE `protocol_type` = 'google'
+  AND (
+    `provider_variant` IN ('google-official', 'google-vertex-image')
+    OR `provider_variant` IS NULL
+    OR `provider_variant` = ''
+    OR `provider_variant` = 'default'
+  );

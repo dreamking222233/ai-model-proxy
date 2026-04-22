@@ -7,6 +7,22 @@ from app.services.health_service import HealthService
 
 
 class ChannelHealthMonitorSwitchTest(unittest.TestCase):
+    def test_google_channel_defaults_to_health_monitor_disabled(self):
+        self.assertEqual(
+            ChannelService._resolve_default_health_check_enabled("google", "google-official"),
+            0,
+        )
+        self.assertEqual(
+            ChannelService._resolve_default_health_check_enabled("google", "google-vertex-image"),
+            0,
+        )
+
+    def test_non_google_channel_defaults_to_health_monitor_enabled(self):
+        self.assertEqual(
+            ChannelService._resolve_default_health_check_enabled("openai", "default"),
+            1,
+        )
+
     def test_channel_to_dict_exposes_health_check_enabled(self):
         payload = ChannelService._channel_to_dict(
             SimpleNamespace(

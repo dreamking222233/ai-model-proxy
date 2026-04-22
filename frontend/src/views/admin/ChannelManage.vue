@@ -494,8 +494,10 @@ export default {
         if (!['google-official', 'google-vertex-image'].includes(this.form.provider_variant)) {
           this.form.provider_variant = 'google-official'
         }
+        this.form.health_check_enabled = false
       } else {
         this.form.provider_variant = 'default'
+        this.form.health_check_enabled = true
       }
       if (this.authHeaderTouched) {
         return

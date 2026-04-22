@@ -635,7 +635,7 @@ INSERT INTO `channel` (
 )
 SELECT
     @google_channel_name, @google_base_url, @google_api_key, 'google', 'google-official', 'x-goog-api-key',
-    1, 1, 1, 1, 100, 0, 'Google Gemini 图片生成渠道'
+    1, 1, 0, 1, 100, 0, 'Google Gemini 图片生成渠道'
 FROM DUAL
 WHERE @google_api_key IS NOT NULL;
 
@@ -673,7 +673,7 @@ INSERT INTO `channel` (
 )
 SELECT
     @vertex_channel_name, @vertex_base_url, @vertex_api_key, 'google', 'google-vertex-image', 'x-goog-api-key',
-    2, 1, 1, 1, 100, 0, 'gemini-2.5-flash', 'Google Vertex 图片生成渠道'
+    2, 1, 0, 1, 100, 0, 'gemini-2.5-flash', 'Google Vertex 图片生成渠道'
 FROM DUAL
 WHERE @vertex_api_key IS NOT NULL;
 

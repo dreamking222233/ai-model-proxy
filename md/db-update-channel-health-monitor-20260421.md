@@ -33,6 +33,11 @@
 
 - `1`
 
+补充：
+
+- 对 Google 图片渠道，升级脚本会回填为 `0`
+- 也就是默认不参与健康监控
+
 ## 执行方式
 
 ```bash
@@ -80,3 +85,5 @@ UPDATE channel
 SET health_check_enabled = 0
 WHERE provider_variant IN ('google-official', 'google-vertex-image');
 ```
+
+当前升级脚本已默认对上述 Google 渠道执行这一步。

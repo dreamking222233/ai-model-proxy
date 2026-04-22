@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 # Default timeout for upstream requests (seconds)
 _UPSTREAM_TIMEOUT = 120.0
+# Longer timeout for image generation requests (seconds)
+_IMAGE_UPSTREAM_TIMEOUT = 300.0
 # Timeout for upstream connection establishment
 _UPSTREAM_CONNECT_TIMEOUT = 15.0
 # Some upstream gateways block generic client defaults like ``python-httpx``.
@@ -7182,6 +7184,13 @@ class ProxyService:
         )
 
     @staticmethod
+    def _resolve_openai_image_generation_url(base_url: str) -> str:
+        normalized = str(base_url or "").rstrip("/")
+        if normalized.endswith("/v1"):
+            return f"{normalized}/images/generations"
+        return f"{normalized}/v1/images/generations"
+
+    @staticmethod
     def _resolve_image_billing_rule(
         db: Session,
         unified_model: UnifiedModel,
@@ -7205,25 +7214,26 @@ class ProxyService:
         default_rule = ModelService.resolve_image_resolution_rule(db, unified_model.id, None)
 
         if requested_image_size and not requested_rule:
-            allowed_sizes = ModelService.get_google_image_resolution_capabilities(unified_model.model_name)
+            allowed_sizes = ModelService.get_image_resolution_capabilities(unified_model.model_name)
             if requested_image_size not in allowed_sizes:
                 raise ServiceException(
                     400,
                     f"Image size '{requested_image_size}' is not supported by model '{unified_model.model_name}'",
                     "IMAGE_SIZE_NOT_SUPPORTED",
                 )
-            raise ServiceException(
-                400,
-                f"Image size '{requested_image_size}' is not enabled for model '{unified_model.model_name}'",
-                "IMAGE_SIZE_NOT_ENABLED",
-            )
+            if unified_model.model_name not in ModelService.PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES:
+                raise ServiceException(
+                    400,
+                    f"Image size '{requested_image_size}' is not enabled for model '{unified_model.model_name}'",
+                    "IMAGE_SIZE_NOT_ENABLED",
+                )
 
         selected_rule = requested_rule or default_rule
         if selected_rule:
             return selected_rule["resolution_code"], Decimal(str(selected_rule["credit_cost"])).quantize(Decimal("0.001"))
 
         if requested_image_size:
-            allowed_sizes = ModelService.get_google_image_resolution_capabilities(unified_model.model_name)
+            allowed_sizes = ModelService.get_image_resolution_capabilities(unified_model.model_name)
             if requested_image_size not in allowed_sizes:
                 raise ServiceException(
                     400,
@@ -7261,6 +7271,40 @@ class ProxyService:
         )
 
     @staticmethod
+    def _build_openai_image_prompt(
+        prompt: str,
+        image_size: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+    ) -> str:
+        normalized_prompt = str(prompt or "").strip()
+        hints: list[str] = []
+        ratio_hint_map = {
+            "1:1": "请优先采用 1:1 方图构图，主体居中且画面平衡。",
+            "16:9": "请优先采用 16:9 横向宽画幅构图，适合电影感场景铺陈。",
+            "9:16": "请优先采用 9:16 纵向构图，适合移动端竖图展示。",
+            "3:2": "请优先采用 3:2 横向构图，保持自然摄影感。",
+            "2:3": "请优先采用 2:3 纵向构图，主体更加突出。",
+        }
+        size_hint_map = {
+            "512": "请按接近 512 档位的简洁构图与基础细节密度进行输出。",
+            "1K": "请按接近 1K 档位输出清晰、完整、细节平衡的画面。",
+            "2K": "请按接近 2K 档位加强画面细节、纹理与材质表现。",
+            "4K": "请按接近 4K 档位尽量强化超高细节、精致纹理与复杂场景信息。",
+        }
+        if aspect_ratio:
+            hints.append(ratio_hint_map.get(aspect_ratio, f"请优先按 {aspect_ratio} 比例组织画面构图。"))
+        if image_size:
+            hints.append(size_hint_map.get(image_size, f"请按接近 {image_size} 档位的细节密度进行画面输出。"))
+        if not hints:
+            return normalized_prompt
+        return (
+            f"{normalized_prompt}\n\n"
+            "额外生成要求：\n"
+            + "\n".join(f"- {item}" for item in hints)
+            + "\n- 保持原始提示词的主体、风格和核心意图不变。"
+        )
+
+    @staticmethod
     def _parse_google_image_response(response_body: dict) -> tuple[list[dict], Optional[str]]:
         images: list[dict] = []
         text_output: list[str] = []
@@ -7277,6 +7321,24 @@ class ProxyService:
                 elif part.get("text"):
                     text_output.append(str(part.get("text")))
         return images, "\n".join(text_output).strip() or None
+
+    @staticmethod
+    def _parse_openai_image_response(response_body: dict) -> tuple[list[dict], Optional[str]]:
+        images: list[dict] = []
+        revised_prompts: list[str] = []
+        for item in response_body.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            b64_json = item.get("b64_json")
+            if b64_json:
+                images.append({
+                    "b64_json": b64_json,
+                    "mime_type": item.get("mime_type") or "image/png",
+                })
+            revised_prompt = item.get("revised_prompt")
+            if revised_prompt:
+                revised_prompts.append(str(revised_prompt))
+        return images, "\n".join(revised_prompts).strip() or None
 
     @staticmethod
     def _build_image_response_payload(
@@ -7379,7 +7441,7 @@ class ProxyService:
         headers = ProxyService._build_headers(channel, "google", request_headers=request_headers)
         payload = ProxyService._build_google_image_payload(request_data, image_size=image_size)
 
-        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
@@ -7427,6 +7489,108 @@ class ProxyService:
         except Exception as exc:
             db.rollback()
             logger.error("Image billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片生成成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
+
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            charged_credits,
+            image_size,
+            extra_text=extra_text,
+        )
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_openai_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        start_time = time.time()
+        base_url = channel.base_url.rstrip("/")
+        url = ProxyService._resolve_openai_image_generation_url(base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
+        payload = {
+            "model": upstream_model_name,
+            "prompt": ProxyService._build_openai_image_prompt(
+                prompt,
+                image_size=image_size,
+                aspect_ratio=aspect_ratio,
+            ),
+            "n": 1,
+            "response_format": "b64_json",
+        }
+
+        timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="OpenAI image non-stream",
+        )
+        if response.status_code != 200:
+            body_text = response.text[:1000]
+            raise ServiceException(
+                400 if 400 <= response.status_code < 500 else 503,
+                f"OpenAI image generation failed: HTTP {response.status_code} {body_text}",
+                "OPENAI_IMAGE_GENERATION_FAILED",
+            )
+        response_body = response.json()
+
+        images, extra_text = ProxyService._parse_openai_image_response(response_body)
+        if not images:
+            raise ServiceException(
+                503,
+                "OpenAI image generation returned no image data",
+                "OPENAI_IMAGE_GENERATION_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=charged_credits,
+                image_size=image_size,
+                image_count=len(images),
+            )
+            db.commit()
+        except ServiceException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.error("OpenAI image billing / logging failed after upstream success: %s", exc)
             raise ServiceException(
                 500,
                 "图片生成成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
@@ -7533,10 +7697,27 @@ class ProxyService:
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
+        protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
         provider_variant = ChannelService._normalize_provider_variant(
             getattr(channel, "protocol_type", None),
             getattr(channel, "provider_variant", None),
         )
+        if protocol_type == "openai":
+            return await ProxyService._non_stream_openai_image_request(
+                db,
+                user,
+                api_key_record,
+                channel,
+                unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                client_ip,
+                charged_credits,
+                image_size=image_size,
+                request_headers=request_headers,
+            )
         if provider_variant == ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE:
             return await ProxyService._non_stream_vertex_image_request(
                 db,
@@ -7646,6 +7827,7 @@ class ProxyService:
                     "UPSTREAM_INVALID_REQUEST",
                     "CONTENT_TOO_LONG",
                     "GOOGLE_IMAGE_GENERATION_FAILED",
+                    "OPENAI_IMAGE_GENERATION_FAILED",
                     "VERTEX_IMAGE_GENERATION_FAILED",
                     "VERTEX_IMAGE_MODEL_NOT_CONFIGURED",
                     "VERTEX_IMAGE_DEPENDENCY_MISSING",

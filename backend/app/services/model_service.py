@@ -30,6 +30,9 @@ class ModelService:
         "gemini-3.1-flash-image-preview": ("512", "1K", "2K", "4K"),
         "gemini-3-pro-image-preview": ("1K", "2K", "4K"),
     }
+    PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
+        "gpt-image-2": ("512", "1K", "2K", "4K"),
+    }
 
     @staticmethod
     def _decimal_to_float(value, default: float = 0.0) -> float:
@@ -56,6 +59,15 @@ class ModelService:
     @staticmethod
     def get_google_image_resolution_capabilities(model_name: str) -> tuple[str, ...]:
         return ModelService.GOOGLE_IMAGE_SIZE_CAPABILITIES.get(str(model_name or ""), ())
+
+    @staticmethod
+    def get_image_resolution_capabilities(model_name: str) -> tuple[str, ...]:
+        normalized_name = str(model_name or "")
+        return (
+            ModelService.GOOGLE_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
+            or ModelService.PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
+            or ()
+        )
 
     @staticmethod
     def _normalize_credit_decimal(value: object, field_name: str = "credit_cost") -> Decimal:

@@ -583,6 +583,12 @@ INSERT INTO `unified_model` (
 ('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
 ('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
 
+INSERT INTO `unified_model` (
+    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+) VALUES
+('gpt-image-2', 'GPT Image 2', 'image', 'openai', NULL, 0, 0, 'image_credit', 0.5, 1, 'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）');
+
 -- 预置 Grok 文本模型
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
@@ -721,6 +727,32 @@ WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-prev
 SET @vertex_api_key = NULL;
 SET @vertex_channel_name = NULL;
 SET @vertex_base_url = NULL;
+
+-- 可选：ChatGPT Image 兼容图片渠道与模型映射
+-- 将 @chatgpt_image_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建渠道与映射。
+SET @chatgpt_image_api_key = NULL;
+SET @chatgpt_image_channel_name = 'ChatGPT Image Compatible';
+SET @chatgpt_image_base_url = 'http://43.156.153.12:3000';
+
+INSERT INTO `channel` (
+    `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,
+    `priority`, `enabled`, `health_check_enabled`, `is_healthy`, `health_score`, `failure_count`, `description`
+)
+SELECT
+    @chatgpt_image_channel_name, @chatgpt_image_base_url, @chatgpt_image_api_key, 'openai', 'openai-image-compatible', 'authorization',
+    10, 1, 0, 1, 100, 0, 'OpenAI 兼容图片生成渠道，固定上游模型 gpt-image-2'
+FROM DUAL
+WHERE @chatgpt_image_api_key IS NOT NULL;
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gpt-image-2', 1
+FROM `unified_model` um
+JOIN `channel` ch ON ch.`name` = @chatgpt_image_channel_name AND ch.`base_url` = @chatgpt_image_base_url
+WHERE @chatgpt_image_api_key IS NOT NULL AND um.`model_name` = 'gpt-image-2';
+
+SET @chatgpt_image_api_key = NULL;
+SET @chatgpt_image_channel_name = NULL;
+SET @chatgpt_image_base_url = NULL;
 
 -- 可选：Grok 文本渠道与模型映射
 -- 将 @grok_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建 Grok OpenAI / Anthropic 双渠道。

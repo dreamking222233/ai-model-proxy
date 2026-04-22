@@ -203,10 +203,25 @@
             <a-select-option value="google">Google</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item v-if="form.protocol_type === 'openai'" label="OpenAI 渠道类型">
+          <a-select
+            v-model="form.provider_variant"
+            placeholder="选择 OpenAI 渠道类型"
+            @change="handleProviderVariantChange"
+            class="form-select"
+          >
+            <a-select-option value="default">Default</a-select-option>
+            <a-select-option value="openai-image-compatible">OpenAI Image Compatible</a-select-option>
+          </a-select>
+          <div class="form-hint">
+            Image Compatible 会将图片模型请求转发到上游 `images/generations` 接口，适合 `gpt-image-2` 这类图片生成网关。
+          </div>
+        </a-form-item>
         <a-form-item v-if="form.protocol_type === 'google'" label="Google 渠道类型">
           <a-select
             v-model="form.provider_variant"
             placeholder="选择 Google 渠道类型"
+            @change="handleProviderVariantChange"
             class="form-select"
           >
             <a-select-option value="google-official">Google Official Image</a-select-option>
@@ -422,6 +437,9 @@ export default {
     },
     getProviderVariantLabel(protocol, providerVariant) {
       const normalized = (providerVariant || '').toLowerCase()
+      if (protocol === 'openai') {
+        return normalized === 'openai-image-compatible' ? 'OpenAI Image Compatible' : 'Default'
+      }
       if (protocol !== 'google') {
         return 'Default'
       }
@@ -432,6 +450,9 @@ export default {
       return map[normalized] || 'Google Official Image'
     },
     getProviderVariantColor(protocol, providerVariant) {
+      if (protocol === 'openai') {
+        return (providerVariant || '').toLowerCase() === 'openai-image-compatible' ? 'geekblue' : 'default'
+      }
       if (protocol !== 'google') {
         return 'default'
       }
@@ -495,6 +516,11 @@ export default {
           this.form.provider_variant = 'google-official'
         }
         this.form.health_check_enabled = false
+      } else if (value === 'openai') {
+        if (!['default', 'openai-image-compatible'].includes(this.form.provider_variant)) {
+          this.form.provider_variant = 'default'
+        }
+        this.form.health_check_enabled = this.form.provider_variant !== 'openai-image-compatible'
       } else {
         this.form.provider_variant = 'default'
         this.form.health_check_enabled = true
@@ -514,6 +540,15 @@ export default {
     },
     handleAuthHeaderTypeChange() {
       this.authHeaderTouched = true
+    },
+    handleProviderVariantChange(value) {
+      if (this.form.protocol_type === 'google') {
+        this.form.health_check_enabled = false
+        return
+      }
+      if (this.form.protocol_type === 'openai') {
+        this.form.health_check_enabled = value !== 'openai-image-compatible'
+      }
     },
     async fetchList() {
       this.loading = true

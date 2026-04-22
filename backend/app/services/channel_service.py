@@ -17,6 +17,7 @@ class ChannelService:
     """CRUD and health summary for channels."""
 
     PROVIDER_VARIANT_DEFAULT = "default"
+    PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE = "openai-image-compatible"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
 
@@ -50,6 +51,8 @@ class ChannelService:
             protocol,
             provider_variant,
         )
+        if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+            return 0
         if protocol == "google" and normalized_variant in {
             ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,
             ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE,
@@ -64,6 +67,10 @@ class ChannelService:
     ) -> str:
         protocol = (protocol_type or "openai").lower()
         raw_variant = str(provider_variant or "").strip().lower()
+        if protocol == "openai":
+            if raw_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+                return raw_variant
+            return ChannelService.PROVIDER_VARIANT_DEFAULT
         if protocol == "google":
             if raw_variant in {
                 ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,

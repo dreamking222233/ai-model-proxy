@@ -57,6 +57,14 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
     protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
     if protocol == "anthropic":
         return raw_target, "anthropic_messages"
+    if protocol == "openai":
+        provider_variant = ChannelService._normalize_provider_variant(
+            protocol,
+            getattr(channel, "provider_variant", None),
+        )
+        if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+            return raw_target, "openai_image_generation"
+        return raw_target, "openai_chat"
     if protocol == "google":
         provider_variant = ChannelService._normalize_provider_variant(
             protocol,
@@ -345,6 +353,8 @@ class HealthService:
         upstream_model_name, upstream_api = _resolve_health_target(channel, actual_model_name)
         if upstream_api == "anthropic_messages":
             header_protocol = "anthropic"
+        elif upstream_api == "openai_image_generation":
+            header_protocol = "openai"
         elif upstream_api == "google_vertex_sdk":
             header_protocol = "google"
         elif upstream_api == "google_generate_content":
@@ -369,6 +379,18 @@ class HealthService:
                 "max_output_tokens": 5,
                 "stream": False,
                 "store": False,
+            }
+        elif upstream_api == "openai_image_generation":
+            url = (
+                f"{base_url}/images/generations"
+                if base_url.endswith("/v1")
+                else f"{base_url}/v1/images/generations"
+            )
+            payload = {
+                "model": upstream_model_name,
+                "prompt": "生成一张包含字母 OK 的简单测试图片",
+                "n": 1,
+                "response_format": "b64_json",
             }
         elif protocol == "openai":
             url = f"{base_url}/chat/completions"

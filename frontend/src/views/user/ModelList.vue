@@ -214,6 +214,7 @@ import { listAvailableModels } from '@/api/model'
 import anthropicIcon from '@/assets/provider-icons/anthropic.svg'
 import openaiIcon from '@/assets/provider-icons/openai.svg'
 import googleIcon from '@/assets/provider-icons/google.svg'
+import grokIcon from '@/assets/provider-icons/grok.svg'
 
 const PROVIDER_RULES = [
   { key: 'claude', label: 'Anthropic', color: '#d97706', icon: anthropicIcon },
@@ -222,6 +223,7 @@ const PROVIDER_RULES = [
   { key: 'o3', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
   { key: 'o4', label: 'OpenAI', color: '#10a37f', icon: openaiIcon },
   { key: 'gemini', label: 'Google', color: '#4285f4', icon: googleIcon },
+  { key: 'grok', label: 'Grok', color: '#111111', icon: grokIcon },
   { key: 'deepseek', label: 'DeepSeek', color: '#0066ff' },
   { key: 'qwen', label: '通义千问', color: '#6236ff' },
   { key: 'glm', label: '智谱', color: '#3b5998' },
@@ -242,7 +244,8 @@ const DEFAULT_PROVIDER = { label: '其他', color: '#8c8c8c', icon: null }
 const PROVIDER_ICON_MAP = {
   Anthropic: anthropicIcon,
   OpenAI: openaiIcon,
-  Google: googleIcon
+  Google: googleIcon,
+  Grok: grokIcon
 }
 
 export default {

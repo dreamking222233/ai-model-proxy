@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from app.services.proxy_service import ProxyService
 
@@ -80,6 +81,49 @@ class ProxyModelAliasRewriteTest(unittest.TestCase):
         self.assertIn(REQUESTED_MODEL, sanitized)
         self.assertNotIn(RESPONSES_UPSTREAM_MODEL, sanitized)
         self.assertNotIn(RESPONSES_UPSTREAM_MODEL.split(':', 1)[1], sanitized)
+
+    def test_normalize_openai_chat_response_payload_backfills_empty_content(self):
+        payload = {
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "model": UPSTREAM_MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "fallback text",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        normalized = ProxyService._normalize_openai_chat_response_payload(payload)
+
+        self.assertEqual(normalized["choices"][0]["message"]["content"], "fallback text")
+        self.assertEqual(payload["choices"][0]["message"]["content"], "")
+
+    def test_prioritize_channels_for_request_prefers_matching_protocol(self):
+        anthropic_channel = SimpleNamespace(id=1, name="anthropic", protocol_type="anthropic", priority=5)
+        openai_channel = SimpleNamespace(id=2, name="openai", protocol_type="openai", priority=5)
+        channels = [
+            (openai_channel, "grok-4.20-auto"),
+            (anthropic_channel, "grok-4.20-auto"),
+        ]
+
+        prioritized_for_anthropic = ProxyService._prioritize_channels_for_request(
+            channels,
+            "anthropic",
+        )
+        prioritized_for_openai = ProxyService._prioritize_channels_for_request(
+            channels,
+            "openai",
+        )
+
+        self.assertEqual(prioritized_for_anthropic[0][0].name, "anthropic")
+        self.assertEqual(prioritized_for_openai[0][0].name, "openai")
 
 
 if __name__ == "__main__":

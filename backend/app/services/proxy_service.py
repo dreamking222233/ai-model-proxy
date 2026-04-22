@@ -10,6 +10,7 @@ Handles OpenAI and Anthropic protocol forwarding with:
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -60,6 +61,8 @@ _UPSTREAM_TIMEOUT = 120.0
 _UPSTREAM_CONNECT_TIMEOUT = 15.0
 # Some upstream gateways block generic client defaults like ``python-httpx``.
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
+_UPSTREAM_RETRY_ATTEMPTS = 3
+_UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 class ResponsesTurnError(Exception):
@@ -1082,6 +1085,183 @@ class ProxyService:
         return raw_target, default_openai_api
 
     @staticmethod
+    def _prioritize_channels_for_request(
+        channels: list[tuple[Channel, str]],
+        request_protocol: str,
+    ) -> list[tuple[Channel, str]]:
+        """Prefer same-protocol channels first while preserving cross-protocol fallback."""
+        normalized_request_protocol = str(request_protocol or "").strip().lower()
+        if normalized_request_protocol not in {"openai", "anthropic", "responses"}:
+            return channels
+
+        def sort_key(item: tuple[Channel, str]) -> tuple[int, int]:
+            channel, actual_model_name = item
+            channel_protocol = str(getattr(channel, "protocol_type", "") or "").strip().lower()
+            raw_target = str(actual_model_name or "").strip().lower()
+            priority = int(getattr(channel, "priority", 10) or 10)
+
+            if normalized_request_protocol == "anthropic":
+                if channel_protocol == "anthropic":
+                    return 0, priority
+                if raw_target.startswith("responses:"):
+                    return 1, priority
+                return 2, priority
+
+            if normalized_request_protocol == "responses":
+                if raw_target.startswith("responses:"):
+                    return 0, priority
+                if channel_protocol == "openai":
+                    return 1, priority
+                return 2, priority
+
+            if channel_protocol == "openai" and not raw_target.startswith("responses:"):
+                return 0, priority
+            if channel_protocol == "anthropic":
+                return 1, priority
+            return 2, priority
+
+        return sorted(channels, key=sort_key)
+
+    @staticmethod
+    def _extract_openai_text_content(value: Any) -> str:
+        """Flatten common OpenAI-compatible text payload shapes into a string."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            text_parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type", "") or "").strip().lower()
+                if item_type in {"text", "input_text", "output_text"}:
+                    text_value = item.get("text")
+                    if text_value is not None:
+                        text_parts.append(str(text_value))
+            return "".join(text_parts)
+        if value is None:
+            return ""
+        return str(value)
+
+    @staticmethod
+    def _normalize_openai_chat_response_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Backfill empty OpenAI chat content from reasoning/text fallbacks when needed."""
+        normalized = copy.deepcopy(payload)
+        choices = normalized.get("choices")
+        if not isinstance(choices, list):
+            return normalized
+
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+
+            content_text = ProxyService._extract_openai_text_content(message.get("content"))
+            reasoning_text = ProxyService._extract_openai_text_content(
+                message.get("reasoning_content") or message.get("reasoning") or message.get("text")
+            )
+            if not content_text and reasoning_text:
+                message["content"] = reasoning_text
+                if "reasoning_content" not in message:
+                    message["reasoning_content"] = reasoning_text
+
+        return normalized
+
+    @staticmethod
+    def _should_retry_upstream_status(status_code: int) -> bool:
+        """Return whether one upstream HTTP status is worth retrying on the same channel."""
+        return int(status_code or 0) in _UPSTREAM_RETRYABLE_STATUS_CODES
+
+    @staticmethod
+    def _should_retry_upstream_exception(exc: Exception) -> bool:
+        """Return whether one transport exception is transient enough to retry."""
+        return isinstance(
+            exc,
+            (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+                httpx.NetworkError,
+            ),
+        )
+
+    @staticmethod
+    async def _post_with_retries(
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        request_id: str,
+        channel: Channel,
+        timeout: httpx.Timeout,
+        log_label: str,
+        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+    ) -> httpx.Response:
+        """POST once or retry transient upstream failures on the same channel."""
+        attempt = 0
+        last_exception: Optional[Exception] = None
+
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+                if response.status_code == 200:
+                    return response
+
+                if (
+                    attempt < max_attempts
+                    and ProxyService._should_retry_upstream_status(response.status_code)
+                ):
+                    retry_delay = 0.6 * attempt
+                    logger.warning(
+                        "%s retrying upstream request_id=%s channel=%s channel_id=%s "
+                        "attempt=%s/%s status=%s delay=%.1fs",
+                        log_label,
+                        request_id,
+                        channel.name,
+                        channel.id,
+                        attempt,
+                        max_attempts,
+                        response.status_code,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                return response
+            except Exception as exc:
+                last_exception = exc
+                if (
+                    attempt < max_attempts
+                    and ProxyService._should_retry_upstream_exception(exc)
+                ):
+                    retry_delay = 0.6 * attempt
+                    logger.warning(
+                        "%s retrying upstream transport request_id=%s channel=%s channel_id=%s "
+                        "attempt=%s/%s error=%s delay=%.1fs",
+                        log_label,
+                        request_id,
+                        channel.name,
+                        channel.id,
+                        attempt,
+                        max_attempts,
+                        exc,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                raise
+
+        if last_exception:
+            raise last_exception
+        raise RuntimeError(f"{log_label} upstream retry loop exited unexpectedly")
+
+    @staticmethod
     def _build_responses_message_content_parts(value) -> list[dict]:
         """Convert Anthropic string/content blocks into Responses message parts."""
         if value is None:
@@ -2024,7 +2204,7 @@ class ProxyService:
     @staticmethod
     def _rewrite_openai_payload_model(payload: dict[str, Any], requested_model: str) -> dict[str, Any]:
         """Rewrite OpenAI-compatible payloads to the client-requested model alias."""
-        rewritten = copy.deepcopy(payload)
+        rewritten = ProxyService._normalize_openai_chat_response_payload(payload)
         if requested_model and isinstance(rewritten, dict):
             rewritten["model"] = requested_model
         return rewritten
@@ -2481,7 +2661,10 @@ class ProxyService:
         if not unified_model:
             raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
 
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ProxyService._prioritize_channels_for_request(
+            ModelService.get_available_channels(db, unified_model.id),
+            "responses",
+        )
         if not channels:
             raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
         return unified_model, channels
@@ -3201,8 +3384,15 @@ class ProxyService:
         # Define upstream call function for passthrough middleware
         async def upstream_call():
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=request_data, headers=headers)
+            resp = await ProxyService._post_with_retries(
+                url,
+                request_data,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="Responses non-stream",
+            )
 
             if resp.status_code != 200:
                 raise Exception(f"Upstream returned HTTP {resp.status_code}: {resp.text[:500]}")
@@ -3318,7 +3508,10 @@ class ProxyService:
             raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
 
         # 3. Get available channels sorted by priority
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ProxyService._prioritize_channels_for_request(
+            ModelService.get_available_channels(db, unified_model.id),
+            "openai",
+        )
         if not channels:
             raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
 
@@ -3521,7 +3714,10 @@ class ProxyService:
             raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
 
         # 3. Get available channels
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ProxyService._prioritize_channels_for_request(
+            ModelService.get_available_channels(db, unified_model.id),
+            "anthropic",
+        )
         if not channels:
             raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
 
@@ -4001,8 +4197,15 @@ class ProxyService:
                 _UPSTREAM_TIMEOUT,
                 connect=_UPSTREAM_CONNECT_TIMEOUT,
             )
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=request_data, headers=headers)
+            resp = await ProxyService._post_with_retries(
+                url,
+                request_data,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="OpenAI non-stream",
+            )
 
             if resp.status_code != 200:
                 logger.warning(
@@ -4034,10 +4237,7 @@ class ProxyService:
                 usage = response_body.get("usage", {})
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
-            response_body = ProxyService._rewrite_openai_payload_model(
-                response_body,
-                requested_model,
-            )
+            response_body = ProxyService._rewrite_openai_payload_model(response_body, requested_model)
 
             # Return standardized response format for the shared middleware contract
             return {
@@ -5430,8 +5630,15 @@ class ProxyService:
                 _UPSTREAM_TIMEOUT,
                 connect=_UPSTREAM_CONNECT_TIMEOUT,
             )
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=responses_request, headers=headers)
+            resp = await ProxyService._post_with_retries(
+                url,
+                responses_request,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="Anthropic via responses non-stream",
+            )
 
             if resp.status_code != 200:
                 raise Exception(
@@ -6000,10 +6207,14 @@ class ProxyService:
                     for variant_index, variant in enumerate(prompt_cache_variants):
                         current_headers = dict(headers)
                         current_headers.update(variant.get("header_overrides") or {})
-                        resp = await client.post(
+                        resp = await ProxyService._post_with_retries(
                             url,
-                            json=variant["request_data"],
-                            headers=current_headers,
+                            variant["request_data"],
+                            current_headers,
+                            request_id=request_id,
+                            channel=channel,
+                            timeout=timeout,
+                            log_label="Anthropic non-stream",
                         )
 
                         if resp.status_code != 200:
@@ -6193,6 +6404,7 @@ class ProxyService:
         input_tokens = 0
         output_tokens = 0
         collected_content = []
+        collected_reasoning_content = []
         last_id = None
         last_model = None
         finish_reason = None
@@ -6216,6 +6428,9 @@ class ProxyService:
                     content = delta.get("content")
                     if content:
                         collected_content.append(content)
+                    reasoning_content = delta.get("reasoning_content")
+                    if reasoning_content:
+                        collected_reasoning_content.append(reasoning_content)
                     fr = choice.get("finish_reason")
                     if fr:
                         finish_reason = fr
@@ -6229,6 +6444,8 @@ class ProxyService:
                 pass
 
         full_content = "".join(collected_content)
+        full_reasoning_content = "".join(collected_reasoning_content)
+        message_content = full_content or full_reasoning_content
 
         response_body = {
             "id": last_id or "chatcmpl-unknown",
@@ -6239,7 +6456,7 @@ class ProxyService:
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": full_content,
+                        "content": message_content,
                     },
                     "finish_reason": finish_reason or "stop",
                 }
@@ -6250,6 +6467,9 @@ class ProxyService:
                 "total_tokens": input_tokens + output_tokens,
             },
         }
+
+        if full_reasoning_content:
+            response_body["choices"][0]["message"]["reasoning_content"] = full_reasoning_content
 
         return response_body, input_tokens, output_tokens
 

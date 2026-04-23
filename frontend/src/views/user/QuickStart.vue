@@ -208,36 +208,45 @@
                 </div>
               </a-tab-pane>
 
-              <a-tab-pane key="images" tab="图片接口">
+              <a-tab-pane key="images" tab="图像 API">
                 <div class="protocol-box">
-                  <div class="endpoint-line">
-                    <span class="e-method green">POST</span>
-                    <code class="e-url">{{ relayOpenaiBase }}/images/generations</code>
-                  </div>
-                  <div class="endpoint-line endpoint-line-secondary">
-                    <span class="e-method green">POST</span>
-                    <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
-                  </div>
-                  <div class="endpoint-line endpoint-line-secondary">
-                    <span class="e-method gold">POST</span>
-                    <code class="e-url">{{ relayOpenaiBase }}/image/edit</code>
-                  </div>
-                  <p class="api-doc-intro">
-                    前两个接口用于文生图，均为非流式 HTTP 调用；<code>/v1/image/edit</code> 用于上传图片后进行编辑。
-                    推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
-                  </p>
-                  <p class="api-doc-intro">
-                    当前支持的模型为 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、<code>gemini-3-pro-image-preview</code>，
-                    分别按 <code>1</code>、<code>2</code>、<code>3</code> 积分/次计费；<code>gpt-image-2</code> 支持文生图与图片编辑，统一按 <code>0.5</code> 图片积分/次计费。
-                  </p>
-                  <div class="code-editor-block">
-                    <div class="editor-content">
-                      <a-icon :type="copyStates['img-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageCurlCode, 'img-curl')" />
-                      <pre><code>{{ imageCurlCode }}</code></pre>
-                    </div>
-                  </div>
-
                   <div class="api-doc-card">
+                    <div class="api-doc-title">图片生成接口</div>
+                    <div class="endpoint-line">
+                      <span class="e-method green">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/images/generations</code>
+                    </div>
+                    <div class="endpoint-line endpoint-line-secondary">
+                      <span class="e-method green">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
+                    </div>
+                    <p class="api-doc-intro">
+                      用于文生图，两个接口都可用，均为非流式 HTTP 调用。
+                      推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
+                    </p>
+                    <p class="api-doc-intro">
+                      当前支持的图片模型包括 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、
+                      <code>gemini-3-pro-image-preview</code> 和 <code>gpt-image-2</code>。
+                      其中 <code>gpt-image-2</code> 按 <code>0.5</code> 图片积分/次计费。
+                    </p>
+
+                    <div class="code-editor-block">
+                      <a-tabs size="small" type="card" class="editor-tabs">
+                        <a-tab-pane key="img-gen-py" tab="Python">
+                          <div class="editor-content">
+                            <a-icon :type="copyStates['img-gen-py'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageGenerationPythonCode, 'img-gen-py')" />
+                            <pre><code>{{ imageGenerationPythonCode }}</code></pre>
+                          </div>
+                        </a-tab-pane>
+                        <a-tab-pane key="img-gen-curl" tab="cURL">
+                          <div class="editor-content">
+                            <a-icon :type="copyStates['img-gen-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageGenerationCurlCode, 'img-gen-curl')" />
+                            <pre><code>{{ imageGenerationCurlCode }}</code></pre>
+                          </div>
+                        </a-tab-pane>
+                      </a-tabs>
+                    </div>
+
                     <div class="api-doc-title">请求参数</div>
                     <div class="api-doc-table">
                       <div class="api-doc-row api-doc-head api-doc-row-req">
@@ -245,68 +254,100 @@
                         <span>必填</span>
                         <span>说明</span>
                       </div>
-                      <div v-for="item in imageRequestFields" :key="item.name" class="api-doc-row api-doc-row-req">
+                      <div v-for="item in imageGenerationRequestFields" :key="`gen-${item.name}`" class="api-doc-row api-doc-row-req">
                         <span><code>{{ item.name }}</code></span>
                         <span>{{ item.required }}</span>
                         <span>{{ item.description }}</span>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="api-doc-card">
-                    <div class="api-doc-title">编辑图片示例</div>
-                    <div class="code-editor-block">
-                      <div class="editor-content">
-                        <a-icon :type="copyStates['img-edit-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditCurlCode, 'img-edit-curl')" />
-                        <pre><code>{{ imageEditCurlCode }}</code></pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="api-doc-card">
-                    <div class="api-doc-title">编辑接口参数</div>
-                    <div class="api-doc-table">
-                      <div class="api-doc-row api-doc-head api-doc-row-req">
-                        <span>参数</span>
-                        <span>必填</span>
-                        <span>说明</span>
-                      </div>
-                      <div v-for="item in imageEditRequestFields" :key="item.name" class="api-doc-row api-doc-row-req">
-                        <span><code>{{ item.name }}</code></span>
-                        <span>{{ item.required }}</span>
-                        <span>{{ item.description }}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="api-doc-card">
-                    <div class="api-doc-title">返回参数</div>
+                    <div class="api-doc-title">返回字段</div>
                     <div class="api-doc-table">
                       <div class="api-doc-row api-doc-head api-doc-row-res">
                         <span>字段</span>
                         <span>说明</span>
                         <span>示例</span>
                       </div>
-                      <div v-for="item in imageResponseFields" :key="item.name" class="api-doc-row api-doc-row-res">
+                      <div v-for="item in imageGenerationResponseFields" :key="`gen-res-${item.name}`" class="api-doc-row api-doc-row-res">
                         <span><code>{{ item.name }}</code></span>
                         <span>{{ item.description }}</span>
                         <span>{{ item.example }}</span>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="api-doc-card">
                     <div class="api-doc-title">响应示例</div>
                     <div class="code-editor-block">
                       <div class="editor-content">
-                        <a-icon :type="copyStates['img-res'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageResponseCode, 'img-res')" />
-                        <pre><code>{{ imageResponseCode }}</code></pre>
+                        <a-icon :type="copyStates['img-gen-res'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageGenerationResponseCode, 'img-gen-res')" />
+                        <pre><code>{{ imageGenerationResponseCode }}</code></pre>
                       </div>
                     </div>
                   </div>
 
                   <div class="api-doc-card">
-                    <div class="api-doc-title">编辑响应示例</div>
+                    <div class="api-doc-title">图片编辑接口</div>
+                    <div class="endpoint-line">
+                      <span class="e-method gold">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/image/edit</code>
+                    </div>
+                    <div class="endpoint-line endpoint-line-secondary">
+                      <span class="e-method gold">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/images/edits</code>
+                    </div>
+                    <p class="api-doc-intro">
+                      用于上传原图后进行编辑，采用 <code>multipart/form-data</code>。
+                      当前支持的编辑模型为 <code>gpt-image-2</code>，按 <code>0.5</code> 图片积分/次计费。
+                    </p>
+                    <p class="api-doc-intro">
+                      编辑接口支持重复上传多个 <code>image</code> 字段，系统会将多张图片一并提交给上游进行组合编辑；<code>n</code> 固定为 <code>1</code>。
+                    </p>
+
+                    <div class="code-editor-block">
+                      <a-tabs size="small" type="card" class="editor-tabs">
+                        <a-tab-pane key="img-edit-py" tab="Python">
+                          <div class="editor-content">
+                            <a-icon :type="copyStates['img-edit-py'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditPythonCode, 'img-edit-py')" />
+                            <pre><code>{{ imageEditPythonCode }}</code></pre>
+                          </div>
+                        </a-tab-pane>
+                        <a-tab-pane key="img-edit-curl" tab="cURL">
+                          <div class="editor-content">
+                            <a-icon :type="copyStates['img-edit-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditCurlCode, 'img-edit-curl')" />
+                            <pre><code>{{ imageEditCurlCode }}</code></pre>
+                          </div>
+                        </a-tab-pane>
+                      </a-tabs>
+                    </div>
+
+                    <div class="api-doc-title">请求参数</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-req">
+                        <span>参数</span>
+                        <span>必填</span>
+                        <span>说明</span>
+                      </div>
+                      <div v-for="item in imageEditRequestFields" :key="`edit-${item.name}`" class="api-doc-row api-doc-row-req">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.required }}</span>
+                        <span>{{ item.description }}</span>
+                      </div>
+                    </div>
+
+                    <div class="api-doc-title">返回字段</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-res">
+                        <span>字段</span>
+                        <span>说明</span>
+                        <span>示例</span>
+                      </div>
+                      <div v-for="item in imageEditResponseFields" :key="`edit-res-${item.name}`" class="api-doc-row api-doc-row-res">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.description }}</span>
+                        <span>{{ item.example }}</span>
+                      </div>
+                    </div>
+
+                    <div class="api-doc-title">响应示例</div>
                     <div class="code-editor-block">
                       <div class="editor-content">
                         <a-icon :type="copyStates['img-edit-res'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditResponseCode, 'img-edit-res')" />
@@ -315,7 +356,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="图片接口不支持 stream；生成与编辑都会以 b64_json 返回，需要业务侧自行 base64 解码保存。编辑接口使用 multipart/form-data 上传图片；当前 `n` 固定为 1。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="图像接口不支持 stream；生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存。编辑接口上传多图时，请重复传递 image 字段；当前 n 固定为 1。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -477,7 +518,36 @@ print(msg.content[0].text)`
     "messages": [{"role": "user", "content": "Hi!"}]
   }'`
     },
-    imageCurlCode() {
+    imageGenerationPythonCode() {
+      return `import requests
+import base64
+from pathlib import Path
+
+url = "${this.relayOpenaiBase}/images/generations"
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer sk-你的密钥"
+}
+payload = {
+    "model": "gpt-image-2",
+    "prompt": "生成一张赛博朋克风格的城市夜景海报",
+    "response_format": "b64_json",
+    "image_size": "1K",
+    "aspect_ratio": "1:1",
+    "n": 1
+}
+
+resp = requests.post(url, headers=headers, json=payload, timeout=300)
+resp.raise_for_status()
+result = resp.json()
+
+for index, item in enumerate(result.get("data", []), start=1):
+    image_bytes = base64.b64decode(item["b64_json"])
+    Path(f"generated_{index}.png").write_bytes(image_bytes)
+
+print(result)`
+    },
+    imageGenerationCurlCode() {
       return `curl -X POST "${this.relayOpenaiBase}/images/generations" \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
@@ -490,18 +560,53 @@ print(msg.content[0].text)`
     "n": 1
   }'`
     },
+    imageEditPythonCode() {
+      return `import requests
+import base64
+from pathlib import Path
+
+url = "${this.relayOpenaiBase}/image/edit"
+headers = {
+    "Authorization": "Bearer sk-你的密钥"
+}
+files = [
+    ("image", ("image1.png", open("image1.png", "rb"), "image/png")),
+    ("image", ("image2.png", open("image2.png", "rb"), "image/png"))
+]
+data = {
+    "model": "gpt-image-2",
+    "prompt": "把这两张图融合成一张赛博朋克海报，保留主体并加强霓虹灯氛围",
+    "response_format": "b64_json",
+    "image_size": "1K",
+    "aspect_ratio": "1:1",
+    "n": "1"
+}
+
+try:
+    resp = requests.post(url, headers=headers, files=files, data=data, timeout=300)
+    resp.raise_for_status()
+    result = resp.json()
+    for index, item in enumerate(result.get("data", []), start=1):
+        image_bytes = base64.b64decode(item["b64_json"])
+        Path(f"edited_{index}.png").write_bytes(image_bytes)
+    print(result)
+finally:
+    for _, (_, file_obj, _) in files:
+        file_obj.close()`
+    },
     imageEditCurlCode() {
       return `curl -X POST "${this.relayOpenaiBase}/image/edit" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -F "model=gpt-image-2" \\
-  -F "prompt=把这张图片改成赛博朋克风格，增强霓虹灯与夜景氛围" \\
-  -F "image=@input.png" \\
+  -F "prompt=把这些图片融合成赛博朋克风格海报，增强霓虹灯与夜景氛围" \\
+  -F "image=@image1.png" \\
+  -F "image=@image2.png" \\
   -F "response_format=b64_json" \\
   -F "image_size=1K" \\
   -F "aspect_ratio=1:1" \\
   -F "n=1"`
     },
-    imageRequestFields() {
+    imageGenerationRequestFields() {
       return [
         { name: 'model', required: '是', description: '要调用的图片模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 或 gpt-image-2。' },
         { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
@@ -518,14 +623,14 @@ print(msg.content[0].text)`
       return [
         { name: 'model', required: '是', description: '当前编辑图片请传支持该能力的模型，例如 gpt-image-2。' },
         { name: 'prompt', required: '是', description: '编辑说明，描述你希望对原图进行的修改。' },
-        { name: 'image', required: '是', description: '待编辑的原图文件，通过 multipart/form-data 上传。' },
+        { name: 'image', required: '是', description: '待编辑的原图文件，通过 multipart/form-data 上传。支持重复传多个 image 字段进行多图组合编辑。' },
         { name: 'response_format', required: '否', description: '当前仅支持 b64_json，建议固定传 b64_json。' },
         { name: 'image_size', required: '否', description: '图片细节档位提示，支持 512、1K、2K、4K。gpt-image-2 会通过提示词适配。' },
         { name: 'aspect_ratio', required: '否', description: '目标构图比例，例如 1:1、16:9、9:16。gpt-image-2 会通过提示词适配。' },
         { name: 'n', required: '否', description: '当前统一固定为 1。' }
       ]
     },
-    imageResponseFields() {
+    imageGenerationResponseFields() {
       return [
         { name: 'created', description: '响应创建时间戳。', example: '1710000000' },
         { name: 'model', description: '本次请求使用的模型名。', example: 'gpt-image-2' },
@@ -536,10 +641,24 @@ print(msg.content[0].text)`
         { name: 'usage.billing_type', description: '计费类型。图片接口统一为 image_credit。', example: 'image_credit' },
         { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分。', example: '0.5' },
         { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '0.5' },
-        { name: 'usage.request_type', description: '本次调用类型，区分文生图与图片编辑。', example: 'image_edit' }
+        { name: 'usage.request_type', description: '本次调用类型，文生图返回 image_generation。', example: 'image_generation' }
       ]
     },
-    imageResponseCode() {
+    imageEditResponseFields() {
+      return [
+        { name: 'created', description: '响应创建时间戳。', example: '1710000000' },
+        { name: 'model', description: '本次请求使用的模型名。', example: 'gpt-image-2' },
+        { name: 'request_id', description: '平台生成的请求 ID，可用于排查日志。', example: 'uuid' },
+        { name: 'data[].b64_json', description: '编辑结果图片的 Base64 内容，需要业务侧自行解码。', example: 'iVBORw0KGgoAAA...' },
+        { name: 'data[].mime_type', description: '图片 MIME 类型。', example: 'image/png' },
+        { name: 'usage.image_size', description: '本次请求生效的图片分辨率档位。', example: '1K' },
+        { name: 'usage.billing_type', description: '计费类型。图片接口统一为 image_credit。', example: 'image_credit' },
+        { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分。', example: '0.5' },
+        { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '0.5' },
+        { name: 'usage.request_type', description: '本次调用类型，图片编辑返回 image_edit。', example: 'image_edit' }
+      ]
+    },
+    imageGenerationResponseCode() {
       return `{
   "created": 1710000000,
   "model": "gpt-image-2",

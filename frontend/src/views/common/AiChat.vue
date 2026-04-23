@@ -89,6 +89,11 @@
           :message="msg"
           :imageMap="runtimeImageMap"
           :streaming="streaming && index === currentMessages.length - 1 && msg.role === 'assistant'"
+          @open-image="handleOpenCachedImage"
+          @preview-image="handlePreviewCachedImage"
+          @download-image="handleDownloadCachedImage"
+          @edit-generated-image="handleEditGeneratedImage"
+          @regenerate-image="handleRegenerateImage"
         />
 
         <!-- Error message -->
@@ -140,7 +145,12 @@
             <span class="image-edit-help">支持单张图片上传，当前编辑请求固定返回 1 张图片。</span>
           </div>
           <div v-if="editImagePreviewUrl" class="image-edit-preview-card">
-            <img :src="editImagePreviewUrl" :alt="editImageName || 'edit source'" class="image-edit-preview-image">
+            <img
+              :src="editImagePreviewUrl"
+              :alt="editImageName || 'edit source'"
+              class="image-edit-preview-image"
+              @click="showImagePreview(editImagePreviewUrl, '', editImageName || 'edit-source')"
+            >
             <div class="image-edit-preview-meta">
               <div class="image-edit-preview-title">{{ editImageName || '已选择图片' }}</div>
               <div class="image-edit-preview-desc">当前将基于这张图片执行编辑。</div>
@@ -185,6 +195,30 @@
         </div>
       </div>
     </div>
+
+    <a-modal
+      :visible="imagePreviewVisible"
+      :footer="null"
+      centered
+      width="72vw"
+      wrapClassName="image-preview-modal"
+      @cancel="closeImagePreview"
+    >
+      <div class="image-preview-modal-body">
+        <img
+          v-if="imagePreviewSrc"
+          :src="imagePreviewSrc"
+          :alt="imagePreviewName || 'preview image'"
+          class="image-preview-modal-image"
+        >
+        <div class="image-preview-modal-actions">
+          <a-button @click="closeImagePreview">关闭</a-button>
+          <a-button type="primary" @click="downloadPreviewImage">
+            下载原图
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
 
     <!-- Right: API Guide Panel -->
     <div class="guide-panel" :class="{ 'guide-panel--open': guideVisible }">
@@ -322,7 +356,11 @@ import {
   saveSession,
   deleteSession,
   clearAll,
-  autoTitle
+  autoTitle,
+  saveImageCache,
+  getImageCache,
+  getImageCaches,
+  collectSessionImageCacheKeys
 } from '@/utils/chatStorage'
 
 var DEFAULT_IMAGE_SIZES = ['512', '1K', '2K', '4K']
@@ -363,6 +401,10 @@ export default {
       editImageFile: null,
       editImagePreviewUrl: '',
       editImageName: '',
+      imagePreviewVisible: false,
+      imagePreviewCacheKey: '',
+      imagePreviewSrc: '',
+      imagePreviewName: '',
       // Streaming state
       streaming: false,
       streamingText: '',
@@ -955,6 +997,7 @@ console.log(response.choices[0].message.content);`
           this.selectedAspectRatio = this.sessions[0].imageOptions.aspectRatio || this.selectedAspectRatio
           this.imageActionMode = this.sessions[0].imageOptions.mode || this.imageActionMode
         }
+        this.hydrateSessionImages(this.sessions[0])
       }
     },
 
@@ -1080,6 +1123,7 @@ console.log(response.choices[0].message.content);`
       }, this.storageNamespace)
       this.refreshSessions()
       this.currentSessionId = session.id
+      this.runtimeImageMap = {}
       this.errorMsg = ''
       this.$nextTick(function () {
         if (this.$refs.chatInput) {
@@ -1103,14 +1147,23 @@ console.log(response.choices[0].message.content);`
         } else {
           this.ensureImageOptionsForCurrentModel()
         }
+        this.hydrateSessionImages(session)
       }
     },
 
     handleDeleteSession: function (id) {
+      var target = this.sessions.find(function (s) { return s.id === id })
+      if (target) {
+        this.dropRuntimeImages(collectSessionImageCacheKeys(target))
+      }
       deleteSession(id, this.storageNamespace)
       this.refreshSessions()
       if (this.currentSessionId === id) {
         this.currentSessionId = this.sessions.length > 0 ? this.sessions[0].id : ''
+        if (this.currentSessionId) {
+          var nextSession = this.sessions.find(function (s) { return s.id === this.currentSessionId }.bind(this))
+          this.hydrateSessionImages(nextSession)
+        }
       }
     },
 
@@ -1118,6 +1171,7 @@ console.log(response.choices[0].message.content);`
       clearAll(this.storageNamespace)
       this.sessions = []
       this.currentSessionId = ''
+      this.runtimeImageMap = {}
     },
 
     // ============ Model & Channel ============
@@ -1192,21 +1246,26 @@ console.log(response.choices[0].message.content);`
     },
     buildImageResultItems: function (currentSession, data) {
       var images = []
+      var cacheTasks = []
       for (var i = 0; i < data.length; i++) {
         var item = data[i] || {}
         if (!item.b64_json) continue
         var cacheKey = currentSession.id + '_' + this.createRuntimeImageCacheKey('result', i)
+        var dataUrl = 'data:' + (item.mime_type || 'image/png') + ';base64,' + item.b64_json
         this.$set(
           this.runtimeImageMap,
           cacheKey,
-          'data:' + (item.mime_type || 'image/png') + ';base64,' + item.b64_json
+          dataUrl
         )
+        cacheTasks.push(saveImageCache(cacheKey, dataUrl))
         images.push({
           cacheKey: cacheKey,
           mimeType: item.mime_type || 'image/png'
         })
       }
-      return images
+      return Promise.all(cacheTasks).then(function () {
+        return images
+      })
     },
 
     handleSend: function () {
@@ -1328,8 +1387,12 @@ console.log(response.choices[0].message.content);`
       }
       currentSession.messages.push({
         role: 'assistant',
+        kind: 'image_generating',
         content: '正在生成图片...',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        meta: {
+          aspectRatio: this.selectedAspectRatio
+        }
       })
       saveSession(currentSession, this.storageNamespace)
       this.refreshSessions()
@@ -1338,34 +1401,34 @@ console.log(response.choices[0].message.content);`
       this.sendImageRequest(prompt).then(function (result) {
         var usage = result.usage || {}
         var data = Array.isArray(result.data) ? result.data : []
-        var images = self.buildImageResultItems(currentSession, data)
-
-        var chargedCredits = Number(
-          usage.image_credits_charged !== undefined
-            ? usage.image_credits_charged
-            : self.currentImageCreditCost
-        )
-        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
-        if (lastMsg && lastMsg.role === 'assistant') {
-          lastMsg.kind = 'image_result'
-          lastMsg.content = '已生成 ' + String(images.length || data.length || 1) + ' 张图片'
-          lastMsg.images = images
-          lastMsg.meta = {
-            model: result.model || self.currentModel,
-            prompt: prompt,
-            requestType: 'image_generation',
-            imageSize: usage.image_size || self.selectedImageSize,
-            aspectRatio: self.selectedAspectRatio,
-            imageCreditsCharged: chargedCredits
+        return self.buildImageResultItems(currentSession, data).then(function (images) {
+          var chargedCredits = Number(
+            usage.image_credits_charged !== undefined
+              ? usage.image_credits_charged
+              : self.currentImageCreditCost
+          )
+          var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant') {
+            lastMsg.kind = 'image_result'
+            lastMsg.content = '已生成 ' + String(images.length || data.length || 1) + ' 张图片'
+            lastMsg.images = images
+            lastMsg.meta = {
+              model: result.model || self.currentModel,
+              prompt: prompt,
+              requestType: 'image_generation',
+              imageSize: usage.image_size || self.selectedImageSize,
+              aspectRatio: self.selectedAspectRatio,
+              imageCreditsCharged: chargedCredits
+            }
           }
-        }
 
-        self.imageGenerating = false
-        currentSession.updatedAt = Date.now()
-        saveSession(currentSession, self.storageNamespace)
-        self.refreshSessions()
-        self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
-        self.loadBalance()
+          self.imageGenerating = false
+          currentSession.updatedAt = Date.now()
+          saveSession(currentSession, self.storageNamespace)
+          self.refreshSessions()
+          self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
+          self.loadBalance()
+        })
       }).catch(function (err) {
         var lastMsg = currentSession.messages[currentSession.messages.length - 1]
         if (lastMsg && lastMsg.role === 'assistant') {
@@ -1384,11 +1447,14 @@ console.log(response.choices[0].message.content);`
       var prompt = this.inputText.trim()
       var currentSession = this.ensureCurrentSession()
       var self = this
+      var sourceImageName = this.editImageName
       this.inputText = ''
       this.errorMsg = ''
 
       var sourceCacheKey = currentSession.id + '_' + this.createRuntimeImageCacheKey('source', 0)
       this.$set(this.runtimeImageMap, sourceCacheKey, this.editImagePreviewUrl)
+      saveImageCache(sourceCacheKey, this.editImagePreviewUrl)
+      this.clearEditImage()
 
       currentSession.messages.push({
         role: 'user',
@@ -1396,7 +1462,7 @@ console.log(response.choices[0].message.content);`
         timestamp: Date.now(),
         requestKind: 'image_edit',
         localImageCacheKey: sourceCacheKey,
-        localImageName: this.editImageName
+        localImageName: sourceImageName
       })
       currentSession.updatedAt = Date.now()
       if (currentSession.messages.length === 1) {
@@ -1404,8 +1470,13 @@ console.log(response.choices[0].message.content);`
       }
       currentSession.messages.push({
         role: 'assistant',
+        kind: 'image_generating',
         content: '正在编辑图片...',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        meta: {
+          aspectRatio: this.selectedAspectRatio,
+          sourceImageCacheKey: sourceCacheKey
+        }
       })
       saveSession(currentSession, this.storageNamespace)
       this.refreshSessions()
@@ -1414,35 +1485,36 @@ console.log(response.choices[0].message.content);`
       this.sendEditImageRequest(prompt).then(function (result) {
         var usage = result.usage || {}
         var data = Array.isArray(result.data) ? result.data : []
-        var images = self.buildImageResultItems(currentSession, data)
-        var chargedCredits = Number(
-          usage.image_credits_charged !== undefined
-            ? usage.image_credits_charged
-            : self.currentImageCreditCost
-        )
-        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
-        if (lastMsg && lastMsg.role === 'assistant') {
-          lastMsg.kind = 'image_result'
-          lastMsg.content = '已完成图片编辑'
-          lastMsg.images = images
-          lastMsg.meta = {
-            model: result.model || self.currentModel,
-            prompt: prompt,
-            requestType: 'image_edit',
-            imageSize: usage.image_size || self.selectedImageSize,
-            aspectRatio: self.selectedAspectRatio,
-            imageCreditsCharged: chargedCredits,
-            sourceImageCacheKey: sourceCacheKey,
-            sourceImageName: self.editImageName
+        return self.buildImageResultItems(currentSession, data).then(function (images) {
+          var chargedCredits = Number(
+            usage.image_credits_charged !== undefined
+              ? usage.image_credits_charged
+              : self.currentImageCreditCost
+          )
+          var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant') {
+            lastMsg.kind = 'image_result'
+            lastMsg.content = '已完成图片编辑'
+            lastMsg.images = images
+            lastMsg.meta = {
+              model: result.model || self.currentModel,
+              prompt: prompt,
+              requestType: 'image_edit',
+              imageSize: usage.image_size || self.selectedImageSize,
+              aspectRatio: self.selectedAspectRatio,
+              imageCreditsCharged: chargedCredits,
+              sourceImageCacheKey: sourceCacheKey,
+              sourceImageName: sourceImageName
+            }
           }
-        }
 
-        self.imageGenerating = false
-        currentSession.updatedAt = Date.now()
-        saveSession(currentSession, self.storageNamespace)
-        self.refreshSessions()
-        self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
-        self.loadBalance()
+          self.imageGenerating = false
+          currentSession.updatedAt = Date.now()
+          saveSession(currentSession, self.storageNamespace)
+          self.refreshSessions()
+          self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
+          self.loadBalance()
+        })
       }).catch(function (err) {
         var lastMsg = currentSession.messages[currentSession.messages.length - 1]
         if (lastMsg && lastMsg.role === 'assistant') {
@@ -1605,6 +1677,266 @@ console.log(response.choices[0].message.content);`
       }
       this.streaming = false
       this.streamingText = ''
+    },
+    mergeRuntimeImages: function (images) {
+      var self = this
+      Object.keys(images || {}).forEach(function (key) {
+        if (images[key]) {
+          self.$set(self.runtimeImageMap, key, images[key])
+        }
+      })
+    },
+    dropRuntimeImages: function (keys) {
+      var self = this
+      ;(keys || []).forEach(function (key) {
+        if (key && Object.prototype.hasOwnProperty.call(self.runtimeImageMap, key)) {
+          self.$delete(self.runtimeImageMap, key)
+        }
+      })
+    },
+    hydrateSessionImages: function (session) {
+      var self = this
+      var keys = collectSessionImageCacheKeys(session)
+      if (keys.length === 0) return Promise.resolve()
+      return getImageCaches(keys).then(function (images) {
+        self.mergeRuntimeImages(images)
+      })
+    },
+    ensureCachedImageSrc: function (cacheKey) {
+      var self = this
+      if (!cacheKey) return Promise.resolve('')
+      if (this.runtimeImageMap[cacheKey]) {
+        return Promise.resolve(this.runtimeImageMap[cacheKey])
+      }
+      return getImageCache(cacheKey).then(function (dataUrl) {
+        if (dataUrl) {
+          self.$set(self.runtimeImageMap, cacheKey, dataUrl)
+        }
+        return dataUrl || ''
+      })
+    },
+    dataUrlToBlob: function (dataUrl) {
+      if (!dataUrl) return null
+      var parts = String(dataUrl).split(',')
+      if (parts.length < 2) return null
+      var mimeMatch = /^data:(.*?);base64$/i.exec(parts[0])
+      var mimeType = mimeMatch && mimeMatch[1] ? mimeMatch[1] : 'image/png'
+      var binary = atob(parts[1])
+      var bytes = new Uint8Array(binary.length)
+      for (var i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return new Blob([bytes], { type: mimeType })
+    },
+    buildDownloadFileName: function (name, dataUrl) {
+      var baseName = String(name || 'chat-image').replace(/[\\/:*?"<>|]+/g, '-')
+      var mimeMatch = /^data:(.*?);base64/i.exec(String(dataUrl || ''))
+      var mimeType = mimeMatch && mimeMatch[1] ? mimeMatch[1] : 'image/png'
+      var extMap = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/webp': 'webp',
+        'image/gif': 'gif'
+      }
+      var extension = extMap[mimeType] || 'png'
+      if (baseName.toLowerCase().endsWith('.' + extension)) {
+        return baseName
+      }
+      return baseName + '.' + extension
+    },
+    buildImageFileFromDataUrl: function (dataUrl, name) {
+      var blob = this.dataUrlToBlob(dataUrl)
+      if (!blob) return null
+      var fileName = this.buildDownloadFileName(name || 'chat-image', dataUrl)
+      try {
+        return new File([blob], fileName, { type: blob.type || 'image/png' })
+      } catch (e) {
+        blob.name = fileName
+        return blob
+      }
+    },
+    findModelMetaByName: function (modelName) {
+      if (!modelName) return null
+      return this.resolveModelMeta(modelName, this.currentChannelId) || this.resolveModelMeta(modelName, null)
+    },
+    findFallbackEditableImageModel: function () {
+      var currentChannelId = this.currentChannelId
+      if (currentChannelId) {
+        for (var i = 0; i < this.channelList.length; i++) {
+          var channel = this.channelList[i]
+          if (channel.channel_id !== currentChannelId) continue
+          for (var j = 0; j < channel.models.length; j++) {
+            var model = channel.models[j]
+            if (model.model_type === 'image' && model.supports_image_edit) {
+              return model
+            }
+          }
+        }
+      }
+      for (var k = 0; k < this.modelList.length; k++) {
+        var item = this.modelList[k]
+        if (item.model_type === 'image' && item.supports_image_edit) {
+          return item
+        }
+      }
+      return null
+    },
+    focusChatInputSoon: function () {
+      this.$nextTick(function () {
+        if (this.$refs.chatInput && this.$refs.chatInput.focus) {
+          this.$refs.chatInput.focus()
+        }
+      }.bind(this))
+    },
+    openImageDataUrl: function (dataUrl) {
+      if (!dataUrl) return
+      var blob = this.dataUrlToBlob(dataUrl)
+      if (!blob) return
+      var blobUrl = URL.createObjectURL(blob)
+      var opened = window.open(blobUrl, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        var link = document.createElement('a')
+        link.href = blobUrl
+        link.target = '_blank'
+        link.rel = 'noopener noreferrer'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      }
+      setTimeout(function () {
+        URL.revokeObjectURL(blobUrl)
+      }, 60000)
+    },
+    handleOpenCachedImage: function (cacheKey) {
+      var self = this
+      this.ensureCachedImageSrc(cacheKey).then(function (src) {
+        if (!src) {
+          self.$message.warning('图片缓存不存在，请重新生成')
+          return
+        }
+        self.openImageDataUrl(src)
+      })
+    },
+    showImagePreview: function (src, cacheKey, name) {
+      this.imagePreviewCacheKey = cacheKey || ''
+      this.imagePreviewSrc = src || ''
+      this.imagePreviewName = name || 'chat-image'
+      this.imagePreviewVisible = !!src
+    },
+    handlePreviewCachedImage: function (payload) {
+      var self = this
+      var cacheKey = payload && payload.cacheKey
+      var name = payload && payload.name
+      this.ensureCachedImageSrc(cacheKey).then(function (src) {
+        if (!src) {
+          self.$message.warning('图片缓存不存在，请重新生成')
+          return
+        }
+        self.showImagePreview(src, cacheKey, name || 'chat-image')
+      })
+    },
+    closeImagePreview: function () {
+      this.imagePreviewVisible = false
+      this.imagePreviewCacheKey = ''
+      this.imagePreviewSrc = ''
+      this.imagePreviewName = ''
+    },
+    handleDownloadCachedImage: function (payload) {
+      var self = this
+      var cacheKey = payload && payload.cacheKey
+      var name = payload && payload.name
+      this.ensureCachedImageSrc(cacheKey).then(function (src) {
+        if (!src) {
+          self.$message.warning('图片缓存不存在，请重新生成')
+          return
+        }
+        var blob = self.dataUrlToBlob(src)
+        if (!blob) {
+          self.$message.error('图片下载失败')
+          return
+        }
+        var blobUrl = URL.createObjectURL(blob)
+        var link = document.createElement('a')
+        link.href = blobUrl
+        link.download = self.buildDownloadFileName(name, src)
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        setTimeout(function () {
+          URL.revokeObjectURL(blobUrl)
+        }, 60000)
+      })
+    },
+    downloadPreviewImage: function () {
+      if (!this.imagePreviewSrc) {
+        this.$message.warning('图片缓存不存在，请重新生成')
+        return
+      }
+      var blob = this.dataUrlToBlob(this.imagePreviewSrc)
+      if (!blob) {
+        this.$message.error('图片下载失败')
+        return
+      }
+      var blobUrl = URL.createObjectURL(blob)
+      var link = document.createElement('a')
+      link.href = blobUrl
+      link.download = this.buildDownloadFileName(this.imagePreviewName, this.imagePreviewSrc)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setTimeout(function () {
+        URL.revokeObjectURL(blobUrl)
+      }, 60000)
+    },
+    handleEditGeneratedImage: function (payload) {
+      var self = this
+      var cacheKey = payload && payload.cacheKey
+      var prompt = (payload && payload.prompt) || ''
+      var targetModelName = (payload && payload.model) || this.currentModel
+      var targetMeta = this.findModelMetaByName(targetModelName)
+      if (!targetMeta || !targetMeta.supports_image_edit) {
+        targetMeta = this.findFallbackEditableImageModel()
+      }
+      if (!targetMeta) {
+        this.$message.warning('当前没有可用于图片编辑的模型')
+        return
+      }
+
+      this.ensureCachedImageSrc(cacheKey).then(function (src) {
+        if (!src) {
+          self.$message.warning('图片缓存不存在，请重新生成')
+          return
+        }
+        var file = self.buildImageFileFromDataUrl(src, (payload && payload.name) || 'generated-image')
+        if (!file) {
+          self.$message.error('无法加载待编辑图片')
+          return
+        }
+        if (self.currentModel !== targetMeta.model_name) {
+          self.handleModelChangeEvent(targetMeta.model_name)
+        }
+        self.imageActionMode = 'edit'
+        self.editImageFile = file
+        self.editImageName = file.name || ((payload && payload.name) || 'generated-image')
+        self.editImagePreviewUrl = src
+        self.inputText = prompt
+        self.persistCurrentSessionImageOptions()
+        self.focusChatInputSoon()
+        self.$message.success('已将图片带入编辑模式')
+      })
+    },
+    handleRegenerateImage: function (payload) {
+      var targetModelName = payload && payload.model
+      if (targetModelName && targetModelName !== this.currentModel && this.findModelMetaByName(targetModelName)) {
+        this.handleModelChangeEvent(targetModelName)
+      }
+      this.imageActionMode = 'generate'
+      this.clearEditImage()
+      this.inputText = (payload && payload.prompt) || ''
+      this.persistCurrentSessionImageOptions()
+      this.focusChatInputSoon()
+      this.$message.success('已回填原提示词，可直接重新生成')
     },
 
     // ============ UI Helpers ============
@@ -1822,6 +2154,7 @@ console.log(response.choices[0].message.content);`
   object-fit: cover;
   border-radius: 14px;
   flex-shrink: 0;
+  cursor: zoom-in;
 }
 
 .image-edit-preview-meta {
@@ -1969,6 +2302,27 @@ console.log(response.choices[0].message.content);`
   font-weight: 500;
 }
 
+.image-preview-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.image-preview-modal-image {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: 16px;
+  background: #f6f8fb;
+}
+
+.image-preview-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 // ============ Responsive ============
 @media (max-width: 768px) {
   .chat-sidebar {
@@ -1987,6 +2341,9 @@ console.log(response.choices[0].message.content);`
   .image-edit-preview-card {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .image-preview-modal-image {
+    max-height: 56vh;
   }
   .guide-panel {
     position: fixed; right: 0; top: 0; bottom: 0; z-index: 25;

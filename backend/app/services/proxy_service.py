@@ -7287,6 +7287,35 @@ class ProxyService:
             raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
 
     @staticmethod
+    def _extract_image_edit_inputs(request_data: dict) -> list[dict[str, Any]]:
+        images = request_data.get("images")
+        if isinstance(images, list):
+            normalized_images = [
+                item for item in images
+                if isinstance(item, dict) and item.get("content")
+            ]
+            if normalized_images:
+                return normalized_images
+
+        image = request_data.get("image")
+        if isinstance(image, dict) and image.get("content"):
+            return [image]
+        return []
+
+    @staticmethod
+    def _summarize_image_edit_inputs(image_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        summary = []
+        for index, image_file in enumerate(image_files, start=1):
+            content = image_file.get("content") or b""
+            summary.append({
+                "index": index,
+                "filename": image_file.get("filename") or "upload.png",
+                "content_type": image_file.get("content_type") or "application/octet-stream",
+                "bytes": len(content),
+            })
+        return summary
+
+    @staticmethod
     def _build_openai_image_prompt(
         prompt: str,
         image_size: Optional[str] = None,
@@ -7326,16 +7355,13 @@ class ProxyService:
         image_size: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
     ) -> str:
-        base_prompt = ProxyService._build_openai_image_prompt(
+        # Keep image_size / aspect_ratio prompt adaptation for compatibility
+        # with this channel, but avoid adding extra edit-specific constraints
+        # that can distort multi-image composition behavior.
+        return ProxyService._build_openai_image_prompt(
             prompt,
             image_size=image_size,
             aspect_ratio=aspect_ratio,
-        )
-        if not base_prompt:
-            return ""
-        return (
-            f"{base_prompt}\n"
-            "- 在未明确要求修改的部分，尽量保留原图主体、构图关系和关键视觉元素。"
         )
 
     @staticmethod
@@ -7666,9 +7692,8 @@ class ProxyService:
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         start_time = time.time()
-        image_file = request_data.get("image") or {}
-        image_content = image_file.get("content")
-        if not image_content:
+        image_files = ProxyService._extract_image_edit_inputs(request_data)
+        if not image_files:
             raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
 
         base_url = channel.base_url.rstrip("/")
@@ -7677,24 +7702,49 @@ class ProxyService:
         headers.pop("Content-Type", None)
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
-        files = {
-            "image": (
-                image_file.get("filename") or "upload.png",
-                image_content,
-                image_file.get("content_type") or "application/octet-stream",
-            ),
-            "model": (None, upstream_model_name),
-            "prompt": (
-                None,
-                ProxyService._build_openai_image_edit_prompt(
-                    prompt,
-                    image_size=image_size,
-                    aspect_ratio=aspect_ratio,
+        forwarded_prompt = ProxyService._build_openai_image_edit_prompt(
+            prompt,
+            image_size=image_size,
+            aspect_ratio=aspect_ratio,
+        )
+        files = []
+        for image_file in image_files:
+            files.append((
+                "image",
+                (
+                    image_file.get("filename") or "upload.png",
+                    image_file.get("content"),
+                    image_file.get("content_type") or "application/octet-stream",
+                ),
+            ))
+        files.extend([
+            ("model", (None, upstream_model_name)),
+            (
+                "prompt",
+                (
+                    None,
+                    forwarded_prompt,
                 ),
             ),
-            "n": (None, "1"),
-            "response_format": (None, "b64_json"),
-        }
+            ("n", (None, "1")),
+            ("response_format", (None, "b64_json")),
+        ])
+
+        logger.info(
+            "Image edit upstream forward request_id=%s url=%s requested_model=%s upstream_model=%s "
+            "image_count=%s images=%s original_prompt=%r forwarded_prompt=%r image_size=%s aspect_ratio=%s response_format=%s",
+            request_id,
+            url,
+            requested_model,
+            upstream_model_name,
+            len(image_files),
+            ProxyService._summarize_image_edit_inputs(image_files),
+            prompt,
+            forwarded_prompt,
+            image_size,
+            aspect_ratio,
+            "b64_json",
+        )
 
         timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -8111,8 +8161,8 @@ class ProxyService:
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
         ProxyService._validate_single_image_count(request_data)
-        image_file = request_data.get("image") or {}
-        if not image_file.get("content"):
+        image_files = ProxyService._extract_image_edit_inputs(request_data)
+        if not image_files:
             raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
 
         unified_model = ModelService.resolve_model(db, requested_model)

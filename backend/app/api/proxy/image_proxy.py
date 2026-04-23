@@ -13,13 +13,20 @@ router = APIRouter(tags=["代理-Image"])
 
 async def _parse_image_edit_form(request: Request) -> dict:
     form = await request.form()
-    image_file = form.get("image")
-    if image_file is None or not hasattr(image_file, "read"):
+    image_files = [item for item in form.getlist("image") if hasattr(item, "read")]
+    if not image_files:
         raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
 
-    image_bytes = await image_file.read()
-    if not image_bytes:
-        raise ServiceException(400, "Uploaded image is empty", "INVALID_IMAGE_FILE")
+    parsed_images = []
+    for image_file in image_files:
+        image_bytes = await image_file.read()
+        if not image_bytes:
+            raise ServiceException(400, "Uploaded image is empty", "INVALID_IMAGE_FILE")
+        parsed_images.append({
+            "filename": getattr(image_file, "filename", None) or "upload.png",
+            "content_type": getattr(image_file, "content_type", None) or "application/octet-stream",
+            "content": image_bytes,
+        })
 
     return {
         "model": form.get("model"),
@@ -30,11 +37,9 @@ async def _parse_image_edit_form(request: Request) -> dict:
         "imageSize": form.get("imageSize"),
         "size": form.get("size"),
         "aspect_ratio": form.get("aspect_ratio"),
-        "image": {
-            "filename": getattr(image_file, "filename", None) or "upload.png",
-            "content_type": getattr(image_file, "content_type", None) or "application/octet-stream",
-            "content": image_bytes,
-        },
+        # Keep the legacy single-image field for existing downstream logic.
+        "image": parsed_images[0],
+        "images": parsed_images,
     }
 
 

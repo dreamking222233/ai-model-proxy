@@ -140,7 +140,18 @@ INSERT INTO `unified_model` (
   `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
 )
 SELECT * FROM (
-  SELECT 'gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 图片生成（按图片积分计费）'
+  SELECT 'gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'
+) AS tmp
+WHERE NOT EXISTS (
+  SELECT 1 FROM `unified_model` WHERE `model_name` = 'gemini-2.5-flash-image'
+);
+
+INSERT INTO `unified_model` (
+  `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
+  `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+)
+SELECT * FROM (
+  SELECT 'gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'
 ) AS tmp
 WHERE NOT EXISTS (
   SELECT 1 FROM `unified_model` WHERE `model_name` = 'gemini-3.1-flash-image-preview'
@@ -151,7 +162,7 @@ INSERT INTO `unified_model` (
   `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
 )
 SELECT * FROM (
-  SELECT 'gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini Pro 图片生成（按图片积分计费）'
+  SELECT 'gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）'
 ) AS tmp
 WHERE NOT EXISTS (
   SELECT 1 FROM `unified_model` WHERE `model_name` = 'gemini-3-pro-image-preview'
@@ -159,10 +170,14 @@ WHERE NOT EXISTS (
 
 UPDATE `unified_model`
 SET `protocol_type` = 'google', `model_type` = 'image', `billing_type` = 'image_credit', `image_credit_multiplier` = 1
-WHERE `model_name` = 'gemini-3.1-flash-image-preview';
+WHERE `model_name` = 'gemini-2.5-flash-image';
 
 UPDATE `unified_model`
 SET `protocol_type` = 'google', `model_type` = 'image', `billing_type` = 'image_credit', `image_credit_multiplier` = 2
+WHERE `model_name` = 'gemini-3.1-flash-image-preview';
+
+UPDATE `unified_model`
+SET `protocol_type` = 'google', `model_type` = 'image', `billing_type` = 'image_credit', `image_credit_multiplier` = 3
 WHERE `model_name` = 'gemini-3-pro-image-preview';
 
 -- Optional Google channel bootstrap.
@@ -184,6 +199,19 @@ WHERE @google_api_key IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM `channel`
     WHERE `protocol_type` = 'google' AND `base_url` = @google_base_url
+  );
+
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, ch.id, 'gemini-2.5-flash-image', 1
+FROM `unified_model` um
+JOIN `channel` ch
+  ON ch.`protocol_type` = 'google'
+ AND ch.`base_url` = @google_base_url
+WHERE @google_api_key IS NOT NULL
+  AND um.`model_name` = 'gemini-2.5-flash-image'
+  AND NOT EXISTS (
+    SELECT 1 FROM `model_channel_mapping` m
+    WHERE m.`unified_model_id` = um.id AND m.`channel_id` = ch.id
   );
 
 INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)

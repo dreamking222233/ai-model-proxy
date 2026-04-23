@@ -4,10 +4,64 @@
  */
 
 var STORAGE_KEY = 'chat_sessions'
+var IMAGE_DB_NAME = 'chat_image_cache_db'
+var IMAGE_STORE_NAME = 'chat_images'
+var IMAGE_DB_VERSION = 1
 
 function resolveStorageKey(namespace) {
   if (!namespace) return STORAGE_KEY
   return STORAGE_KEY + '_' + namespace
+}
+
+function canUseIndexedDb() {
+  return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
+}
+
+function openImageDb() {
+  return new Promise(function (resolve, reject) {
+    if (!canUseIndexedDb()) {
+      resolve(null)
+      return
+    }
+    try {
+      var request = window.indexedDB.open(IMAGE_DB_NAME, IMAGE_DB_VERSION)
+      request.onupgradeneeded = function (event) {
+        var db = event.target.result
+        if (!db.objectStoreNames.contains(IMAGE_STORE_NAME)) {
+          db.createObjectStore(IMAGE_STORE_NAME, { keyPath: 'key' })
+        }
+      }
+      request.onsuccess = function () {
+        resolve(request.result)
+      }
+      request.onerror = function () {
+        reject(request.error)
+      }
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
+function runImageTransaction(mode, handler) {
+  return openImageDb().then(function (db) {
+    if (!db) return null
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction([IMAGE_STORE_NAME], mode)
+      var store = tx.objectStore(IMAGE_STORE_NAME)
+      var result = handler(store, resolve, reject)
+      tx.onerror = function () {
+        reject(tx.error)
+      }
+      tx.oncomplete = function () {
+        if (result === undefined) {
+          resolve(null)
+        }
+      }
+    }).finally(function () {
+      db.close()
+    })
+  })
 }
 
 /**
@@ -38,6 +92,88 @@ export function getSessions(namespace) {
   } catch (e) {
     return []
   }
+}
+
+export function saveImageCache(key, dataUrl) {
+  if (!key || !dataUrl) return Promise.resolve()
+  return runImageTransaction('readwrite', function (store) {
+    store.put({
+      key: key,
+      dataUrl: dataUrl,
+      updatedAt: Date.now()
+    })
+  }).catch(function (e) {
+    console.warn('Failed to save chat image cache:', e)
+  })
+}
+
+export function getImageCache(key) {
+  if (!key) return Promise.resolve('')
+  return runImageTransaction('readonly', function (store, resolve, reject) {
+    var request = store.get(key)
+    request.onsuccess = function () {
+      var result = request.result || {}
+      resolve(result.dataUrl || '')
+    }
+    request.onerror = function () {
+      reject(request.error)
+    }
+  }).then(function (dataUrl) {
+    return dataUrl || ''
+  }).catch(function (e) {
+    console.warn('Failed to load chat image cache:', e)
+    return ''
+  })
+}
+
+export function getImageCaches(keys) {
+  var uniqueKeys = Array.from(new Set((keys || []).filter(Boolean)))
+  if (uniqueKeys.length === 0) return Promise.resolve({})
+  return Promise.all(uniqueKeys.map(function (key) {
+    return getImageCache(key).then(function (dataUrl) {
+      return { key: key, dataUrl: dataUrl }
+    })
+  })).then(function (items) {
+    var result = {}
+    items.forEach(function (item) {
+      if (item.dataUrl) {
+        result[item.key] = item.dataUrl
+      }
+    })
+    return result
+  })
+}
+
+export function deleteImageCaches(keys) {
+  var uniqueKeys = Array.from(new Set((keys || []).filter(Boolean)))
+  if (uniqueKeys.length === 0) return Promise.resolve()
+  return runImageTransaction('readwrite', function (store) {
+    uniqueKeys.forEach(function (key) {
+      store.delete(key)
+    })
+  }).catch(function (e) {
+    console.warn('Failed to delete chat image cache:', e)
+  })
+}
+
+export function collectSessionImageCacheKeys(session) {
+  var keySet = new Set()
+  var messages = Array.isArray(session && session.messages) ? session.messages : []
+  messages.forEach(function (message) {
+    if (message && message.localImageCacheKey) {
+      keySet.add(message.localImageCacheKey)
+    }
+    if (message && message.meta && message.meta.sourceImageCacheKey) {
+      keySet.add(message.meta.sourceImageCacheKey)
+    }
+    var images = Array.isArray(message && message.images) ? message.images : []
+    images.forEach(function (item) {
+      if (item && item.cacheKey) {
+        keySet.add(item.cacheKey)
+      }
+    })
+  })
+  return Array.from(keySet)
 }
 
 /**
@@ -93,6 +229,12 @@ export function saveSession(session, namespace) {
  */
 export function deleteSession(id, namespace) {
   var sessions = getSessions(namespace)
+  var target = sessions.find(function (s) {
+    return s.id === id
+  })
+  if (target) {
+    deleteImageCaches(collectSessionImageCacheKeys(target))
+  }
   var filtered = sessions.filter(function (s) {
     return s.id !== id
   })
@@ -103,6 +245,12 @@ export function deleteSession(id, namespace) {
  * Clear all sessions
  */
 export function clearAll(namespace) {
+  var sessions = getSessions(namespace)
+  var allKeys = []
+  sessions.forEach(function (session) {
+    allKeys = allKeys.concat(collectSessionImageCacheKeys(session))
+  })
+  deleteImageCaches(allKeys)
   localStorage.removeItem(resolveStorageKey(namespace))
 }
 

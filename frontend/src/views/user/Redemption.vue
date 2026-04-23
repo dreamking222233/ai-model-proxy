@@ -114,6 +114,7 @@
 
 <script>
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'Redemption',
@@ -179,9 +180,7 @@ export default {
       }
     },
     formatTime(time) {
-      if (!time) return '-'
-      const d = new Date(time)
-      return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+      return formatDate(time, 'YYYY/MM/DD HH:mm') || time || '-'
     }
   }
 }

@@ -233,6 +233,7 @@
 
 <script>
 import { listApiKeys, createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey } from '@/api/user'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'ApiKeyManage',
@@ -417,14 +418,7 @@ export default {
       return num.toString()
     },
     formatTime(time) {
-      if (!time) return '-'
-      const d = new Date(time)
-      if (isNaN(d.getTime())) return time
-      return d.getFullYear() + '-' +
-        String(d.getMonth() + 1).padStart(2, '0') + '-' +
-        String(d.getDate()).padStart(2, '0') + ' ' +
-        String(d.getHours()).padStart(2, '0') + ':' +
-        String(d.getMinutes()).padStart(2, '0')
+      return formatDate(time, 'YYYY-MM-DD HH:mm') || time || '-'
     }
   }
 }

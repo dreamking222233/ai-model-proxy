@@ -270,7 +270,7 @@ import {
   rechargeImageCredits,
   deductImageCredits
 } from '@/api/user'
-import { formatDate } from '@/utils'
+import { formatDate, parseServerDate } from '@/utils'
 
 export default {
   name: 'UserManage',
@@ -516,7 +516,8 @@ export default {
       })
     },
     getSubscriptionStatus(expiresAt) {
-      const expireDate = new Date(expiresAt)
+      const expireDate = parseServerDate(expiresAt)
+      if (!expireDate) return '未知'
       const now = new Date()
       const diffDays = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24))
 

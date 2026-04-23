@@ -167,6 +167,7 @@
 
 <script>
 import { getUsageLogs, getPerMinuteStats } from '@/api/user'
+import { parseServerDate } from '@/utils'
 
 export default {
   name: 'UsageLog',
@@ -243,7 +244,8 @@ export default {
     formatNumber(n) { return Number(n || 0).toLocaleString() },
     formatTime(t) {
       if (!t) return '-'
-      const d = new Date(t)
+      const d = parseServerDate(t)
+      if (!d) return t
       return `${d.getMonth()+1}-${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
     },
     getBarHeight(v, m) { return Math.max((v / m) * 100, 3) + '%' },

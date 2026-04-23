@@ -143,6 +143,7 @@
 
 <script>
 import { getProfile, changePassword } from '@/api/user'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'Profile',
@@ -202,15 +203,7 @@ export default {
       })
     },
     formatTime(time) {
-      if (!time) return '-'
-      const d = new Date(time)
-      if (isNaN(d.getTime())) return time
-      return d.getFullYear() + '-' +
-        String(d.getMonth() + 1).padStart(2, '0') + '-' +
-        String(d.getDate()).padStart(2, '0') + ' ' +
-        String(d.getHours()).padStart(2, '0') + ':' +
-        String(d.getMinutes()).padStart(2, '0') + ':' +
-        String(d.getSeconds()).padStart(2, '0')
+      return formatDate(time) || time || '-'
     }
   },
   computed: {

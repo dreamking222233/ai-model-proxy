@@ -233,7 +233,7 @@ import CountTo from 'vue-count-to'
 import { getBalance, getUsageLogs, getProfile } from '@/api/user'
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
-import { formatDate } from '@/utils'
+import { formatDate, parseServerDate } from '@/utils'
 
 export default {
   name: 'UserDashboard',
@@ -265,7 +265,10 @@ export default {
       if (!this.userProfile.subscription_expires_at) {
         return { isExpired: true, daysRemaining: 0 }
       }
-      const expireDate = new Date(this.userProfile.subscription_expires_at)
+      const expireDate = parseServerDate(this.userProfile.subscription_expires_at)
+      if (!expireDate) {
+        return { isExpired: true, daysRemaining: 0 }
+      }
       const now = new Date()
       const diffMs = expireDate - now
       const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))

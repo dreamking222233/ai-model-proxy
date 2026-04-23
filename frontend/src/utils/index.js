@@ -4,10 +4,45 @@
  * @param {string} [fmt='YYYY-MM-DD HH:mm:ss'] - The format pattern
  * @returns {string} Formatted date string
  */
+function normalizeServerDateString(value) {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return `${trimmed}T00:00:00`
+  }
+
+  const normalized = trimmed.replace(' ', 'T').replace(/\.(\d{3})\d+/, '.$1')
+  if (/[zZ]$|[+-]\d{2}:\d{2}$/.test(normalized)) {
+    return normalized
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?$/.test(normalized)) {
+    return `${normalized}Z`
+  }
+
+  return trimmed
+}
+
+export function parseServerDate(date) {
+  if (!date) return null
+  if (date instanceof Date) {
+    return Number.isNaN(date.getTime()) ? null : new Date(date.getTime())
+  }
+
+  if (typeof date === 'number') {
+    const parsed = new Date(date)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  const parsed = new Date(normalizeServerDateString(date))
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 export function formatDate(date, fmt = 'YYYY-MM-DD HH:mm:ss') {
   if (!date) return ''
-  const d = new Date(date)
-  if (isNaN(d.getTime())) return ''
+  const d = parseServerDate(date)
+  if (!d) return ''
 
   const map = {
     'YYYY': d.getFullYear(),

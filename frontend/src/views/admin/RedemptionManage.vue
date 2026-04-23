@@ -144,6 +144,11 @@
         <span v-else class="empty-text">-</span>
       </template>
 
+      <template slot="created_at" slot-scope="text">
+        <span v-if="text">{{ formatTime(text) }}</span>
+        <span v-else class="empty-text">-</span>
+      </template>
+
       <template slot="username" slot-scope="text, record">
         <span v-if="text" class="username-text">{{ text }}</span>
         <span v-else-if="record.used_by" class="user-id-text">ID: {{ record.used_by }}</span>
@@ -340,7 +345,7 @@
         </div>
         <div class="preview-item">
           <div class="preview-label">创建时间</div>
-          <div class="preview-value">{{ previewCode.created_at }}</div>
+          <div class="preview-value">{{ formatTime(previewCode.created_at) }}</div>
         </div>
       </div>
     </a-modal>
@@ -349,6 +354,7 @@
 
 <script>
 import { listRedemptionCodes, createRedemptionCode, batchCreateRedemptionCodes, deleteRedemptionCode } from '@/api/redemption'
+import { formatDate } from '@/utils'
 
 export default {
   name: 'RedemptionManage',
@@ -373,7 +379,7 @@ export default {
         { title: '过期时间', dataIndex: 'expires_at', key: 'expires_at', width: 180, scopedSlots: { customRender: 'expires_at' } },
         { title: '使用时间', dataIndex: 'used_at', key: 'used_at', width: 180, scopedSlots: { customRender: 'used_at' } },
         { title: '使用者', dataIndex: 'username', key: 'username', width: 120, scopedSlots: { customRender: 'username' } },
-        { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
+        { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, scopedSlots: { customRender: 'created_at' } },
         { title: '操作', key: 'action', width: 120, fixed: 'right', scopedSlots: { customRender: 'action' } }
       ],
       createModalVisible: false,
@@ -544,10 +550,10 @@ export default {
             code.code,
             code.amount,
             this.getStatusText(code.status),
-            code.expires_at || '永久有效',
-            code.used_at || '-',
+            code.expires_at ? this.formatTime(code.expires_at) : '永久有效',
+            code.used_at ? this.formatTime(code.used_at) : '-',
             code.username || code.used_by || '-',
-            code.created_at
+            code.created_at ? this.formatTime(code.created_at) : '-'
           ].join(','))
         ].join('\n')
 
@@ -588,7 +594,7 @@ export default {
     },
     formatTime(time) {
       if (!time) return '-'
-      return new Date(time).toLocaleString('zh-CN')
+      return formatDate(time)
     }
   }
 }

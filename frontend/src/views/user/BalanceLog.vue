@@ -321,6 +321,7 @@
 
 <script>
 import { getUsageLogs, getProfile, getModelUsageStats } from '@/api/user'
+import { formatDate as formatServerDate, parseServerDate } from '@/utils'
 
 export default {
   name: 'BalanceLog',
@@ -446,13 +447,11 @@ export default {
       return (Number(b) || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
     },
     formatDate(t) {
-      if (!t) return '-'
-      const d = new Date(t)
-      return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`
+      return formatServerDate(t, 'YYYY/MM/DD') || t || '-'
     },
     formatTimeOnly(t) {
-      if (!t) return '-'
-      const d = new Date(t)
+      const d = parseServerDate(t)
+      if (!d) return t || '-'
       return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
     },
     isImageRequest(record) {
@@ -521,10 +520,7 @@ export default {
       return `${Number(value || 0).toLocaleString()} Token`
     },
     formatTime(t) {
-      if (!t) return '-'
-      const d = new Date(t)
-      if (isNaN(d)) return t
-      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
+      return formatServerDate(t) || t || '-'
     },
     hasCacheSummary(r) {
       if (!r) return false

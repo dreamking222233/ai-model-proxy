@@ -123,9 +123,9 @@
           </div>
           <div class="image-toolbar-item">
             <div class="image-toolbar-label">比例</div>
-            <a-select v-model="selectedAspectRatio" size="small" style="width: 110px">
+            <a-select v-model="selectedAspectRatio" size="small" style="width: 128px">
               <a-select-option v-for="ratio in aspectRatioOptions" :key="ratio" :value="ratio">
-                {{ ratio }}
+                {{ getAspectRatioLabel(ratio) }}
               </a-select-option>
             </a-select>
           </div>
@@ -364,6 +364,13 @@ import {
 } from '@/utils/chatStorage'
 
 var DEFAULT_IMAGE_SIZES = ['512', '1K', '2K', '4K']
+var DEFAULT_ASPECT_RATIO_LABELS = {
+  '1:1': '1:1 方图 □',
+  '16:9': '16:9 横图 ▭',
+  '9:16': '9:16 竖图 ▯',
+  '4:3': '4:3 横图 ▭',
+  '3:4': '3:4 竖图 ▯'
+}
 var DEFAULT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
 var IMAGE_REQUEST_TIMEOUT_MS = 300000
 
@@ -1447,13 +1454,21 @@ console.log(response.choices[0].message.content);`
       var prompt = this.inputText.trim()
       var currentSession = this.ensureCurrentSession()
       var self = this
-      var sourceImageName = this.editImageName
+      var requestImageFile = this.editImageFile
+      var requestImageName = this.editImageName || (requestImageFile && requestImageFile.name) || 'upload.png'
+      var requestImagePreviewUrl = this.editImagePreviewUrl
+      var sourceImageName = requestImageName
       this.inputText = ''
       this.errorMsg = ''
 
+      if (!requestImageFile || !requestImagePreviewUrl) {
+        this.errorMsg = '待编辑图片不存在，请重新上传'
+        return
+      }
+
       var sourceCacheKey = currentSession.id + '_' + this.createRuntimeImageCacheKey('source', 0)
-      this.$set(this.runtimeImageMap, sourceCacheKey, this.editImagePreviewUrl)
-      saveImageCache(sourceCacheKey, this.editImagePreviewUrl)
+      this.$set(this.runtimeImageMap, sourceCacheKey, requestImagePreviewUrl)
+      saveImageCache(sourceCacheKey, requestImagePreviewUrl)
       this.clearEditImage()
 
       currentSession.messages.push({
@@ -1482,7 +1497,7 @@ console.log(response.choices[0].message.content);`
       this.refreshSessions()
 
       this.imageGenerating = true
-      this.sendEditImageRequest(prompt).then(function (result) {
+      this.sendEditImageRequest(prompt, requestImageFile, requestImageName).then(function (result) {
         var usage = result.usage || {}
         var data = Array.isArray(result.data) ? result.data : []
         return self.buildImageResultItems(currentSession, data).then(function (images) {
@@ -1593,7 +1608,7 @@ console.log(response.choices[0].message.content);`
         throw err
       })
     },
-    sendEditImageRequest: function (prompt) {
+    sendEditImageRequest: function (prompt, imageFile, imageName) {
       var self = this
       var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
       var timeoutId = null
@@ -1601,6 +1616,10 @@ console.log(response.choices[0].message.content);`
         timeoutId = setTimeout(function () {
           controller.abort()
         }, IMAGE_REQUEST_TIMEOUT_MS)
+      }
+
+      if (!imageFile) {
+        return Promise.reject(new Error('待编辑图片不存在，请重新上传'))
       }
 
       var headers = {
@@ -1617,7 +1636,7 @@ console.log(response.choices[0].message.content);`
       formData.append('image_size', this.selectedImageSize)
       formData.append('aspect_ratio', this.selectedAspectRatio)
       formData.append('n', '1')
-      formData.append('image', this.editImageFile, this.editImageName || this.editImageFile.name || 'upload.png')
+      formData.append('image', imageFile, imageName || imageFile.name || 'upload.png')
 
       return fetch(this.runtimeRelayBase + '/v1/image/edit', {
         method: 'POST',
@@ -1744,6 +1763,9 @@ console.log(response.choices[0].message.content);`
         return baseName
       }
       return baseName + '.' + extension
+    },
+    getAspectRatioLabel: function (ratio) {
+      return DEFAULT_ASPECT_RATIO_LABELS[ratio] || ratio
     },
     buildImageFileFromDataUrl: function (dataUrl, name) {
       var blob = this.dataUrlToBlob(dataUrl)

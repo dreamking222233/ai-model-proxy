@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
@@ -16,6 +17,15 @@ from app.core.exceptions import ServiceException
 
 class LogService:
     """Query and create log records, compute aggregated statistics."""
+
+    DEFAULT_TIMEZONE = "Asia/Shanghai"
+
+    @staticmethod
+    def _get_timezone_day_window(days: int = 1, tz_name: str = DEFAULT_TIMEZONE) -> tuple[datetime, datetime]:
+        zone = ZoneInfo(tz_name)
+        local_now = datetime.now(timezone.utc).astimezone(zone)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(days, 1) - 1)
+        return local_start.replace(tzinfo=None), local_now.replace(tzinfo=None)
 
     @staticmethod
     def _parse_date_filters(
@@ -468,8 +478,7 @@ class LogService:
         """
         Get top users by token usage within the given time window.
         """
-        now = datetime.utcnow()
-        since = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        since, now = LogService._get_timezone_day_window(days)
         rows = (
             db.query(
                 SysUser.id.label("user_id"),
@@ -486,6 +495,7 @@ class LogService:
             .filter(
                 RequestLog.user_id.isnot(None),
                 RequestLog.created_at >= since,
+                RequestLog.created_at <= now,
             )
             .group_by(SysUser.id, SysUser.username, SysUser.role, SysUser.avatar)
             .order_by(

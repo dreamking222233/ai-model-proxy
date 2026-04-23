@@ -3,6 +3,7 @@
     
     <!-- Wallet Dashboard Header -->
     <div class="wallet-header animate__animated animate__fadeIn">
+      <!-- Main Balance Card -->
       <div class="wallet-main-card">
         <div class="card-glass"></div>
         <div class="wallet-content">
@@ -21,6 +22,7 @@
         </div>
       </div>
 
+      <!-- Stats Grid -->
       <div class="stats-grid">
         <div class="stat-mini-card animate__animated animate__fadeInUp" style="animation-delay: 0.1s">
           <div class="stat-icon req"><a-icon type="api" /></div>
@@ -52,26 +54,45 @@
         </div>
       </div>
 
-      <div class="image-credit-tip animate__animated animate__fadeInUp" style="animation-delay: 0.45s">
-        <a-alert
-          type="info"
-          show-icon
-          message="图片积分说明"
-          description="生图模型采用图片积分独立计费，不消耗账户余额。调用成功后会按模型倍率扣除图片积分；你可以在下方账单与明细中查看每次生图请求的积分扣除记录。"
-        />
-        <div class="image-credit-balance">当前图片积分余额：<strong>{{ formatNumber(userInfo.image_credit_balance || 0) }}</strong></div>
+      <!-- Image Credit Card -->
+      <div class="image-credit-card animate__animated animate__fadeInUp" style="animation-delay: 0.45s">
+        <div class="card-glass"></div>
+        <div class="card-content">
+          <div class="card-header">
+            <a-icon type="info-circle" class="info-icon" />
+            <span class="card-title">图片积分说明</span>
+          </div>
+          <p class="card-desc">生图模型采用图片积分独立计费，不消耗余额。成功后按倍率扣除积分。</p>
+          <div class="image-credit-footer">
+            <span class="label">当前余额</span>
+            <span class="value">{{ formatNumber(userInfo.image_credit_balance || 0) }}</span>
+          </div>
+        </div>
       </div>
 
-      <div v-if="subscriptionSummary.subscription_type && subscriptionSummary.subscription_type !== 'balance'" class="package-summary animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
-        <div class="package-summary__title">
-          <a-icon :type="subscriptionSummary.plan_kind === 'daily_quota' ? 'dashboard' : 'crown'" />
-          <span>{{ subscriptionSummary.plan_name || '当前套餐' }}</span>
-        </div>
-        <div class="package-summary__meta">
-          <span>模式：{{ subscriptionSummary.plan_kind === 'daily_quota' ? '每日额度刷新' : '时间无限套餐' }}</span>
-          <span v-if="subscriptionSummary.end_time">到期：{{ formatUtcTime(subscriptionSummary.end_time) }}</span>
-          <span v-if="subscriptionSummary.current_cycle">今日已用 {{ formatQuotaAmount(subscriptionSummary.current_cycle.used_amount, subscriptionSummary.quota_metric) }}</span>
-          <span v-if="subscriptionSummary.current_cycle">今日剩余 {{ formatQuotaAmount(subscriptionSummary.current_cycle.remaining_amount, subscriptionSummary.quota_metric) }}</span>
+      <!-- Subscription Package Card -->
+      <div v-if="subscriptionSummary.subscription_type && subscriptionSummary.subscription_type !== 'balance'" 
+           class="package-card animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
+        <div class="card-glass"></div>
+        <div class="card-content">
+          <div class="card-header">
+            <a-icon :type="subscriptionSummary.plan_kind === 'daily_quota' ? 'dashboard' : 'crown'" class="package-icon" />
+            <span class="card-title">{{ subscriptionSummary.plan_name || '当前套餐' }}</span>
+          </div>
+          <div class="package-info">
+            <div class="info-item">
+              <span class="label">模式</span>
+              <span class="val">{{ subscriptionSummary.plan_kind === 'daily_quota' ? '每日刷新' : '无限套餐' }}</span>
+            </div>
+            <div class="info-item" v-if="subscriptionSummary.end_time">
+              <span class="label">到期</span>
+              <span class="val">{{ formatTime(subscriptionSummary.end_time).split(' ')[0] }}</span>
+            </div>
+            <div class="info-item highlight" v-if="subscriptionSummary.current_cycle">
+              <span class="label">剩余</span>
+              <span class="val">{{ formatQuotaAmount(subscriptionSummary.current_cycle.remaining_amount, subscriptionSummary.quota_metric).split(' ')[0] }}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -321,7 +342,7 @@
 
 <script>
 import { getUsageLogs, getProfile, getModelUsageStats } from '@/api/user'
-import { formatDate as formatLocalDate, formatUtcDate } from '@/utils'
+import { formatDate as formatLocalDate } from '@/utils'
 
 export default {
   name: 'BalanceLog',
@@ -522,9 +543,6 @@ export default {
     formatTime(t) {
       return formatLocalDate(t) || t || '-'
     },
-    formatUtcTime(t) {
-      return formatUtcDate(t) || t || '-'
-    },
     hasCacheSummary(r) {
       if (!r) return false
       return Boolean(r.cache_status && r.cache_status !== 'BYPASS' || Number(r.cache_hit_segments) > 0 || Number(r.cache_miss_segments) > 0)
@@ -569,24 +587,30 @@ export default {
     position: relative;
     z-index: 1;
     display: flex;
+    flex-wrap: wrap;
     justify-content: center;
     align-items: stretch;
-    gap: 24px;
+    gap: 20px;
     padding: 0 24px;
     margin-bottom: 32px;
   }
 
-  .wallet-main-card {
-    flex: 0 1 520px;
-    min-width: 380px;
+  .wallet-main-card, .image-credit-card, .package-card {
     background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(20px);
     border-radius: 24px;
-    padding: 20px 24px;
+    padding: 24px;
     position: relative;
     overflow: hidden;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.6);
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 15px 45px rgba(0, 0, 0, 0.08);
+      border-color: rgba(102, 126, 234, 0.3);
+    }
 
     .card-glass {
       position: absolute;
@@ -594,9 +618,17 @@ export default {
       right: -10%;
       width: 300px;
       height: 300px;
-      background: radial-gradient(circle, rgba(102, 126, 234, 0.1) 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(102, 126, 234, 0.08) 0%, transparent 70%);
       pointer-events: none;
     }
+  }
+
+  .wallet-main-card {
+    flex: 1 1 420px;
+    min-width: 380px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
 
   .wallet-content {
@@ -605,7 +637,7 @@ export default {
     justify-content: center;
     align-items: center;
     text-align: center;
-    gap: 16px;
+    gap: 20px;
     position: relative;
     z-index: 1;
   }
@@ -615,32 +647,32 @@ export default {
       font-size: 14px;
       color: #8c8c8c;
       font-weight: 500;
-      margin-bottom: 4px;
+      margin-bottom: 8px;
     }
     .wallet-balance {
       display: flex;
       align-items: baseline;
-      gap: 6px;
+      gap: 8px;
       
       .currency {
-        font-size: 18px;
+        font-size: 20px;
         font-weight: 700;
         color: #667eea;
       }
       .amount {
-        font-size: 32px;
+        font-size: 38px;
         font-weight: 800;
         color: #1a1a2e;
-        letter-spacing: -1px;
+        letter-spacing: -1.5px;
         font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
       }
     }
   }
 
   .topup-btn {
-    height: 40px;
-    padding: 0 24px;
-    border-radius: 16px;
+    height: 44px;
+    padding: 0 32px;
+    border-radius: 18px;
     font-size: 16px;
     font-weight: 700;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -649,15 +681,16 @@ export default {
     transition: all 0.3s;
 
     &:hover {
-      transform: translateY(-2px);
+      transform: scale(1.02);
       box-shadow: 0 12px 28px rgba(102, 126, 234, 0.35);
       background: linear-gradient(135deg, #7b8ff0 0%, #8a5fb5 100%);
     }
   }
 
   .stats-grid {
+    flex: 0 0 auto;
     display: grid;
-    grid-template-columns: repeat(2, 220px);
+    grid-template-columns: repeat(2, 210px);
     gap: 12px;
     align-content: center;
   }
@@ -665,22 +698,28 @@ export default {
   .stat-mini-card {
     background: rgba(255, 255, 255, 0.82);
     backdrop-filter: blur(10px);
-    border-radius: 18px;
-    padding: 14px 20px;
+    border-radius: 20px;
+    padding: 16px 20px;
     display: flex;
     align-items: center;
     gap: 16px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.6);
+    transition: all 0.3s;
     
+    &:hover {
+      border-color: rgba(102, 126, 234, 0.2);
+      background: rgba(255, 255, 255, 0.95);
+    }
+
     .stat-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 12px;
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 16px;
+      font-size: 18px;
       
       &.req { background: rgba(54, 207, 201, 0.1); color: #36cfc9; }
       &.cost { background: rgba(245, 34, 45, 0.1); color: #f5222d; }
@@ -689,57 +728,85 @@ export default {
     }
 
     .stat-body {
-      .stat-v { font-size: 18px; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
-      .stat-l { font-size: 12px; color: #8c8c8c; }
+      .stat-v { font-size: 19px; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
+      .stat-l { font-size: 12px; color: #8c8c8c; font-weight: 500; }
     }
   }
 
-  .image-credit-tip {
-    margin: 20px 24px 0;
-
-    /deep/ .ant-alert {
-      border-radius: 16px;
-      border: none;
-      background: rgba(255, 255, 255, 0.82);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.03);
+  /* Image Credit & Package Cards */
+  .image-credit-card, .package-card {
+    flex: 1 1 300px;
+    min-width: 280px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    
+    .card-content {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
     }
 
-    .image-credit-balance {
-      margin-top: 12px;
-      color: #475569;
-      font-size: 14px;
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      
+      .info-icon { color: #667eea; font-size: 18px; }
+      .package-icon { color: #facc15; font-size: 20px; }
+      .card-title { font-size: 16px; font-weight: 700; color: #1e293b; }
+    }
 
-      strong {
-        color: #7c3aed;
-        font-size: 18px;
+    .card-desc {
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.5;
+      margin-bottom: 16px;
+      flex-grow: 1;
+    }
+
+    .image-credit-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 12px;
+      border-top: 1px dashed rgba(0, 0, 0, 0.05);
+      
+      .label { font-size: 12px; color: #94a3b8; font-weight: 500; }
+      .value { font-size: 20px; font-weight: 800; color: #7c3aed; }
+    }
+  }
+
+  .package-card {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(102, 126, 234, 0.05) 100%);
+    
+    .package-info {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      
+      .info-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        
+        .label { color: #94a3b8; }
+        .val { color: #475569; font-weight: 600; }
+        
+        &.highlight {
+          margin-top: 4px;
+          padding: 8px 12px;
+          background: rgba(102, 126, 234, 0.1);
+          border-radius: 12px;
+          .label { color: #667eea; font-weight: 600; }
+          .val { color: #667eea; font-size: 15px; font-weight: 800; }
+        }
       }
     }
-  }
-
-  .package-summary {
-    margin: 16px 24px 0;
-    padding: 16px 20px;
-    border-radius: 18px;
-    background: rgba(102, 126, 234, 0.08);
-    border: 1px solid rgba(102, 126, 234, 0.15);
-  }
-
-  .package-summary__title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 16px;
-    font-weight: 700;
-    color: #1f2d3d;
-  }
-
-  .package-summary__meta {
-    margin-top: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px 18px;
-    color: #5c6b77;
-    font-size: 13px;
   }
 
   /* ===== Content Section ===== */

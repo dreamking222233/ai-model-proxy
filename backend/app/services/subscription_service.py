@@ -4,7 +4,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
@@ -121,6 +121,38 @@ class SubscriptionService:
         }
 
     @staticmethod
+    def _active_status_filter():
+        return or_(
+            UserSubscription.status == "active",
+            UserSubscription.status.is_(None),
+            UserSubscription.status == "",
+        )
+
+    @staticmethod
+    def _normalized_subscription_status(
+        subscription: UserSubscription,
+        now: Optional[datetime] = None,
+    ) -> str:
+        usage_now = now or SubscriptionService.get_current_time()
+        raw_status = (subscription.status or "").strip().lower()
+        if raw_status == "cancelled":
+            return "cancelled"
+        if subscription.end_time and subscription.end_time < usage_now:
+            return "expired"
+        return "active"
+
+    @staticmethod
+    def _is_effectively_active(
+        subscription: UserSubscription,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        usage_now = now or SubscriptionService.get_current_time()
+        return (
+            SubscriptionService._normalized_subscription_status(subscription, usage_now) == "active"
+            and subscription.start_time <= usage_now <= subscription.end_time
+        )
+
+    @staticmethod
     def _default_subscription_summary() -> dict:
         return {
             "subscription_type": "balance",
@@ -142,18 +174,24 @@ class SubscriptionService:
             return ZoneInfo(SubscriptionService.DEFAULT_TIMEZONE)
 
     @staticmethod
+    def get_current_time(tz_name: Optional[str] = None) -> datetime:
+        zone = SubscriptionService._resolve_zoneinfo(tz_name or SubscriptionService.DEFAULT_TIMEZONE)
+        return datetime.now(zone).replace(tzinfo=None)
+
+    @staticmethod
     def _get_cycle_window(
-        now_utc: datetime,
+        now_local: datetime,
         tz_name: Optional[str],
     ) -> tuple[date, datetime, datetime]:
+        storage_zone = SubscriptionService._resolve_zoneinfo(SubscriptionService.DEFAULT_TIMEZONE)
         zone = SubscriptionService._resolve_zoneinfo(tz_name)
-        aware_now = now_utc.replace(tzinfo=timezone.utc)
-        local_now = aware_now.astimezone(zone)
-        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        local_end = local_start + timedelta(days=1)
-        start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
-        end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
-        return local_now.date(), start_utc, end_utc
+        aware_now = now_local.replace(tzinfo=storage_zone)
+        target_now = aware_now.astimezone(zone)
+        target_start = target_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        target_end = target_start + timedelta(days=1)
+        start_local = target_start.astimezone(storage_zone).replace(tzinfo=None)
+        end_local = target_end.astimezone(storage_zone).replace(tzinfo=None)
+        return target_now.date(), start_local, end_local
 
     @staticmethod
     def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
@@ -359,7 +397,7 @@ class SubscriptionService:
             "activation_mode": subscription.activation_mode,
             "start_time": subscription.start_time.isoformat() if subscription.start_time else None,
             "end_time": subscription.end_time.isoformat() if subscription.end_time else None,
-            "status": subscription.status,
+            "status": SubscriptionService._normalized_subscription_status(subscription),
             "created_by": subscription.created_by,
             "activated_at": subscription.activated_at.isoformat() if subscription.activated_at else None,
             "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
@@ -495,7 +533,7 @@ class SubscriptionService:
         expired_subs = (
             db.query(UserSubscription)
             .filter(
-                UserSubscription.status == "active",
+                SubscriptionService._active_status_filter(),
                 UserSubscription.end_time < now,
             )
             .all()
@@ -510,13 +548,13 @@ class SubscriptionService:
         user_id: int,
         now: Optional[datetime] = None,
     ) -> Optional[UserSubscription]:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         SubscriptionService._expire_due_subscriptions(db, usage_now)
         return (
             db.query(UserSubscription)
             .filter(
                 UserSubscription.user_id == user_id,
-                UserSubscription.status == "active",
+                SubscriptionService._active_status_filter(),
                 UserSubscription.start_time <= usage_now,
                 UserSubscription.end_time >= usage_now,
             )
@@ -530,7 +568,7 @@ class SubscriptionService:
         user_id: int,
         now: Optional[datetime] = None,
     ) -> Optional[UserSubscription]:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
@@ -557,7 +595,7 @@ class SubscriptionService:
         now: Optional[datetime] = None,
         lock: bool = False,
     ) -> SubscriptionUsageCycle:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
             usage_now,
             subscription.reset_timezone,
@@ -594,7 +632,7 @@ class SubscriptionService:
         subscription: UserSubscription,
         now: Optional[datetime] = None,
     ) -> dict:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
             usage_now,
             subscription.reset_timezone,
@@ -629,7 +667,7 @@ class SubscriptionService:
         user_id: int,
         now: Optional[datetime] = None,
     ) -> dict:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         active_subscription = SubscriptionService.resolve_active_subscription(db, user_id, usage_now)
         if not active_subscription:
             return SubscriptionService._default_subscription_summary()
@@ -658,7 +696,7 @@ class SubscriptionService:
         user: SysUser,
         now: Optional[datetime] = None,
     ) -> dict:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         active_subscription = SubscriptionService.resolve_active_subscription(db, user.id, usage_now)
         if not active_subscription:
             raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
@@ -687,7 +725,7 @@ class SubscriptionService:
         total_cost: float,
         now: Optional[datetime] = None,
     ) -> dict:
-        usage_now = now or datetime.utcnow()
+        usage_now = now or SubscriptionService.get_current_time()
         cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now, lock=True)
 
         quota_metric = subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS
@@ -728,6 +766,7 @@ class SubscriptionService:
         reset_period: str = DEFAULT_RESET_PERIOD,
         reset_timezone: str = DEFAULT_TIMEZONE,
     ) -> UserSubscription:
+        current_time = SubscriptionService.get_current_time()
         return UserSubscription(
             user_id=user_id,
             plan_id=plan_id,
@@ -745,7 +784,7 @@ class SubscriptionService:
             end_time=end_time,
             status="active",
             created_by=operator_id,
-            activated_at=start_time if start_time <= datetime.utcnow() else None,
+            activated_at=start_time if start_time <= current_time else None,
         )
 
     @staticmethod
@@ -764,7 +803,7 @@ class SubscriptionService:
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-        start_time = datetime.utcnow()
+        start_time = SubscriptionService.get_current_time()
         current_active = SubscriptionService.resolve_active_subscription(db, user_id, start_time)
         if current_active and current_active.end_time > start_time:
             start_time = current_active.end_time
@@ -784,7 +823,7 @@ class SubscriptionService:
             quota_value=Decimal("0"),
         )
         db.add(subscription)
-        SubscriptionService.refresh_user_subscription_state(db, user_id, datetime.utcnow())
+        SubscriptionService.refresh_user_subscription_state(db, user_id, SubscriptionService.get_current_time())
         db.commit()
         db.refresh(subscription)
         return SubscriptionService._serialize_subscription(subscription)
@@ -809,7 +848,7 @@ class SubscriptionService:
         if activation_mode not in {"append", "override"}:
             raise ServiceException(400, "Invalid activation mode", "INVALID_ACTIVATION_MODE")
 
-        now = datetime.utcnow()
+        now = SubscriptionService.get_current_time()
         current_active = SubscriptionService.resolve_active_subscription(db, user_id, now)
         start_time = now
         if activation_mode == "append" and current_active and current_active.end_time > now:
@@ -848,12 +887,12 @@ class SubscriptionService:
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-        now = datetime.utcnow()
+        now = SubscriptionService.get_current_time()
         active_subs = (
             db.query(UserSubscription)
             .filter(
                 UserSubscription.user_id == user_id,
-                UserSubscription.status == "active",
+                SubscriptionService._active_status_filter(),
                 UserSubscription.end_time >= now,
             )
             .all()
@@ -886,12 +925,12 @@ class SubscriptionService:
             .all()
         )
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
-        usage_now = datetime.utcnow()
+        usage_now = SubscriptionService.get_current_time()
         result = []
         for subscription in subscriptions:
             current_cycle = None
             if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
-                if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+                if SubscriptionService._is_effectively_active(subscription, usage_now):
                     current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
             result.append(
                 SubscriptionService._serialize_subscription(
@@ -911,7 +950,10 @@ class SubscriptionService:
     ) -> tuple[list[dict], int]:
         query = db.query(UserSubscription, SysUser).join(SysUser, UserSubscription.user_id == SysUser.id)
         if status:
-            query = query.filter(UserSubscription.status == status)
+            if status == "active":
+                query = query.filter(SubscriptionService._active_status_filter())
+            else:
+                query = query.filter(UserSubscription.status == status)
         total = query.count()
         rows = (
             query.order_by(UserSubscription.id.desc())
@@ -921,12 +963,12 @@ class SubscriptionService:
         )
         subscriptions = [sub for sub, _ in rows]
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
-        usage_now = datetime.utcnow()
+        usage_now = SubscriptionService.get_current_time()
         result = []
         for subscription, user in rows:
             current_cycle = None
             if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
-                if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+                if SubscriptionService._is_effectively_active(subscription, usage_now):
                     current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
             result.append(
                 SubscriptionService._serialize_subscription(
@@ -961,8 +1003,8 @@ class SubscriptionService:
         )
         current_cycle = None
         if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
-            usage_now = datetime.utcnow()
-            if subscription.status == "active" and subscription.start_time <= usage_now <= subscription.end_time:
+            usage_now = SubscriptionService.get_current_time()
+            if SubscriptionService._is_effectively_active(subscription, usage_now):
                 current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
 
         query = db.query(ConsumptionRecord).filter(
@@ -993,11 +1035,11 @@ class SubscriptionService:
 
     @staticmethod
     def check_and_expire_subscriptions(db: Session) -> int:
-        now = datetime.utcnow()
+        now = SubscriptionService.get_current_time()
         expired_subs = (
             db.query(UserSubscription)
             .filter(
-                UserSubscription.status == "active",
+                SubscriptionService._active_status_filter(),
                 UserSubscription.end_time < now,
             )
             .all()
@@ -1006,7 +1048,7 @@ class SubscriptionService:
         expired_count = SubscriptionService._expire_due_subscriptions(db, now)
         user_ids = {
             row[0]
-            for row in db.query(UserSubscription.user_id).filter(UserSubscription.status == "active").distinct().all()
+            for row in db.query(UserSubscription.user_id).filter(SubscriptionService._active_status_filter()).distinct().all()
         }
         user_ids.update(expired_user_ids)
         for user_id in user_ids:

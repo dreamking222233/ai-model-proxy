@@ -114,14 +114,25 @@ class ProxyService:
     @staticmethod
     def _assert_text_request_allowed(db: Session, user: SysUser) -> None:
         """Validate whether a text request can proceed under the user's current billing mode."""
-        if user.subscription_type == "balance":
-            balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-            if not balance or balance.balance <= 0:
-                raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        had_subscription_cache = user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at)
+        active_subscription = SubscriptionService.refresh_user_subscription_state(
+            db,
+            user.id,
+            SubscriptionService.get_current_time(),
+        )
+        if active_subscription:
+            if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+                SubscriptionService.check_quota_before_request(db, user)
             return
 
-        if user.subscription_type == "quota":
-            SubscriptionService.check_quota_before_request(db, user)
+        balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
+        if balance and balance.balance > 0:
+            return
+
+        if had_subscription_cache:
+            raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
+
+        raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
 
     @staticmethod
     def _build_model_identity_prompt(requested_model: str) -> str:
@@ -6786,7 +6797,7 @@ class ProxyService:
         write request log and consumption record, and update API key usage stats.
         """
         try:
-            usage_now = datetime.utcnow()
+            usage_now = SubscriptionService.get_current_time()
             raw_input_tokens = int(input_tokens or 0)
             raw_output_tokens = int(output_tokens or 0)
             raw_total_tokens = raw_input_tokens + raw_output_tokens

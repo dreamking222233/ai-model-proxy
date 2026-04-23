@@ -131,7 +131,10 @@ def verify_api_key_from_headers(
 
     # Check subscription expiration for non-balance plan users
     if user.subscription_type in {"unlimited", "quota"}:
-        if not user.subscription_expires_at or user.subscription_expires_at < datetime.utcnow():
+        from app.services.subscription_service import SubscriptionService
+
+        current_time = SubscriptionService.get_current_time()
+        if not user.subscription_expires_at or user.subscription_expires_at < current_time:
             raise ServiceException(status_code=403, detail="套餐已过期，请续费或充值余额", error_code="SUBSCRIPTION_EXPIRED")
 
     return user, api_key_record

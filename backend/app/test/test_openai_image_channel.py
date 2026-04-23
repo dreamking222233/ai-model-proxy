@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.health_service import _resolve_health_target
+from app.core.exceptions import ServiceException
 from app.services.proxy_service import ProxyService
 
 
@@ -34,6 +35,16 @@ class OpenAIImagePromptAdaptationTest(unittest.TestCase):
             "http://43.156.153.12:3000/v1/images/generations",
         )
 
+    def test_resolve_openai_image_edit_url_supports_root_and_v1_base(self):
+        self.assertEqual(
+            ProxyService._resolve_openai_image_edit_url("http://43.156.153.12:3000"),
+            "http://43.156.153.12:3000/v1/images/edits",
+        )
+        self.assertEqual(
+            ProxyService._resolve_openai_image_edit_url("http://43.156.153.12:3000/v1"),
+            "http://43.156.153.12:3000/v1/images/edits",
+        )
+
 
 class OpenAIImageBillingCompatibilityTest(unittest.TestCase):
     @patch("app.services.proxy_service.ModelService.resolve_image_resolution_rule", return_value=None)
@@ -49,6 +60,12 @@ class OpenAIImageBillingCompatibilityTest(unittest.TestCase):
 
         self.assertEqual(image_size, "2K")
         self.assertEqual(credit_cost, Decimal("1.500"))
+
+    def test_validate_single_image_count_rejects_invalid_string(self):
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._validate_single_image_count({"n": "abc"})
+
+        self.assertEqual(ctx.exception.error_code, "IMAGE_COUNT_NOT_SUPPORTED")
 
 
 class OpenAIImageRoutingTest(unittest.IsolatedAsyncioTestCase):
@@ -89,6 +106,38 @@ class OpenAIImageRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "openai-image-response")
         mock_openai_request.assert_awaited_once()
         mock_google_request.assert_not_awaited()
+
+    @patch(
+        "app.services.proxy_service.ProxyService._non_stream_openai_image_edit_request",
+        new_callable=AsyncMock,
+    )
+    async def test_non_stream_image_edit_request_routes_openai_image_channel(
+        self,
+        mock_openai_edit_request,
+    ):
+        mock_openai_edit_request.return_value = "openai-image-edit-response"
+        channel = SimpleNamespace(
+            protocol_type="openai",
+            provider_variant="openai-image-compatible",
+        )
+
+        result = await ProxyService._non_stream_image_edit_request(
+            SimpleNamespace(),
+            SimpleNamespace(id=1),
+            SimpleNamespace(id=2),
+            channel,
+            SimpleNamespace(id=3),
+            {"prompt": "edit", "image": {"content": b"123"}},
+            "req-2",
+            "gpt-image-2",
+            "gpt-image-2",
+            "127.0.0.1",
+            Decimal("0.500"),
+            image_size="1K",
+        )
+
+        self.assertEqual(result, "openai-image-edit-response")
+        mock_openai_edit_request.assert_awaited_once()
 
 
 class OpenAIImageHealthTargetTest(unittest.TestCase):

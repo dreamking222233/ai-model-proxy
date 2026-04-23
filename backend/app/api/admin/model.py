@@ -153,7 +153,7 @@ def get_channels_models(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    """Return all enabled channels with their mapped chat models.
+    """Return all enabled channels with their mapped chat/image models.
     Used by admin chat page for channel+model two-level selection.
     """
     channels = (
@@ -172,7 +172,7 @@ def get_channels_models(
                 ModelChannelMapping.channel_id == ch.id,
                 ModelChannelMapping.enabled == 1,
                 UnifiedModel.enabled == 1,
-                UnifiedModel.model_type == "chat",
+                UnifiedModel.model_type.in_(("chat", "image")),
             )
             .all()
         )
@@ -182,12 +182,33 @@ def get_channels_models(
             um = db.query(UnifiedModel).filter(UnifiedModel.id == mp.unified_model_id).first()
             if um:
                 actual = mp.actual_model_name or ""
-                api_type = "anthropic" if actual.startswith("responses:") else "openai"
+                api_type = "openai"
+                if um.model_type == "chat":
+                    api_type = "anthropic" if actual.startswith("responses:") else "openai"
                 models.append({
                     "model_name": um.model_name,
                     "display_name": um.display_name or um.model_name,
                     "actual_model_name": mp.actual_model_name,
                     "api_type": api_type,
+                    "model_type": um.model_type,
+                    "protocol_type": um.protocol_type,
+                    "billing_type": um.billing_type,
+                    "image_credit_multiplier": float(um.image_credit_multiplier or 1),
+                    "image_resolution_rules": (
+                        ModelService.list_image_resolution_rules(db, um.id)
+                        if um.model_type == "image" and um.protocol_type == "google"
+                        else []
+                    ),
+                    "image_size_capabilities": (
+                        list(ModelService.get_image_resolution_capabilities(um.model_name))
+                        if um.model_type == "image"
+                        else []
+                    ),
+                    "supports_image_edit": (
+                        ModelService.supports_image_edit(um.model_name)
+                        if um.model_type == "image"
+                        else False
+                    ),
                 })
 
         if models:

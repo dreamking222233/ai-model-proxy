@@ -33,6 +33,9 @@ class ModelService:
     PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "gpt-image-2": ("512", "1K", "2K", "4K"),
     }
+    IMAGE_EDIT_CAPABILITIES: set[str] = {
+        "gpt-image-2",
+    }
 
     @staticmethod
     def _decimal_to_float(value, default: float = 0.0) -> float:
@@ -68,6 +71,10 @@ class ModelService:
             or ModelService.PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
             or ()
         )
+
+    @staticmethod
+    def supports_image_edit(model_name: str) -> bool:
+        return str(model_name or "") in ModelService.IMAGE_EDIT_CAPABILITIES
 
     @staticmethod
     def _normalize_credit_decimal(value: object, field_name: str = "credit_cost") -> Decimal:

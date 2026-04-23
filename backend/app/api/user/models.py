@@ -61,14 +61,14 @@ def list_chat_models(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """Return enabled chat-type models for the AI chat page."""
+    """Return enabled chat/image models for the AI chat page."""
     models = (
         db.query(UnifiedModel)
         .filter(
             UnifiedModel.enabled == 1,
-            UnifiedModel.model_type == "chat",
+            UnifiedModel.model_type.in_(("chat", "image")),
         )
-        .order_by(UnifiedModel.model_name)
+        .order_by(UnifiedModel.model_type, UnifiedModel.model_name)
         .all()
     )
 
@@ -84,19 +84,18 @@ def list_chat_models(
             )
             .all()
         )
-        has_chat_completions = False
-        has_any = False
-        for mp in mappings:
-            has_any = True
-            actual = mp.actual_model_name or ""
-            if not actual.startswith("responses:"):
-                has_chat_completions = True
-                break
-
-        if not has_any:
+        if not mappings:
             continue
 
-        api_type = "openai" if has_chat_completions else "anthropic"
+        api_type = "openai"
+        if m.model_type == "chat":
+            has_chat_completions = False
+            for mp in mappings:
+                actual = mp.actual_model_name or ""
+                if not actual.startswith("responses:"):
+                    has_chat_completions = True
+                    break
+            api_type = "openai" if has_chat_completions else "anthropic"
 
         result.append({
             "id": m.id,
@@ -106,6 +105,23 @@ def list_chat_models(
             "protocol_type": m.protocol_type,
             "max_tokens": m.max_tokens,
             "api_type": api_type,
+            "billing_type": m.billing_type,
+            "image_credit_multiplier": float(m.image_credit_multiplier or 1),
+            "image_resolution_rules": (
+                ModelService.list_image_resolution_rules(db, m.id)
+                if m.model_type == "image" and m.protocol_type == "google"
+                else []
+            ),
+            "image_size_capabilities": (
+                list(ModelService.get_image_resolution_capabilities(m.model_name))
+                if m.model_type == "image"
+                else []
+            ),
+            "supports_image_edit": (
+                ModelService.supports_image_edit(m.model_name)
+                if m.model_type == "image"
+                else False
+            ),
         })
 
     return ResponseModel(data=result)

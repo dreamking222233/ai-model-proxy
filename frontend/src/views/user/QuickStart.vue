@@ -208,7 +208,7 @@
                 </div>
               </a-tab-pane>
 
-              <a-tab-pane key="images" tab="生图接口">
+              <a-tab-pane key="images" tab="图片接口">
                 <div class="protocol-box">
                   <div class="endpoint-line">
                     <span class="e-method green">POST</span>
@@ -218,12 +218,17 @@
                     <span class="e-method green">POST</span>
                     <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
                   </div>
+                  <div class="endpoint-line endpoint-line-secondary">
+                    <span class="e-method gold">POST</span>
+                    <code class="e-url">{{ relayOpenaiBase }}/image/edit</code>
+                  </div>
                   <p class="api-doc-intro">
-                    两个接口都可用于调用 Gemini 生图模型，均为非流式 HTTP 调用。推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
+                    前两个接口用于文生图，均为非流式 HTTP 调用；<code>/v1/image/edit</code> 用于上传图片后进行编辑。
+                    推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
                   </p>
                   <p class="api-doc-intro">
                     当前支持的模型为 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、<code>gemini-3-pro-image-preview</code>，
-                    分别按 <code>1</code>、<code>2</code>、<code>3</code> 积分/次计费。
+                    分别按 <code>1</code>、<code>2</code>、<code>3</code> 积分/次计费；<code>gpt-image-2</code> 支持文生图与图片编辑，统一按 <code>0.5</code> 图片积分/次计费。
                   </p>
                   <div class="code-editor-block">
                     <div class="editor-content">
@@ -241,6 +246,32 @@
                         <span>说明</span>
                       </div>
                       <div v-for="item in imageRequestFields" :key="item.name" class="api-doc-row api-doc-row-req">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.required }}</span>
+                        <span>{{ item.description }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">编辑图片示例</div>
+                    <div class="code-editor-block">
+                      <div class="editor-content">
+                        <a-icon :type="copyStates['img-edit-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditCurlCode, 'img-edit-curl')" />
+                        <pre><code>{{ imageEditCurlCode }}</code></pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">编辑接口参数</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-req">
+                        <span>参数</span>
+                        <span>必填</span>
+                        <span>说明</span>
+                      </div>
+                      <div v-for="item in imageEditRequestFields" :key="item.name" class="api-doc-row api-doc-row-req">
                         <span><code>{{ item.name }}</code></span>
                         <span>{{ item.required }}</span>
                         <span>{{ item.description }}</span>
@@ -274,7 +305,17 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="生图接口不支持 stream；图片以 b64_json 返回，需要业务侧自行 base64 解码保存。每次调用会按模型倍率扣除图片积分。" type="warning" class="mini-alert" />
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">编辑响应示例</div>
+                    <div class="code-editor-block">
+                      <div class="editor-content">
+                        <a-icon :type="copyStates['img-edit-res'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(imageEditResponseCode, 'img-edit-res')" />
+                        <pre><code>{{ imageEditResponseCode }}</code></pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <a-alert message="注意" description="图片接口不支持 stream；生成与编辑都会以 b64_json 返回，需要业务侧自行 base64 解码保存。编辑接口使用 multipart/form-data 上传图片；当前 `n` 固定为 1。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -441,7 +482,7 @@ print(msg.content[0].text)`
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{
-    "model": "gemini-2.5-flash-image",
+    "model": "gpt-image-2",
     "prompt": "生成一张赛博朋克风格的城市夜景海报",
     "response_format": "b64_json",
     "image_size": "1K",
@@ -449,36 +490,59 @@ print(msg.content[0].text)`
     "n": 1
   }'`
     },
+    imageEditCurlCode() {
+      return `curl -X POST "${this.relayOpenaiBase}/image/edit" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -F "model=gpt-image-2" \\
+  -F "prompt=把这张图片改成赛博朋克风格，增强霓虹灯与夜景氛围" \\
+  -F "image=@input.png" \\
+  -F "response_format=b64_json" \\
+  -F "image_size=1K" \\
+  -F "aspect_ratio=1:1" \\
+  -F "n=1"`
+    },
     imageRequestFields() {
       return [
-        { name: 'model', required: '是', description: '要调用的生图模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview 或 gemini-3-pro-image-preview。' },
+        { name: 'model', required: '是', description: '要调用的图片模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 或 gpt-image-2。' },
         { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
         { name: 'response_format', required: '否', description: '返回格式，当前仅支持 b64_json。建议固定传 b64_json。' },
-        { name: 'image_size', required: '否', description: 'Google 官方分辨率参数，支持 512、1K、2K、4K；不同模型支持档位不同。' },
-        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16。' },
+        { name: 'image_size', required: '否', description: '图片分辨率档位参数，支持 512、1K、2K、4K；Google 模型会映射为原生分辨率，gpt-image-2 会通过提示词适配。' },
+        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16；gpt-image-2 会通过提示词适配。' },
         { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，系统会透传为 Google imageSize。' },
         { name: 'size', required: '否', description: '兼容参数。若传 512/1K/2K/4K，会按分辨率处理；若传 1024x1024 等旧尺寸，会尝试映射为 aspect_ratio。' },
-        { name: 'n', required: '否', description: '期望图片数量。建议传 1。' },
+        { name: 'n', required: '否', description: '期望图片数量。当前统一固定为 1。' },
         { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
+      ]
+    },
+    imageEditRequestFields() {
+      return [
+        { name: 'model', required: '是', description: '当前编辑图片请传支持该能力的模型，例如 gpt-image-2。' },
+        { name: 'prompt', required: '是', description: '编辑说明，描述你希望对原图进行的修改。' },
+        { name: 'image', required: '是', description: '待编辑的原图文件，通过 multipart/form-data 上传。' },
+        { name: 'response_format', required: '否', description: '当前仅支持 b64_json，建议固定传 b64_json。' },
+        { name: 'image_size', required: '否', description: '图片细节档位提示，支持 512、1K、2K、4K。gpt-image-2 会通过提示词适配。' },
+        { name: 'aspect_ratio', required: '否', description: '目标构图比例，例如 1:1、16:9、9:16。gpt-image-2 会通过提示词适配。' },
+        { name: 'n', required: '否', description: '当前统一固定为 1。' }
       ]
     },
     imageResponseFields() {
       return [
         { name: 'created', description: '响应创建时间戳。', example: '1710000000' },
-        { name: 'model', description: '本次请求使用的模型名。', example: 'gemini-2.5-flash-image' },
+        { name: 'model', description: '本次请求使用的模型名。', example: 'gpt-image-2' },
         { name: 'request_id', description: '平台生成的请求 ID，可用于排查日志。', example: 'uuid' },
         { name: 'data[].b64_json', description: '图片的 Base64 内容，需要业务侧自行解码。', example: 'iVBORw0KGgoAAA...' },
         { name: 'data[].mime_type', description: '图片 MIME 类型。', example: 'image/png' },
         { name: 'usage.image_size', description: '本次请求生效的图片分辨率档位。', example: '1K' },
-        { name: 'usage.billing_type', description: '计费类型。生图接口为 image_credit。', example: 'image_credit' },
-        { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分次数。', example: '1' },
-        { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '1' }
+        { name: 'usage.billing_type', description: '计费类型。图片接口统一为 image_credit。', example: 'image_credit' },
+        { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分。', example: '0.5' },
+        { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '0.5' },
+        { name: 'usage.request_type', description: '本次调用类型，区分文生图与图片编辑。', example: 'image_edit' }
       ]
     },
     imageResponseCode() {
       return `{
   "created": 1710000000,
-  "model": "gemini-2.5-flash-image",
+  "model": "gpt-image-2",
   "request_id": "550e8400-e29b-41d4-a716-446655440000",
   "data": [
     {
@@ -489,8 +553,29 @@ print(msg.content[0].text)`
   "usage": {
     "image_size": "1K",
     "billing_type": "image_credit",
-    "image_credits_charged": 1,
-    "model_multiplier": 1
+    "image_credits_charged": 0.5,
+    "model_multiplier": 0.5,
+    "request_type": "image_generation"
+  }
+}`
+    },
+    imageEditResponseCode() {
+      return `{
+  "created": 1710000000,
+  "model": "gpt-image-2",
+  "request_id": "550e8400-e29b-41d4-a716-446655440001",
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...",
+      "mime_type": "image/png"
+    }
+  ],
+  "usage": {
+    "image_size": "1K",
+    "billing_type": "image_credit",
+    "image_credits_charged": 0.5,
+    "model_multiplier": 0.5,
+    "request_type": "image_edit"
   }
 }`
     },

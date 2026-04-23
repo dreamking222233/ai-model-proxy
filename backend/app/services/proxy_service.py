@@ -7191,6 +7191,13 @@ class ProxyService:
         return f"{normalized}/v1/images/generations"
 
     @staticmethod
+    def _resolve_openai_image_edit_url(base_url: str) -> str:
+        normalized = str(base_url or "").rstrip("/")
+        if normalized.endswith("/v1"):
+            return f"{normalized}/images/edits"
+        return f"{normalized}/v1/images/edits"
+
+    @staticmethod
     def _resolve_image_billing_rule(
         db: Session,
         unified_model: UnifiedModel,
@@ -7271,6 +7278,15 @@ class ProxyService:
         )
 
     @staticmethod
+    def _validate_single_image_count(request_data: dict) -> None:
+        try:
+            requested_n = int(request_data.get("n", 1) or 1)
+        except (TypeError, ValueError):
+            raise ServiceException(400, "Invalid n parameter", "IMAGE_COUNT_NOT_SUPPORTED")
+        if requested_n != 1:
+            raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
+
+    @staticmethod
     def _build_openai_image_prompt(
         prompt: str,
         image_size: Optional[str] = None,
@@ -7302,6 +7318,24 @@ class ProxyService:
             "额外生成要求：\n"
             + "\n".join(f"- {item}" for item in hints)
             + "\n- 保持原始提示词的主体、风格和核心意图不变。"
+        )
+
+    @staticmethod
+    def _build_openai_image_edit_prompt(
+        prompt: str,
+        image_size: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+    ) -> str:
+        base_prompt = ProxyService._build_openai_image_prompt(
+            prompt,
+            image_size=image_size,
+            aspect_ratio=aspect_ratio,
+        )
+        if not base_prompt:
+            return ""
+        return (
+            f"{base_prompt}\n"
+            "- 在未明确要求修改的部分，尽量保留原图主体、构图关系和关键视觉元素。"
         )
 
     @staticmethod
@@ -7347,6 +7381,7 @@ class ProxyService:
         images: list[dict],
         charged_credits: Decimal,
         image_size: Optional[str],
+        request_type: str = "image_generation",
         extra_text: Optional[str] = None,
     ) -> dict:
         response_payload = {
@@ -7359,6 +7394,7 @@ class ProxyService:
                 "image_credits_charged": float(charged_credits),
                 "model_multiplier": float(charged_credits),
                 "image_size": image_size,
+                "request_type": request_type,
             },
         }
         if extra_text:
@@ -7380,7 +7416,9 @@ class ProxyService:
         charged_credits: Decimal,
         image_size: Optional[str] = None,
         image_count: int = 1,
+        request_type: str = "image_generation",
     ) -> None:
+        request_type_label = "Image edit" if request_type == "image_edit" else "Image generation"
         ImageCreditService.deduct_for_request(
             db,
             user_id=user.id,
@@ -7389,7 +7427,7 @@ class ProxyService:
             amount=charged_credits,
             multiplier=charged_credits,
             image_size=image_size,
-            remark=f"Image generation: {image_count} image(s)",
+            remark=f"{request_type_label}: {image_count} image(s)",
         )
         req_log = RequestLog(
             request_id=request_id,
@@ -7400,7 +7438,7 @@ class ProxyService:
             requested_model=requested_model,
             actual_model=actual_model,
             protocol_type=channel.protocol_type,
-            request_type="image_generation",
+            request_type=request_type,
             billing_type="image_credit",
             is_stream=0,
             input_tokens=0,
@@ -7481,6 +7519,7 @@ class ProxyService:
                 charged_credits=charged_credits,
                 image_size=image_size,
                 image_count=len(images),
+                request_type="image_generation",
             )
             db.commit()
         except ServiceException:
@@ -7501,6 +7540,7 @@ class ProxyService:
             images,
             charged_credits,
             image_size,
+            request_type="image_generation",
             extra_text=extra_text,
         )
         return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
@@ -7583,6 +7623,7 @@ class ProxyService:
                 charged_credits=charged_credits,
                 image_size=image_size,
                 image_count=len(images),
+                request_type="image_generation",
             )
             db.commit()
         except ServiceException:
@@ -7603,6 +7644,118 @@ class ProxyService:
             images,
             charged_credits,
             image_size,
+            request_type="image_generation",
+            extra_text=extra_text,
+        )
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_openai_image_edit_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        start_time = time.time()
+        image_file = request_data.get("image") or {}
+        image_content = image_file.get("content")
+        if not image_content:
+            raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
+
+        base_url = channel.base_url.rstrip("/")
+        url = ProxyService._resolve_openai_image_edit_url(base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        headers.pop("Content-Type", None)
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
+        files = {
+            "image": (
+                image_file.get("filename") or "upload.png",
+                image_content,
+                image_file.get("content_type") or "application/octet-stream",
+            ),
+            "model": (None, upstream_model_name),
+            "prompt": (
+                None,
+                ProxyService._build_openai_image_edit_prompt(
+                    prompt,
+                    image_size=image_size,
+                    aspect_ratio=aspect_ratio,
+                ),
+            ),
+            "n": (None, "1"),
+            "response_format": (None, "b64_json"),
+        }
+
+        timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, files=files, headers=headers)
+        if response.status_code != 200:
+            body_text = response.text[:1000]
+            raise ServiceException(
+                400 if 400 <= response.status_code < 500 else 503,
+                f"OpenAI image edit failed: HTTP {response.status_code} {body_text}",
+                "OPENAI_IMAGE_EDIT_FAILED",
+            )
+        response_body = response.json()
+
+        images, extra_text = ProxyService._parse_openai_image_response(response_body)
+        if not images:
+            raise ServiceException(
+                503,
+                "OpenAI image edit returned no image data",
+                "OPENAI_IMAGE_EDIT_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=charged_credits,
+                image_size=image_size,
+                image_count=len(images),
+                request_type="image_edit",
+            )
+            db.commit()
+        except ServiceException:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.error("OpenAI image edit billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片编辑成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
+
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            charged_credits,
+            image_size,
+            request_type="image_edit",
             extra_text=extra_text,
         )
         return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
@@ -7657,6 +7810,7 @@ class ProxyService:
                 charged_credits=charged_credits,
                 image_size=image_size,
                 image_count=len(images),
+                request_type="image_generation",
             )
             db.commit()
         except ServiceException:
@@ -7677,6 +7831,7 @@ class ProxyService:
             images,
             charged_credits,
             image_size,
+            request_type="image_generation",
             extra_text=extra_text,
         )
         return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
@@ -7750,6 +7905,45 @@ class ProxyService:
         )
 
     @staticmethod
+    async def _non_stream_image_edit_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
+        if protocol_type != "openai":
+            raise ServiceException(
+                400,
+                "Current channel does not support image edit",
+                "IMAGE_EDIT_NOT_SUPPORTED",
+            )
+        return await ProxyService._non_stream_openai_image_edit_request(
+            db,
+            user,
+            api_key_record,
+            channel,
+            unified_model,
+            request_data,
+            request_id,
+            requested_model,
+            upstream_model_name,
+            client_ip,
+            charged_credits,
+            image_size=image_size,
+            request_headers=request_headers,
+        )
+
+    @staticmethod
     async def handle_image_request(
         db: Session,
         user: SysUser,
@@ -7774,8 +7968,7 @@ class ProxyService:
                 "Only b64_json response_format is supported",
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
-        if int(request_data.get("n", 1) or 1) != 1:
-            raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
+        ProxyService._validate_single_image_count(request_data)
 
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
@@ -7883,6 +8076,154 @@ class ProxyService:
             False,
             error_detail,
             request_type="image_generation",
+            billing_type="image_credit",
+            image_credits_charged=0,
+            image_count=0,
+            image_size=image_size,
+        )
+        if request_error:
+            raise request_error
+        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+
+    @staticmethod
+    async def handle_image_edit_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_data: dict,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ):
+        request_id = str(uuid.uuid4())
+        requested_model = str(request_data.get("model", "") or "")
+        if not requested_model:
+            raise ServiceException(400, "Missing required field: model", "IMAGE_MODEL_NOT_FOUND")
+
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        if not prompt:
+            raise ServiceException(400, "Missing required field: prompt", "INVALID_IMAGE_PROMPT")
+        if bool(request_data.get("stream")):
+            raise ServiceException(400, "Image edit does not support stream", "IMAGE_STREAM_NOT_SUPPORTED")
+        if request_data.get("response_format") not in (None, "b64_json"):
+            raise ServiceException(
+                400,
+                "Only b64_json response_format is supported",
+                "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
+            )
+        ProxyService._validate_single_image_count(request_data)
+        image_file = request_data.get("image") or {}
+        if not image_file.get("content"):
+            raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
+
+        unified_model = ModelService.resolve_model(db, requested_model)
+        if not unified_model:
+            raise ServiceException(404, f"Model '{requested_model}' not found", "IMAGE_MODEL_NOT_FOUND")
+        if str(unified_model.model_type or "") != "image":
+            raise ServiceException(400, "Requested model is not an image model", "IMAGE_MODEL_NOT_SUPPORTED")
+        if str(unified_model.billing_type or "token") != "image_credit":
+            raise ServiceException(
+                400,
+                "Requested model is not configured for image credit billing",
+                "IMAGE_MODEL_NOT_SUPPORTED",
+            )
+        if not ModelService.supports_image_edit(unified_model.model_name):
+            raise ServiceException(
+                400,
+                f"Model '{requested_model}' does not support image edit",
+                "IMAGE_EDIT_NOT_SUPPORTED",
+            )
+
+        image_size, image_credit_cost = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
+        ImageCreditService.check_balance(db, user.id, image_credit_cost)
+
+        channels = ModelService.get_available_channels(db, unified_model.id)
+        if not channels:
+            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+
+        last_error: Exception | None = None
+        request_error: ServiceException | None = None
+        non_retryable_request_error_codes = {
+            "INSUFFICIENT_IMAGE_CREDITS",
+            "IMAGE_CREDIT_BALANCE_NOT_FOUND",
+            "INVALID_IMAGE_CREDIT_AMOUNT",
+            "IMAGE_BILLING_FAILED",
+        }
+        for channel, actual_model_name in channels:
+            try:
+                upstream_model_name = actual_model_name or requested_model
+                return await ProxyService._non_stream_image_edit_request(
+                    db,
+                    user,
+                    api_key_record,
+                    channel,
+                    unified_model,
+                    request_data,
+                    request_id,
+                    requested_model,
+                    upstream_model_name,
+                    client_ip,
+                    image_credit_cost,
+                    image_size=image_size,
+                    request_headers=request_headers,
+                )
+            except ServiceException as exc:
+                if exc.error_code in {
+                    "UPSTREAM_INVALID_REQUEST",
+                    "CONTENT_TOO_LONG",
+                    "OPENAI_IMAGE_EDIT_FAILED",
+                    "IMAGE_EDIT_NOT_SUPPORTED",
+                }:
+                    request_error = exc
+                    logger.info(
+                        "Image edit channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name,
+                        channel.id,
+                        exc.detail,
+                    )
+                    continue
+                if exc.error_code in non_retryable_request_error_codes:
+                    request_error = exc
+                    logger.warning(
+                        "Image edit request aborted after upstream success or local validation failure on channel %s (%d): %s",
+                        channel.name,
+                        channel.id,
+                        exc.detail,
+                    )
+                    break
+                raise
+            except Exception as exc:
+                mapped_request_error = ProxyService._map_upstream_request_error(exc)
+                if mapped_request_error:
+                    request_error = mapped_request_error
+                    logger.info(
+                        "Image edit channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name,
+                        channel.id,
+                        mapped_request_error.detail,
+                    )
+                    continue
+                last_error = exc
+                logger.warning(
+                    "Image edit channel %s (%d) failed for model %s: %s",
+                    channel.name,
+                    channel.id,
+                    actual_model_name,
+                    exc,
+                )
+                ProxyService._record_channel_failure(db, channel)
+                continue
+
+        error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
+        ProxyService._log_failed_request(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            requested_model,
+            client_ip,
+            False,
+            error_detail,
+            request_type="image_edit",
             billing_type="image_credit",
             image_credits_charged=0,
             image_count=0,

@@ -40,7 +40,7 @@
           />
         </div>
         <div class="topbar-right">
-          <a-tooltip v-if="!apiKey && !isAdmin" title="需要 API Key 才能对话">
+          <a-tooltip v-if="!apiKey && !isAdmin" title="需要 API Key 才能调用">
             <a-tag color="red" class="apikey-tag">
               <a-icon type="warning" /> 无 API Key
             </a-tag>
@@ -48,6 +48,11 @@
           <a-tooltip v-if="apiKey && !isAdmin" title="API Key 已就绪">
             <a-tag color="green" class="apikey-tag">
               <a-icon type="check-circle" /> 已连接
+            </a-tag>
+          </a-tooltip>
+          <a-tooltip v-if="isImageModel" :title="imageBalanceHint">
+            <a-tag color="gold" class="apikey-tag">
+              <a-icon type="picture" /> 图片积分 {{ formatCredit(imageCreditBalance) }}
             </a-tag>
           </a-tooltip>
           <a-tooltip :title="guideVisible ? '关闭调用指南' : '查看调用方式'">
@@ -69,10 +74,12 @@
         <!-- Welcome screen when no messages -->
         <div v-if="!currentMessages.length" class="welcome-screen">
           <div class="welcome-icon">
-            <a-icon type="robot" />
+            <a-icon :type="isImageModel ? 'picture' : 'robot'" />
           </div>
-          <h2 class="welcome-title">AI 对话</h2>
-          <p class="welcome-desc">选择模型，开始与 AI 对话</p>
+          <h2 class="welcome-title">{{ isImageModel ? 'AI 生图' : 'AI 对话' }}</h2>
+          <p class="welcome-desc">
+            {{ imageWelcomeText }}
+          </p>
         </div>
 
         <!-- Message list -->
@@ -80,6 +87,7 @@
           v-for="(msg, index) in currentMessages"
           :key="index"
           :message="msg"
+          :imageMap="runtimeImageMap"
           :streaming="streaming && index === currentMessages.length - 1 && msg.role === 'assistant'"
         />
 
@@ -92,6 +100,53 @@
 
       <!-- Input area -->
       <div class="chat-input-area">
+        <div v-if="isImageModel" class="image-toolbar">
+          <div class="image-toolbar-item image-toolbar-item--mode">
+            <div class="image-toolbar-label">模式</div>
+            <a-radio-group v-model="imageActionMode" size="small" button-style="solid">
+              <a-radio-button value="generate">生成</a-radio-button>
+              <a-radio-button v-if="supportsImageEdit" value="edit">编辑</a-radio-button>
+            </a-radio-group>
+          </div>
+          <div class="image-toolbar-item">
+            <div class="image-toolbar-label">尺寸</div>
+            <a-select v-model="selectedImageSize" size="small" style="width: 110px">
+              <a-select-option v-for="size in currentImageSizeOptions" :key="size" :value="size">
+                {{ size }}
+              </a-select-option>
+            </a-select>
+          </div>
+          <div class="image-toolbar-item">
+            <div class="image-toolbar-label">比例</div>
+            <a-select v-model="selectedAspectRatio" size="small" style="width: 110px">
+              <a-select-option v-for="ratio in aspectRatioOptions" :key="ratio" :value="ratio">
+                {{ ratio }}
+              </a-select-option>
+            </a-select>
+          </div>
+          <div class="image-toolbar-note">{{ imageBalanceHint }}</div>
+        </div>
+        <div v-if="isImageEditMode" class="image-edit-panel">
+          <input
+            ref="editImageInput"
+            type="file"
+            accept="image/*"
+            class="image-edit-input"
+            @change="handleEditImageSelected"
+          >
+          <div class="image-edit-actions">
+            <a-button size="small" icon="upload" @click="triggerEditImagePick">上传原图</a-button>
+            <a-button v-if="editImagePreviewUrl" size="small" @click="clearEditImage">清除图片</a-button>
+            <span class="image-edit-help">支持单张图片上传，当前编辑请求固定返回 1 张图片。</span>
+          </div>
+          <div v-if="editImagePreviewUrl" class="image-edit-preview-card">
+            <img :src="editImagePreviewUrl" :alt="editImageName || 'edit source'" class="image-edit-preview-image">
+            <div class="image-edit-preview-meta">
+              <div class="image-edit-preview-title">{{ editImageName || '已选择图片' }}</div>
+              <div class="image-edit-preview-desc">当前将基于这张图片执行编辑。</div>
+            </div>
+          </div>
+        </div>
         <div class="input-wrapper">
           <a-textarea
             ref="chatInput"
@@ -99,7 +154,7 @@
             :placeholder="inputPlaceholder"
             :autoSize="{ minRows: 1, maxRows: 6 }"
             @keydown="handleKeydown"
-            :disabled="!apiKey"
+            :disabled="!apiKey || imageGenerating"
             class="chat-textarea"
           />
           <div class="input-actions">
@@ -108,6 +163,7 @@
               type="primary"
               shape="circle"
               :disabled="!canSend"
+              :loading="imageGenerating"
               @click="handleSend"
               class="send-btn"
             >
@@ -125,7 +181,7 @@
           </div>
         </div>
         <div class="input-hint">
-          Enter 发送 / Shift+Enter 换行
+          {{ inputHintText }}
         </div>
       </div>
     </div>
@@ -149,8 +205,8 @@
             <div class="guide-section-title">协议 / 端点</div>
             <div class="guide-info-row">
               <span class="guide-info-label">协议</span>
-              <a-tag :color="currentModelApiType === 'anthropic' ? 'purple' : 'green'" style="margin:0">
-                {{ currentModelApiType === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat' }}
+              <a-tag :color="guideProtocolColor" style="margin:0">
+                {{ guideProtocolLabel }}
               </a-tag>
             </div>
             <div class="guide-info-row">
@@ -165,7 +221,17 @@
           <!-- Header -->
           <div class="guide-section">
             <div class="guide-section-title">请求 Header</div>
-            <template v-if="currentModelApiType === 'anthropic'">
+            <template v-if="isImageEditMode">
+              <div class="guide-info-row">
+                <span class="guide-info-label">Authorization</span>
+                <code class="guide-code guide-code--muted">Bearer sk-你的密钥</code>
+              </div>
+              <div class="guide-info-row">
+                <span class="guide-info-label">Content-Type</span>
+                <code class="guide-code guide-code--muted">multipart/form-data</code>
+              </div>
+            </template>
+            <template v-else-if="!isImageModel && currentModelApiType === 'anthropic'">
               <div class="guide-info-row">
                 <span class="guide-info-label">x-api-key</span>
                 <code class="guide-code guide-code--muted">sk-你的密钥</code>
@@ -196,7 +262,7 @@
             <div class="guide-section-title">请求体示例</div>
             <div class="guide-codeblock-wrap">
               <div class="guide-codeblock-header">
-                <span>JSON</span>
+                <span>{{ guideRequestBodyLabel }}</span>
                 <a-icon type="copy" class="guide-copy-icon" @click="copyGuide(guideRequestBody)" />
               </div>
               <pre class="guide-codeblock">{{ guideRequestBody }}</pre>
@@ -248,8 +314,7 @@ import ChatMessage from '@/components/chat/ChatMessage.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { getChatModels, getChannelsModels } from '@/api/chat'
-import { listApiKeys, revealApiKey, createApiKey } from '@/api/user'
-import { getSiteConfig } from '@/api/user'
+import { listApiKeys, revealApiKey, createApiKey, getSiteConfig, getBalance } from '@/api/user'
 import { streamChat } from '@/utils/sse'
 import {
   getSessions,
@@ -259,6 +324,10 @@ import {
   clearAll,
   autoTitle
 } from '@/utils/chatStorage'
+
+var DEFAULT_IMAGE_SIZES = ['512', '1K', '2K', '4K']
+var DEFAULT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
+var IMAGE_REQUEST_TIMEOUT_MS = 300000
 
 export default {
   name: 'AiChat',
@@ -284,6 +353,16 @@ export default {
       apiKey: '',
       // Input
       inputText: '',
+      // Image generation
+      imageCreditBalance: 0,
+      imageGenerating: false,
+      imageActionMode: 'generate',
+      selectedImageSize: '1K',
+      selectedAspectRatio: '1:1',
+      runtimeImageMap: {},
+      editImageFile: null,
+      editImagePreviewUrl: '',
+      editImageName: '',
       // Streaming state
       streaming: false,
       streamingText: '',
@@ -300,9 +379,18 @@ export default {
     isAdmin: function () {
       return this.$route.meta && this.$route.meta.isAdmin === true
     },
+    storageNamespace: function () {
+      return this.isAdmin ? 'admin_ai_chat' : 'user_ai_chat'
+    },
+    apiKeyStorageKey: function () {
+      return this.isAdmin ? 'admin_chat_api_key' : 'chat_api_key'
+    },
     currentSession: function () {
       var id = this.currentSessionId
       return this.sessions.find(function (s) { return s.id === id }) || null
+    },
+    currentModelMeta: function () {
+      return this.resolveModelMeta(this.currentModel, this.currentChannelId)
     },
     currentMessages: function () {
       var msgs = this.currentSession ? this.currentSession.messages : []
@@ -312,58 +400,157 @@ export default {
         var last = msgs[msgs.length - 1]
         if (last && last.role === 'assistant') {
           var copy = msgs.slice(0, msgs.length - 1)
-          copy.push({
-            role: 'assistant',
-            content: this.streamingText,
-            timestamp: last.timestamp
-          })
+          copy.push(Object.assign({}, last, { content: this.streamingText }))
           return copy
         }
       }
       return msgs
     },
-    canSend: function () {
-      return this.inputText.trim() && this.currentModel && this.apiKey && !this.streaming
+    isImageModel: function () {
+      return this.currentModelMeta && this.currentModelMeta.model_type === 'image'
     },
-    currentModelApiType: function () {
-      // Determine the API type for the currently selected model
-      var model = this.currentModel
-      if (!model) return 'openai'
-      // Check in modelList
-      for (var i = 0; i < this.modelList.length; i++) {
-        if (this.modelList[i].model_name === model) {
-          return this.modelList[i].api_type || 'openai'
-        }
+    supportsImageEdit: function () {
+      return !!(this.currentModelMeta && this.currentModelMeta.supports_image_edit)
+    },
+    isImageEditMode: function () {
+      return this.isImageModel && this.supportsImageEdit && this.imageActionMode === 'edit'
+    },
+    currentImageSizeOptions: function () {
+      var meta = this.currentModelMeta || {}
+      var rules = this.getEnabledImageResolutionRules(meta)
+      if (rules.length > 0) {
+        return rules.map(function (item) {
+          return item.resolution_code
+        })
       }
-      // Check in channelList (admin mode)
-      for (var j = 0; j < this.channelList.length; j++) {
-        var ch = this.channelList[j]
-        for (var k = 0; k < ch.models.length; k++) {
-          if (ch.models[k].model_name === model) {
-            return ch.models[k].api_type || 'openai'
+      var capabilities = Array.isArray(meta.image_size_capabilities) ? meta.image_size_capabilities : []
+      return capabilities.length > 0 ? capabilities : DEFAULT_IMAGE_SIZES
+    },
+    aspectRatioOptions: function () {
+      return DEFAULT_ASPECT_RATIOS
+    },
+    currentImageCreditCost: function () {
+      if (!this.isImageModel) return 0
+      var meta = this.currentModelMeta || {}
+      var rules = this.getEnabledImageResolutionRules(meta)
+      if (rules.length > 0) {
+        for (var i = 0; i < rules.length; i++) {
+          if (rules[i].resolution_code === this.selectedImageSize) {
+            return Number(rules[i].credit_cost || 0)
           }
         }
+        var fallbackRule = rules.find(function (item) { return Number(item.is_default) === 1 }) || rules[0]
+        return Number(fallbackRule.credit_cost || 0)
       }
-      return 'openai'
+      if ((meta.billing_type || 'token') === 'free') {
+        return 0
+      }
+      return Number(meta.image_credit_multiplier || 1)
+    },
+    hasEnoughImageCredits: function () {
+      if (!this.isImageModel) return true
+      return Number(this.imageCreditBalance || 0) >= Number(this.currentImageCreditCost || 0)
+    },
+    imageBalanceHint: function () {
+      if (!this.isImageModel) return ''
+      return '当前图片积分 ' + this.formatCredit(this.imageCreditBalance) +
+        '，本次预计消耗 ' + this.formatCredit(this.currentImageCreditCost) + ' 积分'
+    },
+    imageWelcomeText: function () {
+      if (!this.isImageModel) return '选择模型，开始与 AI 对话'
+      if (this.isImageEditMode) return '上传原图并输入修改要求，即可返回编辑后的图片'
+      return '选择生图模型，输入提示词后即可生成图片'
+    },
+    canSend: function () {
+      return this.inputText.trim() &&
+        this.currentModel &&
+        this.apiKey &&
+        !this.streaming &&
+        !this.imageGenerating &&
+        (!this.isImageEditMode || !!this.editImageFile) &&
+        (!this.isImageModel || this.hasEnoughImageCredits)
+    },
+    currentModelApiType: function () {
+      return (this.currentModelMeta && this.currentModelMeta.api_type) || 'openai'
     },
     inputPlaceholder: function () {
       if (!this.apiKey) return this.isAdmin ? '正在准备中...' : '请先获取 API Key...'
       if (!this.currentModel) return '请先选择模型...'
-      return '输入消息...'
+      if (this.isImageModel && !this.hasEnoughImageCredits) return '图片积分不足，请先充值后再生成...'
+      if (this.isImageEditMode && !this.editImageFile) return '请先上传一张待编辑图片，再输入你的修改要求...'
+      if (this.isImageEditMode) return '描述你希望如何修改这张图片，例如风格、服饰、背景、光线...'
+      return this.isImageModel ? '描述你想生成的画面、风格、镜头和细节...' : '输入消息...'
+    },
+    inputHintText: function () {
+      if (this.isImageEditMode) return 'Enter 编辑图片 / Shift+Enter 换行'
+      return this.isImageModel ? 'Enter 生成图片 / Shift+Enter 换行' : 'Enter 发送 / Shift+Enter 换行'
     },
 
     // ---- API Guide computed ----
     relayBase: function () {
       return (this.apiBase || window.location.origin).replace(/\/+$/, '').replace(/\/v1$/i, '')
     },
+    runtimeRelayBase: function () {
+      var configured = (this.apiBase || '').replace(/\/+$/, '').replace(/\/v1$/i, '')
+      if (!configured) return ''
+      if (configured.indexOf('your-domain.com') !== -1) return ''
+      if (process.env.NODE_ENV !== 'production') return ''
+      try {
+        var currentOrigin = window.location.origin.replace(/\/+$/, '')
+        if (configured === currentOrigin) return ''
+      } catch (e) {
+        return ''
+      }
+      return configured
+    },
+    guideProtocolLabel: function () {
+      if (this.isImageEditMode) return 'OpenAI Images Edit'
+      if (this.isImageModel) return 'OpenAI Images'
+      return this.currentModelApiType === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat'
+    },
+    guideProtocolColor: function () {
+      if (this.isImageModel) return 'gold'
+      return this.currentModelApiType === 'anthropic' ? 'purple' : 'green'
+    },
     guideEndpoint: function () {
+      if (this.isImageEditMode) {
+        return this.relayBase + '/v1/image/edit'
+      }
+      if (this.isImageModel) {
+        return this.relayBase + '/v1/images/generations'
+      }
       if (this.currentModelApiType === 'anthropic') {
         return this.relayBase + '/v1/messages'
       }
       return this.relayBase + '/v1/chat/completions'
     },
+    guideRequestBodyLabel: function () {
+      return this.isImageEditMode ? 'multipart/form-data' : 'JSON'
+    },
     guideRequestBody: function () {
       var model = this.currentModel || 'your-model'
+      if (this.isImageEditMode) {
+        return [
+          'multipart/form-data',
+          'model=' + model,
+          'prompt=把这张图片改成电影级赛博朋克风格',
+          'image=@input.png',
+          'response_format=b64_json',
+          'image_size=' + this.selectedImageSize,
+          'aspect_ratio=' + this.selectedAspectRatio,
+          'n=1'
+        ].join('\n')
+      }
+      if (this.isImageModel) {
+        return JSON.stringify({
+          model: model,
+          prompt: '生成一张电影感海报，主体突出，细节丰富',
+          response_format: 'b64_json',
+          image_size: this.selectedImageSize,
+          aspect_ratio: this.selectedAspectRatio,
+          n: 1
+        }, null, 2)
+      }
       if (this.currentModelApiType === 'anthropic') {
         return JSON.stringify({
           model: model,
@@ -383,6 +570,64 @@ export default {
     guidePythonCode: function () {
       var model = this.currentModel || 'your-model'
       var base = this.relayBase
+      if (this.isImageEditMode) {
+        return `import base64
+from pathlib import Path
+import requests
+
+url = "${base}/v1/image/edit"
+headers = {
+    "Authorization": "Bearer sk-你的密钥",
+}
+data = {
+    "model": "${model}",
+    "prompt": "把这张图片改成电影级赛博朋克风格",
+    "response_format": "b64_json",
+    "image_size": "${this.selectedImageSize}",
+    "aspect_ratio": "${this.selectedAspectRatio}",
+    "n": "1",
+}
+
+with open("input.png", "rb") as image_file:
+    resp = requests.post(
+        url,
+        headers=headers,
+        data=data,
+        files={"image": ("input.png", image_file, "image/png")},
+        timeout=300,
+    )
+
+resp.raise_for_status()
+result = resp.json()
+Path("edited.png").write_bytes(base64.b64decode(result["data"][0]["b64_json"]))
+print("saved:", result.get("usage"))`
+      }
+      if (this.isImageModel) {
+        return `import base64
+from pathlib import Path
+import requests
+
+url = "${base}/v1/images/generations"
+headers = {
+    "Authorization": "Bearer sk-你的密钥",
+    "Content-Type": "application/json",
+}
+payload = {
+    "model": "${model}",
+    "prompt": "生成一张电影感海报，主体突出，细节丰富",
+    "response_format": "b64_json",
+    "image_size": "${this.selectedImageSize}",
+    "aspect_ratio": "${this.selectedAspectRatio}",
+    "n": 1,
+}
+
+resp = requests.post(url, headers=headers, json=payload, timeout=300)
+resp.raise_for_status()
+result = resp.json()
+img = result["data"][0]
+Path("generated.png").write_bytes(base64.b64decode(img["b64_json"]))
+print("saved:", result.get("usage"))`
+      }
       if (this.currentModelApiType === 'anthropic') {
         return `import anthropic
 
@@ -418,6 +663,30 @@ print(response.choices[0].message.content)`
     },
     guideCurlCode: function () {
       var model = this.currentModel || 'your-model'
+      if (this.isImageEditMode) {
+        return `curl -X POST "${this.guideEndpoint}" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -F "model=${model}" \\
+  -F "prompt=把这张图片改成电影级赛博朋克风格" \\
+  -F "image=@input.png" \\
+  -F "response_format=b64_json" \\
+  -F "image_size=${this.selectedImageSize}" \\
+  -F "aspect_ratio=${this.selectedAspectRatio}" \\
+  -F "n=1"`
+      }
+      if (this.isImageModel) {
+        return `curl -X POST "${this.guideEndpoint}" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "prompt": "生成一张电影感海报，主体突出，细节丰富",
+    "response_format": "b64_json",
+    "image_size": "${this.selectedImageSize}",
+    "aspect_ratio": "${this.selectedAspectRatio}",
+    "n": 1
+  }'`
+      }
       if (this.currentModelApiType === 'anthropic') {
         return `curl -X POST "${this.guideEndpoint}" \\
   -H "x-api-key: sk-你的密钥" \\
@@ -445,6 +714,57 @@ print(response.choices[0].message.content)`
     guideNodeCode: function () {
       var model = this.currentModel || 'your-model'
       var base = this.relayBase
+      if (this.isImageEditMode) {
+        return `import fs from "node:fs";
+
+const form = new FormData();
+form.append("model", "${model}");
+form.append("prompt", "把这张图片改成电影级赛博朋克风格");
+form.append("response_format", "b64_json");
+form.append("image_size", "${this.selectedImageSize}");
+form.append("aspect_ratio", "${this.selectedAspectRatio}");
+form.append("n", "1");
+form.append(
+  "image",
+  new Blob([fs.readFileSync("input.png")], { type: "image/png" }),
+  "input.png",
+);
+
+const response = await fetch("${base}/v1/image/edit", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer sk-你的密钥",
+  },
+  body: form,
+});
+
+const result = await response.json();
+fs.writeFileSync("edited.png", Buffer.from(result.data[0].b64_json, "base64"));
+console.log(result.usage);`
+      }
+      if (this.isImageModel) {
+        return `import fs from "node:fs";
+
+const response = await fetch("${base}/v1/images/generations", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer sk-你的密钥",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "${model}",
+    prompt: "生成一张电影感海报，主体突出，细节丰富",
+    response_format: "b64_json",
+    image_size: "${this.selectedImageSize}",
+    aspect_ratio: "${this.selectedAspectRatio}",
+    n: 1,
+  }),
+});
+
+const result = await response.json();
+fs.writeFileSync("generated.png", Buffer.from(result.data[0].b64_json, "base64"));
+console.log(result.usage);`
+      }
       if (this.currentModelApiType === 'anthropic') {
         return `import Anthropic from "@anthropic-ai/sdk";
 
@@ -480,12 +800,25 @@ console.log(response.choices[0].message.content);`
   watch: {
     currentMessages: function () {
       this.$nextTick(this.scrollToBottom)
+    },
+    currentModel: function () {
+      this.ensureImageOptionsForCurrentModel()
+    },
+    imageActionMode: function () {
+      this.persistCurrentSessionImageOptions()
+    },
+    selectedImageSize: function () {
+      this.persistCurrentSessionImageOptions()
+    },
+    selectedAspectRatio: function () {
+      this.persistCurrentSessionImageOptions()
     }
   },
   created: function () {
     this.loadSessions()
     this.loadModels()
     this.loadApiKey()
+    this.loadBalance()
     this.loadSiteConfig()
     this.checkMobile()
     window.addEventListener('resize', this.checkMobile)
@@ -497,14 +830,131 @@ console.log(response.choices[0].message.content);`
     }
   },
   methods: {
+    formatCredit: function (value) {
+      var num = Number(value || 0)
+      if (!isFinite(num)) return '0'
+      if (Math.abs(num - Math.round(num)) < 0.0001) {
+        return String(Math.round(num))
+      }
+      return num.toFixed(3).replace(/\.?0+$/, '')
+    },
+    getStorageSessions: function () {
+      return getSessions(this.storageNamespace)
+    },
+    refreshSessions: function () {
+      this.sessions = this.getStorageSessions()
+    },
+    resolveModelMeta: function (modelName, channelId) {
+      if (!modelName) return null
+      var selectedChannelId = channelId
+      if (selectedChannelId) {
+        for (var i = 0; i < this.channelList.length; i++) {
+          var channel = this.channelList[i]
+          if (channel.channel_id === selectedChannelId) {
+            for (var j = 0; j < channel.models.length; j++) {
+              if (channel.models[j].model_name === modelName) {
+                return channel.models[j]
+              }
+            }
+          }
+        }
+      }
+      for (var k = 0; k < this.modelList.length; k++) {
+        if (this.modelList[k].model_name === modelName) {
+          return this.modelList[k]
+        }
+      }
+      return null
+    },
+    getEnabledImageResolutionRules: function (meta) {
+      var rules = Array.isArray(meta && meta.image_resolution_rules) ? meta.image_resolution_rules : []
+      return rules
+        .filter(function (item) {
+          return Number(item.enabled) === 1
+        })
+        .sort(function (a, b) {
+          return Number(a.sort_order || 0) - Number(b.sort_order || 0)
+        })
+    },
+    getDefaultImageSize: function (meta) {
+      var rules = this.getEnabledImageResolutionRules(meta)
+      if (rules.length > 0) {
+        var defaultRule = rules.find(function (item) {
+          return Number(item.is_default) === 1
+        }) || rules[0]
+        if (defaultRule && defaultRule.resolution_code) {
+          return defaultRule.resolution_code
+        }
+      }
+      var capabilities = Array.isArray(meta && meta.image_size_capabilities) ? meta.image_size_capabilities : []
+      if (capabilities.length > 0) {
+        return capabilities[0]
+      }
+      return '1K'
+    },
+    ensureImageOptionsForCurrentModel: function () {
+      if (!this.isImageModel) {
+        this.imageActionMode = 'generate'
+        return
+      }
+      var sessionOptions = this.currentSession && this.currentSession.imageOptions ? this.currentSession.imageOptions : {}
+      var sizeOptions = this.currentImageSizeOptions
+      var nextSize = sessionOptions.size || this.selectedImageSize
+      if (sizeOptions.indexOf(nextSize) === -1) {
+        nextSize = this.getDefaultImageSize(this.currentModelMeta)
+      }
+      this.selectedImageSize = nextSize
+      this.selectedAspectRatio = sessionOptions.aspectRatio || this.selectedAspectRatio || '1:1'
+      if (DEFAULT_ASPECT_RATIOS.indexOf(this.selectedAspectRatio) === -1) {
+        this.selectedAspectRatio = '1:1'
+      }
+      var nextMode = sessionOptions.mode || this.imageActionMode || 'generate'
+      if (!this.supportsImageEdit || nextMode !== 'edit') {
+        nextMode = 'generate'
+      }
+      this.imageActionMode = nextMode
+      this.persistCurrentSessionImageOptions()
+    },
+    persistCurrentSessionImageOptions: function () {
+      if (!this.currentSession || !this.isImageModel) return
+      this.currentSession.imageOptions = {
+        size: this.selectedImageSize,
+        aspectRatio: this.selectedAspectRatio,
+        mode: this.imageActionMode
+      }
+      saveSession(this.currentSession, this.storageNamespace)
+      this.refreshSessions()
+    },
+    ensureCurrentSession: function () {
+      if (this.currentSession) {
+        return this.currentSession
+      }
+      var session = createSession({
+        model: this.currentModel,
+        channelId: this.currentChannelId,
+        imageOptions: {
+          size: this.selectedImageSize,
+          aspectRatio: this.selectedAspectRatio,
+          mode: this.imageActionMode
+        }
+      }, this.storageNamespace)
+      this.refreshSessions()
+      this.currentSessionId = session.id
+      return this.currentSession || session
+    },
     // ============ Data Loading ============
     loadSessions: function () {
-      this.sessions = getSessions()
+      this.sessions = this.getStorageSessions()
       // Auto-select first session or create new
       if (this.sessions.length > 0) {
         this.currentSessionId = this.sessions[0].id
         this.currentModel = this.sessions[0].model || ''
         this.currentChannelId = this.sessions[0].channelId || null
+        if (this.sessions[0].imageOptions) {
+          this.selectedImageSize = this.sessions[0].imageOptions.size || this.selectedImageSize
+          this.selectedAspectRatio = this.sessions[0].imageOptions.aspectRatio || this.selectedAspectRatio
+          this.imageActionMode = this.sessions[0].imageOptions.mode || this.imageActionMode
+        }
       }
     },
 
@@ -528,6 +978,7 @@ console.log(response.choices[0].message.content);`
           if (!self.currentModel && self.modelList.length > 0) {
             self.currentModel = self.modelList[0].model_name
           }
+          self.ensureImageOptionsForCurrentModel()
         }).catch(function () {
           // Fallback to user models API
           self.loadUserModels()
@@ -544,6 +995,7 @@ console.log(response.choices[0].message.content);`
         if (!self.currentModel && self.modelList.length > 0) {
           self.currentModel = self.modelList[0].model_name
         }
+        self.ensureImageOptionsForCurrentModel()
       }).catch(function (err) {
         console.error('Failed to load models:', err)
       })
@@ -552,7 +1004,7 @@ console.log(response.choices[0].message.content);`
     loadApiKey: function () {
       var self = this
       // Check sessionStorage first
-      var cached = sessionStorage.getItem('chat_api_key')
+      var cached = sessionStorage.getItem(this.apiKeyStorageKey)
       if (cached) {
         self.apiKey = cached
         return
@@ -568,7 +1020,7 @@ console.log(response.choices[0].message.content);`
             var fullKey = revealRes.data && revealRes.data.key
             if (fullKey) {
               self.apiKey = fullKey
-              sessionStorage.setItem('chat_api_key', fullKey)
+              sessionStorage.setItem(self.apiKeyStorageKey, fullKey)
             } else {
               self._createChatApiKey()
             }
@@ -592,7 +1044,7 @@ console.log(response.choices[0].message.content);`
         var fullKey = res.data && res.data.key
         if (fullKey) {
           self.apiKey = fullKey
-          sessionStorage.setItem('chat_api_key', fullKey)
+          sessionStorage.setItem(self.apiKeyStorageKey, fullKey)
         }
       }).catch(function (err) {
         console.error('Failed to create API key:', err)
@@ -604,11 +1056,29 @@ console.log(response.choices[0].message.content);`
         }
       })
     },
+    loadBalance: function () {
+      var self = this
+      getBalance().then(function (res) {
+        var data = res.data || {}
+        self.imageCreditBalance = Number(data.image_credit_balance || 0)
+      }).catch(function (err) {
+        console.error('Failed to load balance:', err)
+      })
+    },
 
     // ============ Session Management ============
     handleNewSession: function () {
-      var session = createSession({ model: this.currentModel, channelId: this.currentChannelId })
-      this.sessions = getSessions()
+      this.clearEditImage()
+      var session = createSession({
+        model: this.currentModel,
+        channelId: this.currentChannelId,
+        imageOptions: {
+          size: this.selectedImageSize,
+          aspectRatio: this.selectedAspectRatio,
+          mode: this.imageActionMode
+        }
+      }, this.storageNamespace)
+      this.refreshSessions()
       this.currentSessionId = session.id
       this.errorMsg = ''
       this.$nextTick(function () {
@@ -619,25 +1089,33 @@ console.log(response.choices[0].message.content);`
     },
 
     handleSelectSession: function (id) {
+      this.clearEditImage()
       this.currentSessionId = id
       this.errorMsg = ''
       var session = this.sessions.find(function (s) { return s.id === id })
       if (session) {
         this.currentModel = session.model || this.currentModel
         this.currentChannelId = session.channelId || null
+        if (session.imageOptions) {
+          this.selectedImageSize = session.imageOptions.size || this.selectedImageSize
+          this.selectedAspectRatio = session.imageOptions.aspectRatio || this.selectedAspectRatio
+          this.imageActionMode = session.imageOptions.mode || this.imageActionMode
+        } else {
+          this.ensureImageOptionsForCurrentModel()
+        }
       }
     },
 
     handleDeleteSession: function (id) {
-      deleteSession(id)
-      this.sessions = getSessions()
+      deleteSession(id, this.storageNamespace)
+      this.refreshSessions()
       if (this.currentSessionId === id) {
         this.currentSessionId = this.sessions.length > 0 ? this.sessions[0].id : ''
       }
     },
 
     handleClearAll: function () {
-      clearAll()
+      clearAll(this.storageNamespace)
       this.sessions = []
       this.currentSessionId = ''
     },
@@ -645,10 +1123,13 @@ console.log(response.choices[0].message.content);`
     // ============ Model & Channel ============
     handleModelChangeEvent: function (model) {
       this.currentModel = model
+      if (!this.supportsImageEdit) {
+        this.clearEditImage()
+      }
       if (this.currentSession) {
         this.currentSession.model = model
-        saveSession(this.currentSession)
-        this.sessions = getSessions()
+        saveSession(this.currentSession, this.storageNamespace)
+        this.refreshSessions()
       }
     },
 
@@ -656,8 +1137,8 @@ console.log(response.choices[0].message.content);`
       this.currentChannelId = channelId
       if (this.currentSession) {
         this.currentSession.channelId = channelId
-        saveSession(this.currentSession)
-        this.sessions = getSessions()
+        saveSession(this.currentSession, this.storageNamespace)
+        this.refreshSessions()
       }
     },
 
@@ -670,20 +1151,80 @@ console.log(response.choices[0].message.content);`
         }
       }
     },
+    triggerEditImagePick: function () {
+      if (this.$refs.editImageInput) {
+        this.$refs.editImageInput.click()
+      }
+    },
+    handleEditImageSelected: function (event) {
+      var files = event && event.target && event.target.files
+      var file = files && files[0]
+      if (!file) return
+      if (file.type && file.type.indexOf('image/') !== 0) {
+        this.$message.error('请上传图片文件')
+        this.clearEditImage()
+        return
+      }
+
+      var self = this
+      var reader = new FileReader()
+      reader.onload = function (loadEvent) {
+        self.editImageFile = file
+        self.editImageName = file.name || 'upload.png'
+        self.editImagePreviewUrl = loadEvent && loadEvent.target ? loadEvent.target.result : ''
+      }
+      reader.onerror = function () {
+        self.$message.error('图片读取失败，请重新上传')
+        self.clearEditImage()
+      }
+      reader.readAsDataURL(file)
+    },
+    clearEditImage: function () {
+      this.editImageFile = null
+      this.editImagePreviewUrl = ''
+      this.editImageName = ''
+      if (this.$refs.editImageInput) {
+        this.$refs.editImageInput.value = ''
+      }
+    },
+    createRuntimeImageCacheKey: function (prefix, index) {
+      return (prefix || 'img') + '_' + String(Date.now()) + '_' + String(index || 0)
+    },
+    buildImageResultItems: function (currentSession, data) {
+      var images = []
+      for (var i = 0; i < data.length; i++) {
+        var item = data[i] || {}
+        if (!item.b64_json) continue
+        var cacheKey = currentSession.id + '_' + this.createRuntimeImageCacheKey('result', i)
+        this.$set(
+          this.runtimeImageMap,
+          cacheKey,
+          'data:' + (item.mime_type || 'image/png') + ';base64,' + item.b64_json
+        )
+        images.push({
+          cacheKey: cacheKey,
+          mimeType: item.mime_type || 'image/png'
+        })
+      }
+      return images
+    },
 
     handleSend: function () {
       if (!this.canSend) return
+      if (this.isImageModel) {
+        if (this.isImageEditMode) {
+          this.handleEditImage()
+          return
+        }
+        this.handleGenerateImage()
+        return
+      }
 
       var text = this.inputText.trim()
       this.inputText = ''
       this.errorMsg = ''
 
-      // Ensure we have a session
-      if (!this.currentSession) {
-        var session = createSession({ model: this.currentModel, channelId: this.currentChannelId })
-        this.sessions = getSessions()
-        this.currentSessionId = session.id
-      }
+      var sessionForSend = this.ensureCurrentSession()
 
       // Add user message
       var userMsg = {
@@ -691,16 +1232,16 @@ console.log(response.choices[0].message.content);`
         content: text,
         timestamp: Date.now()
       }
-      this.currentSession.messages.push(userMsg)
-      this.currentSession.updatedAt = Date.now()
+      sessionForSend.messages.push(userMsg)
+      sessionForSend.updatedAt = Date.now()
 
       // Auto title from first message
-      if (this.currentSession.messages.length === 1) {
-        autoTitle(this.currentSession)
+      if (sessionForSend.messages.length === 1) {
+        autoTitle(sessionForSend)
       }
 
-      saveSession(this.currentSession)
-      this.sessions = getSessions()
+      saveSession(sessionForSend, this.storageNamespace)
+      this.refreshSessions()
 
       // Add empty assistant message for streaming
       var assistantMsg = {
@@ -708,13 +1249,13 @@ console.log(response.choices[0].message.content);`
         content: '',
         timestamp: Date.now()
       }
-      this.currentSession.messages.push(assistantMsg)
+      sessionForSend.messages.push(assistantMsg)
 
       // Start streaming
       this.streaming = true
       this.streamingText = ''
       var self = this
-      var currentSession = this.currentSession
+      var currentSession = sessionForSend
 
       // Build messages for API (exclude empty assistant message)
       var apiMessages = currentSession.messages
@@ -743,8 +1284,8 @@ console.log(response.choices[0].message.content);`
           self.streamingText = ''
           self.abortController = null
           currentSession.updatedAt = Date.now()
-          saveSession(currentSession)
-          self.sessions = getSessions()
+          saveSession(currentSession, self.storageNamespace)
+          self.refreshSessions()
         },
         onError: function (err) {
           // If we got partial text, keep it
@@ -761,9 +1302,288 @@ console.log(response.choices[0].message.content);`
           self.streamingText = ''
           self.abortController = null
           self.errorMsg = err.message || '请求失败，请重试'
-          saveSession(currentSession)
-          self.sessions = getSessions()
+          saveSession(currentSession, self.storageNamespace)
+          self.refreshSessions()
         }
+      })
+    },
+    handleGenerateImage: function () {
+      if (!this.canSend) return
+
+      var prompt = this.inputText.trim()
+      var currentSession = this.ensureCurrentSession()
+      var self = this
+      this.inputText = ''
+      this.errorMsg = ''
+
+      currentSession.messages.push({
+        role: 'user',
+        content: prompt,
+        timestamp: Date.now(),
+        requestKind: 'image_generation'
+      })
+      currentSession.updatedAt = Date.now()
+      if (currentSession.messages.length === 1) {
+        autoTitle(currentSession)
+      }
+      currentSession.messages.push({
+        role: 'assistant',
+        content: '正在生成图片...',
+        timestamp: Date.now()
+      })
+      saveSession(currentSession, this.storageNamespace)
+      this.refreshSessions()
+
+      this.imageGenerating = true
+      this.sendImageRequest(prompt).then(function (result) {
+        var usage = result.usage || {}
+        var data = Array.isArray(result.data) ? result.data : []
+        var images = self.buildImageResultItems(currentSession, data)
+
+        var chargedCredits = Number(
+          usage.image_credits_charged !== undefined
+            ? usage.image_credits_charged
+            : self.currentImageCreditCost
+        )
+        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant') {
+          lastMsg.kind = 'image_result'
+          lastMsg.content = '已生成 ' + String(images.length || data.length || 1) + ' 张图片'
+          lastMsg.images = images
+          lastMsg.meta = {
+            model: result.model || self.currentModel,
+            prompt: prompt,
+            requestType: 'image_generation',
+            imageSize: usage.image_size || self.selectedImageSize,
+            aspectRatio: self.selectedAspectRatio,
+            imageCreditsCharged: chargedCredits
+          }
+        }
+
+        self.imageGenerating = false
+        currentSession.updatedAt = Date.now()
+        saveSession(currentSession, self.storageNamespace)
+        self.refreshSessions()
+        self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
+        self.loadBalance()
+      }).catch(function (err) {
+        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant') {
+          currentSession.messages.pop()
+        }
+        self.imageGenerating = false
+        self.errorMsg = err.message || '生图失败，请稍后重试'
+        currentSession.updatedAt = Date.now()
+        saveSession(currentSession, self.storageNamespace)
+        self.refreshSessions()
+      })
+    },
+    handleEditImage: function () {
+      if (!this.canSend || !this.editImageFile || !this.editImagePreviewUrl) return
+
+      var prompt = this.inputText.trim()
+      var currentSession = this.ensureCurrentSession()
+      var self = this
+      this.inputText = ''
+      this.errorMsg = ''
+
+      var sourceCacheKey = currentSession.id + '_' + this.createRuntimeImageCacheKey('source', 0)
+      this.$set(this.runtimeImageMap, sourceCacheKey, this.editImagePreviewUrl)
+
+      currentSession.messages.push({
+        role: 'user',
+        content: prompt,
+        timestamp: Date.now(),
+        requestKind: 'image_edit',
+        localImageCacheKey: sourceCacheKey,
+        localImageName: this.editImageName
+      })
+      currentSession.updatedAt = Date.now()
+      if (currentSession.messages.length === 1) {
+        autoTitle(currentSession)
+      }
+      currentSession.messages.push({
+        role: 'assistant',
+        content: '正在编辑图片...',
+        timestamp: Date.now()
+      })
+      saveSession(currentSession, this.storageNamespace)
+      this.refreshSessions()
+
+      this.imageGenerating = true
+      this.sendEditImageRequest(prompt).then(function (result) {
+        var usage = result.usage || {}
+        var data = Array.isArray(result.data) ? result.data : []
+        var images = self.buildImageResultItems(currentSession, data)
+        var chargedCredits = Number(
+          usage.image_credits_charged !== undefined
+            ? usage.image_credits_charged
+            : self.currentImageCreditCost
+        )
+        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant') {
+          lastMsg.kind = 'image_result'
+          lastMsg.content = '已完成图片编辑'
+          lastMsg.images = images
+          lastMsg.meta = {
+            model: result.model || self.currentModel,
+            prompt: prompt,
+            requestType: 'image_edit',
+            imageSize: usage.image_size || self.selectedImageSize,
+            aspectRatio: self.selectedAspectRatio,
+            imageCreditsCharged: chargedCredits,
+            sourceImageCacheKey: sourceCacheKey,
+            sourceImageName: self.editImageName
+          }
+        }
+
+        self.imageGenerating = false
+        currentSession.updatedAt = Date.now()
+        saveSession(currentSession, self.storageNamespace)
+        self.refreshSessions()
+        self.imageCreditBalance = Math.max(0, Number(self.imageCreditBalance || 0) - chargedCredits)
+        self.loadBalance()
+      }).catch(function (err) {
+        var lastMsg = currentSession.messages[currentSession.messages.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant') {
+          currentSession.messages.pop()
+        }
+        self.imageGenerating = false
+        self.errorMsg = err.message || '图片编辑失败，请稍后重试'
+        currentSession.updatedAt = Date.now()
+        saveSession(currentSession, self.storageNamespace)
+        self.refreshSessions()
+      })
+    },
+    sendImageRequest: function (prompt) {
+      var self = this
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      var timeoutId = null
+      if (controller) {
+        timeoutId = setTimeout(function () {
+          controller.abort()
+        }, IMAGE_REQUEST_TIMEOUT_MS)
+      }
+
+      var headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + this.apiKey
+      }
+      if (this.currentChannelId) {
+        headers['X-Channel-Id'] = String(this.currentChannelId)
+      }
+
+      var payload = {
+        model: this.currentModel,
+        prompt: prompt,
+        response_format: 'b64_json',
+        image_size: this.selectedImageSize,
+        aspect_ratio: this.selectedAspectRatio,
+        n: 1
+      }
+
+      return fetch(this.runtimeRelayBase + '/v1/images/generations', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(payload),
+        signal: controller ? controller.signal : undefined
+      }).then(function (response) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!response.ok) {
+          return response.text().then(function (text) {
+            var errMsg = '生图请求失败 (' + response.status + ')'
+            try {
+              var parsed = JSON.parse(text)
+              errMsg = (parsed.error && parsed.error.message) || parsed.message || parsed.detail || errMsg
+            } catch (e) {
+              // Ignore non-JSON error bodies and surface the fallback message.
+            }
+            throw new Error(errMsg)
+          })
+        }
+        return response.json()
+      }).catch(function (err) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (err && err.name === 'AbortError') {
+          throw new Error('生图超时，请稍后重试')
+        }
+        if (err && err.message === 'Failed to fetch') {
+          throw new Error('生图请求未发送成功，请检查 API 基础地址配置、同源代理或浏览器控制台中的跨域报错')
+        }
+        throw err
+      }).then(function (result) {
+        if (!result || !Array.isArray(result.data) || result.data.length === 0) {
+          throw new Error('生图结果为空，请稍后重试')
+        }
+        return result
+      }).catch(function (err) {
+        self.loadBalance()
+        throw err
+      })
+    },
+    sendEditImageRequest: function (prompt) {
+      var self = this
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      var timeoutId = null
+      if (controller) {
+        timeoutId = setTimeout(function () {
+          controller.abort()
+        }, IMAGE_REQUEST_TIMEOUT_MS)
+      }
+
+      var headers = {
+        'Authorization': 'Bearer ' + this.apiKey
+      }
+      if (this.currentChannelId) {
+        headers['X-Channel-Id'] = String(this.currentChannelId)
+      }
+
+      var formData = new FormData()
+      formData.append('model', this.currentModel)
+      formData.append('prompt', prompt)
+      formData.append('response_format', 'b64_json')
+      formData.append('image_size', this.selectedImageSize)
+      formData.append('aspect_ratio', this.selectedAspectRatio)
+      formData.append('n', '1')
+      formData.append('image', this.editImageFile, this.editImageName || this.editImageFile.name || 'upload.png')
+
+      return fetch(this.runtimeRelayBase + '/v1/image/edit', {
+        method: 'POST',
+        headers: headers,
+        body: formData,
+        signal: controller ? controller.signal : undefined
+      }).then(function (response) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!response.ok) {
+          return response.text().then(function (text) {
+            var errMsg = '图片编辑请求失败 (' + response.status + ')'
+            try {
+              var parsed = JSON.parse(text)
+              errMsg = (parsed.error && parsed.error.message) || parsed.message || parsed.detail || errMsg
+            } catch (e) {
+              // Ignore non-JSON error bodies and surface the fallback message.
+            }
+            throw new Error(errMsg)
+          })
+        }
+        return response.json()
+      }).catch(function (err) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (err && err.name === 'AbortError') {
+          throw new Error('图片编辑超时，请稍后重试')
+        }
+        if (err && err.message === 'Failed to fetch') {
+          throw new Error('图片编辑请求未发送成功，请检查 API 基础地址配置、同源代理或浏览器控制台中的跨域报错')
+        }
+        throw err
+      }).then(function (result) {
+        if (!result || !Array.isArray(result.data) || result.data.length === 0) {
+          throw new Error('图片编辑结果为空，请稍后重试')
+        }
+        return result
+      }).catch(function (err) {
+        self.loadBalance()
+        throw err
       })
     },
 
@@ -780,8 +1600,8 @@ console.log(response.choices[0].message.content);`
           lastMsg.content = this.streamingText
         }
         this.currentSession.updatedAt = Date.now()
-        saveSession(this.currentSession)
-        this.sessions = getSessions()
+        saveSession(this.currentSession, this.storageNamespace)
+        this.refreshSessions()
       }
       this.streaming = false
       this.streamingText = ''
@@ -922,6 +1742,105 @@ console.log(response.choices[0].message.content);`
   padding: 2px 10px;
 }
 
+.image-toolbar {
+  max-width: 800px;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+}
+
+.image-toolbar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-toolbar-item--mode {
+  margin-right: 8px;
+}
+
+.image-toolbar-label {
+  font-size: 12px;
+  color: #8c8c8c;
+  font-weight: 600;
+}
+
+.image-toolbar-note {
+  margin-left: auto;
+  font-size: 12px;
+  color: #667085;
+  font-weight: 600;
+}
+
+.image-edit-panel {
+  max-width: 800px;
+  margin: 0 auto 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+}
+
+.image-edit-input {
+  display: none;
+}
+
+.image-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.image-edit-help {
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.image-edit-preview-card {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(246, 248, 252, 0.92);
+  border: 1px solid rgba(102, 126, 234, 0.12);
+}
+
+.image-edit-preview-image {
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 14px;
+  flex-shrink: 0;
+}
+
+.image-edit-preview-meta {
+  min-width: 0;
+}
+
+.image-edit-preview-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a1a2e;
+  word-break: break-word;
+}
+
+.image-edit-preview-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
 // ============ Messages Area ============
 .chat-messages {
   flex: 1;
@@ -1058,6 +1977,17 @@ console.log(response.choices[0].message.content);`
   }
   .chat-messages { padding: 12px 10px; }
   .chat-input-area { padding: 10px 15px 15px; }
+  .image-toolbar {
+    align-items: flex-start;
+  }
+  .image-toolbar-note {
+    margin-left: 0;
+    width: 100%;
+  }
+  .image-edit-preview-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
   .guide-panel {
     position: fixed; right: 0; top: 0; bottom: 0; z-index: 25;
     width: 320px; transform: translateX(100%);

@@ -5,6 +5,11 @@
 
 var STORAGE_KEY = 'chat_sessions'
 
+function resolveStorageKey(namespace) {
+  if (!namespace) return STORAGE_KEY
+  return STORAGE_KEY + '_' + namespace
+}
+
 /**
  * Generate a simple UUID v4
  */
@@ -20,9 +25,9 @@ function generateId() {
  * Get all sessions from localStorage
  * @returns {Array} sessions sorted by updatedAt desc
  */
-export function getSessions() {
+export function getSessions(namespace) {
   try {
-    var raw = localStorage.getItem(STORAGE_KEY)
+    var raw = localStorage.getItem(resolveStorageKey(namespace))
     if (!raw) return []
     var sessions = JSON.parse(raw)
     // Sort by updatedAt descending
@@ -40,23 +45,25 @@ export function getSessions() {
  * @param {Object} options
  * @param {string} options.model - Selected model name
  * @param {number|null} [options.channelId] - Selected channel ID (admin mode)
+ * @param {Object|null} [options.imageOptions] - Image generation UI state
  * @returns {Object} The new session
  */
-export function createSession(options) {
+export function createSession(options, namespace) {
   var now = Date.now()
   var session = {
     id: generateId(),
     title: '新对话',
     model: options.model || '',
     channelId: options.channelId || null,
+    imageOptions: options.imageOptions || null,
     messages: [],
     createdAt: now,
     updatedAt: now
   }
 
-  var sessions = getSessions()
+  var sessions = getSessions(namespace)
   sessions.unshift(session)
-  _saveSessions(sessions)
+  _saveSessions(sessions, namespace)
   return session
 }
 
@@ -64,8 +71,8 @@ export function createSession(options) {
  * Save/update a session
  * @param {Object} session - The session to save
  */
-export function saveSession(session) {
-  var sessions = getSessions()
+export function saveSession(session, namespace) {
+  var sessions = getSessions(namespace)
   var found = false
   for (var i = 0; i < sessions.length; i++) {
     if (sessions[i].id === session.id) {
@@ -77,26 +84,26 @@ export function saveSession(session) {
   if (!found) {
     sessions.unshift(session)
   }
-  _saveSessions(sessions)
+  _saveSessions(sessions, namespace)
 }
 
 /**
  * Delete a session by ID
  * @param {string} id - Session ID
  */
-export function deleteSession(id) {
-  var sessions = getSessions()
+export function deleteSession(id, namespace) {
+  var sessions = getSessions(namespace)
   var filtered = sessions.filter(function (s) {
     return s.id !== id
   })
-  _saveSessions(filtered)
+  _saveSessions(filtered, namespace)
 }
 
 /**
  * Clear all sessions
  */
-export function clearAll() {
-  localStorage.removeItem(STORAGE_KEY)
+export function clearAll(namespace) {
+  localStorage.removeItem(resolveStorageKey(namespace))
 }
 
 /**
@@ -117,9 +124,9 @@ export function autoTitle(session) {
 /**
  * Internal: persist sessions array to localStorage
  */
-function _saveSessions(sessions) {
+function _saveSessions(sessions, namespace) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions))
+    localStorage.setItem(resolveStorageKey(namespace), JSON.stringify(sessions))
   } catch (e) {
     // localStorage might be full
     console.warn('Failed to save chat sessions:', e)

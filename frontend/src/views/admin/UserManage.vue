@@ -115,7 +115,7 @@
         </template>
 
         <template slot="lastLogin" slot-scope="text">
-          <span v-if="text" class="time-text">{{ formatDate(text) }}</span>
+          <span v-if="text" class="time-text">{{ formatUtcDate(text) }}</span>
           <span v-else class="time-text muted">从未登录</span>
         </template>
 
@@ -270,7 +270,7 @@ import {
   rechargeImageCredits,
   deductImageCredits
 } from '@/api/user'
-import { formatDate, parseServerDate } from '@/utils'
+import { formatDate, formatUtcDate, parseUtcDate } from '@/utils'
 
 export default {
   name: 'UserManage',
@@ -344,6 +344,7 @@ export default {
   },
   methods: {
     formatDate,
+    formatUtcDate,
     async fetchList() {
       this.loading = true
       try {
@@ -516,7 +517,7 @@ export default {
       })
     },
     getSubscriptionStatus(expiresAt) {
-      const expireDate = parseServerDate(expiresAt)
+      const expireDate = parseUtcDate(expiresAt)
       if (!expireDate) return '未知'
       const now = new Date()
       const diffDays = Math.ceil((expireDate - now) / (1000 * 60 * 60 * 24))
@@ -528,7 +529,7 @@ export default {
       } else if (diffDays <= 7) {
         return `剩余 ${diffDays} 天`
       } else {
-        return `到期：${formatDate(expiresAt).split(' ')[0]}`
+        return `到期：${formatUtcDate(expiresAt).split(' ')[0]}`
       }
     }
   }

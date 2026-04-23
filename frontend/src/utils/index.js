@@ -4,7 +4,7 @@
  * @param {string} [fmt='YYYY-MM-DD HH:mm:ss'] - The format pattern
  * @returns {string} Formatted date string
  */
-function normalizeServerDateString(value) {
+function normalizeUtcDateString(value) {
   const trimmed = String(value || '').trim()
   if (!trimmed) return ''
 
@@ -24,7 +24,7 @@ function normalizeServerDateString(value) {
   return trimmed
 }
 
-export function parseServerDate(date) {
+export function parseUtcDate(date) {
   if (!date) return null
   if (date instanceof Date) {
     return Number.isNaN(date.getTime()) ? null : new Date(date.getTime())
@@ -35,13 +35,34 @@ export function parseServerDate(date) {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  const parsed = new Date(normalizeServerDateString(date))
+  const parsed = new Date(normalizeUtcDateString(date))
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 export function formatDate(date, fmt = 'YYYY-MM-DD HH:mm:ss') {
   if (!date) return ''
-  const d = parseServerDate(date)
+  const d = new Date(date)
+  if (Number.isNaN(d.getTime())) return ''
+
+  const map = {
+    'YYYY': d.getFullYear(),
+    'MM': String(d.getMonth() + 1).padStart(2, '0'),
+    'DD': String(d.getDate()).padStart(2, '0'),
+    'HH': String(d.getHours()).padStart(2, '0'),
+    'mm': String(d.getMinutes()).padStart(2, '0'),
+    'ss': String(d.getSeconds()).padStart(2, '0')
+  }
+
+  let result = fmt
+  for (const [key, value] of Object.entries(map)) {
+    result = result.replace(key, value)
+  }
+  return result
+}
+
+export function formatUtcDate(date, fmt = 'YYYY-MM-DD HH:mm:ss') {
+  if (!date) return ''
+  const d = parseUtcDate(date)
   if (!d) return ''
 
   const map = {

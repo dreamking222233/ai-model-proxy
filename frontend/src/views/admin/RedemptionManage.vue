@@ -133,14 +133,14 @@
       </template>
 
       <template slot="expires_at" slot-scope="text">
-        <span v-if="text">{{ formatTime(text) }}</span>
+        <span v-if="text">{{ formatUtcTime(text) }}</span>
         <span v-else class="permanent-tag">
           <a-icon type="infinity" /> 永久有效
         </span>
       </template>
 
       <template slot="used_at" slot-scope="text">
-        <span v-if="text">{{ formatTime(text) }}</span>
+        <span v-if="text">{{ formatUtcTime(text) }}</span>
         <span v-else class="empty-text">-</span>
       </template>
 
@@ -328,13 +328,13 @@
         <div class="preview-item">
           <div class="preview-label">过期时间</div>
           <div class="preview-value">
-            <span v-if="previewCode.expires_at">{{ formatTime(previewCode.expires_at) }}</span>
+            <span v-if="previewCode.expires_at">{{ formatUtcTime(previewCode.expires_at) }}</span>
             <span v-else class="permanent-tag"><a-icon type="infinity" /> 永久有效</span>
           </div>
         </div>
         <div class="preview-item" v-if="previewCode.used_at">
           <div class="preview-label">使用时间</div>
-          <div class="preview-value">{{ formatTime(previewCode.used_at) }}</div>
+          <div class="preview-value">{{ formatUtcTime(previewCode.used_at) }}</div>
         </div>
         <div class="preview-item" v-if="previewCode.username || previewCode.used_by">
           <div class="preview-label">使用者</div>
@@ -354,7 +354,7 @@
 
 <script>
 import { listRedemptionCodes, createRedemptionCode, batchCreateRedemptionCodes, deleteRedemptionCode } from '@/api/redemption'
-import { formatDate } from '@/utils'
+import { formatDate, formatUtcDate } from '@/utils'
 
 export default {
   name: 'RedemptionManage',
@@ -550,8 +550,8 @@ export default {
             code.code,
             code.amount,
             this.getStatusText(code.status),
-            code.expires_at ? this.formatTime(code.expires_at) : '永久有效',
-            code.used_at ? this.formatTime(code.used_at) : '-',
+            code.expires_at ? this.formatUtcTime(code.expires_at) : '永久有效',
+            code.used_at ? this.formatUtcTime(code.used_at) : '-',
             code.username || code.used_by || '-',
             code.created_at ? this.formatTime(code.created_at) : '-'
           ].join(','))
@@ -595,6 +595,10 @@ export default {
     formatTime(time) {
       if (!time) return '-'
       return formatDate(time)
+    },
+    formatUtcTime(time) {
+      if (!time) return '-'
+      return formatUtcDate(time)
     }
   }
 }

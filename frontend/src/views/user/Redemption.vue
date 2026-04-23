@@ -114,7 +114,7 @@
 
 <script>
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
-import { formatDate } from '@/utils'
+import { formatUtcDate } from '@/utils'
 
 export default {
   name: 'Redemption',
@@ -180,7 +180,7 @@ export default {
       }
     },
     formatTime(time) {
-      return formatDate(time, 'YYYY/MM/DD HH:mm') || time || '-'
+      return formatUtcDate(time, 'YYYY/MM/DD HH:mm') || time || '-'
     }
   }
 }

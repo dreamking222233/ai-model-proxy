@@ -69,7 +69,7 @@
         </div>
         <div class="package-summary__meta">
           <span>模式：{{ subscriptionSummary.plan_kind === 'daily_quota' ? '每日额度刷新' : '时间无限套餐' }}</span>
-          <span v-if="subscriptionSummary.end_time">到期：{{ formatTime(subscriptionSummary.end_time) }}</span>
+          <span v-if="subscriptionSummary.end_time">到期：{{ formatUtcTime(subscriptionSummary.end_time) }}</span>
           <span v-if="subscriptionSummary.current_cycle">今日已用 {{ formatQuotaAmount(subscriptionSummary.current_cycle.used_amount, subscriptionSummary.quota_metric) }}</span>
           <span v-if="subscriptionSummary.current_cycle">今日剩余 {{ formatQuotaAmount(subscriptionSummary.current_cycle.remaining_amount, subscriptionSummary.quota_metric) }}</span>
         </div>
@@ -321,7 +321,7 @@
 
 <script>
 import { getUsageLogs, getProfile, getModelUsageStats } from '@/api/user'
-import { formatDate as formatServerDate, parseServerDate } from '@/utils'
+import { formatDate as formatLocalDate, formatUtcDate } from '@/utils'
 
 export default {
   name: 'BalanceLog',
@@ -447,11 +447,11 @@ export default {
       return (Number(b) || 0).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
     },
     formatDate(t) {
-      return formatServerDate(t, 'YYYY/MM/DD') || t || '-'
+      return formatLocalDate(t, 'YYYY/MM/DD') || t || '-'
     },
     formatTimeOnly(t) {
-      const d = parseServerDate(t)
-      if (!d) return t || '-'
+      const d = new Date(t)
+      if (Number.isNaN(d.getTime())) return t || '-'
       return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
     },
     isImageRequest(record) {
@@ -520,7 +520,10 @@ export default {
       return `${Number(value || 0).toLocaleString()} Token`
     },
     formatTime(t) {
-      return formatServerDate(t) || t || '-'
+      return formatLocalDate(t) || t || '-'
+    },
+    formatUtcTime(t) {
+      return formatUtcDate(t) || t || '-'
     },
     hasCacheSummary(r) {
       if (!r) return false

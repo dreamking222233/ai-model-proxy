@@ -164,7 +164,7 @@
           <a-col :xs="24" :sm="12" :md="12">
             <div class="summary-metric-item">
               <span class="summary-metric-key">最后登录</span>
-              <span class="summary-metric-value">{{ userSummary && userSummary.user && userSummary.user.last_login_at ? formatDate(userSummary.user.last_login_at) : '从未登录' }}</span>
+              <span class="summary-metric-value">{{ userSummary && userSummary.user && userSummary.user.last_login_at ? formatUtcDate(userSummary.user.last_login_at) : '从未登录' }}</span>
             </div>
           </a-col>
         </a-row>
@@ -440,7 +440,7 @@
 
 <script>
 import { getRequestUserSummary, listRequestLogs } from '@/api/system'
-import { formatDate } from '@/utils'
+import { formatDate, formatUtcDate } from '@/utils'
 
 export default {
   name: 'RequestLog',
@@ -585,6 +585,7 @@ export default {
   },
   methods: {
     formatDate,
+    formatUtcDate,
     buildRequestParams() {
       const params = {
         page: this.pagination.current,

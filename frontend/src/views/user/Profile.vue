@@ -62,7 +62,7 @@
                     <div class="d-icon"><a-icon type="clock-circle" /></div>
                     <div class="d-body">
                       <div class="d-label">最后活跃</div>
-                      <div class="d-val">{{ userInfo.last_login_at ? formatTime(userInfo.last_login_at) : '从未' }}</div>
+                      <div class="d-val">{{ userInfo.last_login_at ? formatUtcTime(userInfo.last_login_at) : '从未' }}</div>
                     </div>
                   </div>
                   <div class="detail-item">
@@ -143,7 +143,7 @@
 
 <script>
 import { getProfile, changePassword } from '@/api/user'
-import { formatDate } from '@/utils'
+import { formatDate, formatUtcDate } from '@/utils'
 
 export default {
   name: 'Profile',
@@ -204,6 +204,9 @@ export default {
     },
     formatTime(time) {
       return formatDate(time) || time || '-'
+    },
+    formatUtcTime(time) {
+      return formatUtcDate(time) || time || '-'
     }
   },
   computed: {

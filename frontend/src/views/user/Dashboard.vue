@@ -129,7 +129,7 @@
                       <span class="timer-val">{{ subscriptionStatus.isExpired ? '已过期' : subscriptionStatus.daysRemaining }}</span>
                       <span class="timer-unit">{{ subscriptionStatus.isExpired ? '' : '天后到期' }}</span>
                     </div>
-                    <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
+                    <div class="timer-date">截止至 {{ formatUtcDate(userProfile.subscription_expires_at) }}</div>
                   </div>
                 </div>
               </div>
@@ -147,7 +147,7 @@
                       <span class="timer-val">{{ quotaRemainingLabel }}</span>
                       <span class="timer-unit">{{ quotaUnitLabel }}</span>
                     </div>
-                    <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
+                    <div class="timer-date">截止至 {{ formatUtcDate(userProfile.subscription_expires_at) }}</div>
                   </div>
                 </div>
               </div>
@@ -233,7 +233,7 @@ import CountTo from 'vue-count-to'
 import { getBalance, getUsageLogs, getProfile } from '@/api/user'
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
-import { formatDate, parseServerDate } from '@/utils'
+import { formatUtcDate, parseUtcDate } from '@/utils'
 
 export default {
   name: 'UserDashboard',
@@ -265,7 +265,7 @@ export default {
       if (!this.userProfile.subscription_expires_at) {
         return { isExpired: true, daysRemaining: 0 }
       }
-      const expireDate = parseServerDate(this.userProfile.subscription_expires_at)
+      const expireDate = parseUtcDate(this.userProfile.subscription_expires_at)
       if (!expireDate) {
         return { isExpired: true, daysRemaining: 0 }
       }
@@ -363,7 +363,7 @@ export default {
       if (this.profileLoading) return '读取中...'
       if (this.userProfile.subscription_type === 'unlimited') {
         if (this.subscriptionStatus.isExpired) return '已过期'
-        return `有效期至 ${this.formatDate(this.userProfile.subscription_expires_at)}`
+        return `有效期至 ${this.formatUtcDate(this.userProfile.subscription_expires_at)}`
       }
       if (this.userProfile.subscription_type === 'quota') {
         if (!this.quotaCycle) return '每日额度读取中'
@@ -379,7 +379,7 @@ export default {
     this.showAnnouncementModal()
   },
   methods: {
-    formatDate,
+    formatUtcDate,
     refreshData() {
       this.fetchProfile()
       this.fetchBalance()

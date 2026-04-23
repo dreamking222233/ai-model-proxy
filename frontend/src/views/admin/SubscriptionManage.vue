@@ -153,8 +153,8 @@
 
             <template slot="time_range" slot-scope="text, record">
               <div class="sub-text">
-                <div>开始：{{ formatDate(record.start_time) }}</div>
-                <div>结束：{{ formatDate(record.end_time) }}</div>
+                <div>开始：{{ formatUtcDate(record.start_time) }}</div>
+                <div>结束：{{ formatUtcDate(record.end_time) }}</div>
               </div>
             </template>
 
@@ -283,7 +283,7 @@
               {{ getStatusText(selectedSubscription.status) }}
             </a-descriptions-item>
             <a-descriptions-item label="时间范围">
-              {{ formatDate(selectedSubscription.start_time) }} 至 {{ formatDate(selectedSubscription.end_time) }}
+              {{ formatUtcDate(selectedSubscription.start_time) }} 至 {{ formatUtcDate(selectedSubscription.end_time) }}
             </a-descriptions-item>
           </a-descriptions>
 
@@ -359,7 +359,7 @@ import {
   listSubscriptionPlans,
   updateSubscriptionPlan
 } from '@/api/subscription'
-import { formatDate } from '@/utils'
+import { formatDate, formatUtcDate } from '@/utils'
 
 const defaultUsageSummary = () => ({
   request_count: 0,
@@ -474,6 +474,7 @@ export default {
   },
   methods: {
     formatDate,
+    formatUtcDate,
     formatNumber(value) {
       return Number(value || 0).toLocaleString('zh-CN')
     },

@@ -233,7 +233,7 @@
 
 <script>
 import { listApiKeys, createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey } from '@/api/user'
-import { formatDate } from '@/utils'
+import { formatUtcDate } from '@/utils'
 
 export default {
   name: 'ApiKeyManage',
@@ -418,7 +418,7 @@ export default {
       return num.toString()
     },
     formatTime(time) {
-      return formatDate(time, 'YYYY-MM-DD HH:mm') || time || '-'
+      return formatUtcDate(time, 'YYYY-MM-DD HH:mm') || time || '-'
     }
   }
 }

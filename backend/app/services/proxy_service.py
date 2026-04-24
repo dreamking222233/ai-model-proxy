@@ -27,6 +27,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
+from app.database import release_session_connection, session_scope
 from app.models.user import SysUser, UserApiKey
 from app.models.channel import Channel
 from app.models.model import UnifiedModel
@@ -120,6 +121,8 @@ class ProxyService:
             user.id,
             SubscriptionService.get_current_time(),
         )
+        # Persist subscription-state refresh before the request session is proactively released.
+        db.commit()
         if active_subscription:
             if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
                 SubscriptionService.check_quota_before_request(db, user)
@@ -2493,6 +2496,7 @@ class ProxyService:
         """Serve a Codex-compatible websocket session on ``GET /v1/responses``."""
         last_request: dict | None = None
         last_response_output: list = []
+        release_session_connection(db)
 
         while True:
             try:
@@ -2551,6 +2555,7 @@ class ProxyService:
                     db, user, requested_model
                 )
             except ServiceException as exc:
+                release_session_connection(db)
                 await websocket.send_text(json.dumps(
                     ProxyService._build_responses_error_payload(
                         exc.detail,
@@ -2560,6 +2565,7 @@ class ProxyService:
                     ensure_ascii=False,
                 ))
                 return
+            release_session_connection(db)
 
             turn_completed = False
             last_error: Exception | None = None
@@ -2584,6 +2590,7 @@ class ProxyService:
                     requested_model=requested_model,
                 )
                 last_cache_info = cache_info
+                release_session_connection(db)
                 started_at = time.time()
                 try:
                     completed_output, input_tokens, output_tokens, first_chunk_time = (
@@ -2969,6 +2976,7 @@ class ProxyService:
         request_headers: Optional[dict[str, str]] = None,
     ) -> StreamingResponse:
         """Forward a streaming Responses request to upstream ``/responses``."""
+        release_session_connection(db)
         start_time = time.time()
         model_name = request_data.get("model", requested_model)
 
@@ -3389,6 +3397,7 @@ class ProxyService:
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         """Forward a non-streaming Responses request to upstream ``/responses``."""
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/responses"
@@ -3961,6 +3970,7 @@ class ProxyService:
         the client. After the stream ends (``data: [DONE]``), extracts token
         usage from the final chunk (if present), deducts balance, and logs.
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
@@ -4197,6 +4207,7 @@ class ProxyService:
         Sends the request, extracts token usage, deducts balance, logs,
         and returns the full response.
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/chat/completions"
@@ -4327,6 +4338,7 @@ class ProxyService:
         The client still receives OpenAI chat-completions SSE chunks, while the
         upstream request is sent to Claude Messages API.
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
@@ -4666,6 +4678,7 @@ class ProxyService:
         """
         Send an OpenAI chat-completions request through an Anthropic upstream.
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
@@ -4782,6 +4795,7 @@ class ProxyService:
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         """Stream an Anthropic client request through an OpenAI Responses upstream."""
+        release_session_connection(db)
         start_time = time.time()
         responses_request = ProxyService._convert_anthropic_request_to_responses(
             request_data,
@@ -5628,6 +5642,7 @@ class ProxyService:
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> JSONResponse:
         """Send an Anthropic request through an OpenAI Responses upstream."""
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/responses"
@@ -5757,6 +5772,7 @@ class ProxyService:
         Usage info comes from ``message_start`` (input_tokens) and
         ``message_delta`` (output_tokens).
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
@@ -5823,6 +5839,7 @@ class ProxyService:
                         request_attempt["request_data"],
                         request_headers=request_headers,
                     )
+                    release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
                     should_retry_full = False
 
@@ -6157,6 +6174,7 @@ class ProxyService:
         Anthropic response contains ``usage.input_tokens`` and
         ``usage.output_tokens`` at the top level.
         """
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/messages"
@@ -6214,6 +6232,7 @@ class ProxyService:
                         request_payload,
                         request_headers=request_headers,
                     )
+                    release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
                     should_retry_full = False
 
@@ -6724,24 +6743,31 @@ class ProxyService:
         Increments ``failure_count``, sets ``last_failure_at``, and triggers
         the circuit breaker if the threshold is reached.
         """
+        channel_id = getattr(channel, "id", None)
+        if not channel_id:
+            return
         try:
-            channel.failure_count += 1
-            channel.last_failure_at = datetime.utcnow()
+            with session_scope() as write_db:
+                persisted_channel = (
+                    write_db.query(Channel)
+                    .filter(Channel.id == channel_id)
+                    .first()
+                )
+                if not persisted_channel:
+                    return
 
-            # Check circuit breaker threshold
-            threshold = get_system_config(db, "circuit_breaker_threshold", 5)
-            if channel.failure_count >= threshold:
-                recovery = get_system_config(db, "circuit_breaker_recovery", 600)
-                channel.circuit_breaker_until = datetime.utcnow() + timedelta(seconds=recovery)
-                channel.is_healthy = 0
+                persisted_channel.failure_count += 1
+                persisted_channel.last_failure_at = datetime.utcnow()
 
-            # Decrease health score
-            channel.health_score = max(0, channel.health_score - 10)
+                threshold = get_system_config(write_db, "circuit_breaker_threshold", 5)
+                if persisted_channel.failure_count >= threshold:
+                    recovery = get_system_config(write_db, "circuit_breaker_recovery", 600)
+                    persisted_channel.circuit_breaker_until = datetime.utcnow() + timedelta(seconds=recovery)
+                    persisted_channel.is_healthy = 0
 
-            db.commit()
+                persisted_channel.health_score = max(0, persisted_channel.health_score - 10)
         except Exception as e:
             logger.error("Failed to record channel failure: %s", e)
-            db.rollback()
 
     @staticmethod
     def _record_success(
@@ -6755,20 +6781,28 @@ class ProxyService:
 
         Resets ``failure_count`` and ``circuit_breaker_until``, marks healthy.
         """
-        channel.failure_count = 0
-        channel.last_success_at = datetime.utcnow()
-        channel.is_healthy = 1
-        channel.circuit_breaker_until = None
+        channel_id = getattr(channel, "id", None)
+        if not channel_id:
+            return
+        try:
+            with session_scope() as write_db:
+                persisted_channel = (
+                    write_db.query(Channel)
+                    .filter(Channel.id == channel_id)
+                    .first()
+                )
+                if not persisted_channel:
+                    return
 
-        # Increase health score
-        channel.health_score = min(100, channel.health_score + 5)
-
-        if auto_commit:
-            try:
-                db.commit()
-            except Exception as e:
-                logger.error("Failed to record channel success: %s", e)
-                db.rollback()
+                persisted_channel.failure_count = 0
+                persisted_channel.last_success_at = datetime.utcnow()
+                persisted_channel.is_healthy = 1
+                persisted_channel.circuit_breaker_until = None
+                persisted_channel.health_score = min(100, persisted_channel.health_score + 5)
+                if not auto_commit:
+                    write_db.flush()
+        except Exception as e:
+            logger.error("Failed to record channel success: %s", e)
 
     # ===================================================================
     # Helper: balance deduction and logging
@@ -6797,226 +6831,240 @@ class ProxyService:
         write request log and consumption record, and update API key usage stats.
         """
         try:
-            usage_now = SubscriptionService.get_current_time()
-            raw_input_tokens = int(input_tokens or 0)
-            raw_output_tokens = int(output_tokens or 0)
-            raw_total_tokens = raw_input_tokens + raw_output_tokens
-
-            # Apply token multiplier
-            token_multiplier = get_system_config(db, "token_multiplier", 1.0)
-            input_tokens = int(raw_input_tokens * token_multiplier)
-            output_tokens = int(raw_output_tokens * token_multiplier)
-            total_tokens = input_tokens + output_tokens
-
-            # Calculate cost with price multiplier
-            price_multiplier = get_system_config(db, "price_multiplier", 1.0)
-            input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
-            output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
-            total_cost = input_cost + output_cost
-
-            # Handle balance deduction based on subscription type
-            billing_mode = "balance"
-            subscription_id: int | None = None
-            subscription_cycle_id: int | None = None
-            quota_metric: str | None = None
-            quota_consumed_amount = Decimal("0")
-            quota_limit_snapshot = Decimal("0")
-            quota_used_after = Decimal("0")
-            quota_cycle_date = None
-            if user.subscription_type == "balance":
-                # Balance mode: deduct from user balance (with row lock)
-                balance = (
-                    db.query(UserBalance)
-                    .filter(UserBalance.user_id == user.id)
-                    .with_for_update()
+            with session_scope() as write_db:
+                fresh_user = (
+                    write_db.query(SysUser)
+                    .filter(SysUser.id == user.id)
                     .first()
                 )
-                if balance:
-                    balance_before = float(balance.balance)
-                    balance.balance -= Decimal(str(total_cost))
-                    balance.total_consumed += Decimal(str(total_cost))
-                    balance_after = float(balance.balance)
-                else:
-                    balance_before = 0.0
-                    balance_after = 0.0
-            else:
-                # Subscription mode: no balance deduction, but daily quota plans still need usage settlement.
-                billing_mode = "subscription"
-                active_subscription = SubscriptionService.resolve_active_subscription(db, user.id, usage_now)
-                subscription_id = active_subscription.id if active_subscription else None
-                if active_subscription and (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
-                    quota_usage = SubscriptionService.consume_quota_after_request(
-                        db,
-                        active_subscription,
-                        request_id=request_id,
-                        raw_total_tokens=raw_total_tokens,
-                        total_cost=total_cost,
-                        now=usage_now,
+                if not fresh_user:
+                    raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+
+                fresh_api_key_record = None
+                if getattr(api_key_record, "id", None):
+                    fresh_api_key_record = (
+                        write_db.query(UserApiKey)
+                        .filter(UserApiKey.id == api_key_record.id)
+                        .first()
                     )
-                    subscription_cycle_id = quota_usage["subscription_cycle_id"]
-                    quota_metric = quota_usage["quota_metric"]
-                    quota_consumed_amount = quota_usage["quota_consumed_amount"]
-                    quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
-                    quota_used_after = quota_usage["quota_used_after"]
-                    quota_cycle_date = quota_usage["quota_cycle_date"]
 
-                balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-                if balance:
-                    balance_before = float(balance.balance)
-                    balance_after = float(balance.balance)
+                usage_now = SubscriptionService.get_current_time()
+                raw_input_tokens = int(input_tokens or 0)
+                raw_output_tokens = int(output_tokens or 0)
+                raw_total_tokens = raw_input_tokens + raw_output_tokens
+
+                token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
+                input_tokens = int(raw_input_tokens * token_multiplier)
+                output_tokens = int(raw_output_tokens * token_multiplier)
+                total_tokens = input_tokens + output_tokens
+
+                price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
+                input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
+                output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
+                total_cost = input_cost + output_cost
+
+                billing_mode = "balance"
+                subscription_id: int | None = None
+                subscription_cycle_id: int | None = None
+                quota_metric: str | None = None
+                quota_consumed_amount = Decimal("0")
+                quota_limit_snapshot = Decimal("0")
+                quota_used_after = Decimal("0")
+                quota_cycle_date = None
+                if fresh_user.subscription_type == "balance":
+                    balance = (
+                        write_db.query(UserBalance)
+                        .filter(UserBalance.user_id == fresh_user.id)
+                        .with_for_update()
+                        .first()
+                    )
+                    if balance:
+                        balance_before = float(balance.balance)
+                        balance.balance -= Decimal(str(total_cost))
+                        balance.total_consumed += Decimal(str(total_cost))
+                        balance_after = float(balance.balance)
+                    else:
+                        balance_before = 0.0
+                        balance_after = 0.0
                 else:
-                    balance_before = 0.0
-                    balance_after = 0.0
+                    billing_mode = "subscription"
+                    active_subscription = SubscriptionService.resolve_active_subscription(
+                        write_db,
+                        fresh_user.id,
+                        usage_now,
+                    )
+                    subscription_id = active_subscription.id if active_subscription else None
+                    if active_subscription and (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
+                        quota_usage = SubscriptionService.consume_quota_after_request(
+                            write_db,
+                            active_subscription,
+                            request_id=request_id,
+                            raw_total_tokens=raw_total_tokens,
+                            total_cost=total_cost,
+                            now=usage_now,
+                        )
+                        subscription_cycle_id = quota_usage["subscription_cycle_id"]
+                        quota_metric = quota_usage["quota_metric"]
+                        quota_consumed_amount = quota_usage["quota_consumed_amount"]
+                        quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
+                        quota_used_after = quota_usage["quota_used_after"]
+                        quota_cycle_date = quota_usage["quota_cycle_date"]
 
-            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
-            shadow_commit = None
-            if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
-                shadow_commit = cache_info.get("_conversation_shadow_commit")
-            elif (
-                conversation_state_info
-                and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
-            ):
-                shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
+                    balance = (
+                        write_db.query(UserBalance)
+                        .filter(UserBalance.user_id == fresh_user.id)
+                        .first()
+                    )
+                    if balance:
+                        balance_before = float(balance.balance)
+                        balance_after = float(balance.balance)
+                    else:
+                        balance_before = 0.0
+                        balance_after = 0.0
 
-            committed_session_id = ConversationSessionService.commit_success_state(
-                db,
-                user_id=user.id,
-                requested_model=requested_model,
-                protocol_type=channel.protocol_type or "",
-                channel_id=channel.id,
-                shadow_commit=shadow_commit,
-            )
-            if committed_session_id and not cache_log_fields.get("conversation_session_id"):
-                cache_log_fields["conversation_session_id"] = committed_session_id
-                if cache_info is not None:
-                    cache_info["conversation_session_id"] = committed_session_id
-                if conversation_state_info is not None:
-                    conversation_state_info["conversation_session_id"] = committed_session_id
+                cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+                shadow_commit = None
+                if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
+                    shadow_commit = cache_info.get("_conversation_shadow_commit")
+                elif (
+                    conversation_state_info
+                    and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
+                ):
+                    shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
 
-            # Write consumption record (for both modes)
-            logical_input_tokens = int(
-                cache_log_fields.get("logical_input_tokens") or input_tokens
-            )
-            consumption = ConsumptionRecord(
-                user_id=user.id,
-                request_id=request_id,
-                model_name=requested_model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                raw_input_tokens=raw_input_tokens,
-                raw_output_tokens=raw_output_tokens,
-                raw_total_tokens=raw_total_tokens,
-                logical_input_tokens=logical_input_tokens,
-                upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
-                upstream_cache_read_input_tokens=int(
-                    cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
-                ),
-                upstream_cache_creation_input_tokens=int(
-                    cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
-                ),
-                upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
-                input_cost=Decimal(str(input_cost)),
-                output_cost=Decimal(str(output_cost)),
-                total_cost=Decimal(str(total_cost)),
-                balance_before=Decimal(str(balance_before)),
-                balance_after=Decimal(str(balance_after)),
-                billing_mode=billing_mode,
-                subscription_id=subscription_id,
-                subscription_cycle_id=subscription_cycle_id,
-                quota_metric=quota_metric,
-                quota_consumed_amount=quota_consumed_amount,
-                quota_limit_snapshot=quota_limit_snapshot,
-                quota_used_after=quota_used_after,
-                quota_cycle_date=quota_cycle_date,
-            )
-            db.add(consumption)
+                committed_session_id = ConversationSessionService.commit_success_state(
+                    write_db,
+                    user_id=fresh_user.id,
+                    requested_model=requested_model,
+                    protocol_type=channel.protocol_type or "",
+                    channel_id=channel.id,
+                    shadow_commit=shadow_commit,
+                )
+                if committed_session_id and not cache_log_fields.get("conversation_session_id"):
+                    cache_log_fields["conversation_session_id"] = committed_session_id
+                    if cache_info is not None:
+                        cache_info["conversation_session_id"] = committed_session_id
+                    if conversation_state_info is not None:
+                        conversation_state_info["conversation_session_id"] = committed_session_id
 
-            # Write request log
-            req_log = RequestLog(
-                request_id=request_id,
-                user_id=user.id,
-                user_api_key_id=api_key_record.id,
-                channel_id=channel.id,
-                channel_name=channel.name,
-                requested_model=requested_model,
-                actual_model=actual_model or unified_model.model_name,
-                protocol_type=channel.protocol_type,
-                request_type="chat",
-                billing_type="subscription" if billing_mode == "subscription" else "token",
-                is_stream=1 if is_stream else 0,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                raw_input_tokens=raw_input_tokens,
-                raw_output_tokens=raw_output_tokens,
-                raw_total_tokens=raw_total_tokens,
-                image_credits_charged=0,
-                image_count=0,
-                response_time_ms=response_time_ms,
-                cache_status=cache_log_fields["cache_status"],
-                cache_hit_segments=cache_log_fields["cache_hit_segments"],
-                cache_miss_segments=cache_log_fields["cache_miss_segments"],
-                cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
-                cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
-                cache_new_tokens=cache_log_fields["cache_new_tokens"],
-                cache_reused_chars=cache_log_fields["cache_reused_chars"],
-                cache_new_chars=cache_log_fields["cache_new_chars"],
-                logical_input_tokens=logical_input_tokens,
-                upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
-                upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
-                upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
-                upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
-                upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
-                upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
-                conversation_session_id=cache_log_fields["conversation_session_id"],
-                conversation_match_status=cache_log_fields["conversation_match_status"],
-                compression_mode=cache_log_fields["compression_mode"],
-                compression_status=cache_log_fields["compression_status"],
-                original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
-                compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
-                compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
-                compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
-                compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
-                upstream_session_mode=cache_log_fields["upstream_session_mode"],
-                upstream_session_id=cache_log_fields["upstream_session_id"],
-                status="success",
-                error_message=None,
-                client_ip=client_ip,
-                subscription_cycle_id=subscription_cycle_id,
-                quota_metric=quota_metric,
-                quota_consumed_amount=quota_consumed_amount,
-                quota_limit_snapshot=quota_limit_snapshot,
-                quota_used_after=quota_used_after,
-                quota_cycle_date=quota_cycle_date,
-            )
-            db.add(req_log)
-
-            RequestCacheSummaryService.persist_request_cache_summary(
-                db,
-                request_id=request_id,
-                user_id=user.id,
-                requested_model=requested_model,
-                protocol_type=channel.protocol_type,
-                cache_info=cache_info,
-            )
-            if cache_info and cache_info.get("_conversation_mark_cooldown"):
-                ConversationSessionService.mark_session_cooldown_by_session_id(
-                    db,
-                    cache_log_fields.get("conversation_session_id") or committed_session_id,
+                logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
+                write_db.add(
+                    ConsumptionRecord(
+                        user_id=fresh_user.id,
+                        request_id=request_id,
+                        model_name=requested_model,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                        raw_input_tokens=raw_input_tokens,
+                        raw_output_tokens=raw_output_tokens,
+                        raw_total_tokens=raw_total_tokens,
+                        logical_input_tokens=logical_input_tokens,
+                        upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
+                        upstream_cache_read_input_tokens=int(
+                            cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
+                        ),
+                        upstream_cache_creation_input_tokens=int(
+                            cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
+                        ),
+                        upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
+                        input_cost=Decimal(str(input_cost)),
+                        output_cost=Decimal(str(output_cost)),
+                        total_cost=Decimal(str(total_cost)),
+                        balance_before=Decimal(str(balance_before)),
+                        balance_after=Decimal(str(balance_after)),
+                        billing_mode=billing_mode,
+                        subscription_id=subscription_id,
+                        subscription_cycle_id=subscription_cycle_id,
+                        quota_metric=quota_metric,
+                        quota_consumed_amount=quota_consumed_amount,
+                        quota_limit_snapshot=quota_limit_snapshot,
+                        quota_used_after=quota_used_after,
+                        quota_cycle_date=quota_cycle_date,
+                    )
                 )
 
-            # Update API key stats
-            api_key_record.total_requests += 1
-            api_key_record.total_tokens += total_tokens
-            api_key_record.total_cost += Decimal(str(total_cost))
-            api_key_record.last_used_at = datetime.utcnow()
+                write_db.add(
+                    RequestLog(
+                        request_id=request_id,
+                        user_id=fresh_user.id,
+                        user_api_key_id=getattr(api_key_record, "id", None),
+                        channel_id=channel.id,
+                        channel_name=channel.name,
+                        requested_model=requested_model,
+                        actual_model=actual_model or unified_model.model_name,
+                        protocol_type=channel.protocol_type,
+                        request_type="chat",
+                        billing_type="subscription" if billing_mode == "subscription" else "token",
+                        is_stream=1 if is_stream else 0,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=total_tokens,
+                        raw_input_tokens=raw_input_tokens,
+                        raw_output_tokens=raw_output_tokens,
+                        raw_total_tokens=raw_total_tokens,
+                        image_credits_charged=0,
+                        image_count=0,
+                        response_time_ms=response_time_ms,
+                        cache_status=cache_log_fields["cache_status"],
+                        cache_hit_segments=cache_log_fields["cache_hit_segments"],
+                        cache_miss_segments=cache_log_fields["cache_miss_segments"],
+                        cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
+                        cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
+                        cache_new_tokens=cache_log_fields["cache_new_tokens"],
+                        cache_reused_chars=cache_log_fields["cache_reused_chars"],
+                        cache_new_chars=cache_log_fields["cache_new_chars"],
+                        logical_input_tokens=logical_input_tokens,
+                        upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
+                        upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                        upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
+                        upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
+                        upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
+                        upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
+                        conversation_session_id=cache_log_fields["conversation_session_id"],
+                        conversation_match_status=cache_log_fields["conversation_match_status"],
+                        compression_mode=cache_log_fields["compression_mode"],
+                        compression_status=cache_log_fields["compression_status"],
+                        original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
+                        compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
+                        compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
+                        compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
+                        compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
+                        upstream_session_mode=cache_log_fields["upstream_session_mode"],
+                        upstream_session_id=cache_log_fields["upstream_session_id"],
+                        status="success",
+                        error_message=None,
+                        client_ip=client_ip,
+                        subscription_cycle_id=subscription_cycle_id,
+                        quota_metric=quota_metric,
+                        quota_consumed_amount=quota_consumed_amount,
+                        quota_limit_snapshot=quota_limit_snapshot,
+                        quota_used_after=quota_used_after,
+                        quota_cycle_date=quota_cycle_date,
+                    )
+                )
 
-            db.commit()
+                RequestCacheSummaryService.persist_request_cache_summary(
+                    write_db,
+                    request_id=request_id,
+                    user_id=fresh_user.id,
+                    requested_model=requested_model,
+                    protocol_type=channel.protocol_type,
+                    cache_info=cache_info,
+                )
+                if cache_info and cache_info.get("_conversation_mark_cooldown"):
+                    ConversationSessionService.mark_session_cooldown_by_session_id(
+                        write_db,
+                        cache_log_fields.get("conversation_session_id") or committed_session_id,
+                    )
 
+                if fresh_api_key_record:
+                    fresh_api_key_record.total_requests += 1
+                    fresh_api_key_record.total_tokens += total_tokens
+                    fresh_api_key_record.total_cost += Decimal(str(total_cost))
+                    fresh_api_key_record.last_used_at = datetime.utcnow()
         except Exception as e:
             logger.error("Balance deduction / logging failed: %s", e)
-            db.rollback()
 
     @staticmethod
     def _log_failed_request(
@@ -7039,70 +7087,70 @@ class ProxyService:
     ) -> None:
         """Log a failed request without deducting balance."""
         try:
-            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
-            req_log = RequestLog(
-                request_id=request_id,
-                user_id=user.id,
-                user_api_key_id=api_key_record.id,
-                channel_id=channel.id if channel else None,
-                channel_name=channel.name if channel else None,
-                requested_model=requested_model,
-                actual_model=None,
-                protocol_type=channel.protocol_type if channel else None,
-                request_type=request_type,
-                billing_type=billing_type,
-                is_stream=1 if is_stream else 0,
-                input_tokens=0,
-                output_tokens=0,
-                total_tokens=0,
-                image_credits_charged=Decimal(str(image_credits_charged or 0)).quantize(Decimal("0.001")),
-                image_count=int(image_count or 0),
-                image_size=image_size,
-                response_time_ms=response_time_ms,
-                cache_status=cache_log_fields["cache_status"],
-                cache_hit_segments=cache_log_fields["cache_hit_segments"],
-                cache_miss_segments=cache_log_fields["cache_miss_segments"],
-                cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
-                cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
-                cache_new_tokens=cache_log_fields["cache_new_tokens"],
-                cache_reused_chars=cache_log_fields["cache_reused_chars"],
-                cache_new_chars=cache_log_fields["cache_new_chars"],
-                logical_input_tokens=int(cache_log_fields.get("logical_input_tokens", 0) or 0),
-                upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
-                upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
-                upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
-                upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
-                upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
-                upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
-                conversation_session_id=cache_log_fields["conversation_session_id"],
-                conversation_match_status=cache_log_fields["conversation_match_status"],
-                compression_mode=cache_log_fields["compression_mode"],
-                compression_status=cache_log_fields["compression_status"],
-                original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
-                compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
-                compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
-                compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
-                compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
-                upstream_session_mode=cache_log_fields["upstream_session_mode"],
-                upstream_session_id=cache_log_fields["upstream_session_id"],
-                status="error",
-                error_message=error_message[:2000] if error_message else None,
-                client_ip=client_ip,
-            )
-            db.add(req_log)
+            with session_scope() as write_db:
+                cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+                write_db.add(
+                    RequestLog(
+                        request_id=request_id,
+                        user_id=user.id,
+                        user_api_key_id=getattr(api_key_record, "id", None),
+                        channel_id=channel.id if channel else None,
+                        channel_name=channel.name if channel else None,
+                        requested_model=requested_model,
+                        actual_model=None,
+                        protocol_type=channel.protocol_type if channel else None,
+                        request_type=request_type,
+                        billing_type=billing_type,
+                        is_stream=1 if is_stream else 0,
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        image_credits_charged=Decimal(str(image_credits_charged or 0)).quantize(Decimal("0.001")),
+                        image_count=int(image_count or 0),
+                        image_size=image_size,
+                        response_time_ms=response_time_ms,
+                        cache_status=cache_log_fields["cache_status"],
+                        cache_hit_segments=cache_log_fields["cache_hit_segments"],
+                        cache_miss_segments=cache_log_fields["cache_miss_segments"],
+                        cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
+                        cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
+                        cache_new_tokens=cache_log_fields["cache_new_tokens"],
+                        cache_reused_chars=cache_log_fields["cache_reused_chars"],
+                        cache_new_chars=cache_log_fields["cache_new_chars"],
+                        logical_input_tokens=int(cache_log_fields.get("logical_input_tokens", 0) or 0),
+                        upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
+                        upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                        upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
+                        upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
+                        upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
+                        upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
+                        conversation_session_id=cache_log_fields["conversation_session_id"],
+                        conversation_match_status=cache_log_fields["conversation_match_status"],
+                        compression_mode=cache_log_fields["compression_mode"],
+                        compression_status=cache_log_fields["compression_status"],
+                        original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
+                        compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
+                        compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
+                        compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
+                        compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
+                        upstream_session_mode=cache_log_fields["upstream_session_mode"],
+                        upstream_session_id=cache_log_fields["upstream_session_id"],
+                        status="error",
+                        error_message=error_message[:2000] if error_message else None,
+                        client_ip=client_ip,
+                    )
+                )
 
-            RequestCacheSummaryService.persist_request_cache_summary(
-                db,
-                request_id=request_id,
-                user_id=user.id,
-                requested_model=requested_model,
-                protocol_type=channel.protocol_type if channel else None,
-                cache_info=cache_info,
-            )
-            db.commit()
+                RequestCacheSummaryService.persist_request_cache_summary(
+                    write_db,
+                    request_id=request_id,
+                    user_id=user.id,
+                    requested_model=requested_model,
+                    protocol_type=channel.protocol_type if channel else None,
+                    cache_info=cache_info,
+                )
         except Exception as e:
             logger.error("Failed to log error request: %s", e)
-            db.rollback()
 
     # ===================================================================
     # Helper: validate request content length
@@ -7456,43 +7504,51 @@ class ProxyService:
         request_type: str = "image_generation",
     ) -> None:
         request_type_label = "Image edit" if request_type == "image_edit" else "Image generation"
-        ImageCreditService.deduct_for_request(
-            db,
-            user_id=user.id,
-            request_id=request_id,
-            model_name=requested_model,
-            amount=charged_credits,
-            multiplier=charged_credits,
-            image_size=image_size,
-            remark=f"{request_type_label}: {image_count} image(s)",
-        )
-        req_log = RequestLog(
-            request_id=request_id,
-            user_id=user.id,
-            user_api_key_id=api_key_record.id,
-            channel_id=channel.id,
-            channel_name=channel.name,
-            requested_model=requested_model,
-            actual_model=actual_model,
-            protocol_type=channel.protocol_type,
-            request_type=request_type,
-            billing_type="image_credit",
-            is_stream=0,
-            input_tokens=0,
-            output_tokens=0,
-            total_tokens=0,
-            image_credits_charged=charged_credits,
-            image_count=image_count,
-            image_size=image_size,
-            response_time_ms=response_time_ms,
-            status="success",
-            error_message=None,
-            client_ip=client_ip,
-        )
-        db.add(req_log)
-        api_key_record.total_requests += 1
-        api_key_record.last_used_at = datetime.utcnow()
-        db.flush()
+        with session_scope() as write_db:
+            ImageCreditService.deduct_for_request(
+                write_db,
+                user_id=user.id,
+                request_id=request_id,
+                model_name=requested_model,
+                amount=charged_credits,
+                multiplier=charged_credits,
+                image_size=image_size,
+                remark=f"{request_type_label}: {image_count} image(s)",
+            )
+            write_db.add(
+                RequestLog(
+                    request_id=request_id,
+                    user_id=user.id,
+                    user_api_key_id=getattr(api_key_record, "id", None),
+                    channel_id=channel.id,
+                    channel_name=channel.name,
+                    requested_model=requested_model,
+                    actual_model=actual_model,
+                    protocol_type=channel.protocol_type,
+                    request_type=request_type,
+                    billing_type="image_credit",
+                    is_stream=0,
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    image_credits_charged=charged_credits,
+                    image_count=image_count,
+                    image_size=image_size,
+                    response_time_ms=response_time_ms,
+                    status="success",
+                    error_message=None,
+                    client_ip=client_ip,
+                )
+            )
+            if getattr(api_key_record, "id", None):
+                fresh_api_key_record = (
+                    write_db.query(UserApiKey)
+                    .filter(UserApiKey.id == api_key_record.id)
+                    .first()
+                )
+                if fresh_api_key_record:
+                    fresh_api_key_record.total_requests += 1
+                    fresh_api_key_record.last_used_at = datetime.utcnow()
 
     @staticmethod
     async def _non_stream_google_image_request(
@@ -7510,6 +7566,7 @@ class ProxyService:
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/v1beta/models/{upstream_model_name}:generateContent"
@@ -7558,12 +7615,9 @@ class ProxyService:
                 image_count=len(images),
                 request_type="image_generation",
             )
-            db.commit()
         except ServiceException:
-            db.rollback()
             raise
         except Exception as exc:
-            db.rollback()
             logger.error("Image billing / logging failed after upstream success: %s", exc)
             raise ServiceException(
                 500,
@@ -7598,6 +7652,7 @@ class ProxyService:
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
+        release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = ProxyService._resolve_openai_image_generation_url(base_url)
@@ -7662,12 +7717,9 @@ class ProxyService:
                 image_count=len(images),
                 request_type="image_generation",
             )
-            db.commit()
         except ServiceException:
-            db.rollback()
             raise
         except Exception as exc:
-            db.rollback()
             logger.error("OpenAI image billing / logging failed after upstream success: %s", exc)
             raise ServiceException(
                 500,
@@ -7702,6 +7754,7 @@ class ProxyService:
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
+        release_session_connection(db)
         start_time = time.time()
         image_files = ProxyService._extract_image_edit_inputs(request_data)
         if not image_files:
@@ -7797,12 +7850,9 @@ class ProxyService:
                 image_count=len(images),
                 request_type="image_edit",
             )
-            db.commit()
         except ServiceException:
-            db.rollback()
             raise
         except Exception as exc:
-            db.rollback()
             logger.error("OpenAI image edit billing / logging failed after upstream success: %s", exc)
             raise ServiceException(
                 500,
@@ -7836,6 +7886,7 @@ class ProxyService:
         charged_credits: Decimal,
         image_size: Optional[str] = None,
     ) -> JSONResponse:
+        release_session_connection(db)
         start_time = time.time()
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
@@ -7873,12 +7924,9 @@ class ProxyService:
                 image_count=len(images),
                 request_type="image_generation",
             )
-            db.commit()
         except ServiceException:
-            db.rollback()
             raise
         except Exception as exc:
-            db.rollback()
             logger.error("Vertex image billing / logging failed after upstream success: %s", exc)
             raise ServiceException(
                 500,

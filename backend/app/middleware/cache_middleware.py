@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from app.database import release_session_connection
 from app.models.user import SysUser
 from app.services.request_body_cache_service import RequestBodyCacheService
 
@@ -37,6 +38,7 @@ class CacheMiddleware:
         )
         if cache_state is not None:
             cache_state["cache_info"] = cache_info
+        release_session_connection(db)
         try:
             response = await upstream_call()
         except Exception as exc:

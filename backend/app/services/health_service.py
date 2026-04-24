@@ -11,6 +11,7 @@ import httpx
 from datetime import datetime
 from sqlalchemy.orm import Session
 
+from app.database import release_session_connection, session_scope
 from app.models.channel import Channel
 from app.models.model import ModelChannelMapping, UnifiedModel
 from app.models.log import HealthCheckLog, SystemConfig
@@ -230,9 +231,10 @@ class HealthService:
                 })
                 continue
             actual_model_name = _select_health_check_model(db, channel)
-            tasks.append(HealthService._check_and_record(db, channel, actual_model_name))
+            tasks.append(HealthService._check_and_record(channel, actual_model_name))
             task_channels.append(channel)
 
+        release_session_connection(db)
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results -- gather may return exceptions for individual tasks
@@ -275,11 +277,12 @@ class HealthService:
             or _select_health_check_model(db, channel)
         )
 
-        return await HealthService._check_and_record(db, channel, actual_model_name)
+        release_session_connection(db)
+        return await HealthService._check_and_record(channel, actual_model_name)
 
     @staticmethod
     async def _check_and_record(
-        db: Session, channel: Channel, actual_model_name: Optional[str]
+        channel: Channel, actual_model_name: Optional[str]
     ) -> dict:
         """
         Perform the actual health check, update the channel, and log the result.
@@ -294,39 +297,44 @@ class HealthService:
 
         now = datetime.utcnow()
 
-        # Update channel health state
-        channel.last_health_check_at = now
-        if success:
-            channel.is_healthy = 1
-            channel.failure_count = 0
-            channel.last_success_at = now
-            # Increase health score (max 100)
-            channel.health_score = min(100, channel.health_score + 10)
-            channel.circuit_breaker_until = None
-        else:
-            channel.failure_count += 1
-            channel.last_failure_at = now
-            # Decrease health score (min 0)
-            channel.health_score = max(0, channel.health_score - 20)
+        health_score = None
+        failure_count = None
+        with session_scope() as db:
+            persisted_channel = db.query(Channel).filter(Channel.id == channel.id).first()
+            if not persisted_channel:
+                raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
 
-            threshold = get_system_config(db, "circuit_breaker_threshold", 5)
-            if channel.failure_count >= threshold:
-                recovery = get_system_config(db, "circuit_breaker_recovery", 600)
-                from datetime import timedelta
-                channel.circuit_breaker_until = now + timedelta(seconds=recovery)
-                channel.is_healthy = 0
+            persisted_channel.last_health_check_at = now
+            if success:
+                persisted_channel.is_healthy = 1
+                persisted_channel.failure_count = 0
+                persisted_channel.last_success_at = now
+                persisted_channel.health_score = min(100, persisted_channel.health_score + 10)
+                persisted_channel.circuit_breaker_until = None
+            else:
+                persisted_channel.failure_count += 1
+                persisted_channel.last_failure_at = now
+                persisted_channel.health_score = max(0, persisted_channel.health_score - 20)
 
-        # Write health check log
-        log = HealthCheckLog(
-            channel_id=channel.id,
-            channel_name=channel.name,
-            model_name=actual_model_name,
-            status="success" if success else "fail",
-            response_time_ms=response_time_ms,
-            error_message=error_msg,
-        )
-        db.add(log)
-        db.commit()
+                threshold = get_system_config(db, "circuit_breaker_threshold", 5)
+                if persisted_channel.failure_count >= threshold:
+                    recovery = get_system_config(db, "circuit_breaker_recovery", 600)
+                    from datetime import timedelta
+                    persisted_channel.circuit_breaker_until = now + timedelta(seconds=recovery)
+                    persisted_channel.is_healthy = 0
+
+            db.add(
+                HealthCheckLog(
+                    channel_id=persisted_channel.id,
+                    channel_name=persisted_channel.name,
+                    model_name=actual_model_name,
+                    status="success" if success else "fail",
+                    response_time_ms=response_time_ms,
+                    error_message=error_msg,
+                )
+            )
+            health_score = persisted_channel.health_score
+            failure_count = persisted_channel.failure_count
 
         return {
             "channel_id": channel.id,
@@ -334,8 +342,8 @@ class HealthService:
             "is_healthy": success,
             "response_time_ms": response_time_ms,
             "error": error_msg,
-            "health_score": channel.health_score,
-            "failure_count": channel.failure_count,
+            "health_score": health_score,
+            "failure_count": failure_count,
         }
 
     @staticmethod

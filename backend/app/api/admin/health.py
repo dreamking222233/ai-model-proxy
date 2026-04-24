@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from app.database import get_db
+from app.database import SessionLocal, get_db, get_pool_status_snapshot
 from app.core.dependencies import require_admin
 from app.models.user import SysUser
 from app.services.health_service import HealthService
@@ -32,11 +32,14 @@ def get_health_status(
 
 @router.post("/check", response_model=ResponseModel)
 async def trigger_health_check(
-    db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
     await trigger_manual_check()
-    status = HealthService.get_health_status(db)
+    db = SessionLocal()
+    try:
+        status = HealthService.get_health_status(db)
+    finally:
+        db.close()
     return ResponseModel(message="Health check completed", data=status)
 
 
@@ -65,3 +68,10 @@ def get_health_logs(
 ):
     items, total = HealthService.get_health_logs(db, channel_id, page, page_size)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/db-pool", response_model=ResponseModel)
+def get_db_pool_status(
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=get_pool_status_snapshot())

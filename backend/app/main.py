@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.database import get_pool_status_snapshot
 from app.core.exceptions import register_exception_handlers
 from app.core.middleware import RequestLoggingMiddleware
 
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
     logger.info("Starting Model Invocation System...")
+    logger.info("Initial DB pool status: %s", get_pool_status_snapshot())
 
     # Read health check interval from config
     from app.database import SessionLocal
@@ -74,6 +76,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     from app.tasks import scheduler
     scheduler.shutdown(wait=False)
+    logger.info("Final DB pool status: %s", get_pool_status_snapshot())
     logger.info("Model Invocation System shutdown.")
 
 

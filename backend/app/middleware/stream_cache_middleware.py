@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.database import release_session_connection
 from app.models.user import SysUser
 from app.services.request_body_cache_service import RequestBodyCacheService
 
@@ -71,6 +72,7 @@ class StreamCacheMiddleware:
         collected_usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
         if cache_state is not None:
             cache_state["collected_usage"] = collected_usage
+        release_session_connection(db)
         try:
             async for chunk in upstream_call(collector, collected_usage):
                 if cache_state is not None and collected_usage.get("_first_stream_output_time") is not None:

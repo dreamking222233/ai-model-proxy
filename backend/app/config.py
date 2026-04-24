@@ -12,6 +12,11 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "mysql+pymysql://root:s1771746291@localhost:3306/modelinvoke"
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 40
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 3600
+    DB_POOL_PRE_PING: bool = True
 
     # JWT
     JWT_SECRET_KEY: str = "model-invoke-system-jwt-secret-key-2026-please-change-in-production"

@@ -1,5 +1,5 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.database import SessionLocal
+from app.database import SessionLocal, get_pool_status_snapshot
 from app.services.health_service import HealthService
 from app.services.subscription_service import SubscriptionService
 import logging
@@ -11,12 +11,17 @@ scheduler = AsyncIOScheduler()
 
 async def health_check_job():
     """Periodic health check for all enabled channels"""
-    logger.info("Starting scheduled health check...")
+    logger.info("Starting scheduled health check... pool=%s", get_pool_status_snapshot())
     db = SessionLocal()
     try:
         results = await HealthService.check_all_channels(db)
         healthy = sum(1 for r in results if r["is_healthy"])
-        logger.info(f"Health check completed: {healthy}/{len(results)} channels healthy")
+        logger.info(
+            "Health check completed: %s/%s channels healthy pool=%s",
+            healthy,
+            len(results),
+            get_pool_status_snapshot(),
+        )
     except Exception as e:
         logger.error(f"Health check job failed: {e}")
     finally:

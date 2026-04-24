@@ -279,6 +279,8 @@ export default {
       if (!this.$refs.pieChart || this.byModel.length === 0) return
       if (!this.pieInstance) this.pieInstance = echarts.init(this.$refs.pieChart)
       
+      const isNarrow = window.innerWidth < 1100
+
       this.pieInstance.setOption({
         tooltip: {
           trigger: 'item',
@@ -291,24 +293,35 @@ export default {
           formatter: '{b}: <span style="color:#667eea">{c}</span> 次 ({d}%)'
         },
         legend: {
-          orient: 'vertical',
-          right: '5%',
-          top: 'middle',
+          orient: isNarrow ? 'horizontal' : 'vertical',
+          right: isNarrow ? 'center' : '2%',
+          left: isNarrow ? 'center' : 'auto',
+          bottom: isNarrow ? -5 : 'auto',
+          top: isNarrow ? 'auto' : 'middle',
           itemWidth: 10, itemHeight: 10,
-          textStyle: { fontSize: 11, color: '#8c8c8c' },
+          textStyle: { 
+            fontSize: 10, 
+            color: '#8c8c8c',
+            width: isNarrow ? 100 : 140,
+            overflow: 'truncate',
+            ellipsis: '...'
+          },
+          formatter: (name) => {
+            return name.length > 20 ? name.slice(0, 18) + '...' : name
+          }
         },
         color: VIZ_COLORS,
         series: [{
           type: 'pie',
-          radius: ['45%', '72%'],
-          center: ['40%', '50%'],
+          radius: isNarrow ? ['40%', '60%'] : ['45%', '65%'],
+          center: isNarrow ? ['50%', '42%'] : ['28%', '50%'],
           avoidLabelOverlap: true,
           itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 3 },
           label: { show: false },
           emphasis: {
             scale: true,
-            scaleSize: 10,
-            label: { show: true, fontSize: 14, fontWeight: 'bold' }
+            scaleSize: 8,
+            label: { show: true, fontSize: 13, fontWeight: 'bold' }
           },
           data: this.byModel.map(m => ({ name: m.model_name, value: m.request_count }))
         }]
@@ -442,7 +455,10 @@ export default {
       }, true)
     },
     handleResize() {
-      if (this.pieInstance) this.pieInstance.resize()
+      if (this.pieInstance) {
+        this.renderPieChart()
+        this.pieInstance.resize()
+      }
       if (this.barInstance) this.barInstance.resize()
       if (this.trendInstance) this.trendInstance.resize()
     },

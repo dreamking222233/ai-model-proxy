@@ -349,6 +349,7 @@ import SessionList from '@/components/chat/SessionList.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { getChatModels, getChannelsModels } from '@/api/chat'
 import { listApiKeys, revealApiKey, createApiKey, getSiteConfig, getBalance } from '@/api/user'
+import { getUser, getChatApiKeyStorageKey } from '@/utils/auth'
 import { streamChat } from '@/utils/sse'
 import {
   getSessions,
@@ -432,7 +433,7 @@ export default {
       return this.isAdmin ? 'admin_ai_chat' : 'user_ai_chat'
     },
     apiKeyStorageKey: function () {
-      return this.isAdmin ? 'admin_chat_api_key' : 'chat_api_key'
+      return getChatApiKeyStorageKey(getUser(), this.isAdmin)
     },
     currentSession: function () {
       var id = this.currentSessionId
@@ -2576,6 +2577,7 @@ console.log(response.choices[0].message.content);`
   border-radius: 6px;
   font-size: 13px;
 }
+
 
 /deep/ .guide-tabs {
   .ant-tabs-nav {

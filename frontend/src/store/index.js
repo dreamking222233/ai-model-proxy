@@ -1,7 +1,7 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
 import { login as loginApi, register as registerApi } from '@/api/auth'
-import { getToken, setToken, removeToken, getUser, setUser, removeUser } from '@/utils/auth'
+import { getToken, setToken, getUser, setUser, clearSiteClientCache } from '@/utils/auth'
 
 Vue.use(Vuex)
 
@@ -37,8 +37,7 @@ export default new Vuex.Store({
         role: '',
         avatar: ''
       }
-      removeToken()
-      removeUser()
+      clearSiteClientCache()
     }
   },
 
@@ -51,7 +50,7 @@ export default new Vuex.Store({
       return res
     },
 
-    async register({ commit }, { username, email, password }) {
+    async register(_, { username, email, password }) {
       const res = await registerApi(username, email, password)
       return res
     },

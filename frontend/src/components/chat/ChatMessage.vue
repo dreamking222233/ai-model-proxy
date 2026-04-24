@@ -667,6 +667,71 @@ export default {
   .chat-message:hover & { opacity: 1; }
 }
 
+@media (max-width: 600px) {
+  .chat-message {
+    padding: 12px 14px;
+    gap: 10px;
+    
+    &--user {
+      .message-content {
+        border-radius: 18px 18px 4px 18px;
+      }
+    }
+    
+    &--assistant {
+      .message-content {
+        border-radius: 18px 18px 18px 4px;
+      }
+    }
+  }
+  
+  .message-avatar {
+    padding-top: 2px;
+    .avatar { width: 32px; height: 32px; border-radius: 10px; font-size: 14px; }
+  }
+  
+  .message-body {
+    max-width: 90%;
+  }
+  
+  .message-content {
+    padding: 10px 14px;
+    font-size: 14.5px;
+  }
+  
+  .user-image-preview {
+    max-width: 220px;
+  }
+  
+  .image-result-preview {
+    max-width: 100%;
+  }
+  
+  .message-markdown /deep/ pre {
+    padding: 12px;
+    font-size: 12.5px;
+    border-radius: 10px;
+  }
+  
+  .message-actions {
+    opacity: 1; /* Always show actions on mobile */
+    .action-btn { font-size: 14px; padding: 4px; }
+  }
+
+  .image-generating-card {
+    border-radius: 18px;
+  }
+  
+  .generating-content {
+    padding: 30px 20px;
+    gap: 16px;
+  }
+  
+  .generating-status {
+    font-size: 13px;
+  }
+}
+
 .image-generating {
   width: 100%;
   max-width: 512px;

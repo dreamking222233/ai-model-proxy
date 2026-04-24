@@ -30,6 +30,10 @@
             <a-icon type="message" />
             <span>AI 对话</span>
           </a-menu-item>
+          <a-menu-item key="/user/m-chat">
+            <a-icon type="mobile" />
+            <span>手机端对话</span>
+          </a-menu-item>
           <a-menu-item key="/user/dashboard">
             <a-icon type="dashboard" />
             <span>仪表盘</span>
@@ -117,7 +121,7 @@
 </template>
 
 <script>
-import { getUser, removeToken, removeUser } from '@/utils/auth'
+import { getUser, clearSiteClientCache } from '@/utils/auth'
 
 export default {
   name: 'UserLayout',
@@ -152,8 +156,7 @@ export default {
       }
     },
     logout() {
-      removeToken()
-      removeUser()
+      clearSiteClientCache()
       this.$router.push('/login')
       this.$message.success('已退出登录')
     }

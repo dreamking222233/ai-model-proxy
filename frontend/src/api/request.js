@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { message } from 'ant-design-vue'
-import { getToken, removeToken, removeUser } from '@/utils/auth'
+import { getToken, clearSiteClientCache } from '@/utils/auth'
 import router from '@/router'
 
 const service = axios.create({
@@ -31,8 +31,7 @@ service.interceptors.response.use(
 
       // 401: Unauthorized - token expired or invalid
       if (res.code === 401) {
-        removeToken()
-        removeUser()
+        clearSiteClientCache()
         router.push('/login')
       }
 
@@ -44,8 +43,7 @@ service.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
-        removeToken()
-        removeUser()
+        clearSiteClientCache()
         router.push('/login')
         message.error('登录已过期，请重新登录')
       } else if (status === 403) {

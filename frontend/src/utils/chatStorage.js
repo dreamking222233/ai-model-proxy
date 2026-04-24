@@ -254,6 +254,41 @@ export function clearAll(namespace) {
   localStorage.removeItem(resolveStorageKey(namespace))
 }
 
+export function clearAllChatStorage() {
+  if (typeof localStorage !== 'undefined') {
+    for (var i = localStorage.length - 1; i >= 0; i--) {
+      var key = localStorage.key(i)
+      if (key && (key === STORAGE_KEY || key.indexOf(STORAGE_KEY + '_') === 0)) {
+        localStorage.removeItem(key)
+      }
+    }
+  }
+
+  if (!canUseIndexedDb()) {
+    return Promise.resolve()
+  }
+
+  return new Promise(function (resolve) {
+    try {
+      var request = window.indexedDB.deleteDatabase(IMAGE_DB_NAME)
+      request.onsuccess = function () {
+        resolve()
+      }
+      request.onerror = function () {
+        console.warn('Failed to clear chat image cache database:', request.error)
+        resolve()
+      }
+      request.onblocked = function () {
+        console.warn('Chat image cache database deletion was blocked')
+        resolve()
+      }
+    } catch (e) {
+      console.warn('Failed to clear chat image cache database:', e)
+      resolve()
+    }
+  })
+}
+
 /**
  * Auto-generate title from the first user message
  * @param {Object} session

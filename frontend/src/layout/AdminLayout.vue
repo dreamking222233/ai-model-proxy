@@ -131,7 +131,7 @@
 </template>
 
 <script>
-import { getUser, removeToken, removeUser } from '@/utils/auth'
+import { getUser, clearSiteClientCache } from '@/utils/auth'
 
 export default {
   name: 'AdminLayout',
@@ -166,8 +166,7 @@ export default {
       }
     },
     logout() {
-      removeToken()
-      removeUser()
+      clearSiteClientCache()
       this.$router.push('/login')
       this.$message.success('已退出登录')
     }

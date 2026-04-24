@@ -179,6 +179,12 @@ const routes = [
     ]
   },
   {
+    path: '/user/m-chat',
+    name: 'UserMobileChat',
+    component: () => import('@/views/common/MobileChat.vue'),
+    meta: { title: 'AI 对话 (手机版)', requiresAuth: true }
+  },
+  {
     path: '/',
     redirect: '/login'
   },

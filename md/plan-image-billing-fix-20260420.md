@@ -156,16 +156,24 @@
 
 ## 详细 Tasks
 
-- [ ] Task 1: 审核 `ProxyService.handle_image_request()`、`_non_stream_image_request()`、`_deduct_image_credits_and_log()` 的事务边界，明确哪些异常必须中断响应。
-- [ ] Task 2: 重构 `_deduct_image_credits_and_log()`，移除“记录异常后吞掉”的逻辑，改为向上抛出并由调用方统一处理。
-- [ ] Task 3: 确保图片积分扣减、成功请求日志写入、API Key 使用次数更新在同一事务中提交。
-- [ ] Task 4: 调整成功响应返回时机，只有本地扣费和日志提交完成后才返回图片结果。
-- [ ] Task 5: 修正失败请求日志写入逻辑，失败时 `image_credits_charged` 必须为 `0`，避免假扣费。
-- [ ] Task 6: 检查 `admin/logs`、`user/balance` 所依赖的数据字段和汇总逻辑，确认只展示实际扣费结果。
+- [x] Task 1: 审核 `ProxyService.handle_image_request()`、`_non_stream_image_request()`、`_deduct_image_credits_and_log()` 的事务边界，明确哪些异常必须中断响应。
+- [x] Task 2: 重构 `_deduct_image_credits_and_log()`，移除“记录异常后吞掉”的逻辑，改为向上抛出并由调用方统一处理。
+- [x] Task 3: 确保图片积分扣减、成功请求日志写入、API Key 使用次数更新在同一事务中提交。
+- [x] Task 4: 调整成功响应返回时机，只有本地扣费和日志提交完成后才返回图片结果。
+- [x] Task 5: 修正失败请求日志写入逻辑，失败时 `image_credits_charged` 必须为 `0`，避免假扣费。
+- [x] Task 6: 检查 `admin/logs`、`user/balance` 所依赖的数据字段和汇总逻辑，确认只展示实际扣费结果。
 - [ ] Task 7: 如前端存在误导性文案，补充失败请求“未扣积分”的展示说明。
-- [ ] Task 8: 补充后端测试，覆盖成功扣费、失败不扣费、扣费异常中断成功响应三类核心场景。
+- [x] Task 8: 补充后端测试，覆盖成功扣费、失败不扣费、扣费异常中断成功响应三类核心场景。
 - [ ] Task 9: 清理测试脚本中的硬编码密钥，避免继续产生安全风险和误操作。
-- [ ] Task 10: 完成联调后输出 `impl-image-billing-fix-20260420.md`，记录修复结果与验证结论。
+- [x] Task 10: 完成联调后输出 `impl-image-billing-fix-20260420.md`，记录修复结果与验证结论。
+
+## 本次实施状态补充
+
+- 已完成后端事务链路修复，确保图片请求只有在“渠道成功状态更新 + 本地图片积分扣减 + 成功日志写入 + API Key 统计更新”全部成功后才返回成功响应。
+- 已修正最终失败日志，图片失败请求统一记录为 `image_credits_charged=0`、`image_count=0`，避免前后端误展示为已扣费。
+- 已新增自动化测试覆盖本地计费失败中断、失败日志 0 积分、禁止继续切换下一个渠道等关键场景。
+- 前端展示逻辑已复核，当前后端修正后即可按实际扣费结果展示，无需额外代码调整。
+- 测试脚本硬编码密钥清理未纳入本次提交，作为后续安全治理项保留。
 
 ## 风险点
 

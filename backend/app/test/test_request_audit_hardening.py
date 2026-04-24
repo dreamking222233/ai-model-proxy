@@ -1,4 +1,5 @@
 import unittest
+from contextlib import nullcontext
 from decimal import Decimal
 from datetime import datetime
 from types import SimpleNamespace
@@ -19,7 +20,30 @@ class _FailingScope:
         return False
 
 
+class _DetachedAttrObject:
+    def __init__(self, **values):
+        for key, value in values.items():
+            object.__setattr__(self, key, value)
+
+    def __getattribute__(self, name):
+        if name in {"id", "name", "protocol_type"}:
+            raise RuntimeError(f"detached attr access: {name}")
+        return object.__getattribute__(self, name)
+
+
 class ProxyRequestAuditHardeningTest(unittest.TestCase):
+    def test_sanitize_visible_model_text_localizes_common_english_errors(self):
+        localized = ProxyService._sanitize_visible_model_text(
+            "All channels failed: Upstream returned HTTP 503: No available channel for this model",
+            requested_model="gpt-4o",
+            actual_model="responses:gpt-5.4",
+        )
+
+        self.assertEqual(
+            localized,
+            "所有可用渠道均请求失败：上游服务返回异常（HTTP 503）：当前模型暂无可用渠道，请稍后重试",
+        )
+
     @patch("app.services.proxy_service.ProxyService._log_failed_request", return_value=True)
     @patch("app.services.proxy_service.ProxyService._deduct_balance_and_log")
     @patch("app.services.proxy_service.ProxyService._record_success")
@@ -115,6 +139,51 @@ class ProxyRequestAuditHardeningTest(unittest.TestCase):
 
         self.assertTrue(result)
         mock_write_minimal_failed_request_log.assert_called_once()
+
+    @patch("app.services.proxy_service.ImageCreditService.deduct_for_request")
+    @patch("app.services.proxy_service.session_scope")
+    def test_deduct_image_credits_and_log_uses_safe_snapshots_for_detached_objects(
+        self,
+        mock_session_scope,
+        mock_deduct_for_request,
+    ):
+        write_db = MagicMock()
+        api_key_query = MagicMock()
+        api_key_query.filter.return_value = api_key_query
+        api_key_query.first.return_value = SimpleNamespace(total_requests=0, last_used_at=None)
+        write_db.query.return_value = api_key_query
+        mock_session_scope.return_value = nullcontext(write_db)
+
+        user = _DetachedAttrObject(id=101)
+        api_key_record = _DetachedAttrObject(id=202)
+        channel = _DetachedAttrObject(id=303, name="image-channel", protocol_type="openai")
+
+        ProxyService._deduct_image_credits_and_log(
+            db=MagicMock(),
+            user=user,
+            api_key_record=api_key_record,
+            unified_model=SimpleNamespace(model_name="gpt-image-1"),
+            request_id="img-req-1",
+            requested_model="gpt-image-1",
+            actual_model="gpt-image-1-upstream",
+            channel=channel,
+            client_ip="127.0.0.1",
+            response_time_ms=321,
+            charged_credits=Decimal("2"),
+            image_size="1024x1024",
+            image_count=1,
+            request_type="image_generation",
+        )
+
+        mock_deduct_for_request.assert_called_once()
+        self.assertEqual(mock_deduct_for_request.call_args.kwargs["user_id"], 101)
+
+        request_log = write_db.add.call_args.args[0]
+        self.assertEqual(request_log.user_id, 101)
+        self.assertEqual(request_log.user_api_key_id, 202)
+        self.assertEqual(request_log.channel_id, 303)
+        self.assertEqual(request_log.channel_name, "image-channel")
+        self.assertEqual(request_log.protocol_type, "openai")
 
 
 class SubscriptionCycleRaceRecoveryTest(unittest.TestCase):

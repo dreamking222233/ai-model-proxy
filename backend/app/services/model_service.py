@@ -305,7 +305,7 @@ class ModelService:
         """Update an existing unified model."""
         model = db.query(UnifiedModel).filter(UnifiedModel.id == model_id).first()
         if not model:
-            raise ServiceException(404, "Model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "模型不存在", "MODEL_NOT_FOUND")
 
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         next_model_name = d.get("model_name", model.model_name)
@@ -351,7 +351,7 @@ class ModelService:
         """Delete a unified model and its channel mappings."""
         model = db.query(UnifiedModel).filter(UnifiedModel.id == model_id).first()
         if not model:
-            raise ServiceException(404, "Model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "模型不存在", "MODEL_NOT_FOUND")
 
         # Delete related mappings
         db.query(ModelChannelMapping).filter(ModelChannelMapping.unified_model_id == model_id).delete()
@@ -364,7 +364,7 @@ class ModelService:
         """Get a single unified model by id."""
         model = db.query(UnifiedModel).filter(UnifiedModel.id == model_id).first()
         if not model:
-            raise ServiceException(404, "Model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "模型不存在", "MODEL_NOT_FOUND")
         return ModelService._model_to_dict(model)
 
     @staticmethod
@@ -407,7 +407,7 @@ class ModelService:
         """
         model = db.query(UnifiedModel).filter(UnifiedModel.id == model_id).first()
         if not model:
-            raise ServiceException(404, "Model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "模型不存在", "MODEL_NOT_FOUND")
 
         mappings = (
             db.query(ModelChannelMapping)
@@ -445,12 +445,12 @@ class ModelService:
         # Validate model exists
         model = db.query(UnifiedModel).filter(UnifiedModel.id == d["unified_model_id"]).first()
         if not model:
-            raise ServiceException(404, "Unified model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "模型不存在", "MODEL_NOT_FOUND")
 
         # Validate channel exists
         channel = db.query(Channel).filter(Channel.id == d["channel_id"]).first()
         if not channel:
-            raise ServiceException(404, "Channel not found", "CHANNEL_NOT_FOUND")
+            raise ServiceException(404, "渠道不存在", "CHANNEL_NOT_FOUND")
 
         # Check duplicate
         existing = (
@@ -480,7 +480,7 @@ class ModelService:
         """Update a model-channel mapping."""
         mapping = db.query(ModelChannelMapping).filter(ModelChannelMapping.id == mapping_id).first()
         if not mapping:
-            raise ServiceException(404, "Mapping not found", "MAPPING_NOT_FOUND")
+            raise ServiceException(404, "模型渠道映射不存在", "MAPPING_NOT_FOUND")
 
         for field in ("actual_model_name", "enabled"):
             value = data.get(field)
@@ -496,7 +496,7 @@ class ModelService:
         """Delete a model-channel mapping."""
         mapping = db.query(ModelChannelMapping).filter(ModelChannelMapping.id == mapping_id).first()
         if not mapping:
-            raise ServiceException(404, "Mapping not found", "MAPPING_NOT_FOUND")
+            raise ServiceException(404, "模型渠道映射不存在", "MAPPING_NOT_FOUND")
 
         db.delete(mapping)
         db.commit()
@@ -534,7 +534,7 @@ class ModelService:
         # Validate target model exists
         target = db.query(UnifiedModel).filter(UnifiedModel.id == d["target_unified_model_id"]).first()
         if not target:
-            raise ServiceException(404, "Target unified model not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, "目标模型不存在", "MODEL_NOT_FOUND")
 
         rule = ModelOverrideRule(
             name=d["name"],
@@ -554,7 +554,7 @@ class ModelService:
         """Update a model override rule."""
         rule = db.query(ModelOverrideRule).filter(ModelOverrideRule.id == rule_id).first()
         if not rule:
-            raise ServiceException(404, "Override rule not found", "RULE_NOT_FOUND")
+            raise ServiceException(404, "模型改写规则不存在", "RULE_NOT_FOUND")
 
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         updatable = ["name", "rule_type", "source_pattern", "target_unified_model_id", "enabled", "priority"]
@@ -564,7 +564,7 @@ class ModelService:
                 if field == "target_unified_model_id":
                     target = db.query(UnifiedModel).filter(UnifiedModel.id == value).first()
                     if not target:
-                        raise ServiceException(404, "Target unified model not found", "MODEL_NOT_FOUND")
+                        raise ServiceException(404, "目标模型不存在", "MODEL_NOT_FOUND")
                 setattr(rule, field, value)
 
         db.commit()
@@ -576,7 +576,7 @@ class ModelService:
         """Delete a model override rule."""
         rule = db.query(ModelOverrideRule).filter(ModelOverrideRule.id == rule_id).first()
         if not rule:
-            raise ServiceException(404, "Override rule not found", "RULE_NOT_FOUND")
+            raise ServiceException(404, "模型改写规则不存在", "RULE_NOT_FOUND")
 
         db.delete(rule)
         db.commit()

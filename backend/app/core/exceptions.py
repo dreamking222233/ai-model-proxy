@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 class ServiceException(Exception):
     """Business-logic exception that maps to an HTTP error response."""
 
-    def __init__(self, status_code: int = 400, detail: str = "Service error", error_code: str = "SERVICE_ERROR"):
+    def __init__(self, status_code: int = 400, detail: str = "服务异常", error_code: str = "SERVICE_ERROR"):
         self.status_code = status_code
         self.detail = detail
         self.error_code = error_code
@@ -34,12 +34,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         errors = exc.errors()
         first_error = errors[0] if errors else {}
         field = " -> ".join(str(loc) for loc in first_error.get("loc", []))
-        message = first_error.get("msg", "Validation error")
+        message = first_error.get("msg", "请求参数校验失败")
         return JSONResponse(
             status_code=422,
             content={
                 "code": "VALIDATION_ERROR",
-                "message": f"Validation error on field [{field}]: {message}",
+                "message": f"请求参数校验失败，字段 [{field}]：{message}",
                 "data": errors,
             },
         )
@@ -52,7 +52,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=500,
             content={
                 "code": "INTERNAL_ERROR",
-                "message": "Internal server error",
+                "message": "服务器内部错误，请稍后重试",
                 "data": None,
             },
         )

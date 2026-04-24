@@ -8,7 +8,7 @@ import logging
 import time
 
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.database import release_session_connection, session_scope
@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 _DEFAULT_GOOGLE_HEALTH_CHECK_MODEL = "gemini-2.5-flash"
 _IMAGE_CHANNEL_HEALTH_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
+_HEALTH_CHECK_CIRCUIT_BREAKER_THRESHOLD_DEFAULT = 8
+_HEALTH_CHECK_RECENT_SUCCESS_GRACE_SECONDS_DEFAULT = 30 * 60
 
 
 def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
@@ -178,6 +180,43 @@ def _should_skip_scheduled_check(db: Session, channel: Channel, now: datetime) -
     return (now - last_checked).total_seconds() < int(interval_seconds)
 
 
+def _get_health_check_circuit_breaker_threshold(db: Session) -> int:
+    """Health-check failures should be less aggressive than live-request failures."""
+    request_threshold = int(get_system_config(db, "circuit_breaker_threshold", 5) or 5)
+    configured_threshold = get_system_config(
+        db,
+        "health_check_circuit_breaker_threshold",
+        None,
+    )
+    if configured_threshold is None:
+        return max(_HEALTH_CHECK_CIRCUIT_BREAKER_THRESHOLD_DEFAULT, request_threshold + 3)
+    try:
+        return max(1, int(configured_threshold))
+    except (TypeError, ValueError):
+        return max(_HEALTH_CHECK_CIRCUIT_BREAKER_THRESHOLD_DEFAULT, request_threshold + 3)
+
+
+def _get_recent_success_grace_seconds(db: Session) -> int:
+    configured_seconds = get_system_config(
+        db,
+        "health_check_recent_success_grace_seconds",
+        _HEALTH_CHECK_RECENT_SUCCESS_GRACE_SECONDS_DEFAULT,
+    )
+    try:
+        return max(0, int(configured_seconds))
+    except (TypeError, ValueError):
+        return _HEALTH_CHECK_RECENT_SUCCESS_GRACE_SECONDS_DEFAULT
+
+
+def _has_recent_live_success(channel: Channel, now: datetime, grace_seconds: int) -> bool:
+    if grace_seconds <= 0:
+        return False
+    last_success_at = getattr(channel, "last_success_at", None)
+    if not last_success_at:
+        return False
+    return (now - last_success_at).total_seconds() <= grace_seconds
+
+
 class HealthService:
     """Concurrent health checks for all enabled channels."""
 
@@ -278,11 +317,13 @@ class HealthService:
         )
 
         release_session_connection(db)
-        return await HealthService._check_and_record(channel, actual_model_name)
+        return await HealthService._check_and_record(channel, actual_model_name, check_source="manual")
 
     @staticmethod
     async def _check_and_record(
-        channel: Channel, actual_model_name: Optional[str]
+        channel: Channel,
+        actual_model_name: Optional[str],
+        check_source: str = "scheduled",
     ) -> dict:
         """
         Perform the actual health check, update the channel, and log the result.
@@ -299,6 +340,8 @@ class HealthService:
 
         health_score = None
         failure_count = None
+        is_healthy = None
+        recent_live_success = False
         with session_scope() as db:
             persisted_channel = db.query(Channel).filter(Channel.id == channel.id).first()
             if not persisted_channel:
@@ -308,20 +351,26 @@ class HealthService:
             if success:
                 persisted_channel.is_healthy = 1
                 persisted_channel.failure_count = 0
-                persisted_channel.last_success_at = now
                 persisted_channel.health_score = min(100, persisted_channel.health_score + 10)
                 persisted_channel.circuit_breaker_until = None
             else:
-                persisted_channel.failure_count += 1
                 persisted_channel.last_failure_at = now
-                persisted_channel.health_score = max(0, persisted_channel.health_score - 20)
+                recent_live_success = _has_recent_live_success(
+                    persisted_channel,
+                    now,
+                    _get_recent_success_grace_seconds(db),
+                )
+                if recent_live_success:
+                    persisted_channel.health_score = max(0, persisted_channel.health_score - 5)
+                else:
+                    persisted_channel.failure_count += 1
+                    persisted_channel.health_score = max(0, persisted_channel.health_score - 10)
 
-                threshold = get_system_config(db, "circuit_breaker_threshold", 5)
-                if persisted_channel.failure_count >= threshold:
-                    recovery = get_system_config(db, "circuit_breaker_recovery", 600)
-                    from datetime import timedelta
-                    persisted_channel.circuit_breaker_until = now + timedelta(seconds=recovery)
-                    persisted_channel.is_healthy = 0
+                    threshold = _get_health_check_circuit_breaker_threshold(db)
+                    if persisted_channel.failure_count >= threshold:
+                        recovery = get_system_config(db, "circuit_breaker_recovery", 600)
+                        persisted_channel.circuit_breaker_until = now + timedelta(seconds=recovery)
+                        persisted_channel.is_healthy = 0
 
             db.add(
                 HealthCheckLog(
@@ -335,15 +384,19 @@ class HealthService:
             )
             health_score = persisted_channel.health_score
             failure_count = persisted_channel.failure_count
+            is_healthy = bool(persisted_channel.is_healthy)
 
         return {
             "channel_id": channel.id,
             "channel_name": channel.name,
-            "is_healthy": success,
+            "is_healthy": is_healthy,
+            "probe_success": success,
             "response_time_ms": response_time_ms,
             "error": error_msg,
             "health_score": health_score,
             "failure_count": failure_count,
+            "check_source": check_source,
+            "recent_live_success": recent_live_success,
         }
 
     @staticmethod

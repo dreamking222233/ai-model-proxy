@@ -15,6 +15,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Optional
@@ -67,6 +68,9 @@ _UPSTREAM_CONNECT_TIMEOUT = 15.0
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 _UPSTREAM_RETRY_ATTEMPTS = 3
 _UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
+_TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
+_TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
 
 
 class ResponsesTurnError(Exception):
@@ -2361,14 +2365,63 @@ class ProxyService:
     ) -> str:
         """Replace mapped upstream model names in user-visible text with the requested alias."""
         text = str(value or "")
-        if not requested_model:
+        if requested_model:
+            raw_actual_model = str(actual_model or "").strip()
+            if raw_actual_model and raw_actual_model != requested_model:
+                text = text.replace(raw_actual_model, requested_model)
+                if raw_actual_model.startswith("responses:"):
+                    text = text.replace(raw_actual_model.split(":", 1)[1], requested_model)
+
+        return ProxyService._localize_user_visible_error_text(text)
+
+    @staticmethod
+    def _localize_user_visible_error_text(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
             return text
 
-        raw_actual_model = str(actual_model or "").strip()
-        if raw_actual_model and raw_actual_model != requested_model:
-            text = text.replace(raw_actual_model, requested_model)
-            if raw_actual_model.startswith("responses:"):
-                text = text.replace(raw_actual_model.split(":", 1)[1], requested_model)
+        replacements = {
+            "No available channel for this model": "当前模型暂无可用渠道，请稍后重试",
+            "Image generation does not support stream": "图片生成不支持流式请求",
+            "Image edit does not support stream": "图片编辑不支持流式请求",
+            "Only b64_json response_format is supported": "仅支持 b64_json 格式返回图片结果",
+            "Requested model is not an image model": "当前模型不是图片模型",
+            "Requested model is not configured for image credit billing": "当前模型未配置图片点数计费",
+            "Current channel does not support image edit": "当前渠道不支持图片编辑",
+            "stream closed before response.completed": "上游流式响应提前结束",
+            "Upstream responses error": "上游 Responses 接口返回错误",
+            "Unknown error": "未知错误",
+            "Model not found": "模型不存在",
+            "Unified model not found": "模型不存在",
+            "Target unified model not found": "目标模型不存在",
+            "Channel not found": "渠道不存在",
+            "User not found": "用户不存在",
+        }
+        for source, target in replacements.items():
+            text = text.replace(source, target)
+
+        regex_replacements: list[tuple[str, str]] = [
+            (r"^All channels failed:\s*", "所有可用渠道均请求失败："),
+            (r"Upstream returned HTTP\s+(\d+):\s*", r"上游服务返回异常（HTTP \1）："),
+            (r"Invalid upstream /responses body:\s*", "上游 /responses 返回格式无效："),
+            (r"^Model '([^']+)' not found$", r"模型 '\1' 不存在"),
+            (r"^Model \"([^\"]+)\" not found$", r"模型 '\1' 不存在"),
+            (r"^Missing required field:\s*([A-Za-z0-9_]+)$", r"缺少必填字段：\1"),
+            (r"^unsupported websocket request type:\s*(.+)$", r"不支持的 websocket 请求类型：\1"),
+        ]
+        for pattern, replacement in regex_replacements:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+        if text == "websocket request received before response.create":
+            return "websocket 请求必须先发送 response.create"
+        if text == "websocket request requires field: input":
+            return "websocket 请求缺少 input 字段"
+        if text == "missing model in response.create request":
+            return "response.create 请求缺少 model 字段"
+
+        match = re.match(r"^Model '([^']+)' does not support image edit$", text, flags=re.IGNORECASE)
+        if match:
+            return f"模型 '{match.group(1)}' 不支持图片编辑"
 
         return text
 
@@ -2592,7 +2645,7 @@ class ProxyService:
                     "Responses channel %s (%d) failed for model %s: %s",
                     channel.name, channel.id, actual_model_name, exc,
                 )
-                ProxyService._record_channel_failure(db, channel)
+                ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
         if request_error:
@@ -2614,7 +2667,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
 
     @staticmethod
     async def handle_responses_websocket(
@@ -2768,7 +2821,7 @@ class ProxyService:
                         "Responses websocket channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, actual_model_name, exc,
                     )
-                    ProxyService._record_channel_failure(db, channel)
+                    ProxyService._record_channel_failure(db, channel, exc)
                     if not exc.can_retry:
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
@@ -2785,7 +2838,7 @@ class ProxyService:
                         "Responses websocket channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, actual_model_name, exc,
                     )
-                    ProxyService._record_channel_failure(db, channel)
+                    ProxyService._record_channel_failure(db, channel, exc)
                     ProxyService._log_failed_request(
                         db, user, api_key_record, request_id, requested_model,
                         client_ip, True, str(exc), channel=channel,
@@ -2822,7 +2875,7 @@ class ProxyService:
         """Resolve a Responses request into a model plus channel candidates."""
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+            raise ServiceException(404, f"模型 '{requested_model}' 不存在", "MODEL_NOT_FOUND")
 
         quota_precheck = None
         if request_data:
@@ -2839,7 +2892,7 @@ class ProxyService:
             "responses",
         )
         if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+            raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         return unified_model, channels
 
     @staticmethod
@@ -3021,7 +3074,7 @@ class ProxyService:
                     normalized.get("input")
                 )
                 if not normalized.get("model"):
-                    raise ServiceException(400, "missing model in response.create request", "INVALID_REQUEST")
+                    raise ServiceException(400, "response.create 请求缺少 model 字段", "INVALID_REQUEST")
                 normalized["stream"] = True
                 is_prewarm = bool(normalized.pop("generate", True) is False)
                 return normalized, copy.deepcopy(normalized), is_prewarm
@@ -3039,7 +3092,7 @@ class ProxyService:
                 last_response_output,
             )
 
-        raise ServiceException(400, f"unsupported websocket request type: {request_type}", "INVALID_REQUEST")
+        raise ServiceException(400, f"不支持的 websocket 请求类型：{request_type}", "INVALID_REQUEST")
 
     @staticmethod
     def _normalize_followup_responses_websocket_request(
@@ -3049,11 +3102,11 @@ class ProxyService:
     ) -> tuple[dict, dict, bool]:
         """Merge follow-up websocket input with prior request/response state."""
         if not last_request:
-            raise ServiceException(400, "websocket request received before response.create", "INVALID_REQUEST")
+            raise ServiceException(400, "websocket 请求必须先发送 response.create", "INVALID_REQUEST")
 
         next_input = request_data.get("input")
         if next_input is None:
-            raise ServiceException(400, "websocket request requires field: input", "INVALID_REQUEST")
+            raise ServiceException(400, "websocket 请求缺少 input 字段", "INVALID_REQUEST")
 
         merged_input = []
         merged_input.extend(ProxyService._normalize_responses_input(last_request.get("input")))
@@ -3262,7 +3315,7 @@ class ProxyService:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel)
+                            ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         sanitized_error_detail = (
                             ProxyService._sanitize_user_visible_service_exception(
@@ -3693,7 +3746,7 @@ class ProxyService:
             # 2. Resolve model (apply override rules)
             unified_model = ModelService.resolve_model(db, requested_model)
             if not unified_model:
-                raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+                raise ServiceException(404, f"模型 '{requested_model}' 不存在", "MODEL_NOT_FOUND")
 
             quota_precheck = ProxyService._build_text_quota_precheck(
                 db,
@@ -3714,7 +3767,7 @@ class ProxyService:
                 "openai",
             )
             if not channels:
-                raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+                raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
             ProxyService._log_pre_request_failure(
                 db,
@@ -3843,7 +3896,7 @@ class ProxyService:
                         "Channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, upstream_model_name, e,
                     )
-                    ProxyService._record_channel_failure(db, channel)
+                    ProxyService._record_channel_failure(db, channel, e)
                     channel_request_error = None
                     break
 
@@ -3872,7 +3925,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
 
     # -------------------------------------------------------------------
     # Anthropic protocol entry point
@@ -3921,7 +3974,7 @@ class ProxyService:
             # 2. Resolve model
             unified_model = ModelService.resolve_model(db, requested_model)
             if not unified_model:
-                raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+                raise ServiceException(404, f"模型 '{requested_model}' 不存在", "MODEL_NOT_FOUND")
 
             quota_precheck = ProxyService._build_text_quota_precheck(
                 db,
@@ -3942,7 +3995,7 @@ class ProxyService:
                 "anthropic",
             )
             if not channels:
-                raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+                raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
             ProxyService._log_pre_request_failure(
                 db,
@@ -4129,7 +4182,7 @@ class ProxyService:
                         "Channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, upstream_model_name, e,
                     )
-                    ProxyService._record_channel_failure(db, channel)
+                    ProxyService._record_channel_failure(db, channel, e)
                     channel_request_error = None
                     break
 
@@ -4159,7 +4212,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
 
     # ===================================================================
     # OpenAI streaming
@@ -4354,7 +4407,7 @@ class ProxyService:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel)
+                            ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         sanitized_error_detail = (
                             ProxyService._sanitize_user_visible_service_exception(
@@ -4848,7 +4901,7 @@ class ProxyService:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel)
+                            ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
                         sanitized_error_detail = (
                             ProxyService._sanitize_user_visible_service_exception(
@@ -5742,7 +5795,7 @@ class ProxyService:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel)
+                            ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
                         sanitized_error_detail = (
                             ProxyService._sanitize_user_visible_service_exception(
@@ -6356,7 +6409,7 @@ class ProxyService:
                     if stream_error:
                         mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
                         if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel)
+                            ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
                         sanitized_error_detail = (
                             ProxyService._sanitize_user_visible_service_exception(
@@ -7017,7 +7070,110 @@ class ProxyService:
     # ===================================================================
 
     @staticmethod
-    def _record_channel_failure(db: Session, channel: Channel) -> None:
+    def _classify_channel_failure(exc: Optional[Exception]) -> str:
+        if exc is None:
+            return "generic"
+        if isinstance(
+            exc,
+            (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+                httpx.NetworkError,
+            ),
+        ):
+            return "transient"
+        if isinstance(exc, ServiceException) and exc.status_code in _TRANSIENT_CHANNEL_FAILURE_STATUSES:
+            return "transient"
+
+        detail = str(exc).strip().lower()
+        if any(
+            marker in detail
+            for marker in (
+                "http 408",
+                "http 409",
+                "http 425",
+                "http 429",
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+                "rate limit",
+                "too many requests",
+                "temporarily unavailable",
+                "service unavailable",
+                "gateway timeout",
+                "bad gateway",
+                "connection reset",
+                "connection aborted",
+                "timed out",
+                "timeout",
+                "remoteprotocolerror",
+                "connecterror",
+                "readerror",
+            )
+        ):
+            return "transient"
+        return "generic"
+
+    @staticmethod
+    def _resolve_channel_failure_policy(
+        db: Session,
+        exc: Optional[Exception],
+    ) -> tuple[str, int, int, int]:
+        failure_kind = ProxyService._classify_channel_failure(exc)
+        base_threshold = int(get_system_config(db, "circuit_breaker_threshold", 5) or 5)
+        base_recovery = int(get_system_config(db, "circuit_breaker_recovery", 600) or 600)
+        if failure_kind != "transient":
+            return failure_kind, base_threshold, base_recovery, 10
+
+        transient_threshold = get_system_config(
+            db,
+            "transient_channel_failure_threshold",
+            None,
+        )
+        try:
+            threshold = (
+                max(1, int(transient_threshold))
+                if transient_threshold is not None
+                else max(_TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT, base_threshold + 2)
+            )
+        except (TypeError, ValueError):
+            threshold = max(_TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT, base_threshold + 2)
+
+        transient_recovery = get_system_config(
+            db,
+            "transient_channel_failure_recovery",
+            None,
+        )
+        try:
+            recovery = (
+                max(1, int(transient_recovery))
+                if transient_recovery is not None
+                else min(base_recovery, _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT)
+            )
+        except (TypeError, ValueError):
+            recovery = min(base_recovery, _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT)
+
+        transient_penalty = get_system_config(
+            db,
+            "transient_channel_failure_health_penalty",
+            5,
+        )
+        try:
+            health_penalty = max(1, int(transient_penalty))
+        except (TypeError, ValueError):
+            health_penalty = 5
+
+        return failure_kind, threshold, recovery, health_penalty
+
+    @staticmethod
+    def _record_channel_failure(
+        db: Session,
+        channel: Channel,
+        exc: Optional[Exception] = None,
+    ) -> None:
         """
         Record a failure on a channel.
 
@@ -7037,16 +7193,27 @@ class ProxyService:
                 if not persisted_channel:
                     return
 
+                failure_kind, threshold, recovery, health_penalty = ProxyService._resolve_channel_failure_policy(
+                    write_db,
+                    exc,
+                )
                 persisted_channel.failure_count += 1
                 persisted_channel.last_failure_at = datetime.utcnow()
 
-                threshold = get_system_config(write_db, "circuit_breaker_threshold", 5)
                 if persisted_channel.failure_count >= threshold:
-                    recovery = get_system_config(write_db, "circuit_breaker_recovery", 600)
                     persisted_channel.circuit_breaker_until = datetime.utcnow() + timedelta(seconds=recovery)
                     persisted_channel.is_healthy = 0
 
-                persisted_channel.health_score = max(0, persisted_channel.health_score - 10)
+                persisted_channel.health_score = max(0, persisted_channel.health_score - health_penalty)
+                logger.info(
+                    "Recorded channel failure channel=%s channel_id=%s kind=%s failure_count=%s threshold=%s health_score=%s",
+                    getattr(persisted_channel, "name", None),
+                    channel_id,
+                    failure_kind,
+                    persisted_channel.failure_count,
+                    threshold,
+                    persisted_channel.health_score,
+                )
         except Exception as e:
             logger.error("Failed to record channel failure: %s", e)
 
@@ -8023,10 +8190,27 @@ class ProxyService:
         request_type: str = "image_generation",
     ) -> None:
         request_type_label = "Image edit" if request_type == "image_edit" else "Image generation"
+        user_id = ProxyService._safe_object_id(user)
+        api_key_id = ProxyService._safe_object_id(api_key_record)
+        channel_id = ProxyService._safe_object_id(channel)
+        if not user_id:
+            raise ServiceException(500, "图片计费失败：用户信息失效", "IMAGE_BILLING_FAILED")
+        if not channel_id:
+            raise ServiceException(500, "图片计费失败：渠道信息失效", "IMAGE_BILLING_FAILED")
+
+        try:
+            channel_name = object.__getattribute__(channel, "__dict__").get("name")
+        except Exception:
+            channel_name = getattr(channel, "name", None)
+        try:
+            protocol_type = object.__getattribute__(channel, "__dict__").get("protocol_type")
+        except Exception:
+            protocol_type = getattr(channel, "protocol_type", None)
+
         with session_scope() as write_db:
             ImageCreditService.deduct_for_request(
                 write_db,
-                user_id=user.id,
+                user_id=user_id,
                 request_id=request_id,
                 model_name=requested_model,
                 amount=charged_credits,
@@ -8037,13 +8221,13 @@ class ProxyService:
             write_db.add(
                 RequestLog(
                     request_id=request_id,
-                    user_id=user.id,
-                    user_api_key_id=getattr(api_key_record, "id", None),
-                    channel_id=channel.id,
-                    channel_name=channel.name,
+                    user_id=user_id,
+                    user_api_key_id=api_key_id,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
                     requested_model=requested_model,
                     actual_model=actual_model,
-                    protocol_type=channel.protocol_type,
+                    protocol_type=protocol_type,
                     request_type=request_type,
                     billing_type="image_credit",
                     is_stream=0,
@@ -8059,10 +8243,10 @@ class ProxyService:
                     client_ip=client_ip,
                 )
             )
-            if getattr(api_key_record, "id", None):
+            if api_key_id:
                 fresh_api_key_record = (
                     write_db.query(UserApiKey)
-                    .filter(UserApiKey.id == api_key_record.id)
+                    .filter(UserApiKey.id == api_key_id)
                     .first()
                 )
                 if fresh_api_key_record:
@@ -8583,30 +8767,30 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = str(request_data.get("model", "") or "")
         if not requested_model:
-            raise ServiceException(400, "Missing required field: model", "IMAGE_MODEL_NOT_FOUND")
+            raise ServiceException(400, "缺少必填字段：model", "IMAGE_MODEL_NOT_FOUND")
 
         prompt = str(request_data.get("prompt", "") or "").strip()
         if not prompt:
-            raise ServiceException(400, "Missing required field: prompt", "INVALID_IMAGE_PROMPT")
+            raise ServiceException(400, "缺少必填字段：prompt", "INVALID_IMAGE_PROMPT")
         if bool(request_data.get("stream")):
-            raise ServiceException(400, "Image generation does not support stream", "IMAGE_STREAM_NOT_SUPPORTED")
+            raise ServiceException(400, "图片生成不支持流式请求", "IMAGE_STREAM_NOT_SUPPORTED")
         if request_data.get("response_format") not in (None, "b64_json"):
             raise ServiceException(
                 400,
-                "Only b64_json response_format is supported",
+                "仅支持 b64_json 格式返回图片结果",
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
         ProxyService._validate_single_image_count(request_data)
 
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "IMAGE_MODEL_NOT_FOUND")
+            raise ServiceException(404, f"模型 '{requested_model}' 不存在", "IMAGE_MODEL_NOT_FOUND")
         if str(unified_model.model_type or "") != "image":
-            raise ServiceException(400, "Requested model is not an image model", "IMAGE_MODEL_NOT_SUPPORTED")
+            raise ServiceException(400, "当前模型不是图片模型", "IMAGE_MODEL_NOT_SUPPORTED")
         if str(unified_model.billing_type or "token") != "image_credit":
             raise ServiceException(
                 400,
-                "Requested model is not configured for image credit billing",
+                "当前模型未配置图片点数计费",
                 "IMAGE_MODEL_NOT_SUPPORTED",
             )
 
@@ -8615,7 +8799,7 @@ class ProxyService:
 
         channels = ModelService.get_available_channels(db, unified_model.id)
         if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+            raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None
         request_error: ServiceException | None = None
@@ -8690,7 +8874,7 @@ class ProxyService:
                     actual_model_name,
                     exc,
                 )
-                ProxyService._record_channel_failure(db, channel)
+                ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
         error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
@@ -8711,7 +8895,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
 
     @staticmethod
     async def handle_image_edit_request(
@@ -8725,39 +8909,39 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = str(request_data.get("model", "") or "")
         if not requested_model:
-            raise ServiceException(400, "Missing required field: model", "IMAGE_MODEL_NOT_FOUND")
+            raise ServiceException(400, "缺少必填字段：model", "IMAGE_MODEL_NOT_FOUND")
 
         prompt = str(request_data.get("prompt", "") or "").strip()
         if not prompt:
-            raise ServiceException(400, "Missing required field: prompt", "INVALID_IMAGE_PROMPT")
+            raise ServiceException(400, "缺少必填字段：prompt", "INVALID_IMAGE_PROMPT")
         if bool(request_data.get("stream")):
-            raise ServiceException(400, "Image edit does not support stream", "IMAGE_STREAM_NOT_SUPPORTED")
+            raise ServiceException(400, "图片编辑不支持流式请求", "IMAGE_STREAM_NOT_SUPPORTED")
         if request_data.get("response_format") not in (None, "b64_json"):
             raise ServiceException(
                 400,
-                "Only b64_json response_format is supported",
+                "仅支持 b64_json 格式返回图片结果",
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
         ProxyService._validate_single_image_count(request_data)
         image_files = ProxyService._extract_image_edit_inputs(request_data)
         if not image_files:
-            raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
+            raise ServiceException(400, "缺少必填字段：image", "INVALID_IMAGE_FILE")
 
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "IMAGE_MODEL_NOT_FOUND")
+            raise ServiceException(404, f"模型 '{requested_model}' 不存在", "IMAGE_MODEL_NOT_FOUND")
         if str(unified_model.model_type or "") != "image":
-            raise ServiceException(400, "Requested model is not an image model", "IMAGE_MODEL_NOT_SUPPORTED")
+            raise ServiceException(400, "当前模型不是图片模型", "IMAGE_MODEL_NOT_SUPPORTED")
         if str(unified_model.billing_type or "token") != "image_credit":
             raise ServiceException(
                 400,
-                "Requested model is not configured for image credit billing",
+                "当前模型未配置图片点数计费",
                 "IMAGE_MODEL_NOT_SUPPORTED",
             )
         if not ModelService.supports_image_edit(unified_model.model_name):
             raise ServiceException(
                 400,
-                f"Model '{requested_model}' does not support image edit",
+                f"模型 '{requested_model}' 不支持图片编辑",
                 "IMAGE_EDIT_NOT_SUPPORTED",
             )
 
@@ -8766,7 +8950,7 @@ class ProxyService:
 
         channels = ModelService.get_available_channels(db, unified_model.id)
         if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+            raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None
         request_error: ServiceException | None = None
@@ -8838,7 +9022,7 @@ class ProxyService:
                     actual_model_name,
                     exc,
                 )
-                ProxyService._record_channel_failure(db, channel)
+                ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
         error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
@@ -8859,4 +9043,4 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"All channels failed: {error_detail}", "ALL_CHANNELS_FAILED")
+        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")

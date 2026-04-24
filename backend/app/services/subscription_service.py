@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.exceptions import ServiceException
 from app.models.log import (
@@ -579,12 +580,10 @@ class SubscriptionService:
             user.subscription_expires_at = None
             return None
 
-        plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
-        user.subscription_type = (
-            "quota"
-            if plan_kind == SubscriptionService.PLAN_KIND_DAILY_QUOTA
-            else "unlimited"
-        )
+        # ``sys_user.subscription_type`` is only a coarse cache flag and must stay
+        # compatible with legacy schemas that only support ``balance/unlimited``.
+        # The precise package kind continues to come from ``user_subscription``.
+        user.subscription_type = "unlimited"
         user.subscription_expires_at = active_subscription.end_time
         return active_subscription
 
@@ -610,21 +609,31 @@ class SubscriptionService:
         if cycle:
             return cycle
 
-        cycle = SubscriptionUsageCycle(
-            subscription_id=subscription.id,
-            user_id=subscription.user_id,
-            cycle_date=cycle_date,
-            cycle_start_at=cycle_start_at,
-            cycle_end_at=cycle_end_at,
-            quota_metric=subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS,
-            quota_limit=subscription.quota_value or Decimal("0"),
-            used_amount=Decimal("0"),
-            request_count=0,
-            last_request_id=None,
-        )
-        db.add(cycle)
-        db.flush()
-        return cycle
+        savepoint = db.begin_nested()
+        try:
+            cycle = SubscriptionUsageCycle(
+                subscription_id=subscription.id,
+                user_id=subscription.user_id,
+                cycle_date=cycle_date,
+                cycle_start_at=cycle_start_at,
+                cycle_end_at=cycle_end_at,
+                quota_metric=subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS,
+                quota_limit=subscription.quota_value or Decimal("0"),
+                used_amount=Decimal("0"),
+                request_count=0,
+                last_request_id=None,
+            )
+            db.add(cycle)
+            db.flush()
+            savepoint.commit()
+            return cycle
+        except IntegrityError:
+            savepoint.rollback()
+
+        cycle = query.first()
+        if cycle:
+            return cycle
+        raise ServiceException(500, "Failed to load subscription usage cycle", "SUBSCRIPTION_CYCLE_LOAD_FAILED")
 
     @staticmethod
     def _get_cycle_for_summary(
@@ -695,6 +704,7 @@ class SubscriptionService:
         db: Session,
         user: SysUser,
         now: Optional[datetime] = None,
+        quota_precheck: Optional[dict] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
         active_subscription = SubscriptionService.resolve_active_subscription(db, user.id, usage_now)
@@ -705,7 +715,24 @@ class SubscriptionService:
         if plan_kind != SubscriptionService.PLAN_KIND_DAILY_QUOTA:
             return {"subscription": active_subscription, "cycle": None}
 
-        cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now, lock=False)
+        quota_metric = active_subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS
+        estimated_consumed_amount = None
+        if quota_precheck:
+            metric_key = (
+                "estimated_total_cost"
+                if quota_metric == SubscriptionService.QUOTA_METRIC_COST
+                else "estimated_total_tokens"
+            )
+            raw_estimate = quota_precheck.get(metric_key)
+            if raw_estimate is not None:
+                estimated_consumed_amount = SubscriptionService._normalize_decimal(raw_estimate)
+
+        cycle = SubscriptionService._get_or_create_cycle(
+            db,
+            active_subscription,
+            usage_now,
+            lock=estimated_consumed_amount is not None,
+        )
         quota_limit = SubscriptionService._normalize_decimal(active_subscription.quota_value)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         if used_amount >= quota_limit:
@@ -714,6 +741,15 @@ class SubscriptionService:
                 "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
                 "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
             )
+
+        if estimated_consumed_amount is not None:
+            remaining_amount = quota_limit - used_amount
+            if estimated_consumed_amount > remaining_amount:
+                raise ServiceException(
+                    403,
+                    "本次请求预计会超出当日套餐剩余额度，请缩短上下文或降低输出上限后重试",
+                    "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+                )
         return {"subscription": active_subscription, "cycle": cycle}
 
     @staticmethod
@@ -734,7 +770,16 @@ class SubscriptionService:
         else:
             consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
 
-        cycle.used_amount = SubscriptionService._normalize_decimal(cycle.used_amount) + consumed_amount
+        quota_limit = SubscriptionService._normalize_decimal(subscription.quota_value)
+        next_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount) + consumed_amount
+        if next_used_amount > quota_limit:
+            raise ServiceException(
+                403,
+                "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
+                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+            )
+
+        cycle.used_amount = next_used_amount
         cycle.request_count = int(cycle.request_count or 0) + 1
         cycle.last_request_id = request_id
         db.flush()

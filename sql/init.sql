@@ -45,7 +45,7 @@ CREATE TABLE `sys_user` (
     `avatar` VARCHAR(512) DEFAULT NULL,
     `last_login_at` DATETIME DEFAULT NULL,
     `last_login_ip` VARCHAR(45) DEFAULT NULL,
-    `subscription_type` VARCHAR(10) NOT NULL DEFAULT 'balance' COMMENT 'balance=按量计费, unlimited=时间套餐',
+    `subscription_type` VARCHAR(16) NOT NULL DEFAULT 'balance' COMMENT 'balance=按量计费, unlimited/quota=套餐缓存态',
     `subscription_expires_at` DATETIME DEFAULT NULL COMMENT '套餐过期时间',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

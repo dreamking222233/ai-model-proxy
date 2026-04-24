@@ -25,6 +25,7 @@ from decimal import Decimal
 import httpx
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from app.database import release_session_connection, session_scope
@@ -113,7 +114,11 @@ class ProxyService:
     ]
 
     @staticmethod
-    def _assert_text_request_allowed(db: Session, user: SysUser) -> None:
+    def _assert_text_request_allowed(
+        db: Session,
+        user: SysUser,
+        quota_precheck: Optional[dict[str, Decimal]] = None,
+    ) -> None:
         """Validate whether a text request can proceed under the user's current billing mode."""
         had_subscription_cache = user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at)
         active_subscription = SubscriptionService.refresh_user_subscription_state(
@@ -125,7 +130,7 @@ class ProxyService:
         db.commit()
         if active_subscription:
             if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
-                SubscriptionService.check_quota_before_request(db, user)
+                SubscriptionService.check_quota_before_request(db, user, quota_precheck=quota_precheck)
             return
 
         balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
@@ -850,6 +855,115 @@ class ProxyService:
                 total_tokens += int(len(json.dumps(value, ensure_ascii=False)) / 2.5)
 
         return total_tokens
+
+    @staticmethod
+    def estimate_openai_input_tokens(request_data: dict) -> int:
+        """Approximate OpenAI chat-completions input tokens."""
+        total_tokens = ProxyService._estimate_message_text_tokens(
+            request_data.get("messages")
+        )
+
+        for field in (
+            "tools",
+            "tool_choice",
+            "functions",
+            "function_call",
+            "response_format",
+            "metadata",
+        ):
+            value = request_data.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                total_tokens += int(len(value) / 2.5)
+            else:
+                total_tokens += int(len(json.dumps(value, ensure_ascii=False)) / 2.5)
+
+        return total_tokens
+
+    @staticmethod
+    def estimate_responses_input_tokens(request_data: dict) -> int:
+        """Approximate Responses API input tokens."""
+        total_tokens = 0
+        for field in (
+            "input",
+            "instructions",
+            "tools",
+            "metadata",
+            "reasoning",
+            "text",
+            "include",
+        ):
+            value = request_data.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                total_tokens += int(len(value) / 2.5)
+            else:
+                total_tokens += int(len(json.dumps(value, ensure_ascii=False)) / 2.5)
+        return total_tokens
+
+    @staticmethod
+    def _coerce_token_limit(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float, Decimal)):
+            coerced = int(value)
+            return coerced if coerced > 0 else None
+        return None
+
+    @staticmethod
+    def _extract_estimated_output_tokens(protocol: str, request_data: dict) -> Optional[int]:
+        if protocol == "openai":
+            return ProxyService._coerce_token_limit(
+                request_data.get("max_completion_tokens") or request_data.get("max_tokens")
+            )
+        if protocol == "anthropic":
+            max_tokens = ProxyService._coerce_token_limit(request_data.get("max_tokens"))
+            thinking = request_data.get("thinking")
+            if isinstance(thinking, dict):
+                budget_tokens = ProxyService._coerce_token_limit(thinking.get("budget_tokens"))
+                if budget_tokens is not None:
+                    return max(max_tokens or 0, budget_tokens)
+            return max_tokens
+        if protocol == "responses":
+            return ProxyService._coerce_token_limit(request_data.get("max_output_tokens"))
+        return None
+
+    @staticmethod
+    def _build_text_quota_precheck(
+        db: Session,
+        protocol: str,
+        request_data: dict,
+        unified_model: Optional[UnifiedModel] = None,
+    ) -> dict[str, Decimal]:
+        if protocol == "anthropic":
+            estimated_input_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
+        elif protocol == "responses":
+            estimated_input_tokens = ProxyService.estimate_responses_input_tokens(request_data)
+        else:
+            estimated_input_tokens = ProxyService.estimate_openai_input_tokens(request_data)
+
+        estimated_output_tokens = ProxyService._extract_estimated_output_tokens(protocol, request_data)
+        quota_precheck: dict[str, Decimal] = {
+            "estimated_total_tokens": Decimal(str(max(estimated_input_tokens, 0))),
+        }
+        if estimated_output_tokens is not None:
+            quota_precheck["estimated_total_tokens"] += Decimal(str(max(estimated_output_tokens, 0)))
+
+        if unified_model is not None and estimated_output_tokens is not None:
+            price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+            estimated_input_cost = (
+                Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
+            ) * Decimal(str(unified_model.input_price_per_million or 0)) * price_multiplier
+            estimated_output_cost = (
+                Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")
+            ) * Decimal(str(unified_model.output_price_per_million or 0)) * price_multiplier
+            quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
+
+        return quota_precheck
 
     @staticmethod
     def _guard_legacy_claude_tool_context(
@@ -2395,9 +2509,27 @@ class ProxyService:
         # Inject model identity system prompt
         ProxyService._inject_model_identity(client_request, requested_model, "responses")
 
-        unified_model, channels = ProxyService._prepare_responses_request_context(
-            db, user, requested_model
-        )
+        try:
+            unified_model, channels = ProxyService._prepare_responses_request_context(
+                db,
+                user,
+                requested_model,
+                client_request,
+            )
+        except Exception as exc:
+            ProxyService._log_pre_request_failure(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                requested_model,
+                client_ip,
+                is_stream,
+                exc,
+                request_type="responses",
+                actual_model=client_request.get("model"),
+            )
+            raise
 
         last_error: Exception | None = None
         last_error_model: str | None = None
@@ -2552,7 +2684,10 @@ class ProxyService:
 
             try:
                 unified_model, channels = ProxyService._prepare_responses_request_context(
-                    db, user, requested_model
+                    db,
+                    user,
+                    requested_model,
+                    normalized_request,
                 )
             except ServiceException as exc:
                 release_session_connection(db)
@@ -2584,7 +2719,7 @@ class ProxyService:
                 )
                 cache_info = RequestBodyCacheService.analyze_request(
                     db=db,
-                    user_id=user.id,
+                    user_id=ProxyService._safe_object_id(user),
                     request_body=channel_request,
                     request_format="responses",
                     requested_model=requested_model,
@@ -2603,13 +2738,22 @@ class ProxyService:
                         )
                     )
                     response_time_ms = ProxyService._calculate_elapsed_ms(started_at, first_chunk_time)
-                    ProxyService._record_success(db, channel)
-                    ProxyService._deduct_balance_and_log(
-                        db, user, api_key_record, unified_model, request_id,
-                        requested_model, input_tokens, output_tokens, channel,
-                        client_ip, response_time_ms, is_stream=True,
+                    ProxyService._finalize_successful_text_request(
+                        db,
+                        user,
+                        api_key_record,
+                        unified_model,
+                        request_id,
+                        requested_model,
+                        input_tokens,
+                        output_tokens,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        is_stream=True,
                         actual_model=channel_request.get("model"),
                         cache_info=cache_info,
+                        request_type="responses",
                     )
                     last_response_output = completed_output
                     turn_completed = True
@@ -2673,13 +2817,22 @@ class ProxyService:
         db: Session,
         user: SysUser,
         requested_model: str,
+        request_data: Optional[dict] = None,
     ) -> tuple[UnifiedModel, list[tuple[Channel, str]]]:
         """Resolve a Responses request into a model plus channel candidates."""
-        ProxyService._assert_text_request_allowed(db, user)
-
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
             raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+
+        quota_precheck = None
+        if request_data:
+            quota_precheck = ProxyService._build_text_quota_precheck(
+                db,
+                "responses",
+                request_data,
+                unified_model,
+            )
+        ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
         channels = ProxyService._prioritize_channels_for_request(
             ModelService.get_available_channels(db, unified_model.id),
@@ -3133,13 +3286,22 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
-                        ProxyService._record_success(db, channel)
-                        ProxyService._deduct_balance_and_log(
-                            db, user, api_key_record, unified_model, request_id,
-                            requested_model, billing_input_tokens, billing_output_tokens, channel,
-                            client_ip, response_time_ms, is_stream=True,
+                        ProxyService._finalize_successful_text_request(
+                            db,
+                            user,
+                            api_key_record,
+                            unified_model,
+                            request_id,
+                            requested_model,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            is_stream=True,
                             actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
+                            request_type="responses",
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -3463,14 +3625,23 @@ class ProxyService:
             }
         )
 
-        # Record success and do accounting with billing tokens
-        ProxyService._record_success(db, channel)
-        ProxyService._deduct_balance_and_log(
-            db, user, api_key_record, unified_model, request_id,
-            requested_model, billing_input_tokens, billing_output_tokens, channel,
-            client_ip, response_time_ms, is_stream=False,
+        ProxyService._finalize_successful_text_request(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            billing_input_tokens,
+            billing_output_tokens,
+            channel,
+            client_ip,
+            response_time_ms,
+            is_stream=False,
             actual_model=request_data.get("model"),
             cache_info=cache_info,
+            request_type="responses",
+            raise_on_failure=True,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -3518,24 +3689,46 @@ class ProxyService:
         # Inject model identity system prompt
         ProxyService._inject_model_identity(request_data, requested_model, "openai")
 
-        # 1. Check user entitlement before request
-        ProxyService._assert_text_request_allowed(db, user)
+        try:
+            # 2. Resolve model (apply override rules)
+            unified_model = ModelService.resolve_model(db, requested_model)
+            if not unified_model:
+                raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
 
-        # 2. Validate request content length
-        ProxyService._validate_request_length(db, request_data)
+            quota_precheck = ProxyService._build_text_quota_precheck(
+                db,
+                "openai",
+                request_data,
+                unified_model,
+            )
 
-        # 2. Resolve model (apply override rules)
-        unified_model = ModelService.resolve_model(db, requested_model)
-        if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+            # 1. Check user entitlement before request
+            ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
-        # 3. Get available channels sorted by priority
-        channels = ProxyService._prioritize_channels_for_request(
-            ModelService.get_available_channels(db, unified_model.id),
-            "openai",
-        )
-        if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+            # 2. Validate request content length
+            ProxyService._validate_request_length(db, request_data)
+
+            # 3. Get available channels sorted by priority
+            channels = ProxyService._prioritize_channels_for_request(
+                ModelService.get_available_channels(db, unified_model.id),
+                "openai",
+            )
+            if not channels:
+                raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+        except Exception as exc:
+            ProxyService._log_pre_request_failure(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                requested_model,
+                client_ip,
+                bool(is_stream),
+                exc,
+                request_type="chat",
+                actual_model=request_data.get("model"),
+            )
+            raise
 
         # 4. Try each channel (failover)
         last_error: Exception | None = None
@@ -3716,7 +3909,7 @@ class ProxyService:
         )
         conversation_shadow_info = ConversationShadowService.analyze_request(
             db,
-            user_id=user.id,
+            user_id=ProxyService._safe_object_id(user),
             requested_model=requested_model,
             protocol_type="anthropic",
             request_data=request_data,
@@ -3724,24 +3917,46 @@ class ProxyService:
             is_stream=bool(is_stream),
         )
 
-        # 1. Check user entitlement before request
-        ProxyService._assert_text_request_allowed(db, user)
+        try:
+            # 2. Resolve model
+            unified_model = ModelService.resolve_model(db, requested_model)
+            if not unified_model:
+                raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
 
-        # 2. Validate request content length
-        ProxyService._validate_request_length(db, request_data)
+            quota_precheck = ProxyService._build_text_quota_precheck(
+                db,
+                "anthropic",
+                request_data,
+                unified_model,
+            )
 
-        # 2. Resolve model
-        unified_model = ModelService.resolve_model(db, requested_model)
-        if not unified_model:
-            raise ServiceException(404, f"Model '{requested_model}' not found", "MODEL_NOT_FOUND")
+            # 1. Check user entitlement before request
+            ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
-        # 3. Get available channels
-        channels = ProxyService._prioritize_channels_for_request(
-            ModelService.get_available_channels(db, unified_model.id),
-            "anthropic",
-        )
-        if not channels:
-            raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+            # 2. Validate request content length
+            ProxyService._validate_request_length(db, request_data)
+
+            # 3. Get available channels
+            channels = ProxyService._prioritize_channels_for_request(
+                ModelService.get_available_channels(db, unified_model.id),
+                "anthropic",
+            )
+            if not channels:
+                raise ServiceException(503, "No available channel for this model", "NO_CHANNEL")
+        except Exception as exc:
+            ProxyService._log_pre_request_failure(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                requested_model,
+                client_ip,
+                bool(is_stream),
+                exc,
+                request_type="chat",
+                actual_model=request_data.get("model"),
+            )
+            raise
 
         # 4. Failover
         last_error: Exception | None = None
@@ -4163,11 +4378,19 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
-                        ProxyService._record_success(db, channel)
-                        ProxyService._deduct_balance_and_log(
-                            db, user, api_key_record, unified_model, request_id,
-                            requested_model, billing_input_tokens, billing_output_tokens, channel,
-                            client_ip, response_time_ms, is_stream=True,
+                        ProxyService._finalize_successful_text_request(
+                            db,
+                            user,
+                            api_key_record,
+                            unified_model,
+                            request_id,
+                            requested_model,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            is_stream=True,
                             actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
                         )
@@ -4302,14 +4525,22 @@ class ProxyService:
             }
         )
 
-        # Record success and do accounting with billing tokens
-        ProxyService._record_success(db, channel)
-        ProxyService._deduct_balance_and_log(
-            db, user, api_key_record, unified_model, request_id,
-            requested_model, billing_input_tokens, billing_output_tokens, channel,
-            client_ip, response_time_ms, is_stream=False,
+        ProxyService._finalize_successful_text_request(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            billing_input_tokens,
+            billing_output_tokens,
+            channel,
+            client_ip,
+            response_time_ms,
+            is_stream=False,
             actual_model=request_data.get("model"),
             cache_info=cache_info,
+            raise_on_failure=True,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -4641,11 +4872,19 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
-                        ProxyService._record_success(db, channel)
-                        ProxyService._deduct_balance_and_log(
-                            db, user, api_key_record, unified_model, request_id,
-                            requested_model, billing_input_tokens, billing_output_tokens, channel,
-                            client_ip, response_time_ms, is_stream=True,
+                        ProxyService._finalize_successful_text_request(
+                            db,
+                            user,
+                            api_key_record,
+                            unified_model,
+                            request_id,
+                            requested_model,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            is_stream=True,
                             actual_model=request_data.get("model"),
                             cache_info=cache_state.get("cache_info"),
                         )
@@ -4766,13 +5005,22 @@ class ProxyService:
             }
         )
 
-        ProxyService._record_success(db, channel)
-        ProxyService._deduct_balance_and_log(
-            db, user, api_key_record, unified_model, request_id,
-            requested_model, billing_input_tokens, billing_output_tokens, channel,
-            client_ip, response_time_ms, is_stream=False,
+        ProxyService._finalize_successful_text_request(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            billing_input_tokens,
+            billing_output_tokens,
+            channel,
+            client_ip,
+            response_time_ms,
+            is_stream=False,
             actual_model=request_data.get("model"),
             cache_info=cache_info,
+            raise_on_failure=True,
         )
 
         return JSONResponse(
@@ -5518,11 +5766,19 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
-                        ProxyService._record_success(db, channel)
-                        ProxyService._deduct_balance_and_log(
-                            db, user, api_key_record, unified_model, request_id,
-                            requested_model, billing_input_tokens, billing_output_tokens, channel,
-                            client_ip, response_time_ms, is_stream=True,
+                        ProxyService._finalize_successful_text_request(
+                            db,
+                            user,
+                            api_key_record,
+                            unified_model,
+                            request_id,
+                            requested_model,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            is_stream=True,
                             actual_model=request_data.get("model"),
                             cache_info=merged_cache_info,
                             conversation_state_info=conversation_shadow_info,
@@ -5719,14 +5975,23 @@ class ProxyService:
             },
         )
 
-        ProxyService._record_success(db, channel)
-        ProxyService._deduct_balance_and_log(
-            db, user, api_key_record, unified_model, request_id,
-            requested_model, billing_input_tokens, billing_output_tokens, channel,
-            client_ip, response_time_ms, is_stream=False,
+        ProxyService._finalize_successful_text_request(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            billing_input_tokens,
+            billing_output_tokens,
+            channel,
+            client_ip,
+            response_time_ms,
+            is_stream=False,
             actual_model=request_data.get("model"),
             cache_info=merged_cache_info,
             conversation_state_info=conversation_shadow_info,
+            raise_on_failure=True,
         )
 
         return JSONResponse(
@@ -6115,11 +6380,19 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
-                        ProxyService._record_success(db, channel)
-                        ProxyService._deduct_balance_and_log(
-                            db, user, api_key_record, unified_model, request_id,
-                            requested_model, billing_input_tokens, billing_output_tokens, channel,
-                            client_ip, response_time_ms, is_stream=True,
+                        ProxyService._finalize_successful_text_request(
+                            db,
+                            user,
+                            api_key_record,
+                            unified_model,
+                            request_id,
+                            requested_model,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            is_stream=True,
                             actual_model=request_data.get("model"),
                             cache_info=merged_cache_info,
                             conversation_state_info=conversation_runtime_info or conversation_shadow_info,
@@ -6399,15 +6672,23 @@ class ProxyService:
         )
         billing_output_tokens = int(usage_summary.get("output_tokens", actual_output_tokens) or 0)
 
-        # Record success and do accounting with billing tokens
-        ProxyService._record_success(db, channel)
-        ProxyService._deduct_balance_and_log(
-            db, user, api_key_record, unified_model, request_id,
-            requested_model, billing_input_tokens, billing_output_tokens, channel,
-            client_ip, response_time_ms, is_stream=False,
+        ProxyService._finalize_successful_text_request(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            billing_input_tokens,
+            billing_output_tokens,
+            channel,
+            client_ip,
+            response_time_ms,
+            is_stream=False,
             actual_model=request_data.get("model"),
             cache_info=merged_cache_info,
             conversation_state_info=conversation_runtime_info or conversation_shadow_info,
+            raise_on_failure=True,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -6822,6 +7103,7 @@ class ProxyService:
         client_ip: str,
         response_time_ms: int,
         is_stream: bool,
+        request_type: str = "chat",
         actual_model: Optional[str] = None,
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
@@ -6830,241 +7112,383 @@ class ProxyService:
         Calculate cost, deduct from user balance (for balance mode) or just record usage (for unlimited mode),
         write request log and consumption record, and update API key usage stats.
         """
-        try:
-            with session_scope() as write_db:
-                fresh_user = (
-                    write_db.query(SysUser)
-                    .filter(SysUser.id == user.id)
+        user_id = ProxyService._safe_object_id(user)
+        api_key_id = ProxyService._safe_object_id(api_key_record)
+        with session_scope() as write_db:
+            fresh_user = (
+                write_db.query(SysUser)
+                .filter(SysUser.id == user_id)
+                .first()
+            )
+            if not fresh_user:
+                raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+
+            fresh_api_key_record = None
+            if api_key_id:
+                fresh_api_key_record = (
+                    write_db.query(UserApiKey)
+                    .filter(UserApiKey.id == api_key_id)
                     .first()
                 )
-                if not fresh_user:
-                    raise ServiceException(404, "User not found", "USER_NOT_FOUND")
 
-                fresh_api_key_record = None
-                if getattr(api_key_record, "id", None):
-                    fresh_api_key_record = (
-                        write_db.query(UserApiKey)
-                        .filter(UserApiKey.id == api_key_record.id)
-                        .first()
-                    )
+            usage_now = SubscriptionService.get_current_time()
+            raw_input_tokens = int(input_tokens or 0)
+            raw_output_tokens = int(output_tokens or 0)
+            raw_total_tokens = raw_input_tokens + raw_output_tokens
 
-                usage_now = SubscriptionService.get_current_time()
-                raw_input_tokens = int(input_tokens or 0)
-                raw_output_tokens = int(output_tokens or 0)
-                raw_total_tokens = raw_input_tokens + raw_output_tokens
+            token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
+            input_tokens = int(raw_input_tokens * token_multiplier)
+            output_tokens = int(raw_output_tokens * token_multiplier)
+            total_tokens = input_tokens + output_tokens
 
-                token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
-                input_tokens = int(raw_input_tokens * token_multiplier)
-                output_tokens = int(raw_output_tokens * token_multiplier)
-                total_tokens = input_tokens + output_tokens
+            price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
+            input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
+            output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
+            total_cost = input_cost + output_cost
 
-                price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
-                input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
-                output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
-                total_cost = input_cost + output_cost
-
-                billing_mode = "balance"
-                subscription_id: int | None = None
-                subscription_cycle_id: int | None = None
-                quota_metric: str | None = None
-                quota_consumed_amount = Decimal("0")
-                quota_limit_snapshot = Decimal("0")
-                quota_used_after = Decimal("0")
-                quota_cycle_date = None
-                if fresh_user.subscription_type == "balance":
-                    balance = (
-                        write_db.query(UserBalance)
-                        .filter(UserBalance.user_id == fresh_user.id)
-                        .with_for_update()
-                        .first()
-                    )
-                    if balance:
-                        balance_before = float(balance.balance)
-                        balance.balance -= Decimal(str(total_cost))
-                        balance.total_consumed += Decimal(str(total_cost))
-                        balance_after = float(balance.balance)
-                    else:
-                        balance_before = 0.0
-                        balance_after = 0.0
+            billing_mode = "balance"
+            subscription_id: int | None = None
+            subscription_cycle_id: int | None = None
+            quota_metric: str | None = None
+            quota_consumed_amount = Decimal("0")
+            quota_limit_snapshot = Decimal("0")
+            quota_used_after = Decimal("0")
+            quota_cycle_date = None
+            if fresh_user.subscription_type == "balance":
+                balance = (
+                    write_db.query(UserBalance)
+                    .filter(UserBalance.user_id == fresh_user.id)
+                    .with_for_update()
+                    .first()
+                )
+                if balance:
+                    balance_before = float(balance.balance)
+                    balance.balance -= Decimal(str(total_cost))
+                    balance.total_consumed += Decimal(str(total_cost))
+                    balance_after = float(balance.balance)
                 else:
-                    billing_mode = "subscription"
-                    active_subscription = SubscriptionService.resolve_active_subscription(
-                        write_db,
-                        fresh_user.id,
-                        usage_now,
-                    )
-                    subscription_id = active_subscription.id if active_subscription else None
-                    if active_subscription and (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
-                        quota_usage = SubscriptionService.consume_quota_after_request(
-                            write_db,
-                            active_subscription,
-                            request_id=request_id,
-                            raw_total_tokens=raw_total_tokens,
-                            total_cost=total_cost,
-                            now=usage_now,
-                        )
-                        subscription_cycle_id = quota_usage["subscription_cycle_id"]
-                        quota_metric = quota_usage["quota_metric"]
-                        quota_consumed_amount = quota_usage["quota_consumed_amount"]
-                        quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
-                        quota_used_after = quota_usage["quota_used_after"]
-                        quota_cycle_date = quota_usage["quota_cycle_date"]
-
-                    balance = (
-                        write_db.query(UserBalance)
-                        .filter(UserBalance.user_id == fresh_user.id)
-                        .first()
-                    )
-                    if balance:
-                        balance_before = float(balance.balance)
-                        balance_after = float(balance.balance)
-                    else:
-                        balance_before = 0.0
-                        balance_after = 0.0
-
-                cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
-                shadow_commit = None
-                if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
-                    shadow_commit = cache_info.get("_conversation_shadow_commit")
-                elif (
-                    conversation_state_info
-                    and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
-                ):
-                    shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
-
-                committed_session_id = ConversationSessionService.commit_success_state(
+                    balance_before = 0.0
+                    balance_after = 0.0
+            else:
+                billing_mode = "subscription"
+                active_subscription = SubscriptionService.resolve_active_subscription(
                     write_db,
-                    user_id=fresh_user.id,
-                    requested_model=requested_model,
-                    protocol_type=channel.protocol_type or "",
-                    channel_id=channel.id,
-                    shadow_commit=shadow_commit,
+                    fresh_user.id,
+                    usage_now,
                 )
-                if committed_session_id and not cache_log_fields.get("conversation_session_id"):
-                    cache_log_fields["conversation_session_id"] = committed_session_id
-                    if cache_info is not None:
-                        cache_info["conversation_session_id"] = committed_session_id
-                    if conversation_state_info is not None:
-                        conversation_state_info["conversation_session_id"] = committed_session_id
-
-                logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
-                write_db.add(
-                    ConsumptionRecord(
-                        user_id=fresh_user.id,
+                subscription_id = active_subscription.id if active_subscription else None
+                if active_subscription and (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
+                    quota_usage = SubscriptionService.consume_quota_after_request(
+                        write_db,
+                        active_subscription,
                         request_id=request_id,
-                        model_name=requested_model,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        total_tokens=total_tokens,
-                        raw_input_tokens=raw_input_tokens,
-                        raw_output_tokens=raw_output_tokens,
                         raw_total_tokens=raw_total_tokens,
-                        logical_input_tokens=logical_input_tokens,
-                        upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
-                        upstream_cache_read_input_tokens=int(
-                            cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
-                        ),
-                        upstream_cache_creation_input_tokens=int(
-                            cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
-                        ),
-                        upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
-                        input_cost=Decimal(str(input_cost)),
-                        output_cost=Decimal(str(output_cost)),
-                        total_cost=Decimal(str(total_cost)),
-                        balance_before=Decimal(str(balance_before)),
-                        balance_after=Decimal(str(balance_after)),
-                        billing_mode=billing_mode,
-                        subscription_id=subscription_id,
-                        subscription_cycle_id=subscription_cycle_id,
-                        quota_metric=quota_metric,
-                        quota_consumed_amount=quota_consumed_amount,
-                        quota_limit_snapshot=quota_limit_snapshot,
-                        quota_used_after=quota_used_after,
-                        quota_cycle_date=quota_cycle_date,
+                        total_cost=total_cost,
+                        now=usage_now,
                     )
-                )
+                    subscription_cycle_id = quota_usage["subscription_cycle_id"]
+                    quota_metric = quota_usage["quota_metric"]
+                    quota_consumed_amount = quota_usage["quota_consumed_amount"]
+                    quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
+                    quota_used_after = quota_usage["quota_used_after"]
+                    quota_cycle_date = quota_usage["quota_cycle_date"]
 
-                write_db.add(
+                balance = (
+                    write_db.query(UserBalance)
+                    .filter(UserBalance.user_id == fresh_user.id)
+                    .first()
+                )
+                if balance:
+                    balance_before = float(balance.balance)
+                    balance_after = float(balance.balance)
+                else:
+                    balance_before = 0.0
+                    balance_after = 0.0
+
+            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+            shadow_commit = None
+            if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
+                shadow_commit = cache_info.get("_conversation_shadow_commit")
+            elif (
+                conversation_state_info
+                and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
+            ):
+                shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
+
+            committed_session_id = ConversationSessionService.commit_success_state(
+                write_db,
+                user_id=fresh_user.id,
+                requested_model=requested_model,
+                protocol_type=channel.protocol_type or "",
+                channel_id=channel.id,
+                shadow_commit=shadow_commit,
+            )
+            if committed_session_id and not cache_log_fields.get("conversation_session_id"):
+                cache_log_fields["conversation_session_id"] = committed_session_id
+                if cache_info is not None:
+                    cache_info["conversation_session_id"] = committed_session_id
+                if conversation_state_info is not None:
+                    conversation_state_info["conversation_session_id"] = committed_session_id
+
+            logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
+            write_db.add(
+                ConsumptionRecord(
+                    user_id=fresh_user.id,
+                    request_id=request_id,
+                    model_name=requested_model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    raw_input_tokens=raw_input_tokens,
+                    raw_output_tokens=raw_output_tokens,
+                    raw_total_tokens=raw_total_tokens,
+                    logical_input_tokens=logical_input_tokens,
+                    upstream_input_tokens=int(cache_log_fields.get("upstream_input_tokens", 0) or 0),
+                    upstream_cache_read_input_tokens=int(
+                        cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
+                    ),
+                    upstream_cache_creation_input_tokens=int(
+                        cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
+                    ),
+                    upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
+                    input_cost=Decimal(str(input_cost)),
+                    output_cost=Decimal(str(output_cost)),
+                    total_cost=Decimal(str(total_cost)),
+                    balance_before=Decimal(str(balance_before)),
+                    balance_after=Decimal(str(balance_after)),
+                    billing_mode=billing_mode,
+                    subscription_id=subscription_id,
+                    subscription_cycle_id=subscription_cycle_id,
+                    quota_metric=quota_metric,
+                    quota_consumed_amount=quota_consumed_amount,
+                    quota_limit_snapshot=quota_limit_snapshot,
+                    quota_used_after=quota_used_after,
+                    quota_cycle_date=quota_cycle_date,
+                )
+            )
+
+            write_db.add(
                     RequestLog(
                         request_id=request_id,
                         user_id=fresh_user.id,
-                        user_api_key_id=getattr(api_key_record, "id", None),
+                        user_api_key_id=api_key_id,
                         channel_id=channel.id,
                         channel_name=channel.name,
                         requested_model=requested_model,
                         actual_model=actual_model or unified_model.model_name,
                         protocol_type=channel.protocol_type,
-                        request_type="chat",
+                        request_type=request_type,
                         billing_type="subscription" if billing_mode == "subscription" else "token",
-                        is_stream=1 if is_stream else 0,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        total_tokens=total_tokens,
-                        raw_input_tokens=raw_input_tokens,
-                        raw_output_tokens=raw_output_tokens,
-                        raw_total_tokens=raw_total_tokens,
-                        image_credits_charged=0,
-                        image_count=0,
-                        response_time_ms=response_time_ms,
-                        cache_status=cache_log_fields["cache_status"],
-                        cache_hit_segments=cache_log_fields["cache_hit_segments"],
-                        cache_miss_segments=cache_log_fields["cache_miss_segments"],
-                        cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
-                        cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
-                        cache_new_tokens=cache_log_fields["cache_new_tokens"],
-                        cache_reused_chars=cache_log_fields["cache_reused_chars"],
-                        cache_new_chars=cache_log_fields["cache_new_chars"],
-                        logical_input_tokens=logical_input_tokens,
-                        upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
-                        upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
-                        upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
-                        upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
-                        upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
-                        upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
-                        conversation_session_id=cache_log_fields["conversation_session_id"],
-                        conversation_match_status=cache_log_fields["conversation_match_status"],
-                        compression_mode=cache_log_fields["compression_mode"],
-                        compression_status=cache_log_fields["compression_status"],
-                        original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
-                        compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
-                        compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
-                        compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
-                        compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
-                        upstream_session_mode=cache_log_fields["upstream_session_mode"],
-                        upstream_session_id=cache_log_fields["upstream_session_id"],
-                        status="success",
-                        error_message=None,
-                        client_ip=client_ip,
-                        subscription_cycle_id=subscription_cycle_id,
-                        quota_metric=quota_metric,
-                        quota_consumed_amount=quota_consumed_amount,
-                        quota_limit_snapshot=quota_limit_snapshot,
-                        quota_used_after=quota_used_after,
-                        quota_cycle_date=quota_cycle_date,
-                    )
+                    is_stream=1 if is_stream else 0,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    raw_input_tokens=raw_input_tokens,
+                    raw_output_tokens=raw_output_tokens,
+                    raw_total_tokens=raw_total_tokens,
+                    image_credits_charged=0,
+                    image_count=0,
+                    response_time_ms=response_time_ms,
+                    cache_status=cache_log_fields["cache_status"],
+                    cache_hit_segments=cache_log_fields["cache_hit_segments"],
+                    cache_miss_segments=cache_log_fields["cache_miss_segments"],
+                    cache_bypass_segments=cache_log_fields["cache_bypass_segments"],
+                    cache_reused_tokens=cache_log_fields["cache_reused_tokens"],
+                    cache_new_tokens=cache_log_fields["cache_new_tokens"],
+                    cache_reused_chars=cache_log_fields["cache_reused_chars"],
+                    cache_new_chars=cache_log_fields["cache_new_chars"],
+                    logical_input_tokens=logical_input_tokens,
+                    upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
+                    upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                    upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
+                    upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
+                    upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
+                    upstream_prompt_cache_status=cache_log_fields["upstream_prompt_cache_status"],
+                    conversation_session_id=cache_log_fields["conversation_session_id"],
+                    conversation_match_status=cache_log_fields["conversation_match_status"],
+                    compression_mode=cache_log_fields["compression_mode"],
+                    compression_status=cache_log_fields["compression_status"],
+                    original_estimated_input_tokens=cache_log_fields["original_estimated_input_tokens"],
+                    compressed_estimated_input_tokens=cache_log_fields["compressed_estimated_input_tokens"],
+                    compression_saved_estimated_tokens=cache_log_fields["compression_saved_estimated_tokens"],
+                    compression_ratio=Decimal(str(cache_log_fields["compression_ratio"])),
+                    compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
+                    upstream_session_mode=cache_log_fields["upstream_session_mode"],
+                    upstream_session_id=cache_log_fields["upstream_session_id"],
+                    status="success",
+                    error_message=None,
+                    client_ip=client_ip,
+                    subscription_cycle_id=subscription_cycle_id,
+                    quota_metric=quota_metric,
+                    quota_consumed_amount=quota_consumed_amount,
+                    quota_limit_snapshot=quota_limit_snapshot,
+                    quota_used_after=quota_used_after,
+                    quota_cycle_date=quota_cycle_date,
                 )
+            )
 
-                RequestCacheSummaryService.persist_request_cache_summary(
+            RequestCacheSummaryService.persist_request_cache_summary(
+                write_db,
+                request_id=request_id,
+                user_id=fresh_user.id,
+                requested_model=requested_model,
+                protocol_type=channel.protocol_type,
+                cache_info=cache_info,
+            )
+            if cache_info and cache_info.get("_conversation_mark_cooldown"):
+                ConversationSessionService.mark_session_cooldown_by_session_id(
                     write_db,
-                    request_id=request_id,
-                    user_id=fresh_user.id,
-                    requested_model=requested_model,
-                    protocol_type=channel.protocol_type,
-                    cache_info=cache_info,
+                    cache_log_fields.get("conversation_session_id") or committed_session_id,
                 )
-                if cache_info and cache_info.get("_conversation_mark_cooldown"):
-                    ConversationSessionService.mark_session_cooldown_by_session_id(
-                        write_db,
-                        cache_log_fields.get("conversation_session_id") or committed_session_id,
-                    )
 
-                if fresh_api_key_record:
-                    fresh_api_key_record.total_requests += 1
-                    fresh_api_key_record.total_tokens += total_tokens
-                    fresh_api_key_record.total_cost += Decimal(str(total_cost))
-                    fresh_api_key_record.last_used_at = datetime.utcnow()
-        except Exception as e:
-            logger.error("Balance deduction / logging failed: %s", e)
+            if fresh_api_key_record:
+                fresh_api_key_record.total_requests += 1
+                fresh_api_key_record.total_tokens += total_tokens
+                fresh_api_key_record.total_cost += Decimal(str(total_cost))
+                fresh_api_key_record.last_used_at = datetime.utcnow()
+
+    @staticmethod
+    def _build_accounting_failure_error_message(exc: Exception) -> str:
+        if isinstance(exc, ServiceException):
+            return f"本地计费或记账失败：[{exc.error_code}] {exc.detail}"
+        detail = str(exc).strip() or exc.__class__.__name__
+        return f"本地计费或记账失败：{detail}"
+
+    @staticmethod
+    def _request_log_exists(db: Session, request_id: str) -> bool:
+        return (
+            db.query(RequestLog.id)
+            .filter(RequestLog.request_id == request_id)
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def _write_minimal_failed_request_log(
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_id: str,
+        requested_model: str,
+        channel: Channel | None,
+        client_ip: str,
+        is_stream: bool,
+        error_message: str,
+        response_time_ms: Optional[int] = None,
+        request_type: str = "chat",
+        billing_type: str = "token",
+        actual_model: Optional[str] = None,
+    ) -> bool:
+        try:
+            with session_scope() as write_db:
+                if ProxyService._request_log_exists(write_db, request_id):
+                    return True
+                user_id = ProxyService._safe_object_id(user)
+                api_key_id = ProxyService._safe_object_id(api_key_record)
+                write_db.add(
+                    RequestLog(
+                        request_id=request_id,
+                        user_id=user_id,
+                        user_api_key_id=api_key_id,
+                        channel_id=channel.id if channel else None,
+                        channel_name=channel.name if channel else None,
+                        requested_model=requested_model,
+                        actual_model=actual_model,
+                        protocol_type=channel.protocol_type if channel else None,
+                        request_type=request_type,
+                        billing_type=billing_type,
+                        is_stream=1 if is_stream else 0,
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        response_time_ms=response_time_ms,
+                        status="error",
+                        error_message=error_message[:2000] if error_message else None,
+                        client_ip=client_ip,
+                    )
+                )
+            return True
+        except Exception as fallback_exc:
+            logger.error("Failed to write minimal failed request log: %s", fallback_exc, exc_info=True)
+            return False
+
+    @staticmethod
+    def _finalize_successful_text_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        unified_model: UnifiedModel,
+        request_id: str,
+        requested_model: str,
+        input_tokens: int,
+        output_tokens: int,
+        channel: Channel,
+        client_ip: str,
+        response_time_ms: int,
+        is_stream: bool,
+        actual_model: Optional[str] = None,
+        cache_info: Optional[dict[str, Any]] = None,
+        conversation_state_info: Optional[dict[str, Any]] = None,
+        request_type: str = "chat",
+        fallback_billing_type: Optional[str] = None,
+        raise_on_failure: bool = False,
+    ) -> None:
+        ProxyService._record_success(db, channel)
+        try:
+            ProxyService._deduct_balance_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                input_tokens,
+                output_tokens,
+                channel,
+                client_ip,
+                response_time_ms,
+                is_stream=is_stream,
+                request_type=request_type,
+                actual_model=actual_model,
+                cache_info=cache_info,
+                conversation_state_info=conversation_state_info,
+            )
+        except Exception as exc:
+            logger.error(
+                "Text billing / logging failed after upstream success request_id=%s channel=%s (%s): %s",
+                request_id,
+                channel.name,
+                channel.id,
+                exc,
+                exc_info=True,
+            )
+            ProxyService._log_failed_request(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                requested_model,
+                client_ip,
+                is_stream,
+                ProxyService._build_accounting_failure_error_message(exc),
+                channel=channel,
+                response_time_ms=response_time_ms,
+                cache_info=cache_info,
+                request_type=request_type,
+                billing_type=fallback_billing_type or ProxyService._infer_failed_request_billing_type(user),
+                actual_model=actual_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+                raw_input_tokens=input_tokens,
+                raw_output_tokens=output_tokens,
+                raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+            )
+            if raise_on_failure:
+                raise ServiceException(
+                    500,
+                    "文本请求已成功完成，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                    "TEXT_BILLING_FAILED",
+                ) from exc
 
     @staticmethod
     def _log_failed_request(
@@ -7081,30 +7505,44 @@ class ProxyService:
         cache_info: Optional[dict[str, Any]] = None,
         request_type: str = "chat",
         billing_type: str = "token",
+        actual_model: Optional[str] = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        raw_input_tokens: int = 0,
+        raw_output_tokens: int = 0,
+        raw_total_tokens: int = 0,
         image_credits_charged: Decimal | int | float = Decimal("0"),
         image_count: int = 0,
         image_size: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         """Log a failed request without deducting balance."""
         try:
             with session_scope() as write_db:
+                if ProxyService._request_log_exists(write_db, request_id):
+                    return True
+                user_id = ProxyService._safe_object_id(user)
+                api_key_id = ProxyService._safe_object_id(api_key_record)
                 cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
-                        user_id=user.id,
-                        user_api_key_id=getattr(api_key_record, "id", None),
+                        user_id=user_id,
+                        user_api_key_id=api_key_id,
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
                         requested_model=requested_model,
-                        actual_model=None,
+                        actual_model=actual_model,
                         protocol_type=channel.protocol_type if channel else None,
                         request_type=request_type,
                         billing_type=billing_type,
                         is_stream=1 if is_stream else 0,
-                        input_tokens=0,
-                        output_tokens=0,
-                        total_tokens=0,
+                        input_tokens=int(input_tokens or 0),
+                        output_tokens=int(output_tokens or 0),
+                        total_tokens=int(total_tokens or 0),
+                        raw_input_tokens=int(raw_input_tokens or 0),
+                        raw_output_tokens=int(raw_output_tokens or 0),
+                        raw_total_tokens=int(raw_total_tokens or 0),
                         image_credits_charged=Decimal(str(image_credits_charged or 0)).quantize(Decimal("0.001")),
                         image_count=int(image_count or 0),
                         image_size=image_size,
@@ -7144,13 +7582,94 @@ class ProxyService:
                 RequestCacheSummaryService.persist_request_cache_summary(
                     write_db,
                     request_id=request_id,
-                    user_id=user.id,
+                    user_id=user_id,
                     requested_model=requested_model,
                     protocol_type=channel.protocol_type if channel else None,
                     cache_info=cache_info,
                 )
+            return True
         except Exception as e:
-            logger.error("Failed to log error request: %s", e)
+            logger.error("Failed to log detailed error request: %s", e, exc_info=True)
+            return ProxyService._write_minimal_failed_request_log(
+                user=user,
+                api_key_record=api_key_record,
+                request_id=request_id,
+                requested_model=requested_model,
+                channel=channel,
+                client_ip=client_ip,
+                is_stream=is_stream,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                request_type=request_type,
+                billing_type=billing_type,
+                actual_model=actual_model,
+            )
+
+    @staticmethod
+    def _safe_object_id(obj: Any) -> Optional[int]:
+        if obj is None:
+            return None
+        try:
+            identity = sa_inspect(obj).identity
+            if identity:
+                return identity[0]
+        except Exception:
+            pass
+        try:
+            raw_dict = object.__getattribute__(obj, "__dict__")
+            if isinstance(raw_dict, dict) and "id" in raw_dict:
+                return raw_dict.get("id")
+        except Exception:
+            pass
+        try:
+            return getattr(obj, "id", None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _infer_failed_request_billing_type(user: Optional[SysUser]) -> str:
+        try:
+            subscription_type = getattr(user, "subscription_type", None)
+        except Exception:
+            subscription_type = None
+        return "subscription" if subscription_type in {"unlimited", "quota"} else "token"
+
+    @staticmethod
+    def _log_pre_request_failure(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        is_stream: bool,
+        exc: Exception,
+        request_type: str = "chat",
+        actual_model: Optional[str] = None,
+        cache_info: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if isinstance(exc, ServiceException):
+            error_detail = exc.detail
+        else:
+            error_detail = ProxyService._sanitize_visible_model_text(
+                str(exc),
+                requested_model,
+                actual_model,
+            )
+        ProxyService._log_failed_request(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            requested_model,
+            client_ip,
+            is_stream,
+            error_detail,
+            cache_info=cache_info,
+            request_type=request_type,
+            billing_type=ProxyService._infer_failed_request_billing_type(user),
+            actual_model=actual_model,
+        )
 
     # ===================================================================
     # Helper: validate request content length

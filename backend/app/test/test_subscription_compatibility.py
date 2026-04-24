@@ -1,9 +1,11 @@
 import unittest
+from decimal import Decimal
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.core.exceptions import ServiceException
+from app.core.dependencies import verify_api_key_from_headers
 from app.services.proxy_service import ProxyService
 from app.services.subscription_service import SubscriptionService
 
@@ -39,7 +41,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
 
         ProxyService._assert_text_request_allowed(db, user)
 
-        mock_check_quota.assert_called_once_with(db, user)
+        mock_check_quota.assert_called_once_with(db, user, quota_precheck=None)
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
     def test_expired_subscription_without_balance_raises_subscription_expired(self, _mock_refresh):
@@ -88,6 +90,102 @@ class SubscriptionStatusCompatibilityTest(unittest.TestCase):
 
         self.assertEqual(SubscriptionService._normalized_subscription_status(subscription), "expired")
         self.assertFalse(SubscriptionService._is_effectively_active(subscription))
+
+
+class SubscriptionQuotaGuardTest(unittest.TestCase):
+    @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
+    @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
+    def test_precheck_blocks_request_that_would_exceed_remaining_daily_quota(
+        self,
+        mock_get_or_create_cycle,
+        mock_resolve_active_subscription,
+    ):
+        user = SimpleNamespace(id=1)
+        subscription = SimpleNamespace(
+            plan_kind_snapshot="daily_quota",
+            quota_metric="total_tokens",
+            quota_value=Decimal("100"),
+        )
+        cycle = SimpleNamespace(used_amount=Decimal("80"))
+        mock_resolve_active_subscription.return_value = subscription
+        mock_get_or_create_cycle.return_value = cycle
+
+        with self.assertRaises(ServiceException) as ctx:
+            SubscriptionService.check_quota_before_request(
+                MagicMock(),
+                user,
+                quota_precheck={"estimated_total_tokens": Decimal("30")},
+            )
+
+        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
+        mock_get_or_create_cycle.assert_called_once()
+
+    @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
+    def test_consume_quota_rejects_post_request_overflow(
+        self,
+        mock_get_or_create_cycle,
+    ):
+        subscription = SimpleNamespace(
+            id=99,
+            quota_metric="total_tokens",
+            quota_value=Decimal("100"),
+        )
+        cycle = SimpleNamespace(
+            id=7,
+            used_amount=Decimal("95"),
+            request_count=1,
+            last_request_id="old",
+            cycle_date=datetime.utcnow().date(),
+        )
+        mock_get_or_create_cycle.return_value = cycle
+
+        with self.assertRaises(ServiceException) as ctx:
+            SubscriptionService.consume_quota_after_request(
+                MagicMock(),
+                subscription,
+                request_id="new",
+                raw_total_tokens=10,
+                total_cost=0.0,
+            )
+
+        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
+        self.assertEqual(cycle.used_amount, Decimal("95"))
+        self.assertEqual(cycle.request_count, 1)
+
+
+class VerifyApiKeySubscriptionRefreshTest(unittest.TestCase):
+    @patch("app.services.subscription_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_expired_cached_subscription_does_not_fail_in_auth_layer_after_refresh(self, mock_refresh):
+        api_key_record = SimpleNamespace(
+            user_id=1,
+            status="active",
+            expires_at=None,
+        )
+        user = SimpleNamespace(
+            id=1,
+            status=1,
+            subscription_type="unlimited",
+            subscription_expires_at=datetime.utcnow() - timedelta(days=1),
+        )
+
+        api_key_query = MagicMock()
+        api_key_query.filter.return_value.first.return_value = api_key_record
+        user_query = MagicMock()
+        user_query.filter.return_value.first.return_value = user
+
+        db = MagicMock()
+        db.query.side_effect = [api_key_query, user_query]
+
+        result_user, result_key = verify_api_key_from_headers(
+            db,
+            authorization="Bearer sk-test-key",
+        )
+
+        self.assertIs(result_user, user)
+        self.assertIs(result_key, api_key_record)
+        mock_refresh.assert_called_once()
+        db.commit.assert_called_once()
+        db.refresh.assert_called_once_with(user)
 
 
 if __name__ == "__main__":

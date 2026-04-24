@@ -129,13 +129,17 @@ def verify_api_key_from_headers(
     if user.status != 1:
         raise ServiceException(status_code=403, detail="User account is disabled", error_code="FORBIDDEN")
 
-    # Check subscription expiration for non-balance plan users
-    if user.subscription_type in {"unlimited", "quota"}:
+    # Refresh cached subscription state before the request layer makes balance/quota decisions.
+    if user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at):
         from app.services.subscription_service import SubscriptionService
 
-        current_time = SubscriptionService.get_current_time()
-        if not user.subscription_expires_at or user.subscription_expires_at < current_time:
-            raise ServiceException(status_code=403, detail="套餐已过期，请续费或充值余额", error_code="SUBSCRIPTION_EXPIRED")
+        SubscriptionService.refresh_user_subscription_state(
+            db,
+            user.id,
+            SubscriptionService.get_current_time(),
+        )
+        db.commit()
+        db.refresh(user)
 
     return user, api_key_record
 

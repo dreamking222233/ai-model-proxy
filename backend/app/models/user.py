@@ -25,7 +25,7 @@ class SysUser(Base):
     avatar = Column(String(512), nullable=True)
     last_login_at = Column(DateTime, nullable=True)
     last_login_ip = Column(String(45), nullable=True)
-    subscription_type = Column(String(10), nullable=False, default="balance", comment="balance=按量计费, unlimited=时间套餐")
+    subscription_type = Column(String(16), nullable=False, default="balance", comment="balance=按量计费, unlimited/quota=套餐缓存态")
     subscription_expires_at = Column(DateTime, nullable=True, comment="套餐过期时间")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

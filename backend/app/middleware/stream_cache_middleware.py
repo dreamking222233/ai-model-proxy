@@ -7,6 +7,7 @@
 import time
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from app.database import release_session_connection
@@ -43,6 +44,22 @@ class StreamCacheMiddleware:
     """流式请求体缓存分析中间件。"""
 
     @staticmethod
+    def _safe_user_id(user: SysUser) -> Optional[int]:
+        try:
+            identity = sa_inspect(user).identity
+            if identity:
+                return identity[0]
+        except Exception:
+            pass
+        try:
+            raw_dict = object.__getattribute__(user, "__dict__")
+            if isinstance(raw_dict, dict) and "id" in raw_dict:
+                return raw_dict.get("id")
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     async def wrap_stream_request(
         request_body: Dict[str, Any],
         headers: Dict[str, str],
@@ -57,9 +74,10 @@ class StreamCacheMiddleware:
         cache_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """Analyze request-body cache usage, then stream upstream response unchanged."""
+        user_id = StreamCacheMiddleware._safe_user_id(user)
         cache_info = RequestBodyCacheService.analyze_request(
             db=db,
-            user_id=user.id,
+            user_id=user_id,
             request_body=request_body,
             request_format=request_format,
             requested_model=model,

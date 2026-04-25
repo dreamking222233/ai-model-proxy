@@ -15,6 +15,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -1504,6 +1505,106 @@ class ProxyService:
         }
 
     @staticmethod
+    def _should_apply_claude_code_bridge_guidance(
+        requested_model: str,
+        request_data: dict,
+    ) -> bool:
+        """Return whether a bridge request looks like a Claude Code tool session."""
+        if str(requested_model or "").strip() != "claude-opus-4-6":
+            return False
+
+        raw_tools = request_data.get("tools")
+        if not isinstance(raw_tools, list):
+            return False
+
+        tool_names = {
+            str(tool.get("name", "") or "").strip()
+            for tool in raw_tools
+            if isinstance(tool, dict)
+        }
+        if not tool_names:
+            return False
+
+        # Claude Code sessions expose a distinctive management/tooling surface.
+        return bool(
+            {"Agent", "TodoWrite", "ExitPlanMode", "EnterPlanMode"} & tool_names
+        )
+
+    @staticmethod
+    def _build_claude_code_bridge_guidance() -> str:
+        """Guide non-Claude upstreams to follow Claude Code tool conventions."""
+        return (
+            "You are serving Claude Code through an Anthropic-compatible bridge. "
+            "Preserve the full toolset and match Claude Code tool behavior as closely as possible. "
+            "Prefer direct repository exploration with Read, Glob, Grep, and Bash before spawning agents. "
+            "Do not start by reading invented project-memory paths under ~/.claude/projects/.../memory or similar locations unless you have first confirmed the file exists. "
+            "When parallel exploration is genuinely helpful, prefer Agent calls with run_in_background=true. "
+            "Avoid worktree isolation for read-only analysis, and do not spawn multiple worktree-isolated agents in the same turn "
+            "unless the task explicitly requires isolated editing. "
+            "For the Read tool, only use paths that you have already discovered or that clearly exist, and omit the pages field unless you are reading a paginated document. "
+            "Never send an empty pages value. "
+            "Keep tool names, ids, and arguments exact, and use the simplest valid tool plan that will work reliably in Claude Code."
+        )
+
+    @staticmethod
+    def _normalize_claude_code_bridge_tool_input(
+        requested_model: str,
+        tool_name: str,
+        tool_input: Any,
+    ) -> dict[str, Any]:
+        """Normalize bridge-emitted tool arguments toward native Claude Code conventions."""
+        parsed_input = ProxyService._parse_tool_arguments(tool_input)
+        if str(requested_model or "").strip() != "claude-opus-4-6":
+            return parsed_input
+
+        normalized = copy.deepcopy(parsed_input)
+        if not isinstance(normalized, dict):
+            return parsed_input
+
+        normalized_tool_name = str(tool_name or "").strip()
+        if normalized_tool_name == "Read":
+            if normalized.get("pages") in {"", None}:
+                normalized.pop("pages", None)
+            return normalized
+
+        if normalized_tool_name == "Grep":
+            raw_path = str(normalized.get("path", "") or "").strip()
+            raw_glob = str(normalized.get("glob", "") or "").strip()
+            if raw_path and not raw_glob and any(token in raw_path for token in ("*", "?", "[", "{")):
+                normalized["path"] = os.path.dirname(raw_path) or "."
+                normalized["glob"] = os.path.basename(raw_path)
+            return normalized
+
+        if normalized_tool_name != "Agent":
+            return normalized
+
+        prompt_text = str(normalized.get("prompt", "") or "").lower()
+        read_only_markers = (
+            "read-only",
+            "read only",
+            "do not modify",
+            "只读",
+            "不要修改",
+            "只做研究",
+        )
+        if any(marker in prompt_text for marker in read_only_markers):
+            normalized["run_in_background"] = True
+            if str(normalized.get("isolation", "") or "").strip().lower() == "worktree":
+                normalized.pop("isolation", None)
+
+        return normalized
+
+    @staticmethod
+    def _should_defer_claude_code_bridge_tool_delta(
+        requested_model: str,
+        tool_name: str,
+    ) -> bool:
+        """Defer selected tool deltas so the bridge can emit sanitized final arguments once."""
+        if str(requested_model or "").strip() != "claude-opus-4-6":
+            return False
+        return str(tool_name or "").strip() in {"Agent", "Read", "Grep"}
+
+    @staticmethod
     def _convert_anthropic_tools_to_responses(
         request_data: dict,
     ) -> tuple[list[dict], Optional[str | dict]]:
@@ -1562,6 +1663,16 @@ class ProxyService:
             responses_request["max_output_tokens"] = max_tokens
 
         input_items: list[dict] = []
+
+        if ProxyService._should_apply_claude_code_bridge_guidance(
+            requested_model,
+            request_copy,
+        ):
+            input_items.append({
+                "type": "message",
+                "role": "developer",
+                "content": ProxyService._build_claude_code_bridge_guidance(),
+            })
 
         system_parts = ProxyService._build_responses_message_content_parts(
             request_copy.get("system")
@@ -1680,17 +1791,6 @@ class ProxyService:
             responses_request["tools"] = tools
         if tool_choice is not None:
             responses_request["tool_choice"] = tool_choice
-
-        if requested_model == "claude-opus-4-6":
-            reasoning = copy.deepcopy(responses_request.get("reasoning") or {})
-            reasoning["effort"] = "high"
-            reasoning.setdefault("summary", "auto")
-            responses_request["reasoning"] = reasoning
-
-        ProxyService._apply_responses_parallel_tool_mitigation(
-            str(responses_request.get("model", "") or requested_model),
-            responses_request,
-        )
 
         return responses_request
 
@@ -5103,6 +5203,10 @@ class ProxyService:
             requested_model=requested_model,
         )
         responses_request["stream"] = True
+        responses_request = ProxyService._prepare_responses_request_body(
+            str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
+            responses_request,
+        )
         upstream_event_sequence: list[str] = []
         upstream_event_counts: dict[str, int] = {}
         client_event_sequence: list[str] = []
@@ -5161,6 +5265,10 @@ class ProxyService:
             tool_block_states: dict[str, dict[str, Any]] = {}
             tool_call_aliases: dict[str, str] = {}
             final_response: dict[str, Any] | None = None
+            bridge_tool_normalization_enabled = ProxyService._should_apply_claude_code_bridge_guidance(
+                requested_model,
+                request_data,
+            )
 
             def ensure_message_start(response_obj: Optional[dict[str, Any]] = None) -> list[str]:
                 nonlocal message_started, message_id, input_tokens
@@ -5327,6 +5435,7 @@ class ProxyService:
                         "argument_mismatch": False,
                         "name_source": "payload" if item.get("name") else "fallback",
                         "closed_by": None,
+                        "defer_input_json_delta": False,
                     }
                     tool_block_states[call_id] = state
                     next_block_index += 1
@@ -5335,6 +5444,13 @@ class ProxyService:
                     if resolved_name and resolved_name != state.get("name"):
                         state["name"] = resolved_name
                         state["name_source"] = "payload"
+                state["defer_input_json_delta"] = bool(
+                    bridge_tool_normalization_enabled
+                    and ProxyService._should_defer_claude_code_bridge_tool_delta(
+                        requested_model,
+                        str(state.get("name", "") or ""),
+                    )
+                )
                 return call_id, state
 
             def ensure_tool_use_block_started(item: dict[str, Any]) -> tuple[str, list[str]]:
@@ -5370,6 +5486,8 @@ class ProxyService:
                     return events
                 state["saw_delta"] = True
                 state["arguments_text"] = f"{state['arguments_text']}{serialized_delta}"
+                if state.get("defer_input_json_delta"):
+                    return events
                 events.append(
                     build_client_event(
                         "content_block_delta",
@@ -5399,6 +5517,32 @@ class ProxyService:
 
                 final_text = ProxyService._stringify_tool_arguments_json(final_arguments)
                 current_text = str(state.get("arguments_text", "") or "")
+                if state.get("defer_input_json_delta"):
+                    normalized_input = ProxyService._normalize_claude_code_bridge_tool_input(
+                        requested_model,
+                        str(state.get("name", "") or ""),
+                        final_arguments if final_arguments is not None else current_text,
+                    )
+                    normalized_text = ProxyService._stringify_tool_arguments_json(normalized_input)
+                    state["arguments_text"] = normalized_text
+                    state["completed_arguments_text"] = normalized_text
+                    if normalized_text:
+                        events.append(
+                            build_client_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": state["index"],
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": normalized_text,
+                                    },
+                                },
+                                detail="input_json_delta",
+                            )
+                        )
+                    final_text = normalized_text
+                    current_text = normalized_text
                 if final_text:
                     if not current_text:
                         missing_text = final_text
@@ -5961,6 +6105,10 @@ class ProxyService:
             requested_model=requested_model,
         )
         responses_request["stream"] = False
+        responses_request = ProxyService._prepare_responses_request_body(
+            str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
+            responses_request,
+        )
 
         async def upstream_call():
             timeout = httpx.Timeout(

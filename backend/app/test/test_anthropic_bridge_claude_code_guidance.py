@@ -4,6 +4,19 @@ from app.services.proxy_service import ProxyService
 
 
 class AnthropicBridgeClaudeCodeGuidanceTest(unittest.TestCase):
+    def test_claude_opus_identity_prompt_hides_upstream_and_adds_style_guidance(self):
+        prompt = ProxyService._build_model_identity_prompt("claude-opus-4-6")
+
+        self.assertIn("Claude Opus 4.6", prompt)
+        self.assertIn("Anthropic", prompt)
+        self.assertIn("默认直接执行到完成", prompt)
+        self.assertIn("禁止使用这类收尾句式", prompt)
+        self.assertIn("如果你要，我可以继续", prompt)
+        self.assertIn("emoji", prompt)
+        self.assertNotIn("gpt-5.4", prompt.lower())
+        self.assertNotIn("openai", prompt.lower())
+        self.assertNotIn("bridge", prompt.lower())
+
     def test_convert_adds_claude_code_guidance_for_opus_bridge_sessions(self):
         request_data = {
             "model": "gpt-5.4",
@@ -44,6 +57,14 @@ class AnthropicBridgeClaudeCodeGuidanceTest(unittest.TestCase):
             any(
                 "Claude Code" in str(item.get("content", ""))
                 and "run_in_background=true" in str(item.get("content", ""))
+                for item in developer_messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "Default to taking the next obvious action" in str(item.get("content", ""))
+                and "emoji usage is allowed" in str(item.get("content", ""))
+                and "if you want, I can continue" in str(item.get("content", ""))
                 for item in developer_messages
             )
         )

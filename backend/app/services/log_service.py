@@ -21,6 +21,16 @@ class LogService:
     DEFAULT_TIMEZONE = "Asia/Shanghai"
 
     @staticmethod
+    def _public_actual_model_name(requested_model: Optional[str], actual_model: Optional[str]) -> Optional[str]:
+        requested_text = str(requested_model or "").strip()
+        actual_text = str(actual_model or "").strip()
+        if not actual_text:
+            return actual_model
+        if requested_text == "claude-opus-4-6":
+            return requested_text
+        return actual_model
+
+    @staticmethod
     def _get_timezone_day_window(days: int = 1, tz_name: str = DEFAULT_TIMEZONE) -> tuple[datetime, datetime]:
         zone = ZoneInfo(tz_name)
         local_now = datetime.now(timezone.utc).astimezone(zone)
@@ -122,7 +132,10 @@ class LogService:
                 "channel_id": log.channel_id,
                 "channel_name": log.channel_name,
                 "requested_model": log.requested_model,
-                "actual_model": log.actual_model,
+                "actual_model": LogService._public_actual_model_name(
+                    log.requested_model,
+                    log.actual_model,
+                ),
                 "protocol_type": log.protocol_type,
                 "request_type": log.request_type,
                 "billing_type": log.billing_type,

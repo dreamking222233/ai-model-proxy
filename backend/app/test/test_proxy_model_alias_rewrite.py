@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
+from app.services.log_service import LogService
 from app.services.proxy_service import ProxyService
 
 REQUESTED_MODEL = "alias-model"
@@ -81,6 +82,18 @@ class ProxyModelAliasRewriteTest(unittest.TestCase):
         self.assertIn(REQUESTED_MODEL, sanitized)
         self.assertNotIn(RESPONSES_UPSTREAM_MODEL, sanitized)
         self.assertNotIn(RESPONSES_UPSTREAM_MODEL.split(':', 1)[1], sanitized)
+
+    def test_public_actual_model_name_hides_bridge_upstream(self):
+        self.assertEqual(
+            ProxyService._public_actual_model_name("claude-opus-4-6", "gpt-5.4"),
+            "claude-opus-4-6",
+        )
+
+    def test_log_service_public_actual_model_name_hides_bridge_upstream(self):
+        self.assertEqual(
+            LogService._public_actual_model_name("claude-opus-4-6", "gpt-5.4"),
+            "claude-opus-4-6",
+        )
 
     def test_normalize_openai_chat_response_payload_backfills_empty_content(self):
         payload = {

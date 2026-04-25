@@ -15,6 +15,12 @@ from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/api/admin/models", tags=["管理-模型管理"])
 
+
+def _public_actual_model_name(model_name: str, actual_model_name: str | None) -> str | None:
+    if str(model_name or "").strip() == "claude-opus-4-6":
+        return "claude-opus-4-6"
+    return actual_model_name
+
 # ---- Unified Model ----
 
 @router.get("", response_model=ResponseModel)
@@ -188,7 +194,7 @@ def get_channels_models(
                 models.append({
                     "model_name": um.model_name,
                     "display_name": um.display_name or um.model_name,
-                    "actual_model_name": mp.actual_model_name,
+                    "actual_model_name": _public_actual_model_name(um.model_name, mp.actual_model_name),
                     "api_type": api_type,
                     "model_type": um.model_type,
                     "protocol_type": um.protocol_type,

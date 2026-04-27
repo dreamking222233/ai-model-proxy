@@ -15,3 +15,19 @@ export function register(username, email, password) {
     data: { username, email, password }
   })
 }
+
+export function forgotPassword(data) {
+  return request({
+    url: '/api/auth/forgot-password',
+    method: 'post',
+    data
+  })
+}
+
+export function verifyForgotPasswordIdentity(data) {
+  return request({
+    url: '/api/auth/forgot-password/verify',
+    method: 'post',
+    data
+  })
+}

@@ -134,6 +134,10 @@
                 </a-button>
               </a-form-item>
 
+              <div v-if="!isAgentLogin" class="login-actions">
+                <a @click.prevent="openForgotPassword">忘记密码？</a>
+              </div>
+
               <div v-if="!isAgentLogin" class="form-footer">
                 <span>还没有账户？</span>
                 <a @click.prevent="switchMode('register')">立即注册</a>
@@ -245,11 +249,74 @@
         </div>
       </div>
     </div>
+
+    <a-modal
+      title="找回密码"
+      :visible="forgotVisible"
+      :confirm-loading="forgotLoading"
+      :ok-text="forgotStep === 'identity' ? '验证身份' : '重置密码'"
+      cancel-text="取消"
+      :mask-closable="false"
+      :closable="!forgotLoading"
+      centered
+      wrapClassName="forgot-password-modal"
+      @ok="handleForgotPassword"
+      @cancel="closeForgotPassword"
+    >
+      <a-form :form="forgotForm" layout="vertical" class="forgot-form">
+        <div class="forgot-step-tip">
+          <span v-if="forgotStep === 'identity'">先校验账号和邮箱，校验通过后再设置新密码</span>
+          <span v-else>身份已通过校验，现在请输入新的登录密码</span>
+          <a v-if="forgotStep === 'reset'" @click.prevent="resetForgotIdentityStep">重新验证</a>
+        </div>
+        <a-form-item label="账号">
+          <a-input
+            v-decorator="['username', { rules: [{ required: true, message: '请输入账号' }] }]"
+            placeholder="请输入注册账号"
+            size="large"
+            :disabled="forgotStep === 'reset'"
+          >
+            <a-icon slot="prefix" type="user" />
+          </a-input>
+        </a-form-item>
+        <a-form-item label="邮箱">
+          <a-input
+            v-decorator="['email', { rules: [{ required: true, message: '请输入邮箱' }, { type: 'email', message: '请输入有效的邮箱地址' }] }]"
+            placeholder="请输入注册邮箱"
+            size="large"
+            :disabled="forgotStep === 'reset'"
+          >
+            <a-icon slot="prefix" type="mail" />
+          </a-input>
+        </a-form-item>
+        <a-form-item v-if="forgotStep === 'reset'" label="新密码">
+          <a-input-password
+            v-decorator="['new_password', { rules: [{ required: true, message: '请输入新密码' }, { min: 6, message: '密码至少 6 个字符' }, { validator: validateForgotPassword }] }]"
+            placeholder="请输入新的登录密码"
+            size="large"
+            @change="handleForgotPasswordChange"
+          >
+            <a-icon slot="prefix" type="lock" />
+          </a-input-password>
+        </a-form-item>
+        <a-form-item v-if="forgotStep === 'reset'" label="确认新密码">
+          <a-input-password
+            v-decorator="['confirm_password', { rules: [{ required: true, message: '请再次输入新密码' }, { validator: compareForgotPassword }] }]"
+            placeholder="请再次输入新的登录密码"
+            size="large"
+            @blur="handleForgotConfirmBlur"
+          >
+            <a-icon slot="prefix" type="safety-certificate" />
+          </a-input-password>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
 <script>
 import { getPublicSiteConfig } from '@/api/public'
+import { forgotPassword, verifyForgotPasswordIdentity } from '@/api/auth'
 
 export default {
   name: 'Login',
@@ -257,10 +324,15 @@ export default {
     return {
       mode: 'login', // 'login' 或 'register'
       loading: false,
+      forgotLoading: false,
+      forgotVisible: false,
+      forgotStep: 'identity',
       focusedField: null,
       confirmDirty: false,
+      forgotConfirmDirty: false,
       loginValues: { username: '', password: '' },
       registerValues: { username: '', email: '', password: '', confirmPassword: '' },
+      forgotValues: { username: '', email: '', newPassword: '', confirmPassword: '' },
       // 品牌区特性列表
       features: [
         { icon: 'api', title: '多模型支持', desc: '接入 GPT、Claude、Gemini 等主流模型' },
@@ -303,6 +375,7 @@ export default {
   beforeCreate() {
     this.loginForm = this.$form.createForm(this, { name: 'login' })
     this.registerForm = this.$form.createForm(this, { name: 'register' })
+    this.forgotForm = this.$form.createForm(this, { name: 'forgot_password' })
   },
   mounted() {
     // 根据路由判断初始模式
@@ -364,6 +437,104 @@ export default {
       } else {
         callback()
       }
+    },
+    handleForgotPasswordChange(e) {
+      this.forgotValues.newPassword = e.target.value
+    },
+    handleForgotConfirmBlur(e) {
+      const value = e.target.value
+      this.forgotConfirmDirty = this.forgotConfirmDirty || !!value
+      this.forgotValues.confirmPassword = value || ''
+    },
+    validateForgotPassword(rule, value, callback) {
+      if (value && this.forgotConfirmDirty) {
+        this.forgotForm.validateFields(['confirm_password'], { force: true })
+      }
+      callback()
+    },
+    compareForgotPassword(rule, value, callback) {
+      if (value && value !== this.forgotForm.getFieldValue('new_password')) {
+        callback('两次输入的密码不一致')
+      } else {
+        callback()
+      }
+    },
+    openForgotPassword() {
+      this.forgotVisible = true
+      this.forgotStep = 'identity'
+      this.$nextTick(() => {
+        const username = this.loginForm.getFieldValue('username') || this.loginValues.username || ''
+        this.forgotForm.setFieldsValue({ username })
+      })
+    },
+    resetForgotIdentityStep() {
+      this.forgotStep = 'identity'
+      this.forgotConfirmDirty = false
+      this.forgotValues.newPassword = ''
+      this.forgotValues.confirmPassword = ''
+      this.$nextTick(() => {
+        this.forgotForm.setFieldsValue({
+          new_password: undefined,
+          confirm_password: undefined
+        })
+      })
+    },
+    closeForgotPassword() {
+      if (this.forgotLoading) return
+      this.forgotVisible = false
+      this.forgotStep = 'identity'
+      this.forgotConfirmDirty = false
+      this.forgotValues = { username: '', email: '', newPassword: '', confirmPassword: '' }
+      this.forgotForm.resetFields()
+    },
+    handleForgotPassword() {
+      this.forgotForm.validateFields((err, values) => {
+        if (err) return
+        this.forgotLoading = true
+        const action = this.forgotStep === 'identity'
+          ? verifyForgotPasswordIdentity({
+            username: values.username,
+            email: values.email
+          })
+          : forgotPassword({
+            username: values.username,
+            email: values.email,
+            new_password: values.new_password
+          })
+        action
+          .then(() => {
+            if (this.forgotStep === 'identity') {
+              this.forgotValues.username = values.username || ''
+              this.forgotValues.email = values.email || ''
+              this.forgotStep = 'reset'
+              this.$message.success('身份校验通过，请输入新密码')
+              return
+            }
+            this.$message.success('密码已重置，请使用新密码登录')
+            this.loginForm.setFieldsValue({
+              username: values.username,
+              password: ''
+            })
+            this.loginValues.username = values.username || ''
+            this.loginValues.password = ''
+            this.forgotVisible = false
+            this.forgotStep = 'identity'
+            this.forgotConfirmDirty = false
+            this.forgotValues = { username: '', email: '', newPassword: '', confirmPassword: '' }
+            this.forgotForm.resetFields()
+            this.switchMode('login')
+          })
+          .catch((error) => {
+            const msg =
+              (error.response && error.response.data && error.response.data.message) ||
+              error.message ||
+              (this.forgotStep === 'identity' ? '身份校验失败，请重试' : '密码找回失败，请重试')
+            this.$message.error(msg)
+          })
+          .finally(() => {
+            this.forgotLoading = false
+          })
+      })
     },
 
     /** 登录提交 */
@@ -1048,6 +1219,27 @@ export default {
 }
 
 /* =============================================
+   登录辅助操作
+   ============================================= */
+.login-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 16px;
+
+  a {
+    color: rgba(168, 184, 255, 0.92);
+    font-size: 13px;
+    text-decoration: none;
+    transition: all 0.2s ease;
+
+    &:hover {
+      color: #c3ceff;
+      text-shadow: 0 0 12px rgba(102, 126, 234, 0.35);
+    }
+  }
+}
+
+/* =============================================
    表单底部
    ============================================= */
 .form-footer {
@@ -1068,6 +1260,84 @@ export default {
       color: #b0bfff;
       text-shadow: 0 0 12px rgba(102, 126, 234, 0.4);
     }
+  }
+}
+
+/deep/ .forgot-password-modal {
+  .ant-modal-content {
+    background: linear-gradient(180deg, rgba(13, 16, 37, 0.98), rgba(9, 12, 28, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  }
+
+  .ant-modal-header {
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px 18px 0 0;
+  }
+
+  .ant-modal-title,
+  .ant-modal-close,
+  .ant-modal-close-x {
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .ant-modal-body {
+    padding-top: 20px;
+  }
+
+  .ant-modal-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .ant-form-item-label > label {
+    color: rgba(255, 255, 255, 0.74);
+  }
+
+  .ant-input,
+  .ant-input-password .ant-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    color: #fff;
+  }
+
+  .ant-input:hover,
+  .ant-input-password .ant-input:hover,
+  .ant-input:focus,
+  .ant-input-password .ant-input:focus,
+  .ant-input-focused {
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
+  }
+
+  .ant-input-affix-wrapper .ant-input-prefix,
+  .ant-input-prefix,
+  .ant-input-password-icon,
+  .anticon {
+    color: rgba(255, 255, 255, 0.38);
+  }
+
+  .ant-form-explain {
+    color: #ff7875;
+  }
+}
+
+.forgot-step-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  line-height: 1.6;
+
+  a {
+    flex-shrink: 0;
+    color: #8fa0f5;
+    text-decoration: none;
   }
 }
 

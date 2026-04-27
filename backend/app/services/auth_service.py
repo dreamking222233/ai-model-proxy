@@ -371,3 +371,81 @@ class AuthService:
             raise ServiceException(400, "旧密码错误")
         user.password_hash = hash_password(new_password)
         db.commit()
+
+    @staticmethod
+    def _get_user_for_password_reset(
+        db: Session,
+        username: str,
+        email: str,
+        request_host: Optional[str] = None,
+        x_site_host: Optional[str] = None,
+        origin: Optional[str] = None,
+        referer: Optional[str] = None,
+    ) -> SysUser:
+        normalized_username = str(username).strip()
+        normalized_email = str(email).strip().lower()
+        context = AgentService.get_site_context_from_request(
+            db,
+            host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        )
+        query = db.query(SysUser).filter(
+            SysUser.username == normalized_username,
+            func.lower(SysUser.email) == normalized_email,
+        )
+        if not AgentService.is_local_dev_host(context.host or context.request_host):
+            if context.site_scope == "agent":
+                query = query.filter(SysUser.agent_id == int(context.agent_id or 0))
+            else:
+                query = query.filter(SysUser.agent_id.is_(None))
+        user = query.first()
+        if not user:
+            raise ServiceException(400, "账号或邮箱不匹配", "IDENTITY_MISMATCH")
+        if user.status != 1:
+            raise ServiceException(403, "账号已被禁用", "ACCOUNT_DISABLED")
+        return user
+
+    @staticmethod
+    def verify_password_reset_identity(
+        db: Session,
+        username: str,
+        email: str,
+        request_host: Optional[str] = None,
+        x_site_host: Optional[str] = None,
+        origin: Optional[str] = None,
+        referer: Optional[str] = None,
+    ) -> None:
+        AuthService._get_user_for_password_reset(
+            db,
+            username=username,
+            email=email,
+            request_host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        )
+
+    @staticmethod
+    def reset_password_by_identity(
+        db: Session,
+        username: str,
+        email: str,
+        new_password: str,
+        request_host: Optional[str] = None,
+        x_site_host: Optional[str] = None,
+        origin: Optional[str] = None,
+        referer: Optional[str] = None,
+    ) -> None:
+        user = AuthService._get_user_for_password_reset(
+            db,
+            username=username,
+            email=email,
+            request_host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        )
+        user.password_hash = hash_password(new_password)
+        db.commit()

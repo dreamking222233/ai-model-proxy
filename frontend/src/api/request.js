@@ -15,6 +15,38 @@ const service = axios.create({
   timeout: 30000
 })
 
+function isAuthEntryRequest(config) {
+  const url = String(config?.url || '')
+  return [
+    '/api/auth/login',
+    '/api/auth/register',
+    '/api/auth/forgot-password'
+  ].some(path => url.endsWith(path))
+}
+
+function resolveLoginPath() {
+  const currentPath =
+    (router.currentRoute && router.currentRoute.path) ||
+    (typeof window !== 'undefined' && window.location ? window.location.pathname : '') ||
+    ''
+  if (currentPath === '/agents/login' || currentPath.startsWith('/agent')) {
+    return '/agents/login'
+  }
+  return '/login'
+}
+
+function redirectToLogin() {
+  const currentPath =
+    (router.currentRoute && router.currentRoute.path) ||
+    (typeof window !== 'undefined' && window.location ? window.location.pathname : '') ||
+    ''
+  const targetPath = resolveLoginPath()
+  if (currentPath === targetPath) {
+    return
+  }
+  router.replace({ path: targetPath }).catch(() => {})
+}
+
 // Request interceptor
 service.interceptors.request.use(
   config => {
@@ -54,9 +86,11 @@ service.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
-        clearSiteClientCache()
-        router.push('/login')
-        message.error('登录已过期，请重新登录')
+        if (!isAuthEntryRequest(error.config)) {
+          clearSiteClientCache()
+          redirectToLogin()
+          message.error('登录已过期，请重新登录')
+        }
       } else if (status === 403) {
         message.error(error.response.data?.message || '无权访问该资源')
       } else if (status === 500) {

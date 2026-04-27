@@ -46,6 +46,21 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Identity-based password reset request."""
+
+    username: str = Field(..., min_length=1, max_length=64)
+    email: EmailStr
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class ForgotPasswordVerifyRequest(BaseModel):
+    """Identity verification request before password reset."""
+
+    username: str = Field(..., min_length=1, max_length=64)
+    email: EmailStr
+
+
 # ---------------------------------------------------------------------------
 # User detail / admin
 # ---------------------------------------------------------------------------

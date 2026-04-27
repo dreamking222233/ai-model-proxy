@@ -323,6 +323,9 @@ export default {
       }
       return statusMap[status] || status || '-'
     },
+    formatMoney(value) {
+      return Number(value || 0).toFixed(4)
+    },
     formatBeijingTime(time) {
       const date = parseUtcDate(time)
       if (!date) return '-'

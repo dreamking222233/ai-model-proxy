@@ -11,6 +11,13 @@
     <a-card v-if="selectedAgent" title="代理资产充值" class="block">
       <p>当前代理：{{ selectedAgent.agent_name }}</p>
       <p>余额池：${{ Number(selectedAgent.balance || 0).toFixed(4) }}，图片积分池：{{ Number(selectedAgent.image_credit_balance || 0).toFixed(3) }}</p>
+      <a-alert
+        type="info"
+        show-icon
+        style="margin: 12px 0 16px"
+        message="代理兑换码不再单独充值额度"
+        description="当前代理生成兑换码时，会直接占用这里的余额池；删除未使用兑换码后，金额会自动退回代理余额。"
+      />
       <div class="form-row">
         <a-input-number v-model="rechargeForm.balance_amount" :min="0" :step="1" style="width: 220px" placeholder="充值余额" />
         <a-input-number v-model="rechargeForm.image_amount" :min="0" :step="1" style="width: 220px" placeholder="充值图片积分" />
@@ -34,6 +41,9 @@
     </a-card>
 
     <a-card title="代理兑换码固定面额规则" class="block">
+      <p style="margin-bottom: 16px; color: #666;">
+        这里只控制代理端可选择的固定面额，不代表单独的兑换码额度池。代理生成兑换码时，实际扣减的是代理余额。
+      </p>
       <div class="form-row">
         <a-input-number v-model="ruleForm.amount" :min="0.01" :step="0.5" style="width: 220px" placeholder="固定金额" />
         <a-input-number v-model="ruleForm.sort_order" :min="0" :step="1" style="width: 180px" placeholder="排序" />

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-content">
         <h2 class="page-title">兑换码管理</h2>
-        <p class="page-subtitle">按管理员配置的固定面额生成兑换码，供当前代理平台用户兑换</p>
+        <p class="page-subtitle">按管理员配置的固定面额生成兑换码，生成时直接扣减当前代理余额，不再使用独立兑换码额度</p>
       </div>
       <div class="header-actions">
         <a-select
@@ -27,6 +27,20 @@
           <a-icon type="plus" />
           生成兑换码
         </a-button>
+      </div>
+    </div>
+
+    <div class="balance-tip-card">
+      <div class="tip-item">
+        <span class="tip-label">当前可用余额</span>
+        <strong class="tip-value success">${{ formatMoney(assetSummary.balance) }}</strong>
+      </div>
+      <div class="tip-item">
+        <span class="tip-label">兑换码冻结余额</span>
+        <strong class="tip-value warning">${{ formatMoney(assetSummary.frozen_balance) }}</strong>
+      </div>
+      <div class="tip-item tip-text">
+        删除未使用兑换码后，对应金额会自动退回代理余额。
       </div>
     </div>
 
@@ -163,6 +177,7 @@
 <script>
 import { parseUtcDate } from '@/utils'
 import {
+  getAgentWorkbenchSummary,
   listAgentRedemptionRules,
   listAgentRedemptionCodes,
   createAgentRedemptionCode,
@@ -176,6 +191,10 @@ export default {
       loading: false,
       rules: [],
       list: [],
+      assetSummary: {
+        balance: 0,
+        frozen_balance: 0
+      },
       copiedCode: '',
       filters: { status: '' },
       createForm: { amount_rule_id: undefined, expires_days: undefined },
@@ -209,10 +228,19 @@ export default {
     }
   },
   mounted() {
+    this.fetchAssetSummary()
     this.fetchRules()
     this.fetchList()
   },
   methods: {
+    async fetchAssetSummary() {
+      const res = await getAgentWorkbenchSummary()
+      const data = res.data || {}
+      this.assetSummary = {
+        balance: Number(data.balance || 0),
+        frozen_balance: Number(data.frozen_balance || 0)
+      }
+    },
     async fetchRules() {
       const res = await listAgentRedemptionRules()
       this.rules = res.data || []
@@ -249,18 +277,23 @@ export default {
         this.$message.warning(this.rules.length > 0 ? '请选择兑换码固定面额' : '当前没有可生成的兑换码面额，请联系管理员配置')
         return
       }
+      const selectedRule = this.rules.find(item => Number(item.id) === Number(this.createForm.amount_rule_id))
+      if (selectedRule && Number(this.assetSummary.balance || 0) < Number(selectedRule.amount || 0)) {
+        this.$message.warning('当前代理余额不足，无法生成该面额兑换码')
+        return
+      }
       await createAgentRedemptionCode({
         amount_rule_id: this.createForm.amount_rule_id,
         expires_days: this.createForm.expires_days || undefined
       })
       this.$message.success('兑换码生成成功')
       this.pagination.current = 1
-      this.fetchList()
+      await Promise.all([this.fetchList(), this.fetchAssetSummary()])
     },
     async remove(record) {
       await deleteAgentRedemptionCode(record.id)
       this.$message.success('兑换码已删除')
-      this.fetchList()
+      await Promise.all([this.fetchList(), this.fetchAssetSummary()])
     },
     async copyCode(code) {
       try {
@@ -421,6 +454,48 @@ export default {
     }
   }
 
+  .balance-tip-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+
+    .tip-item {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .tip-label {
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    .tip-value {
+      font-size: 20px;
+      font-weight: 700;
+
+      &.success {
+        color: #15803d;
+      }
+
+      &.warning {
+        color: #c2410c;
+      }
+    }
+
+    .tip-text {
+      color: #475569;
+      font-size: 13px;
+      margin-left: auto;
+    }
+  }
+
   .filter-card {
     margin-bottom: 18px;
     border-radius: 10px;
@@ -536,6 +611,14 @@ export default {
         .action-btn {
           width: 100%;
         }
+      }
+    }
+  }
+
+  @media (max-width: 768px) {
+    .balance-tip-card {
+      .tip-text {
+        margin-left: 0;
       }
     }
   }

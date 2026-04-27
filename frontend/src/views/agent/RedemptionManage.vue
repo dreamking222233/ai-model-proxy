@@ -23,7 +23,7 @@
           placeholder="有效期天数"
           class="expires-input"
         />
-        <a-button type="primary" class="action-btn" :disabled="rules.length === 0" @click="createCode">
+        <a-button type="primary" class="action-btn" @click="createCode">
           <a-icon type="plus" />
           生成兑换码
         </a-button>

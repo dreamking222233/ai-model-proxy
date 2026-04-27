@@ -9,18 +9,45 @@ from sqlalchemy.orm import Session
 
 from app.models.cache_log import CacheLog
 from app.models.log import ConversationCheckpoint, ConversationSession, UserBalance, UserImageBalance, UserSubscription
+from app.models.agent import Agent
 from app.models.user import SysUser
 from app.models.user import UserApiKey
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.exceptions import ServiceException
 from sqlalchemy import func, or_
+from app.services.agent_service import AgentService
 
 
 class AuthService:
     """Stateless authentication service."""
 
     @staticmethod
-    def register(db: Session, username: str, email: str, password: str) -> dict:
+    def _build_agent_meta_map(db: Session, agent_ids: list[int]) -> dict[int, dict]:
+        normalized_ids = sorted({int(agent_id) for agent_id in agent_ids if agent_id})
+        if not normalized_ids:
+            return {}
+        rows = db.query(Agent).filter(Agent.id.in_(normalized_ids)).all()
+        return {
+            int(agent.id): {
+                "agent_id": int(agent.id),
+                "agent_code": agent.agent_code,
+                "agent_name": agent.agent_name,
+                "agent_frontend_domain": agent.frontend_domain,
+            }
+            for agent in rows
+        }
+
+    @staticmethod
+    def register(
+        db: Session,
+        username: str,
+        email: str,
+        password: str,
+        request_host: Optional[str] = None,
+        x_site_host: Optional[str] = None,
+        origin: Optional[str] = None,
+        referer: Optional[str] = None,
+    ) -> dict:
         """
         Register a new user.
 
@@ -30,13 +57,30 @@ class AuthService:
         Raises:
             ServiceException: if username or email is already taken.
         """
+        if not AgentService.is_self_register_allowed(
+            db,
+            host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        ):
+            raise ServiceException(403, "当前站点已关闭注册", "REGISTRATION_DISABLED")
+
+        site_context = AgentService.get_site_context_from_request(
+            db,
+            host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        )
+
         # Check unique username
         if db.query(SysUser).filter(SysUser.username == username).first():
-            raise ServiceException(400, "Username already taken", "DUPLICATE_USERNAME")
+            raise ServiceException(400, "用户名已存在", "DUPLICATE_USERNAME")
 
         # Check unique email
         if db.query(SysUser).filter(SysUser.email == email).first():
-            raise ServiceException(400, "Email already registered", "DUPLICATE_EMAIL")
+            raise ServiceException(400, "邮箱已被注册", "DUPLICATE_EMAIL")
 
         # Create user
         user = SysUser(
@@ -44,6 +88,8 @@ class AuthService:
             email=email,
             password_hash=hash_password(password),
             role="user",
+            agent_id=site_context.agent_id,
+            source_domain=site_context.host or AgentService.normalize_host(request_host),
             status=1,
         )
         db.add(user)
@@ -71,12 +117,22 @@ class AuthService:
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
+                "agent_id": user.agent_id,
                 "avatar": user.avatar,
             },
         }
 
     @staticmethod
-    def login(db: Session, username: str, password: str, client_ip: Optional[str] = None) -> dict:
+    def login(
+        db: Session,
+        username: str,
+        password: str,
+        client_ip: Optional[str] = None,
+        request_host: Optional[str] = None,
+        x_site_host: Optional[str] = None,
+        origin: Optional[str] = None,
+        referer: Optional[str] = None,
+    ) -> dict:
         """
         Authenticate a user by username and password.
 
@@ -88,13 +144,22 @@ class AuthService:
         """
         user = db.query(SysUser).filter(SysUser.username == username).first()
         if not user:
-            raise ServiceException(401, "Invalid username or password", "AUTH_FAILED")
+            raise ServiceException(401, "用户名或密码错误", "AUTH_FAILED")
 
         if not verify_password(password, user.password_hash):
-            raise ServiceException(401, "Invalid username or password", "AUTH_FAILED")
+            raise ServiceException(401, "用户名或密码错误", "AUTH_FAILED")
 
         if user.status != 1:
-            raise ServiceException(403, "User account is disabled", "ACCOUNT_DISABLED")
+            raise ServiceException(403, "账号已被禁用", "ACCOUNT_DISABLED")
+
+        AgentService.assert_user_matches_site(
+            db,
+            user,
+            host=request_host,
+            x_site_host=x_site_host,
+            origin=origin,
+            referer=referer,
+        )
 
         # Update login metadata
         user.last_login_at = datetime.utcnow()
@@ -111,6 +176,7 @@ class AuthService:
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
+                "agent_id": user.agent_id,
                 "avatar": user.avatar,
             },
         }
@@ -128,7 +194,7 @@ class AuthService:
 
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
-            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
 
         # Fetch balances
         balance = db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
@@ -139,12 +205,20 @@ class AuthService:
         total_tokens = db.query(
             func.coalesce(func.sum(RequestLog.total_tokens), 0)
         ).filter(RequestLog.user_id == user_id).scalar() or 0
+        agent_meta = {}
+        if user.agent_id:
+            agent_meta = AuthService._build_agent_meta_map(db, [int(user.agent_id)]).get(int(user.agent_id), {})
 
         return {
             "id": user.id,
             "username": user.username,
             "email": user.email,
             "role": user.role,
+            "agent_id": user.agent_id,
+            "agent_code": agent_meta.get("agent_code"),
+            "agent_name": agent_meta.get("agent_name"),
+            "agent_frontend_domain": agent_meta.get("agent_frontend_domain"),
+            "source_domain": user.source_domain,
             "status": user.status,
             "avatar": user.avatar,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
@@ -167,13 +241,27 @@ class AuthService:
         keyword: str = None,
         sort_by: str = "id",
         sort_order: str = "desc",
+        agent_id: Optional[int] = None,
+        roles: Optional[list[str]] = None,
     ) -> tuple:
         query = db.query(SysUser, UserBalance.balance.label("balance")).outerjoin(
             UserBalance, UserBalance.user_id == SysUser.id
         )
+        if agent_id is None:
+            pass
+        elif agent_id == 0:
+            query = query.filter(SysUser.agent_id.is_(None))
+        else:
+            query = query.filter(SysUser.agent_id == agent_id)
+        if roles:
+            query = query.filter(SysUser.role.in_(roles))
         if keyword:
-            like = f"%{keyword}%"
-            query = query.filter(or_(SysUser.username.like(like), SysUser.email.like(like)))
+            keyword_text = str(keyword).strip()
+            like = f"%{keyword_text}%"
+            conditions = [SysUser.username.like(like), SysUser.email.like(like)]
+            if keyword_text.isdigit():
+                conditions.append(SysUser.id == int(keyword_text))
+            query = query.filter(or_(*conditions))
         sort_dir = sort_order.lower() if sort_order else "desc"
         if sort_by == "balance":
             order_column = func.coalesce(UserBalance.balance, 0)
@@ -190,14 +278,24 @@ class AuthService:
 
         total = query.count()
         users = query.offset((page - 1) * page_size).limit(page_size).all()
+        agent_meta_map = AuthService._build_agent_meta_map(
+            db,
+            [int(u.agent_id) for u, _balance in users if getattr(u, "agent_id", None)],
+        )
         result = []
         for u, balance in users:
             image_bal = db.query(UserImageBalance).filter(UserImageBalance.user_id == u.id).first()
             from app.services.subscription_service import SubscriptionService
             subscription_summary = SubscriptionService.get_current_subscription_summary(db, u.id)
+            agent_meta = agent_meta_map.get(int(u.agent_id), {}) if u.agent_id else {}
             result.append({
                 "id": u.id, "username": u.username, "email": u.email,
                 "role": u.role, "status": u.status, "avatar": u.avatar,
+                "agent_id": u.agent_id,
+                "agent_code": agent_meta.get("agent_code"),
+                "agent_name": agent_meta.get("agent_name"),
+                "agent_frontend_domain": agent_meta.get("agent_frontend_domain"),
+                "source_domain": u.source_domain,
                 "last_login": u.last_login_at.isoformat() if u.last_login_at else None,
                 "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -210,14 +308,17 @@ class AuthService:
         return result, total
 
     @staticmethod
-    def get_user_detail(db: Session, user_id: int) -> dict:
-        return AuthService.get_current_user_info(db, user_id)
+    def get_user_detail(db: Session, user_id: int, agent_id: Optional[int] = None) -> dict:
+        info = AuthService.get_current_user_info(db, user_id)
+        if agent_id is not None and int(info.get("agent_id") or 0) != int(agent_id):
+            raise ServiceException(403, "目标用户不在当前代理范围内", "AGENT_SCOPE_VIOLATION")
+        return info
 
     @staticmethod
     def update_user(db: Session, user_id: int, data) -> dict:
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
-            raise ServiceException(404, "User not found")
+            raise ServiceException(404, "用户不存在")
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         for field in ("email", "avatar", "status", "role"):
             if field in d and d[field] is not None:
@@ -230,7 +331,7 @@ class AuthService:
     def toggle_user_status(db: Session, user_id: int) -> SysUser:
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
-            raise ServiceException(404, "User not found")
+            raise ServiceException(404, "用户不存在")
         user.status = 0 if user.status == 1 else 1
         db.commit()
         db.refresh(user)
@@ -240,9 +341,9 @@ class AuthService:
     def delete_user(db: Session, user_id: int, operator_user_id: int) -> None:
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
-            raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
         if user.id == operator_user_id:
-            raise ServiceException(403, "You cannot delete your own account", "DELETE_SELF_FORBIDDEN")
+            raise ServiceException(403, "不能删除当前登录账号", "DELETE_SELF_FORBIDDEN")
 
         db.query(CacheLog).filter(CacheLog.user_id == user_id).delete(synchronize_session=False)
         session_ids = [
@@ -265,8 +366,8 @@ class AuthService:
     def change_password(db: Session, user_id: int, old_password: str, new_password: str):
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
-            raise ServiceException(404, "User not found")
+            raise ServiceException(404, "用户不存在")
         if not verify_password(old_password, user.password_hash):
-            raise ServiceException(400, "Incorrect old password")
+            raise ServiceException(400, "旧密码错误")
         user.password_hash = hash_password(new_password)
         db.commit()

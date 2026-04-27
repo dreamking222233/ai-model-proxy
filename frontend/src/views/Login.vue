@@ -24,8 +24,8 @@
               </div>
             </div>
           </div>
-          <h1 class="brand-title">AI 模型中转平台</h1>
-          <p class="brand-subtitle">一站式 AI 模型调用服务，让智能触手可及</p>
+          <h1 class="brand-title">{{ siteConfig.site_name || 'AI 模型中转平台' }}</h1>
+          <p class="brand-subtitle">{{ siteConfig.site_subtitle || '一站式 AI 模型调用服务，让智能触手可及' }}</p>
 
           <!-- 特性列表 -->
           <div class="features">
@@ -43,7 +43,7 @@
 
         <!-- 底部装饰 -->
         <div class="brand-footer">
-          <span>© 2026 小乐AI</span>
+          <span>© 2026 {{ siteConfig.site_name || '小乐AI' }}</span>
         </div>
       </div>
 
@@ -57,9 +57,10 @@
               :class="{ active: mode === 'login' }"
               @click="switchMode('login')"
             >
-              登录
+              {{ isAgentLogin ? '代理登录' : '登录' }}
             </button>
             <button
+              v-if="!isAgentLogin"
               class="tab-btn"
               :class="{ active: mode === 'register' }"
               @click="switchMode('register')"
@@ -72,8 +73,8 @@
           <!-- 欢迎文字 -->
           <transition name="text-fade" mode="out-in">
             <div class="welcome-text" :key="mode">
-              <h2>{{ mode === 'login' ? '欢迎回来' : '创建账户' }}</h2>
-              <p>{{ mode === 'login' ? '登录您的账户以继续使用服务' : '注册新账户，开始您的 AI 之旅' }}</p>
+              <h2>{{ welcomeTitle }}</h2>
+              <p>{{ welcomeSubtitle }}</p>
             </div>
           </transition>
 
@@ -133,7 +134,7 @@
                 </a-button>
               </a-form-item>
 
-              <div class="form-footer">
+              <div v-if="!isAgentLogin" class="form-footer">
                 <span>还没有账户？</span>
                 <a @click.prevent="switchMode('register')">立即注册</a>
               </div>
@@ -248,6 +249,8 @@
 </template>
 
 <script>
+import { getPublicSiteConfig } from '@/api/public'
+
 export default {
   name: 'Login',
   data() {
@@ -264,6 +267,7 @@ export default {
         { icon: 'dashboard', title: '智能路由', desc: '自动负载均衡，智能故障转移' },
         { icon: 'safety-certificate', title: '安全可靠', desc: '企业级安全防护，数据加密传输' }
       ],
+      siteConfig: {},
       // 粒子动画相关
       particles: [],
       animationId: null
@@ -283,6 +287,17 @@ export default {
     strengthLabel() {
       const labels = { 0: '', 1: '弱', 2: '中', 3: '强' }
       return labels[this.passwordStrength] || ''
+    },
+    isAgentLogin() {
+      return this.$route.path === '/agents/login'
+    },
+    welcomeTitle() {
+      if (this.isAgentLogin) return '代理后台登录'
+      return this.mode === 'login' ? '欢迎回来' : '创建账户'
+    },
+    welcomeSubtitle() {
+      if (this.isAgentLogin) return '登录代理账号以管理用户、套餐和站点配置'
+      return this.mode === 'login' ? '登录您的账户以继续使用服务' : '注册新账户，开始您的 AI 之旅'
     }
   },
   beforeCreate() {
@@ -291,9 +306,12 @@ export default {
   },
   mounted() {
     // 根据路由判断初始模式
-    if (this.$route.path === '/register') {
+    if (this.$route.path === '/register' && !this.isAgentLogin) {
       this.mode = 'register'
+    } else {
+      this.mode = 'login'
     }
+    this.fetchSiteConfig()
     this.initParticles()
   },
   beforeDestroy() {
@@ -304,6 +322,7 @@ export default {
   methods: {
     /** 切换登录/注册模式 */
     switchMode(newMode) {
+      if (this.isAgentLogin && newMode !== 'login') return
       if (this.mode === newMode) return
       this.mode = newMode
       this.focusedField = null
@@ -356,12 +375,20 @@ export default {
         this.$store
           .dispatch('login', values)
           .then(() => {
-            this.$message.success('登录成功')
             const user = this.$store.state.user
+            if (this.isAgentLogin && (!user || user.role !== 'agent')) {
+              this.$store.dispatch('logout')
+              this.$message.error('当前账号不是代理账号')
+              return
+            }
+            this.$message.success('登录成功')
+            const redirect = this.$route.query.redirect
             if (user && user.role === 'admin') {
-              this.$router.push('/admin/dashboard')
+              this.$router.push(redirect || '/admin/dashboard')
+            } else if (user && user.role === 'agent') {
+              this.$router.push(redirect || '/agent/workbench')
             } else {
-              this.$router.push('/user/dashboard')
+              this.$router.push(redirect || '/user/dashboard')
             }
           })
           .catch((error) => {
@@ -405,6 +432,14 @@ export default {
             this.loading = false
           })
       })
+    },
+    async fetchSiteConfig() {
+      try {
+        const res = await getPublicSiteConfig()
+        this.siteConfig = res.data || {}
+      } catch (e) {
+        this.siteConfig = {}
+      }
     },
 
     /** 粒子动画初始化 */

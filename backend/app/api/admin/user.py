@@ -24,12 +24,14 @@ def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query(None),
+    roles: str = Query(None),
     sort_by: str = Query("id"),
     sort_order: str = Query("desc"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    items, total = AuthService.list_users(db, page, page_size, keyword, sort_by, sort_order)
+    role_list = [item.strip() for item in str(roles or "").split(",") if item.strip()] or None
+    items, total = AuthService.list_users(db, page, page_size, keyword, sort_by, sort_order, roles=role_list)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 

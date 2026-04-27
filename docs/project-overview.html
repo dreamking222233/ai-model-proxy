@@ -1,0 +1,1612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="小乐AI大模型调用中转平台项目说明页，介绍系统架构、技术栈、角色体系、核心功能、API接入与部署文档。">
+  <title>小乐AI大模型调用中转平台 | 项目说明</title>
+  <style>
+    :root {
+      --bg: #eff6ff;
+      --bg-soft: #f8fbff;
+      --surface: rgba(255, 255, 255, 0.92);
+      --surface-strong: #ffffff;
+      --primary: #1e40af;
+      --primary-strong: #1e3a8a;
+      --primary-soft: #dbeafe;
+      --secondary: #3b82f6;
+      --accent: #22c55e;
+      --accent-soft: #dcfce7;
+      --text: #0f172a;
+      --muted: #475569;
+      --line: #cbd5e1;
+      --line-soft: #e2e8f0;
+      --code-bg: #0f172a;
+      --code-text: #dbeafe;
+      --shadow: 0 24px 70px rgba(30, 64, 175, 0.14);
+      --shadow-soft: 0 12px 32px rgba(15, 23, 42, 0.08);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --container: 1180px;
+      --nav-bg: rgba(255, 255, 255, 0.82);
+      --hero-grid: rgba(30, 64, 175, 0.08);
+      --surface-hover: rgba(255, 255, 255, 0.98);
+      --gradient-text: linear-gradient(135deg, #0f172a 0%, #1e40af 55%, #16a34a 100%);
+      --ring: rgba(34, 197, 94, 0.75);
+      --scrollbar: rgba(30, 64, 175, 0.35);
+      color-scheme: light;
+    }
+
+    html[data-theme="dark"] {
+      --bg: #07111f;
+      --bg-soft: #0f172a;
+      --surface: rgba(15, 23, 42, 0.84);
+      --surface-strong: #111827;
+      --primary: #60a5fa;
+      --primary-strong: #bfdbfe;
+      --primary-soft: rgba(37, 99, 235, 0.24);
+      --secondary: #93c5fd;
+      --accent: #4ade80;
+      --accent-soft: rgba(34, 197, 94, 0.16);
+      --text: #f8fafc;
+      --muted: #cbd5e1;
+      --line: rgba(148, 163, 184, 0.44);
+      --line-soft: rgba(148, 163, 184, 0.2);
+      --code-bg: #020617;
+      --code-text: #dbeafe;
+      --shadow: 0 24px 70px rgba(2, 6, 23, 0.42);
+      --shadow-soft: 0 12px 32px rgba(2, 6, 23, 0.32);
+      --nav-bg: rgba(15, 23, 42, 0.84);
+      --hero-grid: rgba(96, 165, 250, 0.1);
+      --surface-hover: rgba(30, 41, 59, 0.98);
+      --gradient-text: linear-gradient(135deg, #f8fafc 0%, #93c5fd 55%, #86efac 100%);
+      --ring: rgba(74, 222, 128, 0.78);
+      --scrollbar: rgba(96, 165, 250, 0.55);
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.18), transparent 34rem),
+        radial-gradient(circle at 88% 12%, rgba(34, 197, 94, 0.13), transparent 26rem),
+        linear-gradient(180deg, var(--bg) 0%, var(--surface-strong) 48%, var(--bg-soft) 100%);
+      font-family: "Plus Jakarta Sans", "Fira Sans", "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      transition: background-color 240ms ease, color 240ms ease;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      content: "";
+      pointer-events: none;
+      background-image:
+        linear-gradient(var(--hero-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--hero-grid) 1px, transparent 1px);
+      background-size: 58px 58px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.72), transparent 72%);
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+      transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease, transform 200ms ease, box-shadow 200ms ease;
+    }
+
+    a:hover {
+      color: var(--secondary);
+    }
+
+    a:focus-visible,
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid var(--ring);
+      outline-offset: 3px;
+      border-radius: 10px;
+    }
+
+    ::selection {
+      color: #ffffff;
+      background: var(--primary);
+    }
+
+    .progress-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 60;
+      width: 100%;
+      height: 4px;
+      pointer-events: none;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      z-index: 50;
+      padding: 0.75rem 1rem;
+      color: #ffffff;
+      background: var(--primary);
+      border-radius: 999px;
+    }
+
+    .skip-link:focus {
+      top: 1rem;
+    }
+
+    .page {
+      min-height: 100vh;
+    }
+
+    .container {
+      width: min(100% - 2rem, var(--container));
+      margin: 0 auto;
+    }
+
+    .nav-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 1rem 0 0.75rem;
+      backdrop-filter: blur(18px);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, transparent), color-mix(in srgb, var(--bg) 56%, transparent));
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+      transition: padding 220ms ease, background-color 220ms ease, border-color 220ms ease;
+    }
+
+    .nav-wrap.is-compact {
+      padding: 0.5rem 0;
+      background: color-mix(in srgb, var(--bg) 84%, transparent);
+    }
+
+    .nav {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.75rem 1rem;
+      background: var(--nav-bg);
+      border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+      border-radius: 999px;
+      box-shadow: var(--shadow-soft);
+      transition: border-radius 220ms ease, background-color 220ms ease, box-shadow 220ms ease;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      min-width: max-content;
+      font-weight: 800;
+      color: var(--primary-strong);
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      display: inline-grid;
+      width: 2.2rem;
+      height: 2.2rem;
+      place-items: center;
+      color: #ffffff;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      border-radius: 0.8rem;
+      box-shadow: 0 10px 22px rgba(30, 64, 175, 0.22);
+    }
+
+    .brand-mark svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 0.2rem;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .nav-links::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 0.55rem 0.82rem;
+      color: #334155;
+      border-radius: 999px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .nav-links a:hover,
+    .nav-links a.is-active {
+      color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .nav-tools {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+
+    .theme-toggle {
+      display: inline-grid;
+      width: 44px;
+      height: 44px;
+      place-items: center;
+      color: var(--primary-strong);
+      background: var(--surface-strong);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: transform 180ms ease, background-color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+    }
+
+    .theme-toggle:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--primary) 46%, var(--line));
+      box-shadow: var(--shadow-soft);
+    }
+
+    .theme-toggle svg {
+      width: 1.18rem;
+      height: 1.18rem;
+    }
+
+    .moon-icon {
+      display: none;
+    }
+
+    html[data-theme="dark"] .sun-icon {
+      display: none;
+    }
+
+    html[data-theme="dark"] .moon-icon {
+      display: block;
+    }
+
+    .hero {
+      position: relative;
+      padding: 5.25rem 0 3rem;
+      overflow: hidden;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 2rem;
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-height: 36px;
+      padding: 0.35rem 0.75rem;
+      color: var(--primary-strong);
+      background: rgba(219, 234, 254, 0.86);
+      border: 1px solid rgba(59, 130, 246, 0.24);
+      border-radius: 999px;
+      font-size: 0.92rem;
+      font-weight: 750;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 0.55rem;
+      height: 0.55rem;
+      background: var(--accent);
+      border-radius: 999px;
+      box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.16);
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      margin: 0;
+      color: var(--text);
+      line-height: 1.18;
+      letter-spacing: -0.035em;
+    }
+
+    h1 {
+      max-width: 11ch;
+      margin-top: 1rem;
+      font-size: clamp(2.7rem, 8vw, 5.5rem);
+      background: var(--gradient-text);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+    }
+
+    h3 {
+      font-size: 1.25rem;
+    }
+
+    .lead {
+      max-width: 58rem;
+      margin: 1.25rem 0 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem;
+      margin-top: 2rem;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      min-height: 46px;
+      padding: 0.78rem 1.05rem;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    .button-primary {
+      color: #ffffff;
+      background: var(--primary);
+      box-shadow: 0 16px 28px rgba(30, 64, 175, 0.24);
+    }
+
+    .button-primary:hover {
+      color: #ffffff;
+      background: var(--primary-strong);
+      transform: translateY(-2px);
+    }
+
+    .button-secondary {
+      color: var(--primary-strong);
+      background: rgba(255, 255, 255, 0.86);
+      border-color: var(--line);
+    }
+
+    .button-secondary:hover {
+      color: var(--primary);
+      border-color: rgba(59, 130, 246, 0.48);
+      box-shadow: var(--shadow-soft);
+      transform: translateY(-2px);
+    }
+
+    .hero-card {
+      position: relative;
+      padding: 1.35rem;
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-card::before {
+      position: absolute;
+      inset: -1px;
+      z-index: -1;
+      content: "";
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(34, 197, 94, 0.22));
+      border-radius: inherit;
+      filter: blur(18px);
+      opacity: 0.45;
+    }
+
+    .terminal {
+      overflow: hidden;
+      background: var(--code-bg);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 20px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .terminal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1rem;
+      color: #bfdbfe;
+      background: rgba(15, 23, 42, 0.96);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.82rem;
+    }
+
+    .terminal-dots {
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .terminal-dots span {
+      width: 0.65rem;
+      height: 0.65rem;
+      border-radius: 999px;
+      background: #60a5fa;
+    }
+
+    .terminal-dots span:nth-child(2) {
+      background: #22c55e;
+    }
+
+    .terminal-dots span:nth-child(3) {
+      background: #93c5fd;
+    }
+
+    .terminal-body {
+      margin: 0;
+      padding: 1.05rem;
+      overflow-x: auto;
+      color: var(--code-text);
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.84rem;
+      line-height: 1.75;
+      white-space: pre;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+
+    .stat {
+      padding: 1.15rem;
+      background: var(--surface);
+      border: 1px solid rgba(203, 213, 225, 0.78);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .stat strong {
+      display: block;
+      color: var(--primary-strong);
+      font-size: 1.85rem;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 0.45rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    section {
+      padding: 4.25rem 0;
+    }
+
+    .section-heading {
+      display: grid;
+      grid-template-columns: minmax(0, 0.92fr) minmax(280px, 0.58fr);
+      gap: 1.5rem;
+      align-items: end;
+      margin-bottom: 1.8rem;
+    }
+
+    .section-heading p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 1.35rem;
+      background: var(--surface);
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .card h3,
+    .card h4 {
+      margin-bottom: 0.55rem;
+    }
+
+    .card p,
+    .card li {
+      color: var(--muted);
+    }
+
+    .card p {
+      margin: 0;
+    }
+
+    .icon-card {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 1rem;
+    }
+
+    .icon-box {
+      display: inline-grid;
+      width: 2.6rem;
+      height: 2.6rem;
+      place-items: center;
+      color: var(--primary);
+      background: var(--primary-soft);
+      border-radius: 0.9rem;
+      flex: 0 0 auto;
+    }
+
+    .icon-box svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0.25rem 0.62rem;
+      color: var(--primary-strong);
+      background: rgba(219, 234, 254, 0.86);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      border-radius: 999px;
+      font-size: 0.88rem;
+      font-weight: 750;
+    }
+
+    .tag.green {
+      color: #166534;
+      background: var(--accent-soft);
+      border-color: rgba(34, 197, 94, 0.22);
+    }
+
+    .architecture {
+      position: relative;
+      display: grid;
+      gap: 1rem;
+      padding: 1.25rem;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(219, 234, 254, 0.68));
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.8rem;
+      align-items: stretch;
+    }
+
+    .flow-step {
+      position: relative;
+      padding: 1rem;
+      min-height: 126px;
+      background: var(--surface-strong);
+      border: 1px solid rgba(203, 213, 225, 0.86);
+      border-radius: var(--radius-md);
+    }
+
+    .flow-step:not(:last-child)::after {
+      position: absolute;
+      top: 50%;
+      right: -0.78rem;
+      width: 0.72rem;
+      height: 0.72rem;
+      content: "";
+      border-top: 2px solid var(--secondary);
+      border-right: 2px solid var(--secondary);
+      transform: translateY(-50%) rotate(45deg);
+      background: transparent;
+    }
+
+    .flow-step .kicker,
+    .role .kicker {
+      display: block;
+      margin-bottom: 0.45rem;
+      color: var(--secondary);
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .flow-step p {
+      margin: 0.45rem 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .role {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      padding: 1.3rem;
+      background: var(--surface-strong);
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .role ul,
+    .feature-list,
+    .doc-list,
+    .check-list {
+      padding: 0;
+      margin: 1rem 0 0;
+      list-style: none;
+    }
+
+    .role li,
+    .feature-list li,
+    .doc-list li,
+    .check-list li {
+      position: relative;
+      padding-left: 1.25rem;
+      margin-top: 0.55rem;
+      color: var(--muted);
+    }
+
+    .role li::before,
+    .feature-list li::before,
+    .doc-list li::before,
+    .check-list li::before {
+      position: absolute;
+      left: 0;
+      top: 0.72em;
+      width: 0.45rem;
+      height: 0.45rem;
+      content: "";
+      background: var(--accent);
+      border-radius: 999px;
+      transform: translateY(-50%);
+    }
+
+    .feature-list li::before {
+      background: var(--secondary);
+    }
+
+    .module-card {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-height: 100%;
+    }
+
+    .module-card .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: auto;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 0.2rem 0.55rem;
+      color: #334155;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--surface-strong);
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-soft);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 740px;
+    }
+
+    th,
+    td {
+      padding: 0.95rem 1rem;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    th {
+      color: var(--primary-strong);
+      background: #f8fafc;
+      font-size: 0.9rem;
+      letter-spacing: 0.02em;
+    }
+
+    td {
+      color: var(--muted);
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code,
+    .mono {
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.32rem;
+      color: var(--primary-strong);
+      background: var(--primary-soft);
+      border-radius: 0.4rem;
+      font-size: 0.9em;
+    }
+
+    .code-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    pre.snippet {
+      min-height: 100%;
+      margin: 0;
+      padding: 1.1rem;
+      overflow-x: auto;
+      color: var(--code-text);
+      background: var(--code-bg);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: var(--radius-lg);
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.85rem;
+      line-height: 1.75;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .doc-list li {
+      display: flex;
+      flex-direction: column;
+      gap: 0.18rem;
+      padding-left: 1.35rem;
+    }
+
+    .doc-list a {
+      width: fit-content;
+      min-height: 32px;
+      font-weight: 800;
+    }
+
+    .doc-list small {
+      color: var(--muted);
+    }
+
+    .notice {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 0.85rem;
+      padding: 1rem;
+      color: #14532d;
+      background: rgba(220, 252, 231, 0.82);
+      border: 1px solid rgba(34, 197, 94, 0.28);
+      border-radius: var(--radius-lg);
+    }
+
+    .notice .notice-mark {
+      width: 0.75rem;
+      height: 0.75rem;
+      margin-top: 0.45rem;
+      background: var(--accent);
+      border-radius: 999px;
+      box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.12);
+    }
+
+    .footer {
+      padding: 2.5rem 0 4rem;
+      color: var(--muted);
+      border-top: 1px solid rgba(203, 213, 225, 0.72);
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .back-top {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 0.55rem 0.85rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #ffffff;
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid,
+      .section-heading,
+      .grid-2,
+      .grid-3,
+      .grid-4,
+      .code-grid,
+      .role-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-step:not(:last-child)::after {
+        top: auto;
+        right: 50%;
+        bottom: -0.78rem;
+        transform: translateX(50%) rotate(135deg);
+      }
+
+      .nav {
+        align-items: flex-start;
+        border-radius: 1.3rem;
+        flex-direction: column;
+      }
+
+      .nav-links {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        width: min(100% - 1rem, var(--container));
+      }
+
+      .hero {
+        padding-top: 3rem;
+      }
+
+      .stats {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-card,
+      .architecture,
+      .card,
+      .role {
+        border-radius: 18px;
+      }
+
+      .terminal-body,
+      pre.snippet {
+        font-size: 0.78rem;
+      }
+
+      .footer-inner {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="page" id="top">
+    <header class="nav-wrap" aria-label="页面导航">
+      <nav class="nav container">
+        <a class="brand" href="#top" aria-label="返回页面顶部">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false">
+              <path d="M5 16.5L12 4l7 12.5H5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M8.5 16.5h7L12 10.2l-3.5 6.3Z" fill="currentColor" opacity="0.72"/>
+            </svg>
+          </span>
+          <span>小乐AI 中转平台</span>
+        </a>
+        <div class="nav-links" aria-label="章节导航">
+          <a href="#overview">概览</a>
+          <a href="#architecture">架构</a>
+          <a href="#repo">工程结构</a>
+          <a href="#roles">角色</a>
+          <a href="#features">功能</a>
+          <a href="#api">API 接入</a>
+          <a href="#deployment">部署</a>
+          <a href="#data">数据</a>
+          <a href="#ops">维护</a>
+          <a href="#docs">文档</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="overview">
+        <div class="container hero-grid">
+          <div>
+            <span class="eyebrow">AI Model Gateway · SaaS Platform</span>
+            <h1>大模型调用中转平台</h1>
+            <p class="lead">小乐AI 是一套面向平台运营、代理商和终端用户的多模型中转系统。项目以 FastAPI 后端、Vue2 管理前台和 MySQL 数据库为核心，统一管理 OpenAI、Anthropic、Responses 和图片模型调用，提供渠道容灾、计费、套餐、兑换码、代理白标站点与全链路审计能力。</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#api">查看接入方式</a>
+              <a class="button button-secondary" href="../DEPLOYMENT.md">打开部署文档</a>
+              <a class="button button-secondary" href="client-integration-guide.md">客户端接入指南</a>
+            </div>
+            <div class="stats" aria-label="项目关键指标">
+              <div class="stat">
+                <strong>3</strong>
+                <span>平台管理员、代理商、终端用户三类门户</span>
+              </div>
+              <div class="stat">
+                <strong>4+</strong>
+                <span>OpenAI、Anthropic、Responses、Image 等协议入口</span>
+              </div>
+              <div class="stat">
+                <strong>30+</strong>
+                <span>后端服务与运营能力模块</span>
+              </div>
+              <div class="stat">
+                <strong>40+</strong>
+                <span>前端页面覆盖用户、管理、代理和聊天场景</span>
+              </div>
+            </div>
+          </div>
+
+          <aside class="hero-card" aria-label="项目调用流程摘要">
+            <div class="terminal">
+              <div class="terminal-top">
+                <div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+                <span>request-flow.txt</span>
+              </div>
+              <pre class="terminal-body">客户端请求
+  -&gt; API Key / JWT 鉴权
+  -&gt; 解析统一模型名
+  -&gt; 应用模型映射与覆盖规则
+  -&gt; 余额、套餐或图片积分预检查
+  -&gt; 按优先级选择健康渠道
+  -&gt; 转发到 OpenAI / Anthropic / Google / Grok 等上游
+  -&gt; 记录请求、token、成本、缓存、套餐用量
+  -&gt; 失败时自动降级、熔断并切换渠道</pre>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">System Architecture</span>
+              <h2>从前台门户到多渠道转发的完整链路</h2>
+            </div>
+            <p>系统通过统一 API 域名、站点上下文识别和模型路由层，将平台直营与代理白标站点放在同一套代码与数据库中运营。</p>
+          </div>
+
+          <div class="architecture">
+            <div class="flow" aria-label="系统架构流程">
+              <div class="flow-step">
+                <span class="kicker">01 Frontend</span>
+                <h3>Vue2 单页应用</h3>
+                <p>登录、用户中心、管理后台、代理门户共享一套前端构建产物。</p>
+              </div>
+              <div class="flow-step">
+                <span class="kicker">02 Gateway</span>
+                <h3>Nginx / API 域名</h3>
+                <p>生产环境前端静态部署，API 反代到 FastAPI 服务。</p>
+              </div>
+              <div class="flow-step">
+                <span class="kicker">03 Backend</span>
+                <h3>FastAPI 服务层</h3>
+                <p>认证、路由、计费、日志、套餐和代理资产管理。</p>
+              </div>
+              <div class="flow-step">
+                <span class="kicker">04 Data</span>
+                <h3>MySQL 业务数据</h3>
+                <p>用户、API Key、渠道、统一模型、日志、余额、套餐与代理表。</p>
+              </div>
+              <div class="flow-step">
+                <span class="kicker">05 Upstream</span>
+                <h3>多模型上游</h3>
+                <p>对接 Claude、GPT、Gemini、Grok、Codex 与图片生成/编辑通道。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-4" style="margin-top: 1rem;">
+            <div class="card">
+              <h3>后端技术栈</h3>
+              <div class="tag-list">
+                <span class="tag">FastAPI 0.104</span>
+                <span class="tag">SQLAlchemy 2</span>
+                <span class="tag">PyMySQL</span>
+                <span class="tag">APScheduler</span>
+                <span class="tag">JWT</span>
+              </div>
+            </div>
+            <div class="card">
+              <h3>前端技术栈</h3>
+              <div class="tag-list">
+                <span class="tag">Vue 2.7</span>
+                <span class="tag">Vue Router 3</span>
+                <span class="tag">Vuex 3</span>
+                <span class="tag">Ant Design Vue</span>
+                <span class="tag">ECharts</span>
+              </div>
+            </div>
+            <div class="card">
+              <h3>数据与部署</h3>
+              <div class="tag-list">
+                <span class="tag green">MySQL 8</span>
+                <span class="tag green">Nginx</span>
+                <span class="tag green">Uvicorn</span>
+                <span class="tag green">Node.js 16+</span>
+              </div>
+            </div>
+            <div class="card">
+              <h3>关键入口文件</h3>
+              <p><a href="../backend/app/main.py">backend/app/main.py</a>、<a href="../frontend/src/router/index.js">frontend/src/router/index.js</a> 和 <a href="../sql/init.sql">sql/init.sql</a> 定义了主链路。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="repo">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Repository Map</span>
+              <h2>当前目录的工程与文档分布</h2>
+            </div>
+            <p>仓库按后端服务、前端应用、数据库脚本、部署资料和迭代文档组织，适合从源码、SQL 和运维文档三条线理解项目。</p>
+          </div>
+
+          <div class="grid grid-3">
+            <article class="card module-card">
+              <h3>backend/</h3>
+              <p>FastAPI 后端服务，包含 API Router、Service、SQLAlchemy Model、Pydantic Schema、依赖注入、中间件和定时健康检查任务。</p>
+              <div class="tag-list">
+                <span class="tag">app/main.py</span>
+                <span class="tag">app/api/</span>
+                <span class="tag">app/services/</span>
+                <span class="tag">app/models/</span>
+              </div>
+            </article>
+            <article class="card module-card">
+              <h3>frontend/</h3>
+              <p>Vue2 单页应用，提供登录页、用户端、管理员端、代理门户、AI 对话、API 接入教程和多套布局。</p>
+              <div class="tag-list">
+                <span class="tag">src/router/</span>
+                <span class="tag">src/layout/</span>
+                <span class="tag">src/views/</span>
+                <span class="tag">src/api/</span>
+              </div>
+            </article>
+            <article class="card module-card">
+              <h3>sql/ 与 backend/sql/</h3>
+              <p>数据库初始化与增量升级脚本，覆盖平台基础表、缓存、图片积分、订阅套餐、代理门户和多域名部署相关结构。</p>
+              <div class="tag-list">
+                <span class="tag green">init.sql</span>
+                <span class="tag green">upgrade_*.sql</span>
+                <span class="tag green">agent portal</span>
+              </div>
+            </article>
+            <article class="card module-card">
+              <h3>docs/</h3>
+              <p>面向使用者和部署者的正式文档，包括客户端接入、OpenClaw、Vertex 图片、Cloudflare CDN 和代理子域部署。</p>
+              <div class="tag-list">
+                <span class="tag">client integration</span>
+                <span class="tag">deployment</span>
+                <span class="tag">cdn</span>
+              </div>
+            </article>
+            <article class="card module-card">
+              <h3>md/</h3>
+              <p>开发过程文档与实现记录，保存功能计划、实现说明、评审记录、数据库更新说明和阶段性技术决策。</p>
+              <div class="tag-list">
+                <span class="tag">plan-*.md</span>
+                <span class="tag">impl-*.md</span>
+                <span class="tag">review-*.md</span>
+              </div>
+            </article>
+            <article class="card module-card">
+              <h3>nginx/、openclaw/、promo/</h3>
+              <p>承载反向代理配置、客户端集成样例与推广资源，辅助生产部署、第三方工具接入和平台运营展示。</p>
+              <div class="tag-list">
+                <span class="tag green">Nginx</span>
+                <span class="tag green">OpenClaw</span>
+                <span class="tag green">推广素材</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="roles">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Role Portals</span>
+              <h2>三类角色，一套多租户运营体系</h2>
+            </div>
+            <p>路由守卫根据用户角色区分平台管理员、代理商和普通用户，后端通过站点上下文与 <code>agent_id</code> 做数据隔离。</p>
+          </div>
+
+          <div class="role-grid">
+            <article class="role">
+              <span class="kicker">/admin</span>
+              <h3>平台管理员</h3>
+              <ul>
+                <li>管理渠道、统一模型、模型映射和覆盖规则。</li>
+                <li>管理用户余额、图片积分、套餐、兑换码与系统配置。</li>
+                <li>查看请求日志、消费流水、健康监控和数据库连接池状态。</li>
+                <li>创建代理站点并给代理分配余额、图片积分和套餐库存。</li>
+              </ul>
+            </article>
+            <article class="role">
+              <span class="kicker">/agent</span>
+              <h3>代理商门户</h3>
+              <ul>
+                <li>拥有独立前台域名、站点文案、公告和联系方式。</li>
+                <li>管理自身范围内的用户、充值、扣减、兑换码和套餐发放。</li>
+                <li>查看本代理下的请求记录、消费流水和使用排行。</li>
+                <li>通过统一 API 域名服务代理用户，同时保留白标体验。</li>
+              </ul>
+            </article>
+            <article class="role">
+              <span class="kicker">/user</span>
+              <h3>终端用户</h3>
+              <ul>
+                <li>登录注册后创建、启用、禁用和查看 API Key。</li>
+                <li>使用 AI 对话页面、移动端对话和模型列表。</li>
+                <li>查看余额、图片积分、套餐状态、消费明细与用量统计。</li>
+                <li>通过兑换码充值，并按 OpenAI 或 Anthropic 客户端方式接入。</li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="features">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Core Capabilities</span>
+              <h2>核心业务能力地图</h2>
+            </div>
+            <p>这些能力来自当前后端路由、服务层、数据库初始化脚本和已有实施文档。</p>
+          </div>
+
+          <div class="grid grid-3">
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M5 7h14M5 12h14M5 17h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <div>
+                <h3>统一模型与渠道映射</h3>
+                <p>使用统一模型名屏蔽上游差异，通过 <code>unified_model</code>、<code>model_channel_mapping</code> 和覆盖规则映射真实上游模型。</p>
+              </div>
+              <div class="meta"><span class="pill">model_service.py</span><span class="pill">admin/model.py</span></div>
+            </article>
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M7 8a5 5 0 0 1 10 0v1h1a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h1V8Z" stroke="currentColor" stroke-width="2"/><path d="M10 9V8a2 2 0 1 1 4 0v1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <div>
+                <h3>鉴权与 API Key</h3>
+                <p>支持 JWT 登录态和多种 API Key 头：<code>Authorization</code>、<code>X-API-Key</code>、<code>anthropic-api-key</code>。</p>
+              </div>
+              <div class="meta"><span class="pill">auth.py</span><span class="pill">api_key_service.py</span></div>
+            </article>
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M4 12h5l2-6 3 12 2-6h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div>
+                <h3>健康检查与故障切换</h3>
+                <p>渠道按优先级调度，结合健康分、失败次数和熔断时间，在上游异常时自动尝试下一可用渠道。</p>
+              </div>
+              <div class="meta"><span class="pill">health_service.py</span><span class="pill">health_check.py</span></div>
+            </article>
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M12 3v18M6 7h9a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <div>
+                <h3>余额、套餐与图片积分</h3>
+                <p>支持按量余额、无限套餐、每日额度套餐、token 或金额限额，以及图片模型按积分和分辨率计费。</p>
+              </div>
+              <div class="meta"><span class="pill">subscription_service.py</span><span class="pill">image_credit_service.py</span></div>
+            </article>
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M5 5h14v14H5z" stroke="currentColor" stroke-width="2"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <div>
+                <h3>日志审计与统计</h3>
+                <p>请求日志记录用户、代理、渠道、模型、token、成本、缓存、会话压缩、套餐额度与错误信息。</p>
+              </div>
+              <div class="meta"><span class="pill">log_service.py</span><span class="pill">request_log</span></div>
+            </article>
+            <article class="card icon-card module-card">
+              <span class="icon-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M4 10l8-6 8 6v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 20v-6h6v6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+              </span>
+              <div>
+                <h3>代理白标站点</h3>
+                <p>代理拥有独立域名、站点配置、资产池和下游用户隔离，前端通过 <code>X-Site-Host</code> 帮助共享 API 识别站点。</p>
+              </div>
+              <div class="meta"><span class="pill">agent_service.py</span><span class="pill">agent_asset_service.py</span></div>
+            </article>
+          </div>
+
+          <div class="table-wrap" role="region" aria-label="后端和前端模块矩阵" tabindex="0" style="margin-top: 1rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th>领域</th>
+                  <th>后端关键模块</th>
+                  <th>前端关键模块</th>
+                  <th>业务价值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>认证与站点识别</td>
+                  <td><code>api/auth.py</code>、<code>core/dependencies.py</code>、<code>services/agent_service.py</code></td>
+                  <td><code>views/Login.vue</code>、<code>store/index.js</code>、<code>api/request.js</code></td>
+                  <td>统一处理平台、代理和用户登录态，并按当前访问域名返回对应站点配置。</td>
+                </tr>
+                <tr>
+                  <td>模型代理转发</td>
+                  <td><code>api/proxy/</code>、<code>services/proxy_service.py</code>、<code>services/model_service.py</code></td>
+                  <td><code>views/common/AiChat.vue</code>、<code>utils/sse.js</code>、<code>components/chat/</code></td>
+                  <td>让终端用户用 OpenAI、Anthropic 或图片接口访问多家上游模型，并支持流式响应。</td>
+                </tr>
+                <tr>
+                  <td>运营管理后台</td>
+                  <td><code>api/admin/</code>、<code>services/channel_service.py</code>、<code>services/log_service.py</code></td>
+                  <td><code>layout/AdminLayout.vue</code>、<code>views/admin/</code></td>
+                  <td>管理员可以配置渠道、模型、套餐、用户资产、代理资产和全链路日志。</td>
+                </tr>
+                <tr>
+                  <td>用户自助中心</td>
+                  <td><code>api/user/</code>、<code>services/api_key_service.py</code>、<code>services/balance_service.py</code></td>
+                  <td><code>layout/UserLayout.vue</code>、<code>views/user/</code></td>
+                  <td>用户可以生成 API Key、查看余额套餐、阅读快速开始并查询调用统计。</td>
+                </tr>
+                <tr>
+                  <td>代理商门户</td>
+                  <td><code>api/agent/</code>、<code>services/agent_asset_service.py</code>、<code>models/agent.py</code></td>
+                  <td><code>layout/AgentLayout.vue</code>、<code>views/agent/</code></td>
+                  <td>代理商在独立白标站点内管理下游用户、资产、兑换码、套餐和调用日志。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="api">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">API Integration</span>
+              <h2>兼容主流 AI 客户端与 SDK</h2>
+            </div>
+            <p>平台入口同时支持带 <code>/v1</code> 和不带 <code>/v1</code> 的路径，方便 OpenClaw、Cursor、Continue、Cline、OpenAI SDK 和 Anthropic SDK 接入。</p>
+          </div>
+
+          <div class="table-wrap" role="region" aria-label="API 兼容路径表" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th>协议 / 能力</th>
+                  <th>标准路径</th>
+                  <th>兼容路径</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>OpenAI Chat Completions</td>
+                  <td><code>POST /v1/chat/completions</code></td>
+                  <td><code>POST /chat/completions</code></td>
+                  <td>面向 OpenAI SDK、Cursor、Continue、Cline 等客户端。</td>
+                </tr>
+                <tr>
+                  <td>OpenAI Models</td>
+                  <td><code>GET /v1/models</code></td>
+                  <td><code>GET /models</code></td>
+                  <td>返回平台暴露给用户的可用统一模型列表。</td>
+                </tr>
+                <tr>
+                  <td>OpenAI Responses</td>
+                  <td><code>POST /v1/responses</code></td>
+                  <td><code>POST /responses</code></td>
+                  <td>兼容 Responses API 与部分 Codex CLI 使用场景。</td>
+                </tr>
+                <tr>
+                  <td>Anthropic Messages</td>
+                  <td><code>POST /v1/messages</code></td>
+                  <td><code>POST /messages</code></td>
+                  <td>支持 <code>anthropic-api-key</code> 与 <code>X-API-Key</code> 鉴权头。</td>
+                </tr>
+                <tr>
+                  <td>图片生成 / 编辑</td>
+                  <td><code>POST /v1/images/generations</code></td>
+                  <td><code>POST /v1/images/edits</code></td>
+                  <td>使用图片积分计费，支持 OpenAI、Google、Vertex 等图片上游。</td>
+                </tr>
+                <tr>
+                  <td>站点公开配置</td>
+                  <td><code>GET /api/public/site-config</code></td>
+                  <td><code>GET /api/user/profile/site-config</code></td>
+                  <td>登录页、用户端和代理站点读取当前域名对应的平台或代理配置。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="code-grid" style="margin-top: 1rem;">
+            <pre class="snippet" aria-label="OpenAI 协议示例">curl https://your-domain.example/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 128
+  }'</pre>
+            <pre class="snippet" aria-label="Anthropic 协议示例">curl https://your-domain.example/messages \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: sk-your-api-key" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 128
+  }'</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="deployment">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Deployment</span>
+              <h2>本地开发与生产部署路径</h2>
+            </div>
+            <p>部署文档中推荐后端 FastAPI 运行在 8085，前端 Vue 构建为静态文件，由 Nginx 提供访问并反向代理 API。</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <h3>本地启动</h3>
+              <pre class="snippet" style="margin-top: 1rem;"># 后端
+cd backend
+uvicorn app.main:app --host 0.0.0.0 --port 8085 --reload
+
+# 前端
+cd frontend
+npm install
+npm run serve</pre>
+            </div>
+            <div class="card">
+              <h3>生产部署</h3>
+              <ul class="feature-list">
+                <li>Python 3.9+、Node.js 16+、MySQL 8.0+、Nginx 1.18+。</li>
+                <li>后端通过 `.env` 覆盖数据库、JWT、CORS 和服务端口配置。</li>
+                <li>前端执行 `npm run build` 后将 `dist` 静态文件交给 Nginx。</li>
+                <li>代理前台可使用独立域名，统一 API 推荐共享 `api` 域名。</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="notice" style="margin-top: 1rem;">
+            <span class="notice-mark" aria-hidden="true"></span>
+            <div>
+              <strong>生产安全提示：</strong>说明页不展示仓库配置中的数据库连接、JWT Secret 或上游 Key 示例。上线前请确认敏感配置均由环境变量或安全配置系统注入，并避免将真实凭据写入 SQL 初始化脚本或公开文档。
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="data">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Data Model</span>
+              <h2>数据库表承载的业务边界</h2>
+            </div>
+            <p>初始化脚本覆盖从用户、代理、渠道、模型到计费、缓存、会话与审计的完整结构。</p>
+          </div>
+
+          <div class="grid grid-4">
+            <div class="card">
+              <h3>用户与鉴权</h3>
+              <ul class="feature-list">
+                <li><code>sys_user</code></li>
+                <li><code>user_api_key</code></li>
+                <li><code>user_balance</code></li>
+                <li><code>user_image_balance</code></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>模型与渠道</h3>
+              <ul class="feature-list">
+                <li><code>channel</code></li>
+                <li><code>unified_model</code></li>
+                <li><code>model_channel_mapping</code></li>
+                <li><code>model_override_rule</code></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>计费与套餐</h3>
+              <ul class="feature-list">
+                <li><code>consumption_record</code></li>
+                <li><code>subscription_plan</code></li>
+                <li><code>user_subscription</code></li>
+                <li><code>redemption_code</code></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>代理与审计</h3>
+              <ul class="feature-list">
+                <li><code>agent</code></li>
+                <li><code>agent_balance</code></li>
+                <li><code>request_log</code></li>
+                <li><code>health_check_log</code></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="ops">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Operations Notes</span>
+              <h2>后续维护重点</h2>
+            </div>
+            <p>这些注意事项来自当前代码与文档的综合分析，适合作为上线前检查和后续重构优先级参考。</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <h3>上线前安全检查</h3>
+              <ul class="check-list">
+                <li>生产环境必须用 `.env` 或安全配置系统覆盖数据库连接串、JWT Secret、上游 API Key 和 CORS 白名单。</li>
+                <li>反向代理应明确控制可信 Host 与 API 域名，避免客户端伪造站点上下文造成代理数据边界混淆。</li>
+                <li>API Key 当前支持 reveal 完整密钥，若转为更严格的生产安全模型，可考虑仅创建时展示一次。</li>
+                <li>管理员、代理商和用户端的充值、扣减、套餐发放属于资产操作，需保留操作日志并限制权限范围。</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>工程演进建议</h3>
+              <ul class="check-list">
+                <li><code>proxy_service.py</code> 承担了协议适配、计费、缓存、日志、图片和容灾，后续可按职责逐步拆分。</li>
+                <li>高并发流式代理场景下，需要持续观察同步 SQLAlchemy Session、连接池占用和上游超时行为。</li>
+                <li>模型、渠道、套餐、图片积分和代理库存均有管理端入口，数据库升级脚本应和页面能力同步维护。</li>
+                <li>新增客户端兼容能力时，优先补充 <code>docs/client-integration-guide.md</code> 与用户端快速开始页面。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="docs">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <span class="eyebrow">Documentation Map</span>
+              <h2>相关文档导航</h2>
+            </div>
+            <p>以下文档提供部署、客户端接入、代理域名、图片模型和 CDN 配置的更细说明。</p>
+          </div>
+
+          <div class="grid grid-2">
+            <div class="card">
+              <h3>部署与运维</h3>
+              <ul class="doc-list">
+                <li><a href="../DEPLOYMENT.md">生产环境部署文档</a><small>系统要求、数据库初始化、后端、前端、Nginx、进程管理与日志。</small></li>
+                <li><a href="agent-subdomain-deployment.md">代理前台域名 + 共享 API 部署说明</a><small>代理前台域名、统一 API 域名、站点识别和上线核对清单。</small></li>
+                <li><a href="cloudflare-cdn-config.md">Cloudflare CDN 配置</a><small>前台静态资源缓存、API 路径缓存排除和跨域建议。</small></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>客户端与模型能力</h3>
+              <ul class="doc-list">
+                <li><a href="client-integration-guide.md">AI 客户端接入指南</a><small>OpenClaw、Cursor、Continue、Cline、OpenAI SDK、Anthropic SDK 等接入方式。</small></li>
+                <li><a href="openclaw-integration.md">OpenClaw 接入配置指南</a><small>面向 OpenClaw 的协议、Base URL 和认证头配置。</small></li>
+                <li><a href="vertex-image-integration.md">Vertex 图片集成文档</a><small>Google Vertex 图片渠道、尺寸和图片计费相关配置。</small></li>
+                <li><a href="compatibility-optimization.md">兼容性优化说明</a><small>路径、头部、模型名称和客户端兼容策略。</small></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-inner">
+        <div>
+          <strong>小乐AI 大模型调用中转平台</strong><br>
+          <span>基于当前目录源码、SQL 和文档分析生成的静态项目说明页。</span>
+        </div>
+        <a class="back-top" href="#top">返回顶部</a>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

@@ -63,6 +63,7 @@ export default new Vuex.Store({
   getters: {
     isLoggedIn: state => !!state.token,
     isAdmin: state => state.user && state.user.role === 'admin',
+    isAgent: state => state.user && state.user.role === 'agent',
     currentUser: state => state.user
   }
 })

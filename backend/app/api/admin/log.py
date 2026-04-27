@@ -14,6 +14,7 @@ def list_request_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user_id: int = Query(None),
+    agent_id: int = Query(None),
     model: str = Query(None),
     status: str = Query(None),
     start_date: str = Query(None),
@@ -22,7 +23,7 @@ def list_request_logs(
     current_user: SysUser = Depends(require_admin),
 ):
     items, total = LogService.list_request_logs(
-        db, page, page_size, user_id, model, status, start_date, end_date
+        db, page, page_size, user_id, agent_id, model, status, start_date, end_date
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
@@ -65,8 +66,9 @@ def list_consumption_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user_id: int = Query(None),
+    agent_id: int = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    items, total = LogService.list_consumption_records(db, page, page_size, user_id)
+    items, total = LogService.list_consumption_records(db, page, page_size, user_id, agent_id)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})

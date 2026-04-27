@@ -165,7 +165,7 @@
                   <div class="c-icon wechat"><a-icon type="wechat" /></div>
                   <div class="c-info">
                     <div class="c-label">微信充值</div>
-                    <div class="c-val">Q-Free-M</div>
+                    <div class="c-val">{{ siteConfig.support_wechat || '-' }}</div>
                   </div>
                 </div>
                 <div class="contact-divider"></div>
@@ -173,7 +173,7 @@
                   <div class="c-icon qq"><a-icon type="qq" /></div>
                   <div class="c-info">
                     <div class="c-label">QQ 咨询</div>
-                    <div class="c-val">2222006406</div>
+                    <div class="c-val">{{ siteConfig.support_qq || '-' }}</div>
                   </div>
                 </div>
               </div>
@@ -230,7 +230,7 @@
 
 <script>
 import CountTo from 'vue-count-to'
-import { getBalance, getUsageLogs, getProfile } from '@/api/user'
+import { getBalance, getUsageLogs, getProfile, getSiteConfig } from '@/api/user'
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
 import { formatDate } from '@/utils'
@@ -251,6 +251,7 @@ export default {
         todayRequests: 0,
         totalTokens: 0
       },
+      siteConfig: {},
       redemptionCode: '',
       redeemLoading: false,
       hasRedeemed: false
@@ -375,7 +376,8 @@ export default {
   created() {
     this.refreshData()
   },
-  mounted() {
+  async mounted() {
+    await this.fetchSiteConfig()
     this.showAnnouncementModal()
   },
   methods: {
@@ -385,39 +387,39 @@ export default {
       this.fetchBalance()
       this.fetchUsageSummary()
       this.fetchRedemptionStatus()
+      this.fetchSiteConfig()
     },
     showAnnouncementModal() {
       const hasShownAnnouncement = sessionStorage.getItem('hasShownAnnouncement')
       if (hasShownAnnouncement) return
 
+      const title = this.siteConfig.announcement_title || '平台公告'
+      const contentText = this.siteConfig.announcement_content || '尊敬的用户，欢迎使用 AI 模型中转平台！'
+      const lines = String(contentText).split('\n').filter(Boolean)
       this.$info({
-        title: '🌟 平台公告',
+        title,
         width: 600,
         centered: true,
         maskClosable: true,
         content: (h) => {
           return h('div', { class: 'announcement-dialog' }, [
-            h('p', { class: 'dialog-intro' }, '尊敬的用户，欢迎使用 AI 模型中转平台！'),
+            h('p', { class: 'dialog-intro' }, lines[0] || contentText),
             h('div', { class: 'dialog-box' }, [
-              h('div', { class: 'box-row' }, [
-                h('span', { class: 'dot' }),
-                h('span', '支持Claude和GPT及Gemini全系列模型!')
-              ]),
-              h('div', { class: 'box-row highlight' }, [
-                h('span', { class: 'dot green' }),
-                h('span', '新用户注册，立即赠送 $5 体验额度')
-              ])
+              ...lines.slice(1).map((line, index) => h('div', { class: `box-row${index === 1 ? ' highlight' : ''}` }, [
+                h('span', { class: `dot${index === 1 ? ' green' : ''}` }),
+                h('span', line)
+              ]))
             ]),
             h('div', { class: 'dialog-contact' }, [
               h('div', { class: 'contact-pill' }, [
                 h('span', { class: 'icon' }, '💬'),
                 h('span', '微信: '),
-                h('strong', 'Q-Free-M')
+                h('strong', this.siteConfig.support_wechat || '-')
               ]),
               h('div', { class: 'contact-pill' }, [
                 h('span', { class: 'icon' }, '🐧'),
                 h('span', 'QQ: '),
-                h('strong', '2222006406')
+                h('strong', this.siteConfig.support_qq || '-')
               ])
             ])
           ])
@@ -438,6 +440,14 @@ export default {
         console.error('Fetch profile failed:', e)
       } finally {
         this.profileLoading = false
+      }
+    },
+    async fetchSiteConfig() {
+      try {
+        const res = await getSiteConfig()
+        this.siteConfig = res.data || {}
+      } catch (e) {
+        this.siteConfig = {}
       }
     },
     async fetchBalance() {

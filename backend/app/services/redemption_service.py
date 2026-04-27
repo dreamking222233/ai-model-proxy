@@ -13,6 +13,7 @@ from sqlalchemy import and_, or_
 
 from app.models.redemption import RedemptionCode
 from app.models.log import UserBalance
+from app.models.agent import AgentRedemptionAmountRule, AgentBalance, AgentBalanceRecord
 from app.core.exceptions import ServiceException
 
 
@@ -33,6 +34,9 @@ class RedemptionService:
         admin_id: int,
         amount: float,
         expires_days: Optional[int] = None,
+        agent_id: Optional[int] = None,
+        amount_rule_snapshot: Optional[str] = None,
+        code_scope: str = "platform",
     ) -> dict:
         """
         Create a single redemption code.
@@ -52,7 +56,10 @@ class RedemptionService:
 
         redemption = RedemptionCode(
             code=code,
+            agent_id=agent_id,
             amount=Decimal(str(amount)),
+            amount_rule_snapshot=amount_rule_snapshot,
+            code_scope=code_scope,
             status="unused",
             created_by=admin_id,
             expires_at=expires_at,
@@ -65,6 +72,7 @@ class RedemptionService:
             "id": redemption.id,
             "code": redemption.code,
             "amount": float(redemption.amount),
+            "agent_id": redemption.agent_id,
             "status": redemption.status,
             "expires_at": redemption.expires_at.isoformat() if redemption.expires_at else None,
             "created_at": redemption.created_at.isoformat(),
@@ -77,6 +85,9 @@ class RedemptionService:
         amount: float,
         count: int,
         expires_days: Optional[int] = None,
+        agent_id: Optional[int] = None,
+        amount_rule_snapshot: Optional[str] = None,
+        code_scope: str = "platform",
     ) -> list[dict]:
         """
         Batch create multiple redemption codes.
@@ -91,7 +102,7 @@ class RedemptionService:
             List of code dicts.
         """
         if count > 1000:
-            raise ServiceException(400, "Cannot generate more than 1000 codes at once")
+            raise ServiceException(400, "单次最多生成 1000 个兑换码")
 
         expires_at = None
         if expires_days:
@@ -102,7 +113,10 @@ class RedemptionService:
             code = RedemptionService.generate_code()
             redemption = RedemptionCode(
                 code=code,
+                agent_id=agent_id,
                 amount=Decimal(str(amount)),
+                amount_rule_snapshot=amount_rule_snapshot,
+                code_scope=code_scope,
                 status="unused",
                 created_by=admin_id,
                 expires_at=expires_at,
@@ -110,6 +124,7 @@ class RedemptionService:
             db.add(redemption)
             codes.append({
                 "code": code,
+                "agent_id": agent_id,
                 "amount": float(amount),
                 "expires_at": expires_at.isoformat() if expires_at else None,
             })
@@ -205,6 +220,14 @@ class RedemptionService:
             db.commit()
             raise ServiceException(400, "兑换码已过期", "CODE_EXPIRED")
 
+        if redemption.agent_id is not None:
+            from app.models.user import SysUser
+            user = db.query(SysUser).filter(SysUser.id == user_id).first()
+            if not user:
+                raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+            if int(user.agent_id or 0) != int(redemption.agent_id):
+                raise ServiceException(403, "兑换码不属于当前代理用户", "AGENT_REDEMPTION_SCOPE_MISMATCH")
+
         # Get user balance
         balance = db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
         if not balance:
@@ -236,6 +259,7 @@ class RedemptionService:
         page_size: int = 20,
         status: Optional[str] = None,
         created_by: Optional[int] = None,
+        agent_id: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         """
         List redemption codes with pagination.
@@ -251,6 +275,8 @@ class RedemptionService:
             query = query.filter(RedemptionCode.status == status)
         if created_by:
             query = query.filter(RedemptionCode.created_by == created_by)
+        if agent_id is not None:
+            query = query.filter(RedemptionCode.agent_id == agent_id)
 
         total = query.count()
         codes = (
@@ -272,7 +298,10 @@ class RedemptionService:
             result.append({
                 "id": c.id,
                 "code": c.code,
+                "agent_id": c.agent_id,
                 "amount": float(c.amount),
+                "amount_rule_snapshot": c.amount_rule_snapshot,
+                "code_scope": c.code_scope,
                 "status": c.status,
                 "created_by": c.created_by,
                 "used_by": c.used_by,
@@ -285,14 +314,179 @@ class RedemptionService:
         return result, total
 
     @staticmethod
-    def delete_code(db: Session, code_id: int) -> None:
+    def delete_code(db: Session, code_id: int, agent_id: Optional[int] = None) -> None:
         """Delete a redemption code (only if unused)."""
         code = db.query(RedemptionCode).filter(RedemptionCode.id == code_id).first()
         if not code:
             raise ServiceException(404, "兑换码不存在", "CODE_NOT_FOUND")
+        if agent_id is not None and int(code.agent_id or 0) != int(agent_id):
+            raise ServiceException(403, "兑换码不在当前代理范围内", "AGENT_SCOPE_VIOLATION")
 
         if code.status == "used":
             raise ServiceException(400, "已使用的兑换码不能删除", "CODE_ALREADY_USED")
 
+        db.delete(code)
+        db.commit()
+
+    @staticmethod
+    def list_allowed_amount_rules(db: Session, agent_id: Optional[int] = None) -> list[dict]:
+        query = db.query(AgentRedemptionAmountRule).filter(AgentRedemptionAmountRule.status == "active")
+        if agent_id is not None:
+            query = query.filter(or_(AgentRedemptionAmountRule.agent_id.is_(None), AgentRedemptionAmountRule.agent_id == agent_id))
+        else:
+            query = query.filter(AgentRedemptionAmountRule.agent_id.is_(None))
+        rows = query.order_by(AgentRedemptionAmountRule.sort_order.asc(), AgentRedemptionAmountRule.id.asc()).all()
+        return [
+            {
+                "id": row.id,
+                "agent_id": row.agent_id,
+                "amount": float(row.amount),
+                "status": row.status,
+                "sort_order": row.sort_order,
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def create_amount_rule(
+        db: Session,
+        amount: float,
+        agent_id: Optional[int] = None,
+        status: str = "active",
+        sort_order: int = 0,
+    ) -> dict:
+        amount_decimal = Decimal(str(amount))
+        rule = AgentRedemptionAmountRule(
+            agent_id=agent_id,
+            amount=amount_decimal,
+            status=status or "active",
+            sort_order=int(sort_order or 0),
+        )
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return {
+            "id": rule.id,
+            "agent_id": rule.agent_id,
+            "amount": float(rule.amount),
+            "status": rule.status,
+            "sort_order": rule.sort_order,
+        }
+
+    @staticmethod
+    def create_agent_redemption_code(
+        db: Session,
+        agent_id: int,
+        operator_user_id: int,
+        amount_rule_id: int,
+        expires_days: Optional[int] = None,
+    ) -> dict:
+        rule = (
+            db.query(AgentRedemptionAmountRule)
+            .filter(
+                AgentRedemptionAmountRule.id == amount_rule_id,
+                AgentRedemptionAmountRule.status == "active",
+                or_(
+                    AgentRedemptionAmountRule.agent_id.is_(None),
+                    AgentRedemptionAmountRule.agent_id == agent_id,
+                ),
+            )
+            .first()
+        )
+        if not rule:
+            raise ServiceException(404, "兑换码面额规则不存在", "AGENT_REDEMPTION_RULE_NOT_FOUND")
+
+        amount = Decimal(str(rule.amount))
+        balance = (
+            db.query(AgentBalance)
+            .filter(AgentBalance.agent_id == agent_id)
+            .with_for_update()
+            .first()
+        )
+        if not balance:
+            raise ServiceException(404, "代理余额池不存在", "AGENT_BALANCE_NOT_FOUND")
+        if Decimal(str(balance.balance or 0)) < amount:
+            raise ServiceException(400, "代理余额不足，无法生成兑换码", "AGENT_BALANCE_INSUFFICIENT")
+
+        code = RedemptionService.generate_code()
+        expires_at = datetime.utcnow() + timedelta(days=expires_days) if expires_days else None
+        before = Decimal(str(balance.balance or 0))
+        balance.balance = before - amount
+        balance.total_allocated = Decimal(str(balance.total_allocated or 0)) + amount
+
+        redemption = RedemptionCode(
+            code=code,
+            agent_id=agent_id,
+            amount=amount,
+            amount_rule_snapshot=str(rule.amount),
+            code_scope="agent",
+            status="unused",
+            created_by=operator_user_id,
+            expires_at=expires_at,
+        )
+        db.add(redemption)
+        db.flush()
+        db.add(AgentBalanceRecord(
+            agent_id=agent_id,
+            target_user_id=None,
+            related_code_id=redemption.id,
+            action_type="reserve_redemption_code",
+            change_amount=-amount,
+            balance_before=before,
+            balance_after=balance.balance,
+            operator_user_id=operator_user_id,
+            remark=f"reserve amount rule {rule.id}",
+        ))
+        db.commit()
+        db.refresh(redemption)
+        return {
+            "id": redemption.id,
+            "code": redemption.code,
+            "agent_id": redemption.agent_id,
+            "amount": float(redemption.amount),
+            "amount_rule_id": rule.id,
+            "status": redemption.status,
+            "expires_at": redemption.expires_at.isoformat() if redemption.expires_at else None,
+            "created_at": redemption.created_at.isoformat(),
+        }
+
+    @staticmethod
+    def delete_agent_code(db: Session, code_id: int, agent_id: int, operator_user_id: int) -> None:
+        code = (
+            db.query(RedemptionCode)
+            .filter(RedemptionCode.id == code_id, RedemptionCode.agent_id == agent_id)
+            .with_for_update()
+            .first()
+        )
+        if not code:
+            raise ServiceException(404, "兑换码不存在", "CODE_NOT_FOUND")
+        if code.status == "used":
+            raise ServiceException(400, "已使用的兑换码不能删除", "CODE_ALREADY_USED")
+
+        balance = (
+            db.query(AgentBalance)
+            .filter(AgentBalance.agent_id == agent_id)
+            .with_for_update()
+            .first()
+        )
+        if not balance:
+            raise ServiceException(404, "代理余额池不存在", "AGENT_BALANCE_NOT_FOUND")
+
+        before = Decimal(str(balance.balance or 0))
+        amount = Decimal(str(code.amount or 0))
+        balance.balance = before + amount
+        balance.total_reclaimed = Decimal(str(balance.total_reclaimed or 0)) + amount
+
+        db.add(AgentBalanceRecord(
+            agent_id=agent_id,
+            target_user_id=None,
+            related_code_id=code.id,
+            action_type="release_redemption_code",
+            change_amount=amount,
+            balance_before=before,
+            balance_after=balance.balance,
+            operator_user_id=operator_user_id,
+            remark="delete unused agent redemption code",
+        ))
         db.delete(code)
         db.commit()

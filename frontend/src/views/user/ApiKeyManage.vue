@@ -101,18 +101,18 @@
 
             <!-- Usage Stats Column -->
             <template slot="usage_stats" slot-scope="text, record">
-              <div class="usage-stack">
-                <div class="usage-row">
-                  <div class="u-tag blue">Requests</div>
-                  <span class="u-value">{{ formatNumber(record.total_requests || 0) }}</span>
+              <div class="usage-overview">
+                <div class="usage-item" title="请求数">
+                  <a-icon type="interaction" class="u-icon blue" />
+                  <span class="u-val">{{ formatNumber(record.total_requests || 0) }}</span>
                 </div>
-                <div class="usage-row">
-                  <div class="u-tag purple">Tokens</div>
-                  <span class="u-value">{{ formatNumberShort(record.total_tokens || 0) }}</span>
+                <div class="usage-item" title="Tokens 消耗">
+                  <a-icon type="fire" class="u-icon purple" />
+                  <span class="u-val">{{ formatNumberShort(record.total_tokens || 0) }}</span>
                 </div>
-                <div class="usage-row">
-                  <div class="u-tag orange">Cost</div>
-                  <span class="u-value text-orange">${{ (record.total_cost || 0).toFixed(4) }}</span>
+                <div class="usage-item" title="消费金额">
+                  <a-icon type="dollar" class="u-icon orange" />
+                  <span class="u-val text-orange">${{ (record.total_cost || 0).toFixed(4) }}</span>
                 </div>
               </div>
             </template>
@@ -162,34 +162,40 @@
     <!-- Create Modal -->
     <a-modal
       v-model="createModalVisible"
-      title="创建 API 密钥"
       :confirmLoading="createLoading"
       @ok="handleCreate"
-      class="glass-modal"
+      class="glass-modal create-modal"
       centered
       :footer="null"
+      :width="480"
+      :getContainer="false"
     >
       <div class="modal-form-content">
         <div class="modal-illustration">
+          <div class="glow-bg"></div>
           <a-icon type="key" class="main-icon" />
-          <div class="sub-circles"><span></span><span></span><span></span></div>
+          <div class="particle p1"></div>
+          <div class="particle p2"></div>
+          <div class="particle p3"></div>
         </div>
-        <h3>配置您的新密钥</h3>
-        <p>为密钥设置一个易于识别的名称，以便追踪不同项目的消耗。</p>
+        <h3 class="modal-title-text">创建新的访问令牌</h3>
+        <p class="modal-subtitle">为您的密钥命名，以便在控制台中轻松识别用量来源。</p>
         
         <a-form layout="vertical" class="modern-form">
           <a-form-item label="密钥名称">
             <a-input
+              ref="nameInput"
               v-model="createForm.name"
-              placeholder="例如：开发环境 / 生产环境"
+              placeholder="输入名称，例如：生产环境"
               :maxLength="64"
               class="premium-input"
+              @pressEnter="handleCreate"
             />
           </a-form-item>
           <div class="modal-btns">
             <a-button @click="createModalVisible = false" class="cancel-btn">取消</a-button>
             <a-button type="primary" :loading="createLoading" @click="handleCreate" class="submit-btn">
-              立即创建
+              确认并生成
             </a-button>
           </div>
         </a-form>
@@ -199,33 +205,51 @@
     <!-- Success Modal -->
     <a-modal
       v-model="showKeyModalVisible"
-      title="API 密钥已就绪"
       :footer="null"
       :maskClosable="false"
       class="glass-modal success-modal"
       centered
+      :width="520"
+      :getContainer="false"
       @cancel="showKeyModalVisible = false"
     >
       <div class="modal-success-content">
-        <div class="success-icon-wrapper">
-          <a-icon type="check-circle" theme="filled" />
-        </div>
-        <h2>创建成功</h2>
-        <p>请复制并安全保存您的完整密钥。出于安全考虑，系统不会再次重复显示完整密钥值。</p>
-        
-        <div class="key-reveal-box">
-          <div class="key-value-display">
-            <code>{{ createdKey }}</code>
+        <div class="success-header">
+          <div class="confetti-container">
+            <div class="confetti" v-for="i in 12" :key="i"></div>
           </div>
-          <a-button type="primary" block class="copy-full-btn" @click="handleCopy(createdKey, 'created')">
-            <a-icon :type="copyStates['created'] ? 'check' : 'copy'" />
-            {{ copyStates['created'] ? '复制成功' : '复制完整密钥' }}
+          <div class="success-icon-wrapper">
+            <a-icon type="check-circle" theme="filled" />
+          </div>
+        </div>
+        
+        <h2 class="success-title">API 密钥已生成</h2>
+        
+        <div class="security-warning-banner">
+          <a-icon type="warning" theme="filled" class="warning-icon" />
+          <div class="warning-text">
+            请立即复制并保存在安全的地方。出于安全原因，<strong>此密钥将不再显示</strong>。
+          </div>
+        </div>
+        
+        <div class="key-reveal-container">
+          <div class="key-display-label">您的 API 密钥</div>
+          <div class="key-reveal-box" @click="handleCopy(createdKey, 'created')">
+            <div class="key-value-display">
+              <code>{{ createdKey }}</code>
+            </div>
+            <div class="copy-hint" :class="{ 'copied': copyStates['created'] }">
+              <a-icon :type="copyStates['created'] ? 'check' : 'copy'" />
+              <span>{{ copyStates['created'] ? '已复制' : '点击复制' }}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="modal-footer-actions">
+          <a-button block type="primary" @click="showKeyModalVisible = false" class="finish-btn">
+            我已妥善保存，关闭
           </a-button>
         </div>
-        
-        <a-button block @click="showKeyModalVisible = false" class="finish-btn">
-          我已保存，完成
-        </a-button>
       </div>
     </a-modal>
   </div>
@@ -250,12 +274,12 @@ export default {
       createdKey: '',
       copyStates: {},
       columns: [
-        { title: '密钥名称', dataIndex: 'name', key: 'name', width: 200, scopedSlots: { customRender: 'name' } },
-        { title: '密钥令牌 (Revealed/Prefix)', dataIndex: 'key_prefix', key: 'key_prefix', width: 340, scopedSlots: { customRender: 'key_prefix' } },
-        { title: '状态', dataIndex: 'status', key: 'status', width: 120, scopedSlots: { customRender: 'status' } },
-        { title: '用量细则 (请求/Tokens/消费)', key: 'usage_stats', width: 280, scopedSlots: { customRender: 'usage_stats' } },
+        { title: '密钥名称', dataIndex: 'name', key: 'name', width: 180, fixed: 'left', scopedSlots: { customRender: 'name' } },
+        { title: '密钥令牌 (Revealed/Prefix)', dataIndex: 'key_prefix', key: 'key_prefix', width: 320, scopedSlots: { customRender: 'key_prefix' } },
+        { title: '用量统计', key: 'usage_stats', width: 320, scopedSlots: { customRender: 'usage_stats' } },
+        { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '最近活跃', dataIndex: 'last_used_at', key: 'last_used_at', width: 180, scopedSlots: { customRender: 'last_used_at' } },
-        { title: '安全操作', key: 'action', width: 150, fixed: 'right', scopedSlots: { customRender: 'action' } }
+        { title: '安全操作', key: 'action', width: 140, fixed: 'right', align: 'center', scopedSlots: { customRender: 'action' } }
       ]
     }
   },
@@ -290,6 +314,11 @@ export default {
     showCreateModal() {
       this.createForm.name = ''
       this.createModalVisible = true
+      this.$nextTick(() => {
+        if (this.$refs.nameInput) {
+          this.$refs.nameInput.focus()
+        }
+      })
     },
     async handleCreate() {
       if (!this.createForm.name || !this.createForm.name.trim()) {
@@ -515,10 +544,23 @@ export default {
     /deep/ .ant-table {
       background: transparent;
       .ant-table-thead > tr > th {
-        background: rgba(245, 247, 255, 0.5); font-weight: 700; color: #595959; border-bottom: 1px solid #f0f0f0; padding: 16px 24px;
+        background: rgba(245, 247, 255, 0.7);
+        font-weight: 800;
+        color: #475569;
+        border-bottom: 1px solid #eef2f6;
+        padding: 20px 24px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
       }
-      .ant-table-tbody > tr > td { border-bottom: 1px solid #f8f8f8; padding: 18px 24px; }
-      .ant-table-tbody > tr:hover > td { background: rgba(102, 126, 234, 0.04) !important; }
+      .ant-table-tbody > tr > td {
+        border-bottom: 1px solid #f1f5f9;
+        padding: 24px;
+        transition: all 0.3s;
+      }
+      .ant-table-tbody > tr:hover > td {
+        background: rgba(102, 126, 234, 0.04) !important;
+      }
     }
   }
 
@@ -529,36 +571,35 @@ export default {
     display: flex; align-items: center; gap: 12px;
 
     .key-box {
-      background: #f1f5f9; padding: 6px 12px; border-radius: 10px; border: 1px solid #e2e8f0;
-      min-width: 220px; transition: all 0.3s;
-      &.is-revealed { background: rgba(255, 255, 255, 0.8); border-color: #667eea; box-shadow: 0 0 12px rgba(102, 126, 234, 0.15); }
+      background: #f8fafc; padding: 8px 16px; border-radius: 12px; border: 1px solid #e2e8f0;
+      min-width: 240px; transition: all 0.3s;
+      &.is-revealed { background: #1a1a2e; border-color: #667eea; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        .key-text { color: #f8fafc; font-weight: 600; }
+      }
       
       .key-text {
-        font-family: 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; color: #64748b;
+        font-family: 'Fira Code', monospace; font-size: 13px; color: #64748b;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;
       }
     }
     
-    .key-actions { display: flex; gap: 4px; }
+    .key-actions { display: flex; gap: 6px; }
     .reveal-btn, .hide-btn {
-      color: #94a3b8; transition: all 0.3s;
-      &:hover { color: #667eea; transform: scale(1.2); }
+      width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+      border-radius: 8px; background: #f1f5f9; color: #94a3b8; transition: all 0.3s;
+      &:hover { color: #667eea; background: #eef2ff; transform: translateY(-1px); }
       .success-icon { color: #52c41a; }
     }
   }
 
-  /* ===== Usage Stack ===== */
-  .usage-stack {
-    display: flex; flex-direction: column; gap: 6px;
-    .usage-row {
-      display: flex; align-items: center; gap: 8px;
-      .u-tag {
-        font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 4px; min-width: 60px; text-align: center; text-transform: uppercase;
-        &.blue { background: rgba(102, 126, 234, 0.1); color: #667eea; }
-        &.purple { background: rgba(118, 75, 162, 0.1); color: #764ba2; }
-        &.orange { background: rgba(250, 140, 22, 0.1); color: #fa8c16; }
-      }
-      .u-value { font-family: monospace; font-size: 12px; color: #595959; font-weight: 600; &.text-orange { color: #fa8c16; } }
+  /* ===== Usage Overview ===== */
+  .usage-overview {
+    display: flex; align-items: center; gap: 16px;
+    .usage-item {
+      display: flex; align-items: center; gap: 6px;
+      .u-icon { font-size: 16px; opacity: 0.8; }
+      .u-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: #334155; }
+      .text-orange { color: #fa8c16; }
     }
   }
 
@@ -592,69 +633,160 @@ export default {
   /* ===== Modals ===== */
   .glass-modal {
     /deep/ .ant-modal-content {
-      background: rgba(255, 255, 255, 0.65); backdrop-filter: blur(25px); border-radius: 28px; border: 1px solid rgba(255,255,255,0.5); overflow: hidden;
-      box-shadow: 0 25px 80px rgba(0,0,0,0.15);
+      background: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(30px) saturate(180%);
+      border-radius: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      overflow: hidden;
+      box-shadow: 0 40px 120px rgba(0, 0, 0, 0.18);
     }
-    /deep/ .ant-modal-header { background: transparent; border: none; padding: 24px 32px 0; }
-    /deep/ .ant-modal-title { font-weight: 800; color: #1a1a2e; font-size: 20px; }
+    /deep/ .ant-modal-body { padding: 0; }
   }
 
+  /* Create Modal Content */
   .modal-form-content {
-    padding: 0 32px 32px; text-align: center;
+    padding: 60px 48px 48px;
+    text-align: center;
+    
     .modal-illustration {
-      width: 80px; height: 80px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 24px;
-      margin: 0 auto 24px; display: flex; align-items: center; justify-content: center; position: relative;
-      .main-icon { font-size: 32px; color: #fff; z-index: 2; }
-      .sub-circles {
-        position: absolute; width: 100%; height: 100%;
-        span {
-          position: absolute; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%;
-          &:nth-child(1) { width: 120%; height: 120%; animation: pulse 3s infinite; }
-          &:nth-child(2) { width: 150%; height: 150%; animation: pulse 3s infinite 1s; }
-        }
+      width: 100px; height: 100px; margin: 0 auto 40px; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+      border-radius: 30px;
+      
+      .glow-bg {
+        position: absolute; inset: -15px; border-radius: 40px;
+        background: radial-gradient(circle, rgba(102, 126, 234, 0.4) 0%, transparent 70%);
+        animation: rotateGlow 8s linear infinite;
+      }
+      
+      .main-icon { font-size: 42px; color: #667eea; z-index: 2; filter: drop-shadow(0 8px 16px rgba(102,126,234,0.3)); }
+      
+      .particle {
+        position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #764ba2; opacity: 0.6;
+        &.p1 { top: -10%; right: -10%; animation: floatParticle 3s infinite; }
+        &.p2 { bottom: -5%; left: -10%; animation: floatParticle 4s infinite reverse; }
+        &.p3 { top: 30%; left: -20%; animation: floatParticle 3.5s infinite 0.5s; }
       }
     }
-    @keyframes pulse { 0% { opacity: 0; transform: scale(0.8); } 50% { opacity: 1; } 100% { opacity: 0; transform: scale(1.2); } }
 
-    h3 { font-size: 22px; font-weight: 800; color: #1a1a2e; margin-bottom: 8px; }
-    p { color: #8c8c8c; font-size: 14px; margin-bottom: 24px; }
+    .modal-title-text { font-size: 26px; font-weight: 900; color: #1a1a2e; margin-bottom: 16px; letter-spacing: -0.5px; }
+    .modal-subtitle { color: #64748b; font-size: 15px; line-height: 1.6; margin-bottom: 40px; padding: 0 10px; }
+  }
+
+  .modern-form {
+    text-align: left;
+    /deep/ .ant-form-item-label > label { font-weight: 700; color: #475569; font-size: 13px; margin-bottom: 4px; }
   }
 
   .premium-input {
-    height: 54px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(10px); font-weight: 600;
-    &:focus { border-color: #667eea; box-shadow: 0 0 16px rgba(102, 126, 234, 0.1); }
+    height: 60px; border-radius: 18px; border: 2px solid rgba(102, 126, 234, 0.1); background: rgba(245, 247, 255, 0.6); font-weight: 600; padding: 0 24px; font-size: 16px;
+    transition: all 0.3s;
+    &:focus, &:hover { border-color: #667eea; box-shadow: 0 0 0 5px rgba(102, 126, 234, 0.1); background: #fff; }
   }
 
   .modal-btns {
-    display: flex; gap: 12px; margin-top: 24px;
-    .ant-btn { height: 50px; border-radius: 12px; font-weight: 700; flex: 1; }
-    .cancel-btn { background: #f8fafc; border: 1px solid #e2e8f0; color: #64748b; }
-    .submit-btn { background: linear-gradient(135deg, #667eea, #764ba2); border: none; box-shadow: 0 8px 20px rgba(102, 126, 234, 0.2); }
-  }
-
-  /* ===== Success Modal Detail ===== */
-  .modal-success-content {
-    padding: 0 32px 40px; text-align: center;
-    .success-icon-wrapper { font-size: 72px; color: #52c41a; margin-bottom: 16px; animation: bounceIn 0.8s; }
-    h2 { font-size: 28px; font-weight: 800; color: #1a1a2e; margin-bottom: 12px; }
-    p { color: #8c8c8c; line-height: 1.6; margin-bottom: 32px; }
-
-    .key-reveal-box {
-      background: #f8fafc; border-radius: 20px; padding: 20px; border: 1px dashed #cbd5e1; margin-bottom: 24px;
-      .key-value-display {
-        background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px); padding: 16px; border-radius: 12px; margin-bottom: 16px; word-break: break-all;
-        code { font-family: 'Fira Code', monospace; color: #1a1a2e; font-weight: 700; font-size: 14px; }
-      }
-      .copy-full-btn { height: 48px; border-radius: 10px; font-weight: 700; background: #1a1a2e; border: none; &:hover { background: #000; } }
+    display: flex; gap: 20px; margin-top: 40px;
+    .ant-btn { height: 60px; border-radius: 20px; font-weight: 800; font-size: 16px; flex: 1; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .cancel-btn { background: #f8fafc; border: none; color: #94a3b8; &:hover { background: #f1f5f9; color: #64748b; } }
+    .submit-btn {
+      background: linear-gradient(135deg, #667eea, #764ba2); border: none; color: #fff;
+      box-shadow: 0 12px 30px rgba(102, 126, 234, 0.35);
+      &:hover { transform: translateY(-3px); box-shadow: 0 20px 45px rgba(102, 126, 234, 0.45); }
+      &:active { transform: translateY(-1px); }
     }
-    .finish-btn { height: 50px; border-radius: 12px; font-weight: 700; color: #667eea; border: 2px solid #667eea; background: rgba(255, 255, 255, 0.4); &:hover { background: rgba(255, 255, 255, 0.8); } }
   }
 
-  @keyframes bounceIn {
+  /* Success Modal Detail */
+  .modal-success-content {
+    padding: 0; text-align: center;
+    
+    .success-header {
+      height: 240px; position: relative; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at center, rgba(102, 126, 234, 0.08) 0%, transparent 70%);
+      overflow: hidden;
+      
+      .success-icon-wrapper {
+        font-size: 96px; color: #52c41a; z-index: 2; animation: scaleInBounce 0.8s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+        filter: drop-shadow(0 15px 30px rgba(82, 196, 26, 0.3));
+      }
+    }
+    
+    .success-title { font-size: 32px; font-weight: 900; color: #1a1a2e; margin: -30px 0 32px; position: relative; z-index: 2; }
+    
+    .security-warning-banner {
+      margin: 0 48px 40px; padding: 20px 24px; border-radius: 20px; background: #fff7e6; border: 1px solid #ffd591;
+      display: flex; align-items: flex-start; gap: 16px; text-align: left;
+      box-shadow: 0 4px 12px rgba(250, 173, 20, 0.05);
+      
+      .warning-icon { font-size: 22px; color: #faad14; flex-shrink: 0; margin-top: 2px; }
+      .warning-text { color: #874d00; font-size: 14px; line-height: 1.6; strong { color: #d46b08; font-weight: 800; } }
+    }
+
+    .key-reveal-container {
+      margin: 0 48px 48px; text-align: left;
+      
+      .key-display-label { font-size: 13px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; padding-left: 4px; }
+      
+      .key-reveal-box {
+        background: #0f172a; border-radius: 24px; padding: 32px; position: relative; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        
+        &:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 30px 70px rgba(0,0,0,0.4); background: #000; border-color: rgba(102, 126, 234, 0.3); }
+        
+        .key-value-display {
+          margin-bottom: 0; word-break: break-all;
+          code { font-family: 'Fira Code', 'JetBrains Mono', monospace; color: #f8fafc; font-weight: 600; font-size: 16px; line-height: 1.7; letter-spacing: 0.5px; }
+        }
+        
+        .copy-hint {
+          position: absolute; bottom: 16px; right: 20px; font-size: 12px; color: rgba(255,255,255,0.4);
+          display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 30px; background: rgba(255,255,255,0.08);
+          transition: all 0.3s; font-weight: 600;
+          &.copied { color: #fff; background: #52c41a; box-shadow: 0 0 15px rgba(82, 196, 26, 0.5); }
+        }
+      }
+    }
+    
+    .modal-footer-actions { padding: 0 48px 60px; }
+    .finish-btn {
+      height: 64px; border-radius: 22px; font-weight: 800; font-size: 17px;
+      background: #f1f5f9; border: none; color: #475569; transition: all 0.3s;
+      &:hover { background: #1a1a2e; color: #fff; transform: translateY(-3px); box-shadow: 0 15px 35px rgba(0,0,0,0.15); }
+    }
+  }
+
+  /* Animations */
+  @keyframes rotateGlow { 0% { transform: rotate(0deg) scale(1); opacity: 0.3; } 50% { transform: rotate(180deg) scale(1.2); opacity: 0.5; } 100% { transform: rotate(360deg) scale(1); opacity: 0.3; } }
+  @keyframes floatParticle { 0%, 100% { transform: translate(0, 0); opacity: 0.4; } 50% { transform: translate(15px, -15px); opacity: 0.8; } }
+  @keyframes scaleInBounce {
     0% { transform: scale(0.3); opacity: 0; }
-    50% { transform: scale(1.05); opacity: 1; }
-    70% { transform: scale(0.9); }
+    70% { transform: scale(1.15); opacity: 1; }
     100% { transform: scale(1); }
+  }
+
+  /* Confetti Effect */
+  .confetti-container { position: absolute; inset: 0; pointer-events: none; }
+  .confetti {
+    position: absolute; width: 8px; height: 8px; background: #667eea; border-radius: 2px;
+    top: -10px; animation: confettiFall 3s linear forwards;
+    &:nth-child(2n) { background: #764ba2; width: 6px; height: 10px; }
+    &:nth-child(3n) { background: #52c41a; }
+  }
+  .confetti-loop(@n, @i: 1) when (@i =< @n) {
+    .confetti:nth-child(@{i}) {
+      left: 8% * @i;
+      animation-delay: 0.1s * @i;
+      animation-duration: 2s + (@i * 0.15s);
+    }
+    .confetti-loop(@n, (@i + 1));
+  }
+  .confetti-loop(12);
+
+  @keyframes confettiFall {
+    0% { transform: translateY(0) rotate(0); opacity: 1; }
+    100% { transform: translateY(220px) rotate(720deg); opacity: 0; }
   }
 }
 </style>

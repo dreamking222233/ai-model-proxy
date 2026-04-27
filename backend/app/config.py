@@ -33,6 +33,42 @@ class Settings(BaseSettings):
         "https://www.xiaoleai.team",
         "https://api.xiaoleai.team"
     ]
+    CORS_ORIGIN_REGEX: str = (
+        r"^https?://([a-z0-9-]+\.)*xiaoleai\.team(:\d+)?$|"
+        r"^https?://([a-z0-9-]+\.)*(localhost|127\.0\.0\.1|local)(:\d+)?$"
+    )
+
+    # Platform hosts
+    PLATFORM_FRONTEND_HOSTS: List[str] = [
+        "www.xiaoleai.team",
+        "xiaoleai.team",
+        "localhost",
+        "127.0.0.1",
+        "platform.localhost",
+        "platform.local",
+    ]
+    PLATFORM_API_HOSTS: List[str] = [
+        "api.xiaoleai.team",
+        "localhost",
+        "127.0.0.1",
+        "api.localhost",
+        "api.local",
+        "platform-api.localhost",
+        "platform-api.local",
+    ]
+
+    # Platform site defaults
+    PLATFORM_SITE_NAME: str = "小乐AI"
+    PLATFORM_SITE_SUBTITLE: str = "一站式 AI 模型调用服务，让智能触手可及"
+    PLATFORM_ANNOUNCEMENT_TITLE: str = "平台公告"
+    PLATFORM_ANNOUNCEMENT_CONTENT: str = (
+        "尊敬的用户，欢迎使用 AI 模型中转平台！\n\n"
+        "支持Claude和GPT及Gemini全系列模型!\n\n"
+        "新用户注册，立即赠送 $5 体验额度"
+    )
+    PLATFORM_SUPPORT_WECHAT: str = "Q-Free-M"
+    PLATFORM_SUPPORT_QQ: str = "2222006406"
+    PLATFORM_ALLOW_REGISTER: bool = True
 
     class Config:
         env_file = ".env"

@@ -52,6 +52,7 @@
         :pagination="pagination"
         row-key="id"
         @change="handleTableChange"
+        :scroll="{ x: 1800 }"
       >
         <template slot="username" slot-scope="text, record">
           <div class="user-info">
@@ -64,8 +65,25 @@
 
         <template slot="role" slot-scope="text">
           <a-tag :color="text === 'admin' ? 'purple' : 'blue'">
-            {{ text === 'admin' ? '管理员' : '用户' }}
+            {{ text === 'admin' ? '管理员' : text === 'agent' ? '代理' : '用户' }}
           </a-tag>
+        </template>
+
+        <template slot="agentScope" slot-scope="text, record">
+          <div class="agent-scope">
+            <a-tag v-if="record.role === 'admin'" color="purple">平台管理</a-tag>
+            <template v-else-if="record.agent_id">
+              <div class="agent-scope-name">{{ record.agent_name || `代理 #${record.agent_id}` }}</div>
+              <div class="agent-scope-meta">{{ record.agent_code || '-' }}</div>
+            </template>
+            <a-tag v-else color="green">平台直营</a-tag>
+          </div>
+        </template>
+
+        <template slot="sourceDomain" slot-scope="text, record">
+          <span v-if="record.source_domain" class="source-domain">{{ record.source_domain }}</span>
+          <span v-else-if="record.agent_frontend_domain" class="source-domain">{{ record.agent_frontend_domain }}</span>
+          <span v-else class="time-text muted">平台默认</span>
         </template>
 
         <template slot="status" slot-scope="text">
@@ -289,16 +307,18 @@ export default {
         showTotal: total => `共 ${total} 条`
       },
       columns: [
-        { title: 'ID', dataIndex: 'id', key: 'id', width: 80 },
-        { title: '用户名', dataIndex: 'username', key: 'username', scopedSlots: { customRender: 'username' } },
-        { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
+        { title: 'ID', dataIndex: 'id', key: 'id', width: 70, fixed: 'left' },
+        { title: '用户名', dataIndex: 'username', key: 'username', width: 180, fixed: 'left', scopedSlots: { customRender: 'username' } },
+        { title: '邮箱', dataIndex: 'email', key: 'email', width: 220, ellipsis: true },
         { title: '角色', dataIndex: 'role', key: 'role', width: 100, scopedSlots: { customRender: 'role' } },
-        { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
-        { title: '计费模式', key: 'subscription', width: 190, scopedSlots: { customRender: 'subscription' } },
+        { title: '所属代理', key: 'agentScope', width: 200, scopedSlots: { customRender: 'agentScope' } },
+        { title: '注册来源', dataIndex: 'source_domain', key: 'sourceDomain', width: 180, scopedSlots: { customRender: 'sourceDomain' } },
+        { title: '状态', dataIndex: 'status', key: 'status', width: 90, scopedSlots: { customRender: 'status' } },
+        { title: '计费模式', key: 'subscription', width: 200, scopedSlots: { customRender: 'subscription' } },
         { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, sorter: true, scopedSlots: { customRender: 'balance' } },
         { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, sorter: true, scopedSlots: { customRender: 'lastLogin' } },
-        { title: '操作', key: 'action', width: 220, align: 'center', scopedSlots: { customRender: 'action' } }
+        { title: '操作', key: 'action', width: 220, align: 'center', fixed: 'right', scopedSlots: { customRender: 'action' } }
       ],
       // Edit Modal
       editModalVisible: false,
@@ -601,6 +621,12 @@ export default {
 
     .user-name {
       font-weight: 500;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
 
       &-link {
         color: #667eea;
@@ -613,6 +639,30 @@ export default {
         }
       }
     }
+  }
+
+  .agent-scope {
+    line-height: 1.4;
+
+    .agent-scope-name {
+      color: #262626;
+      font-weight: 500;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-scope-meta {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+  }
+
+  .source-domain {
+    color: #4b5563;
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-size: 12px;
   }
 
   .balance-text {
@@ -637,12 +687,44 @@ export default {
   }
 
   /deep/ .ant-table {
-    .ant-table-tbody > tr {
-      transition: background-color 0.2s;
+    background: transparent;
 
-      &:hover > td {
-        background: rgba(102, 126, 234, 0.04) !important;
-      }
+    .ant-table-thead > tr > th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: #475569;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 16px;
+    }
+
+    .ant-table-tbody > tr > td {
+      padding: 16px;
+      border-bottom: 1px solid #f1f5f9;
+      transition: all 0.2s;
+    }
+
+    .ant-table-tbody > tr:hover > td {
+      background: rgba(102, 126, 234, 0.04) !important;
+    }
+
+    // 修复 fixed 列的阴影和边框
+    .ant-table-header-column {
+      width: 100%;
+    }
+  }
+
+  // 优化滚动条样式
+  /deep/ .ant-table-body {
+    &::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    &::-webkit-scrollbar-thumb {
+      background: #e2e8f0;
+      border-radius: 10px;
+    }
+    &::-webkit-scrollbar-track {
+      background: transparent;
     }
   }
 }

@@ -52,6 +52,14 @@
             <a-icon type="team" />
             <span>用户管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/agents">
+            <a-icon type="apartment" />
+            <span>代理管理</span>
+          </a-menu-item>
+          <a-menu-item key="/admin/agent-assets">
+            <a-icon type="wallet" />
+            <span>代理资产</span>
+          </a-menu-item>
           <a-menu-item key="/admin/redemption">
             <a-icon type="gift" />
             <span>兑换码管理</span>
@@ -67,6 +75,10 @@
           <a-menu-item key="/admin/logs">
             <a-icon type="file-text" />
             <span>请求日志</span>
+          </a-menu-item>
+          <a-menu-item key="/admin/agent-logs">
+            <a-icon type="cluster" />
+            <span>代理日志</span>
           </a-menu-item>
           <a-menu-item key="/admin/ranking">
             <a-icon type="trophy" />

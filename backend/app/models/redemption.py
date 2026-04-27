@@ -9,7 +9,10 @@ class RedemptionCode(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     code = Column(String(32), unique=True, nullable=False, comment="兑换码")
+    agent_id = Column(BigInteger, nullable=True, index=True, comment="所属代理ID，NULL=平台兑换码")
     amount = Column(DECIMAL(12, 6), nullable=False, comment="兑换金额(美元)")
+    amount_rule_snapshot = Column(String(64), nullable=True, comment="面额规则快照")
+    code_scope = Column(String(16), nullable=False, default="platform", comment="platform/agent")
     status = Column(
         Enum("unused", "used", "expired", name="redemption_status"),
         nullable=False,

@@ -15,6 +15,10 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
         username=req.username,
         email=req.email,
         password=req.password,
+        request_host=request.headers.get("host"),
+        x_site_host=request.headers.get("X-Site-Host"),
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
     )
     return ResponseModel(data=result)
 
@@ -22,5 +26,14 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
 @router.post("/login", response_model=ResponseModel)
 def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else None
-    result = AuthService.login(db, username=req.username, password=req.password, client_ip=client_ip)
+    result = AuthService.login(
+        db,
+        username=req.username,
+        password=req.password,
+        client_ip=client_ip,
+        request_host=request.headers.get("host"),
+        x_site_host=request.headers.get("X-Site-Host"),
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
+    )
     return ResponseModel(data=result)

@@ -59,8 +59,28 @@
           <div class="grant-layout">
             <a-card title="模板发放" :bordered="false" class="grant-card">
               <a-form layout="vertical">
-                <a-form-item label="用户 ID">
-                  <a-input-number v-model="grantForm.user_id" :min="1" style="width: 100%" />
+                <a-form-item label="选择用户">
+                  <a-select
+                    class="user-picker-select"
+                    v-model="grantForm.user_id"
+                    showSearch
+                    allowClear
+                    placeholder="输入用户ID或用户名搜索终端用户"
+                    dropdownClassName="subscription-user-select-dropdown"
+                    :getPopupContainer="getUserSelectPopupContainer"
+                    :filterOption="false"
+                    :notFoundContent="userSearchLoading ? '搜索中...' : '暂无匹配用户'"
+                    @search="handleUserSearch"
+                    @focus="handleUserSearchFocus"
+                  >
+                    <a-select-option v-for="user in userOptions" :key="user.id" :value="user.id">
+                      <span class="user-option-pill">
+                        <span class="user-option-id">ID:{{ user.id }}</span>
+                        <span class="user-option-divider">|</span>
+                        <span class="user-option-name">用户名:{{ user.username }}</span>
+                      </span>
+                    </a-select-option>
+                  </a-select>
                 </a-form-item>
                 <a-form-item label="套餐模板">
                   <a-select v-model="grantForm.plan_id" placeholder="请选择套餐模板">
@@ -83,8 +103,28 @@
 
             <a-card title="旧版无限套餐开通" :bordered="false" class="grant-card">
               <a-form layout="vertical">
-                <a-form-item label="用户 ID">
-                  <a-input-number v-model="legacyForm.user_id" :min="1" style="width: 100%" />
+                <a-form-item label="选择用户">
+                  <a-select
+                    class="user-picker-select"
+                    v-model="legacyForm.user_id"
+                    showSearch
+                    allowClear
+                    placeholder="输入用户ID或用户名搜索终端用户"
+                    dropdownClassName="subscription-user-select-dropdown"
+                    :getPopupContainer="getUserSelectPopupContainer"
+                    :filterOption="false"
+                    :notFoundContent="userSearchLoading ? '搜索中...' : '暂无匹配用户'"
+                    @search="handleUserSearch"
+                    @focus="handleUserSearchFocus"
+                  >
+                    <a-select-option v-for="user in userOptions" :key="user.id" :value="user.id">
+                      <span class="user-option-pill">
+                        <span class="user-option-id">ID:{{ user.id }}</span>
+                        <span class="user-option-divider">|</span>
+                        <span class="user-option-name">用户名:{{ user.username }}</span>
+                      </span>
+                    </a-select-option>
+                  </a-select>
                 </a-form-item>
                 <a-form-item label="套餐类型">
                   <a-select v-model="legacyForm.plan_type" @change="handleLegacyTypeChange">
@@ -359,6 +399,7 @@ import {
   listSubscriptionPlans,
   updateSubscriptionPlan
 } from '@/api/subscription'
+import { getUser, listUsers } from '@/api/user'
 import { formatDate } from '@/utils'
 
 const defaultUsageSummary = () => ({
@@ -393,6 +434,9 @@ export default {
       planForm: defaultPlanForm(),
       grantLoading: false,
       legacyLoading: false,
+      userSearchLoading: false,
+      userSearchTimer: null,
+      userOptions: [],
       grantForm: {
         user_id: null,
         plan_id: null,
@@ -467,6 +511,7 @@ export default {
       if (userId) {
         this.grantForm.user_id = userId
         this.legacyForm.user_id = userId
+        this.ensureUserOption(userId)
       }
     }
     this.fetchPlans()
@@ -497,6 +542,50 @@ export default {
     handleLegacyTypeChange(value) {
       const durationMap = { daily: 1, weekly: 7, monthly: 30, custom: 30 }
       this.legacyForm.duration_days = durationMap[value]
+    },
+    async fetchUserOptions(keyword = '') {
+      this.userSearchLoading = true
+      try {
+        const res = await listUsers({
+          page: 1,
+          page_size: 20,
+          keyword: keyword || undefined,
+          roles: 'user'
+        })
+        const data = res.data || {}
+        this.userOptions = data.list || []
+      } finally {
+        this.userSearchLoading = false
+      }
+    },
+    handleUserSearch(keyword) {
+      if (this.userSearchTimer) {
+        clearTimeout(this.userSearchTimer)
+      }
+      this.userSearchTimer = setTimeout(() => {
+        this.fetchUserOptions(keyword)
+      }, 250)
+    },
+    handleUserSearchFocus() {
+      if (!this.userOptions.length) {
+        this.fetchUserOptions('')
+      }
+    },
+    getUserSelectPopupContainer(triggerNode) {
+      return (triggerNode && triggerNode.parentNode) || document.body
+    },
+    async ensureUserOption(userId) {
+      if (!userId) return
+      if (this.userOptions.some(item => Number(item.id) === Number(userId))) return
+      try {
+        const res = await getUser(userId)
+        const user = res.data
+        if (user && user.role === 'user') {
+          this.userOptions = [user, ...this.userOptions.filter(item => Number(item.id) !== Number(user.id))]
+        }
+      } catch (error) {
+        console.error('Failed to preload user option:', error)
+      }
     },
     async fetchPlans() {
       this.planLoading = true
@@ -550,7 +639,7 @@ export default {
     },
     async handleGrantPlan() {
       if (!this.grantForm.user_id || !this.grantForm.plan_id) {
-        this.$message.warning('请填写用户 ID 并选择套餐模板')
+        this.$message.warning('请选择用户并选择套餐模板')
         return
       }
       this.grantLoading = true
@@ -564,7 +653,7 @@ export default {
     },
     async handleLegacyActivate() {
       if (!this.legacyForm.user_id || !this.legacyForm.duration_days) {
-        this.$message.warning('请填写用户 ID 和套餐时长')
+        this.$message.warning('请选择用户并填写套餐时长')
         return
       }
       const planNameMap = {
@@ -687,6 +776,56 @@ export default {
     background: #fafafa;
   }
 
+  /deep/ .grant-card .ant-select {
+    width: 100%;
+  }
+
+  .user-picker-select /deep/ .ant-select-selection-selected-value {
+    max-width: calc(100% - 24px);
+    margin-top: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+    border: 1px solid #dbe4ff;
+    color: #312e81;
+    font-size: 12px;
+    line-height: 20px;
+  }
+
+  /deep/ .ant-select-selection__placeholder {
+    font-size: 13px;
+  }
+
+  /deep/ .ant-select-selection__rendered .user-option-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+    border: 1px solid #dbe4ff;
+    color: #3730a3;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .user-option-id {
+    font-weight: 700;
+    color: #1d4ed8;
+    white-space: nowrap;
+  }
+
+  .user-option-divider {
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .user-option-name {
+    color: #312e81;
+    white-space: nowrap;
+  }
+
   .sub-text {
     color: #8c8c8c;
     font-size: 12px;
@@ -740,6 +879,45 @@ export default {
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+}
+</style>
+
+<style lang="less">
+.subscription-user-select-dropdown {
+  .ant-select-dropdown-menu-item {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .user-option-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+    border: 1px solid #dbe4ff;
+    color: #3730a3;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .user-option-id {
+    font-weight: 700;
+    color: #1d4ed8;
+    white-space: nowrap;
+  }
+
+  .user-option-divider {
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .user-option-name {
+    color: #312e81;
+    white-space: nowrap;
   }
 }
 </style>

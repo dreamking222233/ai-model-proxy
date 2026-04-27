@@ -84,6 +84,7 @@ class ImageCreditService:
 
         db.add(ImageCreditRecord(
             user_id=user_id,
+            agent_id=None,
             request_id=None,
             model_name=None,
             change_amount=amount_decimal,
@@ -128,6 +129,7 @@ class ImageCreditService:
 
         db.add(ImageCreditRecord(
             user_id=user_id,
+            agent_id=None,
             request_id=None,
             model_name=None,
             change_amount=-amount_decimal,
@@ -163,6 +165,7 @@ class ImageCreditService:
     def deduct_for_request(
         db: Session,
         user_id: int,
+        agent_id: int | None,
         request_id: str,
         model_name: str,
         amount,
@@ -191,6 +194,7 @@ class ImageCreditService:
 
         db.add(ImageCreditRecord(
             user_id=user_id,
+            agent_id=agent_id,
             request_id=request_id,
             model_name=model_name,
             change_amount=-amount_decimal,

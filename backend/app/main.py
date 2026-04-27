@@ -16,6 +16,8 @@ import app.models  # noqa: F401
 
 # Import routers
 from app.api.auth import router as auth_router
+from app.api.public.site import router as public_site_router
+from app.api.admin.agent import router as admin_agent_router
 from app.api.admin.channel import router as admin_channel_router
 from app.api.admin.model import router as admin_model_router
 from app.api.admin.user import router as admin_user_router
@@ -30,6 +32,12 @@ from app.api.user.profile import router as user_profile_router
 from app.api.user.models import router as user_models_router
 from app.api.user.stats import router as user_stats_router
 from app.api.user.redemption import router as user_redemption_router
+from app.api.agent.user import router as agent_user_router
+from app.api.agent.log import router as agent_log_router
+from app.api.agent.stats import router as agent_stats_router
+from app.api.agent.system import router as agent_system_router
+from app.api.agent.subscription import router as agent_subscription_router
+from app.api.agent.redemption import router as agent_redemption_router
 from app.api.proxy.openai_proxy import router as openai_proxy_router
 from app.api.proxy.anthropic_proxy import router as anthropic_proxy_router
 from app.api.proxy.image_proxy import router as image_proxy_router
@@ -91,6 +99,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,9 +113,11 @@ register_exception_handlers(app)
 
 # Register routers - Auth
 app.include_router(auth_router)
+app.include_router(public_site_router)
 
 # Register routers - Admin
 app.include_router(admin_channel_router)
+app.include_router(admin_agent_router)
 app.include_router(admin_model_router)
 app.include_router(admin_user_router)
 app.include_router(admin_log_router)
@@ -122,6 +133,14 @@ app.include_router(user_profile_router)
 app.include_router(user_models_router)
 app.include_router(user_stats_router)
 app.include_router(user_redemption_router)
+
+# Register routers - Agent
+app.include_router(agent_user_router)
+app.include_router(agent_log_router)
+app.include_router(agent_stats_router)
+app.include_router(agent_system_router)
+app.include_router(agent_subscription_router)
+app.include_router(agent_redemption_router)
 
 # Register routers - Proxy
 app.include_router(openai_proxy_router)

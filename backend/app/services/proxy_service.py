@@ -7664,6 +7664,7 @@ class ProxyService:
             write_db.add(
                 ConsumptionRecord(
                     user_id=fresh_user.id,
+                    agent_id=fresh_user.agent_id,
                     request_id=request_id,
                     model_name=requested_model,
                     input_tokens=input_tokens,
@@ -7701,6 +7702,7 @@ class ProxyService:
                     RequestLog(
                         request_id=request_id,
                         user_id=fresh_user.id,
+                        agent_id=fresh_user.agent_id,
                         user_api_key_id=api_key_id,
                         channel_id=channel.id,
                         channel_name=channel.name,
@@ -7821,6 +7823,7 @@ class ProxyService:
                     RequestLog(
                         request_id=request_id,
                         user_id=user_id,
+                        agent_id=getattr(user, "agent_id", None),
                         user_api_key_id=api_key_id,
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
@@ -7964,6 +7967,7 @@ class ProxyService:
                     RequestLog(
                         request_id=request_id,
                         user_id=user_id,
+                        agent_id=getattr(user, "agent_id", None),
                         user_api_key_id=api_key_id,
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
@@ -8483,6 +8487,7 @@ class ProxyService:
             ImageCreditService.deduct_for_request(
                 write_db,
                 user_id=user_id,
+                agent_id=getattr(user, "agent_id", None),
                 request_id=request_id,
                 model_name=requested_model,
                 amount=charged_credits,
@@ -8494,6 +8499,7 @@ class ProxyService:
                 RequestLog(
                     request_id=request_id,
                     user_id=user_id,
+                    agent_id=getattr(user, "agent_id", None),
                     user_api_key_id=api_key_id,
                     channel_id=channel_id,
                     channel_name=channel_name,

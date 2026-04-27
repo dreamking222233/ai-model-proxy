@@ -3,17 +3,28 @@ import { message } from 'ant-design-vue'
 import { getToken, clearSiteClientCache } from '@/utils/auth'
 import router from '@/router'
 
+function resolveApiBaseURL() {
+  if (process.env.NODE_ENV !== 'production' || typeof window === 'undefined') {
+    return ''
+  }
+  return 'https://api.xiaoleai.team'
+}
+
 const service = axios.create({
-  baseURL: process.env.NODE_ENV === 'production' ? 'https://api.xiaoleai.team' : '',
+  baseURL: resolveApiBaseURL(),
   timeout: 30000
 })
 
 // Request interceptor
 service.interceptors.request.use(
   config => {
+    config.headers = config.headers || {}
     const token = getToken()
     if (token) {
       config.headers['Authorization'] = 'Bearer ' + token
+    }
+    if (typeof window !== 'undefined' && window.location && window.location.host) {
+      config.headers['X-Site-Host'] = window.location.host
     }
     return config
   },
@@ -47,7 +58,7 @@ service.interceptors.response.use(
         router.push('/login')
         message.error('登录已过期，请重新登录')
       } else if (status === 403) {
-        message.error('无权访问该资源')
+        message.error(error.response.data?.message || '无权访问该资源')
       } else if (status === 500) {
         message.error('服务器错误，请稍后重试')
       } else {

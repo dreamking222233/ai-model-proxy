@@ -27,6 +27,7 @@ class UserInfoBrief(BaseModel):
     username: str
     email: str
     role: str
+    agent_id: Optional[int] = None
     avatar: Optional[str] = None
 
 
@@ -58,6 +59,7 @@ class UserInfo(BaseModel):
     username: str
     email: str
     role: str
+    agent_id: Optional[int] = None
     status: int
     avatar: Optional[str] = None
     last_login_at: Optional[datetime] = None
@@ -70,7 +72,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     avatar: Optional[str] = Field(None, max_length=512)
     status: Optional[int] = Field(None, ge=0, le=1)
-    role: Optional[str] = Field(None, pattern=r"^(admin|user)$")
+    role: Optional[str] = Field(None, pattern=r"^(admin|agent|user)$")
 
 
 class PasswordChange(BaseModel):

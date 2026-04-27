@@ -13,7 +13,7 @@
           <a-icon type="thunderbolt" class="logo-icon" />
         </div>
         <transition name="logo-text-fade">
-          <span v-if="!collapsed" class="logo-text">AI 模型中转</span>
+          <span v-if="!collapsed" class="logo-text">{{ siteName }}</span>
         </transition>
       </div>
 
@@ -122,12 +122,14 @@
 
 <script>
 import { getUser, clearSiteClientCache } from '@/utils/auth'
+import { getSiteConfig } from '@/api/user'
 
 export default {
   name: 'UserLayout',
   data() {
     return {
-      collapsed: false
+      collapsed: false,
+      siteConfig: {}
     }
   },
   computed: {
@@ -138,11 +140,25 @@ export default {
       const user = getUser()
       return user ? user.username : '用户'
     },
+    siteName() {
+      return this.siteConfig.site_name || 'AI 模型中转'
+    },
     isFullscreen() {
       return this.$route.meta && this.$route.meta.fullscreen === true
     }
   },
+  mounted() {
+    this.fetchSiteConfig()
+  },
   methods: {
+    async fetchSiteConfig() {
+      try {
+        const res = await getSiteConfig()
+        this.siteConfig = res.data || {}
+      } catch (e) {
+        this.siteConfig = {}
+      }
+    },
     handleMenuClick({ key }) {
       if (this.$route.path !== key) {
         this.$router.push(key)

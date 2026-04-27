@@ -75,6 +75,7 @@ class LogService:
         page: int = 1,
         page_size: int = 20,
         user_id: Optional[int] = None,
+        agent_id: Optional[int] = None,
         model: Optional[str] = None,
         status: Optional[str] = None,
         start_date: Optional[str] = None,
@@ -104,6 +105,8 @@ class LogService:
 
         if user_id is not None:
             query = query.filter(RequestLog.user_id == user_id)
+        if agent_id is not None:
+            query = query.filter(RequestLog.agent_id == agent_id)
         if model:
             query = query.filter(RequestLog.requested_model == model)
         if status:
@@ -127,6 +130,7 @@ class LogService:
                 "id": log.id,
                 "request_id": log.request_id,
                 "user_id": log.user_id,
+                "agent_id": log.agent_id,
                 "username": username,
                 "user_api_key_id": log.user_api_key_id,
                 "channel_id": log.channel_id,
@@ -269,7 +273,31 @@ class LogService:
         }
 
     @staticmethod
-    def get_request_stats(db: Session, days: int = 7) -> list[dict]:
+    def get_agent_user_usage_summary(
+        db: Session,
+        user_id: int,
+        agent_id: int,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> dict:
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+        if int(user.agent_id or 0) != int(agent_id):
+            raise ServiceException(403, "目标用户不在当前代理范围内", "AGENT_SCOPE_VIOLATION")
+
+        summary = LogService.get_admin_user_usage_summary(
+            db=db,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        summary_user = summary.get("user") or {}
+        summary_user["agent_id"] = user.agent_id
+        return summary
+
+    @staticmethod
+    def get_request_stats(db: Session, days: int = 7, agent_id: Optional[int] = None) -> list[dict]:
         """
         Get daily aggregated request statistics for the past N days.
 
@@ -278,9 +306,9 @@ class LogService:
             ``success_requests``, ``failed_requests``, ``total_input_tokens``,
             ``total_output_tokens``, ``total_tokens``, ``total_cost``.
         """
-        since = datetime.utcnow() - timedelta(days=days)
+        since, until = LogService._get_timezone_day_window(days)
 
-        rows = (
+        query = (
             db.query(
                 func.date(RequestLog.created_at).label("date"),
                 func.count(RequestLog.id).label("total_requests"),
@@ -294,14 +322,19 @@ class LogService:
                 func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
             )
-            .filter(RequestLog.created_at >= since)
-            .group_by(func.date(RequestLog.created_at))
+            .filter(RequestLog.created_at >= since, RequestLog.created_at <= until)
+        )
+        if agent_id is not None:
+            query = query.filter(RequestLog.agent_id == agent_id)
+
+        rows = (
+            query.group_by(func.date(RequestLog.created_at))
             .order_by(func.date(RequestLog.created_at).asc())
             .all()
         )
 
-        return [
-            {
+        rows_by_date = {
+            str(row.date): {
                 "date": str(row.date),
                 "total_requests": int(row.total_requests),
                 "success_requests": int(row.success_requests or 0),
@@ -311,6 +344,23 @@ class LogService:
                 "total_tokens": int(row.total_tokens),
             }
             for row in rows
+        }
+
+        start_date = since.date()
+        return [
+            rows_by_date.get(
+                (start_date + timedelta(days=offset)).isoformat(),
+                {
+                    "date": (start_date + timedelta(days=offset)).isoformat(),
+                    "total_requests": 0,
+                    "success_requests": 0,
+                    "failed_requests": 0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_tokens": 0,
+                },
+            )
+            for offset in range(max(days, 1))
         ]
 
     @staticmethod
@@ -360,6 +410,7 @@ class LogService:
         target_id: Optional[int] = None,
         description: Optional[str] = None,
         ip: Optional[str] = None,
+        agent_id: Optional[int] = None,
     ) -> OperationLog:
         """
         Create an operation audit log entry.
@@ -375,6 +426,7 @@ class LogService:
             target_id=target_id,
             description=description,
             ip_address=ip,
+            agent_id=agent_id,
         )
         db.add(log)
         db.commit()
@@ -539,16 +591,18 @@ class LogService:
 
     @staticmethod
     def list_consumption_records(
-        db: Session, page: int = 1, page_size: int = 20, user_id: int = None,
+        db: Session, page: int = 1, page_size: int = 20, user_id: int = None, agent_id: int = None,
     ) -> tuple[list[dict], int]:
         query = db.query(ConsumptionRecord)
         if user_id is not None:
             query = query.filter(ConsumptionRecord.user_id == user_id)
+        if agent_id is not None:
+            query = query.filter(ConsumptionRecord.agent_id == agent_id)
         total = query.count()
         records = query.order_by(ConsumptionRecord.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
         result = [
             {
-                "id": r.id, "user_id": r.user_id, "request_id": r.request_id,
+                "id": r.id, "user_id": r.user_id, "agent_id": r.agent_id, "request_id": r.request_id,
                 "model_name": r.model_name,
                 "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
                 "total_tokens": r.total_tokens,
@@ -570,6 +624,60 @@ class LogService:
             for r in records
         ]
         return result, total
+
+    @staticmethod
+    def get_agent_token_ranking(
+        db: Session,
+        agent_id: int,
+        days: int = 1,
+        limit: int = 10,
+    ) -> list[dict]:
+        since, now = LogService._get_timezone_day_window(days)
+        rows = (
+            db.query(
+                SysUser.id.label("user_id"),
+                SysUser.username,
+                SysUser.role,
+                SysUser.avatar,
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(RequestLog.input_tokens), 0).label("input_tokens"),
+                func.coalesce(func.sum(RequestLog.output_tokens), 0).label("output_tokens"),
+                func.count(RequestLog.id).label("request_count"),
+                func.max(RequestLog.created_at).label("last_used_at"),
+            )
+            .join(SysUser, SysUser.id == RequestLog.user_id)
+            .filter(
+                RequestLog.agent_id == agent_id,
+                RequestLog.user_id.isnot(None),
+                SysUser.role == "user",
+                RequestLog.created_at >= since,
+                RequestLog.created_at <= now,
+            )
+            .group_by(SysUser.id, SysUser.username, SysUser.role, SysUser.avatar)
+            .order_by(
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).desc(),
+                func.count(RequestLog.id).desc(),
+                func.max(RequestLog.created_at).desc(),
+                SysUser.id.asc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "rank": index + 1,
+                "user_id": row.user_id,
+                "username": row.username,
+                "role": row.role,
+                "avatar": row.avatar,
+                "total_tokens": int(row.total_tokens or 0),
+                "input_tokens": int(row.input_tokens or 0),
+                "output_tokens": int(row.output_tokens or 0),
+                "request_count": int(row.request_count or 0),
+                "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            }
+            for index, row in enumerate(rows)
+        ]
 
     @staticmethod
     def get_usage_summary(

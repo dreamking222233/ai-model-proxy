@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import get_current_user
@@ -6,6 +6,7 @@ from app.models.user import SysUser
 from app.services.auth_service import AuthService
 from app.services.log_service import LogService
 from app.services.health_service import get_system_config
+from app.services.agent_service import AgentService
 from app.models.log import SystemConfig
 from app.schemas.user import PasswordChange
 from app.schemas.common import ResponseModel
@@ -75,19 +76,29 @@ def get_usage_logs(
 
 @router.get("/site-config", response_model=ResponseModel)
 def get_site_config(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
     """Return public site config values for frontend display."""
-    keys = [
-        "api_base_url",
+    keys = {
         "anthropic_prompt_cache_enabled",
         "anthropic_prompt_cache_user_visible",
         "conversation_state_compaction_enabled",
         "conversation_state_user_visible",
-    ]
+    }
     configs = db.query(SystemConfig).filter(SystemConfig.config_key.in_(keys)).all()
-    result = {c.config_key: c.config_value for c in configs}
+    result = AgentService.build_public_site_config(
+        db,
+        host=request.headers.get("host"),
+        x_site_host=request.headers.get("X-Site-Host"),
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
+    )
+    result["api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")
+    result["quickstart_api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")
+    for config in configs:
+        result[config.config_key] = config.config_value
     return ResponseModel(data=result)
 
 

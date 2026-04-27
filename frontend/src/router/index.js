@@ -12,6 +12,12 @@ const routes = [
     meta: { guest: true }
   },
   {
+    path: '/agents/login',
+    name: 'AgentLogin',
+    component: () => import('@/views/Login.vue'),
+    meta: { guest: true, agentLogin: true }
+  },
+  {
     path: '/register',
     name: 'Register',
     component: () => import('@/views/Login.vue'),
@@ -20,7 +26,7 @@ const routes = [
   {
     path: '/admin',
     component: () => import('@/layout/AdminLayout.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresPlatformAdmin: true },
     children: [
       {
         path: '',
@@ -57,10 +63,28 @@ const routes = [
         meta: { title: '用户管理' }
       },
       {
+        path: 'agents',
+        name: 'AgentManage',
+        component: () => import('@/views/admin/AgentManage.vue'),
+        meta: { title: '代理管理' }
+      },
+      {
+        path: 'agent-assets',
+        name: 'AgentAssetManage',
+        component: () => import('@/views/admin/AgentAssetManage.vue'),
+        meta: { title: '代理资产' }
+      },
+      {
         path: 'logs',
         name: 'RequestLog',
         component: () => import('@/views/admin/RequestLog.vue'),
         meta: { title: '请求日志' }
+      },
+      {
+        path: 'agent-logs',
+        name: 'AdminAgentRequestLog',
+        component: () => import('@/views/admin/AgentRequestLog.vue'),
+        meta: { title: '代理日志' }
       },
       {
         path: 'ranking',
@@ -179,6 +203,65 @@ const routes = [
     ]
   },
   {
+    path: '/agent',
+    component: () => import('@/layout/AgentLayout.vue'),
+    meta: { requiresAuth: true, requiresAgentAdmin: true },
+    children: [
+      {
+        path: '',
+        redirect: 'workbench'
+      },
+      {
+        path: 'workbench',
+        name: 'AgentWorkbench',
+        component: () => import('@/views/agent/Workbench.vue'),
+        meta: { title: '工作台' }
+      },
+      {
+        path: 'dashboard',
+        name: 'AgentDashboard',
+        component: () => import('@/views/agent/Dashboard.vue'),
+        meta: { title: '仪表盘' }
+      },
+      {
+        path: 'users',
+        name: 'AgentUserManage',
+        component: () => import('@/views/agent/UserManage.vue'),
+        meta: { title: '用户管理' }
+      },
+      {
+        path: 'redemption',
+        name: 'AgentRedemptionManage',
+        component: () => import('@/views/agent/RedemptionManage.vue'),
+        meta: { title: '兑换码管理' }
+      },
+      {
+        path: 'subscription',
+        name: 'AgentSubscriptionManage',
+        component: () => import('@/views/agent/SubscriptionManage.vue'),
+        meta: { title: '套餐管理' }
+      },
+      {
+        path: 'logs',
+        name: 'AgentLogs',
+        component: () => import('@/views/agent/RequestLog.vue'),
+        meta: { title: '请求记录' }
+      },
+      {
+        path: 'ranking',
+        name: 'AgentUsageRanking',
+        component: () => import('@/views/agent/UsageRanking.vue'),
+        meta: { title: '使用排行' }
+      },
+      {
+        path: 'system',
+        name: 'AgentSystemManage',
+        component: () => import('@/views/agent/SystemManage.vue'),
+        meta: { title: '系统管理' }
+      }
+    ]
+  },
+  {
     path: '/user/m-chat',
     name: 'UserMobileChat',
     component: () => import('@/views/common/MobileChat.vue'),
@@ -208,13 +291,20 @@ router.beforeEach((to, from, next) => {
   // If route requires authentication
   if (to.matched.some(record => record.meta.requiresAuth)) {
     if (!token) {
-      next({ path: '/login', query: { redirect: to.fullPath } })
+      const loginPath = to.matched.some(record => record.meta.requiresAgentAdmin) ? '/agents/login' : '/login'
+      next({ path: loginPath, query: { redirect: to.fullPath } })
       return
     }
 
-    // If route requires admin role
-    if (to.matched.some(record => record.meta.requiresAdmin)) {
+    if (to.matched.some(record => record.meta.requiresPlatformAdmin)) {
       if (!user || user.role !== 'admin') {
+        next({ path: '/user/dashboard' })
+        return
+      }
+    }
+
+    if (to.matched.some(record => record.meta.requiresAgentAdmin)) {
+      if (!user || user.role !== 'agent') {
         next({ path: '/user/dashboard' })
         return
       }
@@ -227,8 +317,14 @@ router.beforeEach((to, from, next) => {
   // If route is for guests only (login/register) and user is already logged in
   if (to.matched.some(record => record.meta.guest)) {
     if (token && user) {
+      if (to.matched.some(record => record.meta.agentLogin) && user.role !== 'agent') {
+        next()
+        return
+      }
       if (user.role === 'admin') {
         next({ path: '/admin/dashboard' })
+      } else if (user.role === 'agent') {
+        next({ path: '/agent/workbench' })
       } else {
         next({ path: '/user/dashboard' })
       }

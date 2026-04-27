@@ -30,6 +30,7 @@ class RequestLog(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     request_id = Column(String(36), nullable=False, unique=True, comment="UUID")
     user_id = Column(BigInteger, nullable=True, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True, comment="所属代理ID")
     user_api_key_id = Column(BigInteger, nullable=True)
     channel_id = Column(BigInteger, nullable=True, index=True)
     channel_name = Column(String(128), nullable=True)
@@ -132,6 +133,7 @@ class OperationLog(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=True, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True)
     username = Column(String(64), nullable=True)
     action = Column(String(64), nullable=False, index=True)
     target_type = Column(String(64), nullable=True)
@@ -162,6 +164,7 @@ class ConsumptionRecord(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True)
     request_id = Column(String(36), nullable=True, index=True)
     model_name = Column(String(128), nullable=True)
     input_tokens = Column(Integer, nullable=True, default=0)
@@ -212,6 +215,7 @@ class ImageCreditRecord(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True)
     request_id = Column(String(36), nullable=True, index=True)
     model_name = Column(String(128), nullable=True)
     change_amount = Column(DECIMAL(12, 3), nullable=False, comment="Positive for recharge, negative for deduction")
@@ -275,6 +279,7 @@ class UserSubscription(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True)
     plan_id = Column(BigInteger, nullable=True, index=True)
     plan_code_snapshot = Column(String(64), nullable=True, comment="套餐编码快照")
     plan_name = Column(String(64), nullable=False, comment="套餐名称")

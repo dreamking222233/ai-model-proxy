@@ -158,6 +158,10 @@ async def _handle_codex_responses_websocket(websocket: WebSocket, db: Session):
             authorization=websocket.headers.get("Authorization"),
             x_api_key=websocket.headers.get("X-API-Key"),
             anthropic_api_key=websocket.headers.get("anthropic-api-key"),
+            host=websocket.headers.get("host"),
+            x_site_host=websocket.headers.get("X-Site-Host"),
+            origin=websocket.headers.get("Origin"),
+            referer=websocket.headers.get("Referer"),
         )
     except ServiceException as exc:
         await websocket.close(code=1008, reason=exc.detail[:120])

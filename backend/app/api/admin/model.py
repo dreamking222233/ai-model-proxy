@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -16,7 +20,7 @@ from app.schemas.common import ResponseModel
 router = APIRouter(prefix="/api/admin/models", tags=["管理-模型管理"])
 
 
-def _public_actual_model_name(model_name: str, actual_model_name: str | None) -> str | None:
+def _public_actual_model_name(model_name: str, actual_model_name: Optional[str]) -> Optional[str]:
     if str(model_name or "").strip() == "claude-opus-4-6":
         return "claude-opus-4-6"
     return actual_model_name

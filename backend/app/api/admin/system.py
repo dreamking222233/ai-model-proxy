@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import require_admin
@@ -63,6 +63,7 @@ def update_config(
 
 @router.get("/dashboard", response_model=ResponseModel)
 def get_dashboard_stats(
+    range_key: str = Query("7d", alias="range"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
@@ -71,9 +72,9 @@ def get_dashboard_stats(
     from app.models.model import UnifiedModel
     from app.models.log import RequestLog
     from sqlalchemy import func
-    from datetime import datetime, timedelta
+    from app.services.log_service import LogService
 
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today, _ = LogService._get_timezone_day_window(1)
 
     total_users = db.query(func.count(UserModel.id)).scalar()
     total_channels = db.query(func.count(Channel.id)).scalar()
@@ -92,8 +93,9 @@ def get_dashboard_stats(
         RequestLog.created_at >= today
     ).scalar()
     today_errors = db.query(func.count(RequestLog.id)).filter(
-        RequestLog.created_at >= today, RequestLog.status == 'error'
+        RequestLog.created_at >= today, RequestLog.status != 'success'
     ).scalar()
+    model_usage_ratio = LogService.get_model_usage_ratio(db, range_key=range_key)
 
     return ResponseModel(data={
         "total_users": total_users,
@@ -104,4 +106,5 @@ def get_dashboard_stats(
         "today_requests": today_requests,
         "today_tokens": int(today_tokens),
         "today_errors": today_errors,
+        "model_usage_ratio": model_usage_ratio,
     })

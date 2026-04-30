@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -43,10 +45,11 @@ def get_request_user_summary(
 @router.get("/requests/stats", response_model=ResponseModel)
 def get_request_stats(
     days: int = Query(7, ge=1, le=90),
+    range_key: Optional[str] = Query(None, alias="range"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    stats = LogService.get_request_stats(db, days)
+    stats = LogService.get_request_stats(db, days=days, range_key=range_key)
     return ResponseModel(data=stats)
 
 

@@ -2,10 +2,11 @@ import request from './request'
 
 // ==================== Dashboard ====================
 
-export function getDashboardStats() {
+export function getDashboardStats(range) {
   return request({
     url: '/api/admin/system/dashboard',
-    method: 'get'
+    method: 'get',
+    params: range ? { range } : undefined
   })
 }
 
@@ -76,11 +77,15 @@ export function getRequestUserSummary(params) {
   })
 }
 
-export function getRequestStats(days) {
+export function getRequestStats(rangeOrDays) {
+  const params = typeof rangeOrDays === 'number'
+    ? { days: rangeOrDays }
+    : (rangeOrDays ? { range: rangeOrDays } : undefined)
+
   return request({
     url: '/api/admin/logs/requests/stats',
     method: 'get',
-    params: { days }
+    params
   })
 }
 

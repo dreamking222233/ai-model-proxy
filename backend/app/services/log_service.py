@@ -19,6 +19,11 @@ class LogService:
     """Query and create log records, compute aggregated statistics."""
 
     DEFAULT_TIMEZONE = "Asia/Shanghai"
+    REQUEST_STATS_RANGES = {
+        "today": 1,
+        "7d": 7,
+        "30d": 30,
+    }
 
     @staticmethod
     def _public_actual_model_name(requested_model: Optional[str], actual_model: Optional[str]) -> Optional[str]:
@@ -36,6 +41,59 @@ class LogService:
         local_now = datetime.now(timezone.utc).astimezone(zone)
         local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(days, 1) - 1)
         return local_start.replace(tzinfo=None), local_now.replace(tzinfo=None)
+
+    @staticmethod
+    def _resolve_request_stats_config(days: int = 7, range_key: Optional[str] = None) -> dict:
+        normalized_range = str(range_key or "").strip().lower()
+        if normalized_range == "today":
+            since, until = LogService._get_timezone_day_window(1)
+            return {
+                "range_key": "today",
+                "days": 1,
+                "bucket_mode": "two_hour",
+                "since": since,
+                "until": until,
+            }
+
+        resolved_days = LogService.REQUEST_STATS_RANGES.get(normalized_range, max(int(days or 1), 1))
+        since, until = LogService._get_timezone_day_window(resolved_days)
+        return {
+            "range_key": normalized_range or f"{resolved_days}d",
+            "days": resolved_days,
+            "bucket_mode": "day",
+            "since": since,
+            "until": until,
+        }
+
+    @staticmethod
+    def _summarize_model_usage_rows(rows: list, limit: int = 6) -> list[dict]:
+        total_requests = sum(int(row.request_count or 0) for row in rows)
+        if total_requests <= 0:
+            return []
+
+        primary_rows = list(rows[:limit])
+        remaining_rows = list(rows[limit:])
+        result = [
+            {
+                "model_name": str(row.model_name or "unknown"),
+                "request_count": int(row.request_count or 0),
+                "total_tokens": int(row.total_tokens or 0),
+                "ratio": round(int(row.request_count or 0) * 100 / total_requests, 1),
+            }
+            for row in primary_rows
+        ]
+
+        if remaining_rows:
+            other_requests = sum(int(row.request_count or 0) for row in remaining_rows)
+            other_tokens = sum(int(row.total_tokens or 0) for row in remaining_rows)
+            result.append({
+                "model_name": "其他",
+                "request_count": other_requests,
+                "total_tokens": other_tokens,
+                "ratio": round(other_requests * 100 / total_requests, 1),
+            })
+
+        return result
 
     @staticmethod
     def _parse_date_filters(
@@ -297,61 +355,126 @@ class LogService:
         return summary
 
     @staticmethod
-    def get_request_stats(db: Session, days: int = 7, agent_id: Optional[int] = None) -> list[dict]:
+    def get_request_stats(
+        db: Session,
+        days: int = 7,
+        agent_id: Optional[int] = None,
+        range_key: Optional[str] = None,
+    ) -> list[dict]:
         """
-        Get daily aggregated request statistics for the past N days.
+        Get aggregated request statistics for a given range.
 
         Returns:
-            List of dicts with keys: ``date``, ``total_requests``,
+            List of dicts with keys: ``date``, ``label``, ``total_requests``,
             ``success_requests``, ``failed_requests``, ``total_input_tokens``,
             ``total_output_tokens``, ``total_tokens``, ``total_cost``.
         """
-        since, until = LogService._get_timezone_day_window(days)
+        config = LogService._resolve_request_stats_config(days=days, range_key=range_key)
+        since = config["since"]
+        until = config["until"]
+        bucket_mode = config["bucket_mode"]
 
-        query = (
-            db.query(
-                func.date(RequestLog.created_at).label("date"),
-                func.count(RequestLog.id).label("total_requests"),
-                func.sum(
-                    func.IF(RequestLog.status == "success", 1, 0)
-                ).label("success_requests"),
-                func.sum(
-                    func.IF(RequestLog.status != "success", 1, 0)
-                ).label("failed_requests"),
-                func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
-                func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
-                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
-            )
-            .filter(RequestLog.created_at >= since, RequestLog.created_at <= until)
+        query = db.query(RequestLog).filter(
+            RequestLog.created_at >= since,
+            RequestLog.created_at <= until,
         )
         if agent_id is not None:
             query = query.filter(RequestLog.agent_id == agent_id)
 
+        if bucket_mode == "two_hour":
+            bucket_expr = func.concat(
+                func.date_format(RequestLog.created_at, "%Y-%m-%d "),
+                func.lpad(func.floor(func.hour(RequestLog.created_at) / 2) * 2, 2, "0"),
+                ":00",
+            )
+            rows = (
+                query.with_entities(
+                    bucket_expr.label("bucket_key"),
+                    func.count(RequestLog.id).label("total_requests"),
+                    func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_requests"),
+                    func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_requests"),
+                    func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
+                    func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
+                    func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                )
+                .group_by(bucket_expr)
+                .order_by(bucket_expr.asc())
+                .all()
+            )
+
+            rows_by_bucket = {
+                str(row.bucket_key): {
+                    "bucket_key": str(row.bucket_key),
+                    "date": str(row.bucket_key)[11:16],
+                    "label": str(row.bucket_key)[11:16],
+                    "total_requests": int(row.total_requests or 0),
+                    "success_requests": int(row.success_requests or 0),
+                    "failed_requests": int(row.failed_requests or 0),
+                    "total_input_tokens": int(row.total_input_tokens or 0),
+                    "total_output_tokens": int(row.total_output_tokens or 0),
+                    "total_tokens": int(row.total_tokens or 0),
+                }
+                for row in rows
+            }
+
+            bucket_start = since.replace(minute=0, second=0, microsecond=0)
+            return [
+                rows_by_bucket.get(
+                    (bucket_start + timedelta(hours=offset * 2)).strftime("%Y-%m-%d %H:00"),
+                    {
+                        "bucket_key": (bucket_start + timedelta(hours=offset * 2)).strftime("%Y-%m-%d %H:00"),
+                        "date": (bucket_start + timedelta(hours=offset * 2)).strftime("%H:%M"),
+                        "label": (bucket_start + timedelta(hours=offset * 2)).strftime("%H:%M"),
+                        "total_requests": 0,
+                        "success_requests": 0,
+                        "failed_requests": 0,
+                        "total_input_tokens": 0,
+                        "total_output_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                )
+                for offset in range(12)
+            ]
+
         rows = (
-            query.group_by(func.date(RequestLog.created_at))
+            query.with_entities(
+                func.date(RequestLog.created_at).label("date"),
+                func.count(RequestLog.id).label("total_requests"),
+                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_requests"),
+                func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_requests"),
+                func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
+                func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+            )
+            .group_by(func.date(RequestLog.created_at))
             .order_by(func.date(RequestLog.created_at).asc())
             .all()
         )
 
         rows_by_date = {
             str(row.date): {
+                "bucket_key": str(row.date),
                 "date": str(row.date),
-                "total_requests": int(row.total_requests),
+                "label": str(row.date),
+                "total_requests": int(row.total_requests or 0),
                 "success_requests": int(row.success_requests or 0),
                 "failed_requests": int(row.failed_requests or 0),
-                "total_input_tokens": int(row.total_input_tokens),
-                "total_output_tokens": int(row.total_output_tokens),
-                "total_tokens": int(row.total_tokens),
+                "total_input_tokens": int(row.total_input_tokens or 0),
+                "total_output_tokens": int(row.total_output_tokens or 0),
+                "total_tokens": int(row.total_tokens or 0),
             }
             for row in rows
         }
 
         start_date = since.date()
+        total_days = max(int(config["days"] or 1), 1)
         return [
             rows_by_date.get(
                 (start_date + timedelta(days=offset)).isoformat(),
                 {
+                    "bucket_key": (start_date + timedelta(days=offset)).isoformat(),
                     "date": (start_date + timedelta(days=offset)).isoformat(),
+                    "label": (start_date + timedelta(days=offset)).isoformat(),
                     "total_requests": 0,
                     "success_requests": 0,
                     "failed_requests": 0,
@@ -360,8 +483,41 @@ class LogService:
                     "total_tokens": 0,
                 },
             )
-            for offset in range(max(days, 1))
+            for offset in range(total_days)
         ]
+
+    @staticmethod
+    def get_model_usage_ratio(
+        db: Session,
+        days: int = 7,
+        agent_id: Optional[int] = None,
+        range_key: Optional[str] = None,
+        limit: int = 6,
+    ) -> list[dict]:
+        """Get model usage ratio aggregated by request count for a given range."""
+        config = LogService._resolve_request_stats_config(days=days, range_key=range_key)
+        since = config["since"]
+        until = config["until"]
+        model_name_expr = func.coalesce(RequestLog.requested_model, "unknown")
+
+        query = db.query(RequestLog).filter(
+            RequestLog.created_at >= since,
+            RequestLog.created_at <= until,
+        )
+        if agent_id is not None:
+            query = query.filter(RequestLog.agent_id == agent_id)
+
+        rows = (
+            query.with_entities(
+                model_name_expr.label("model_name"),
+                func.count(RequestLog.id).label("request_count"),
+                func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+            )
+            .group_by(model_name_expr)
+            .order_by(func.count(RequestLog.id).desc(), model_name_expr.asc())
+            .all()
+        )
+        return LogService._summarize_model_usage_rows(rows, limit=limit)
 
     @staticmethod
     def list_operation_logs(

@@ -222,12 +222,13 @@
                     </div>
                     <p class="api-doc-intro">
                       用于文生图，两个接口都可用，均为非流式 HTTP 调用。
-                      推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>。
+                      推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>、<code>n</code>。
                     </p>
                     <p class="api-doc-intro">
                       当前支持的图片模型包括 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、
                       <code>gemini-3-pro-image-preview</code> 和 <code>gpt-image-2</code>。
-                      其中 <code>gpt-image-2</code> 按 <code>0.5</code> 图片积分/次计费。
+                      其中 <code>gpt-image-2</code> 支持 <code>1 &lt;= n &lt;= 4</code>，会在 <code>data</code> 数组中返回多张图片；
+                      计费按 <code>0.5</code> 图片积分/张线性累加。
                     </p>
 
                     <div class="code-editor-block">
@@ -356,7 +357,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="图像接口不支持 stream；生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存。编辑接口上传多图时，请重复传递 image 字段；当前 n 固定为 1。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="图像接口不支持 stream；生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存。图片生成里，gpt-image-2 当前支持 1-4 张并通过 data 数组返回；编辑接口上传多图时，请重复传递 image 字段，但当前 n 仍固定为 1。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -534,7 +535,7 @@ payload = {
     "response_format": "b64_json",
     "image_size": "1K",
     "aspect_ratio": "1:1",
-    "n": 1
+    "n": 2
 }
 
 resp = requests.post(url, headers=headers, json=payload, timeout=300)
@@ -557,7 +558,7 @@ print(result)`
     "response_format": "b64_json",
     "image_size": "1K",
     "aspect_ratio": "1:1",
-    "n": 1
+    "n": 2
   }'`
     },
     imageEditPythonCode() {
@@ -615,7 +616,7 @@ finally:
         { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16；gpt-image-2 会通过提示词适配。' },
         { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，系统会透传为 Google imageSize。' },
         { name: 'size', required: '否', description: '兼容参数。若传 512/1K/2K/4K，会按分辨率处理；若传 1024x1024 等旧尺寸，会尝试映射为 aspect_ratio。' },
-        { name: 'n', required: '否', description: '期望图片数量。当前统一固定为 1。' },
+        { name: 'n', required: '否', description: '期望图片数量。当前 gpt-image-2 支持 1-4，并会在 data 数组中返回对应张数；其他图片模型当前仅支持 1。' },
         { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
       ]
     },
@@ -637,10 +638,11 @@ finally:
         { name: 'request_id', description: '平台生成的请求 ID，可用于排查日志。', example: 'uuid' },
         { name: 'data[].b64_json', description: '图片的 Base64 内容，需要业务侧自行解码。', example: 'iVBORw0KGgoAAA...' },
         { name: 'data[].mime_type', description: '图片 MIME 类型。', example: 'image/png' },
+        { name: 'usage.image_count', description: '本次实际返回的图片张数。', example: '2' },
         { name: 'usage.image_size', description: '本次请求生效的图片分辨率档位。', example: '1K' },
         { name: 'usage.billing_type', description: '计费类型。图片接口统一为 image_credit。', example: 'image_credit' },
-        { name: 'usage.image_credits_charged', description: '本次调用扣除的图片积分。', example: '0.5' },
-        { name: 'usage.model_multiplier', description: '当前模型配置的倍率。', example: '0.5' },
+        { name: 'usage.image_credits_charged', description: '本次调用扣除的总图片积分；多图时会按张数累加。', example: '1.0' },
+        { name: 'usage.model_multiplier', description: '当前模型的单张积分倍率。', example: '0.5' },
         { name: 'usage.request_type', description: '本次调用类型，文生图返回 image_generation。', example: 'image_generation' }
       ]
     },
@@ -665,14 +667,19 @@ finally:
   "request_id": "550e8400-e29b-41d4-a716-446655440000",
   "data": [
     {
-      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...",
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...image1",
+      "mime_type": "image/png"
+    },
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...image2",
       "mime_type": "image/png"
     }
   ],
   "usage": {
+    "image_count": 2,
     "image_size": "1K",
     "billing_type": "image_credit",
-    "image_credits_charged": 0.5,
+    "image_credits_charged": 1.0,
     "model_multiplier": 0.5,
     "request_type": "image_generation"
   }

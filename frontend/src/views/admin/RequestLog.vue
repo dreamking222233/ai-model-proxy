@@ -589,7 +589,8 @@ export default {
     buildRequestParams() {
       const params = {
         page: this.pagination.current,
-        page_size: this.pagination.pageSize
+        page_size: this.pagination.pageSize,
+        platform_only: true
       }
       if (this.filters.model) {
         params.model = this.filters.model
@@ -785,7 +786,8 @@ export default {
         const res = await getRequestUserSummary({
           user_id: params.user_id,
           start_date: params.start_date,
-          end_date: params.end_date
+          end_date: params.end_date,
+          platform_only: true
         })
         this.userSummary = res.data || null
       } catch (err) {

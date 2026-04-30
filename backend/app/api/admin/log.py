@@ -21,11 +21,13 @@ def list_request_logs(
     status: str = Query(None),
     start_date: str = Query(None),
     end_date: str = Query(None),
+    agent_only: bool = Query(False),
+    platform_only: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
     items, total = LogService.list_request_logs(
-        db, page, page_size, user_id, agent_id, model, status, start_date, end_date
+        db, page, page_size, user_id, agent_id, model, status, start_date, end_date, agent_only, platform_only
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
@@ -35,10 +37,11 @@ def get_request_user_summary(
     user_id: int = Query(...),
     start_date: str = Query(None),
     end_date: str = Query(None),
+    platform_only: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    summary = LogService.get_admin_user_usage_summary(db, user_id, start_date, end_date)
+    summary = LogService.get_admin_user_usage_summary(db, user_id, start_date, end_date, platform_only)
     return ResponseModel(data=summary)
 
 

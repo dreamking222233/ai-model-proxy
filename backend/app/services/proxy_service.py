@@ -8299,11 +8299,48 @@ class ProxyService:
         )
 
     @staticmethod
-    def _validate_single_image_count(request_data: dict) -> None:
+    def _resolve_requested_image_count(request_data: dict) -> int:
+        raw_n = request_data.get("n")
+        if raw_n in (None, ""):
+            return 1
         try:
-            requested_n = int(request_data.get("n", 1) or 1)
+            requested_n = int(raw_n)
         except (TypeError, ValueError):
             raise ServiceException(400, "Invalid n parameter", "IMAGE_COUNT_NOT_SUPPORTED")
+        if requested_n < 1:
+            raise ServiceException(400, "n must be a positive integer", "IMAGE_COUNT_NOT_SUPPORTED")
+        return requested_n
+
+    @staticmethod
+    def _validate_supported_image_count(
+        requested_image_count: int,
+        *,
+        max_count: int = 1,
+        provider_label: str = "Current image channel",
+    ) -> None:
+        if requested_image_count > max_count:
+            if max_count <= 1:
+                detail = f"{provider_label} only supports n=1"
+            else:
+                detail = f"{provider_label} supports 1 <= n <= {max_count}"
+            raise ServiceException(
+                400,
+                detail,
+                "IMAGE_COUNT_NOT_SUPPORTED",
+            )
+
+    @staticmethod
+    def _calculate_total_image_credits(
+        base_image_credits: Decimal,
+        image_count: int,
+    ) -> Decimal:
+        return (
+            Decimal(str(base_image_credits or 0)) * Decimal(str(image_count or 0))
+        ).quantize(Decimal("0.001"))
+
+    @staticmethod
+    def _validate_single_image_count(request_data: dict) -> None:
+        requested_n = ProxyService._resolve_requested_image_count(request_data)
         if requested_n != 1:
             raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
 
@@ -8427,6 +8464,7 @@ class ProxyService:
         request_id: str,
         images: list[dict],
         charged_credits: Decimal,
+        model_multiplier: Decimal,
         image_size: Optional[str],
         request_type: str = "image_generation",
         extra_text: Optional[str] = None,
@@ -8439,7 +8477,8 @@ class ProxyService:
             "usage": {
                 "billing_type": "image_credit",
                 "image_credits_charged": float(charged_credits),
-                "model_multiplier": float(charged_credits),
+                "model_multiplier": float(model_multiplier),
+                "image_count": len(images),
                 "image_size": image_size,
                 "request_type": request_type,
             },
@@ -8461,6 +8500,7 @@ class ProxyService:
         client_ip: str,
         response_time_ms: int,
         charged_credits: Decimal,
+        model_multiplier: Decimal,
         image_size: Optional[str] = None,
         image_count: int = 1,
         request_type: str = "image_generation",
@@ -8491,7 +8531,7 @@ class ProxyService:
                 request_id=request_id,
                 model_name=requested_model,
                 amount=charged_credits,
-                multiplier=charged_credits,
+                multiplier=model_multiplier,
                 image_size=image_size,
                 remark=f"{request_type_label}: {image_count} image(s)",
             )
@@ -8547,10 +8587,16 @@ class ProxyService:
         upstream_model_name: str,
         client_ip: str,
         charged_credits: Decimal,
+        requested_image_count: int = 1,
+        model_multiplier: Optional[Decimal] = None,
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        ProxyService._validate_supported_image_count(
+            requested_image_count,
+            provider_label="Google image channel",
+        )
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/v1beta/models/{upstream_model_name}:generateContent"
@@ -8595,6 +8641,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 charged_credits=charged_credits,
+                model_multiplier=model_multiplier or charged_credits,
                 image_size=image_size,
                 image_count=len(images),
                 request_type="image_generation",
@@ -8614,6 +8661,7 @@ class ProxyService:
             request_id,
             images,
             charged_credits,
+            model_multiplier or charged_credits,
             image_size,
             request_type="image_generation",
             extra_text=extra_text,
@@ -8633,10 +8681,17 @@ class ProxyService:
         upstream_model_name: str,
         client_ip: str,
         charged_credits: Decimal,
+        requested_image_count: int = 1,
+        model_multiplier: Optional[Decimal] = None,
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        ProxyService._validate_supported_image_count(
+            requested_image_count,
+            max_count=4,
+            provider_label="ChatGPT Image Compatible channel",
+        )
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
         url = ProxyService._resolve_openai_image_generation_url(base_url)
@@ -8650,7 +8705,7 @@ class ProxyService:
                 image_size=image_size,
                 aspect_ratio=aspect_ratio,
             ),
-            "n": 1,
+            "n": requested_image_count,
             "response_format": "b64_json",
         }
 
@@ -8697,6 +8752,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 charged_credits=charged_credits,
+                model_multiplier=model_multiplier or charged_credits,
                 image_size=image_size,
                 image_count=len(images),
                 request_type="image_generation",
@@ -8716,6 +8772,7 @@ class ProxyService:
             request_id,
             images,
             charged_credits,
+            model_multiplier or charged_credits,
             image_size,
             request_type="image_generation",
             extra_text=extra_text,
@@ -8830,6 +8887,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 charged_credits=charged_credits,
+                model_multiplier=charged_credits,
                 image_size=image_size,
                 image_count=len(images),
                 request_type="image_edit",
@@ -8848,6 +8906,7 @@ class ProxyService:
             requested_model,
             request_id,
             images,
+            charged_credits,
             charged_credits,
             image_size,
             request_type="image_edit",
@@ -8868,9 +8927,15 @@ class ProxyService:
         upstream_model_name: str,
         client_ip: str,
         charged_credits: Decimal,
+        requested_image_count: int = 1,
+        model_multiplier: Optional[Decimal] = None,
         image_size: Optional[str] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        ProxyService._validate_supported_image_count(
+            requested_image_count,
+            provider_label="Vertex image channel",
+        )
         start_time = time.time()
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
@@ -8904,6 +8969,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 charged_credits=charged_credits,
+                model_multiplier=model_multiplier or charged_credits,
                 image_size=image_size,
                 image_count=len(images),
                 request_type="image_generation",
@@ -8923,6 +8989,7 @@ class ProxyService:
             request_id,
             images,
             charged_credits,
+            model_multiplier or charged_credits,
             image_size,
             request_type="image_generation",
             extra_text=extra_text,
@@ -8942,6 +9009,8 @@ class ProxyService:
         upstream_model_name: str,
         client_ip: str,
         charged_credits: Decimal,
+        requested_image_count: int = 1,
+        model_multiplier: Optional[Decimal] = None,
         image_size: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
@@ -8963,6 +9032,8 @@ class ProxyService:
                 upstream_model_name,
                 client_ip,
                 charged_credits,
+                requested_image_count=requested_image_count,
+                model_multiplier=model_multiplier,
                 image_size=image_size,
                 request_headers=request_headers,
             )
@@ -8979,6 +9050,8 @@ class ProxyService:
                 upstream_model_name,
                 client_ip,
                 charged_credits,
+                requested_image_count=requested_image_count,
+                model_multiplier=model_multiplier,
                 image_size=image_size,
             )
         return await ProxyService._non_stream_google_image_request(
@@ -8993,6 +9066,8 @@ class ProxyService:
             upstream_model_name,
             client_ip,
             charged_credits,
+            requested_image_count=requested_image_count,
+            model_multiplier=model_multiplier,
             image_size=image_size,
             request_headers=request_headers,
         )
@@ -9061,7 +9136,7 @@ class ProxyService:
                 "仅支持 b64_json 格式返回图片结果",
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
-        ProxyService._validate_single_image_count(request_data)
+        requested_image_count = ProxyService._resolve_requested_image_count(request_data)
 
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
@@ -9075,7 +9150,11 @@ class ProxyService:
                 "IMAGE_MODEL_NOT_SUPPORTED",
             )
 
-        image_size, image_credit_cost = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
+        image_size, model_multiplier = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
+        image_credit_cost = ProxyService._calculate_total_image_credits(
+            model_multiplier,
+            requested_image_count,
+        )
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
         channels = ModelService.get_available_channels(db, unified_model.id)
@@ -9105,6 +9184,8 @@ class ProxyService:
                     upstream_model_name,
                     client_ip,
                     image_credit_cost,
+                    requested_image_count=requested_image_count,
+                    model_multiplier=model_multiplier,
                     image_size=image_size,
                     request_headers=request_headers,
                 )
@@ -9112,6 +9193,7 @@ class ProxyService:
                 if exc.error_code in {
                     "UPSTREAM_INVALID_REQUEST",
                     "CONTENT_TOO_LONG",
+                    "IMAGE_COUNT_NOT_SUPPORTED",
                     "GOOGLE_IMAGE_GENERATION_FAILED",
                     "OPENAI_IMAGE_GENERATION_FAILED",
                     "VERTEX_IMAGE_GENERATION_FAILED",

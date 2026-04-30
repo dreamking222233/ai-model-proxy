@@ -138,6 +138,8 @@ class LogService:
         status: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        agent_only: bool = False,
+        platform_only: bool = False,
     ) -> tuple[list[dict], int]:
         """
         List request logs with pagination and optional filters.
@@ -165,6 +167,10 @@ class LogService:
             query = query.filter(RequestLog.user_id == user_id)
         if agent_id is not None:
             query = query.filter(RequestLog.agent_id == agent_id)
+        elif agent_only:
+            query = query.filter(RequestLog.agent_id.isnot(None))
+        elif platform_only:
+            query = query.filter(RequestLog.agent_id.is_(None))
         if model:
             query = query.filter(RequestLog.requested_model == model)
         if status:
@@ -261,14 +267,19 @@ class LogService:
         user_id: int,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        platform_only: bool = False,
     ) -> dict:
         user = db.query(SysUser).filter(SysUser.id == user_id).first()
         if not user:
             raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+        if platform_only and user.agent_id is not None:
+            raise ServiceException(404, "用户不属于平台主站", "USER_NOT_PLATFORM_SCOPE")
 
         start_dt, end_dt = LogService._parse_date_filters(start_date, end_date)
 
         request_query = db.query(RequestLog).filter(RequestLog.user_id == user_id)
+        if platform_only:
+            request_query = request_query.filter(RequestLog.agent_id.is_(None))
         if start_dt:
             request_query = request_query.filter(RequestLog.created_at >= start_dt)
         if end_dt:
@@ -291,6 +302,8 @@ class LogService:
             ConsumptionRecord.total_cost > 0,
             ConsumptionRecord.model_name.isnot(None),
         )
+        if platform_only:
+            cost_query = cost_query.filter(ConsumptionRecord.agent_id.is_(None))
         if start_dt:
             cost_query = cost_query.filter(ConsumptionRecord.created_at >= start_dt)
         if end_dt:

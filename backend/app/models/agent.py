@@ -1,7 +1,7 @@
 """ORM models for agent tenant, balances, and inventory."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, func, UniqueConstraint,
+    Column, BigInteger, String, Integer, Text, DateTime, Date, SmallInteger, DECIMAL, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -145,3 +145,102 @@ class AgentRedemptionAmountRule(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentDailyLimit(Base):
+    """Daily credit limit for agent settlement-mode allocation."""
+
+    __tablename__ = "agent_daily_limit"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "resource_type", "plan_id_key", name="uk_agent_daily_limit_resource"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    resource_type = Column(String(32), nullable=False)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    plan_id_key = Column(BigInteger, nullable=False, default=0)
+    daily_limit = Column(DECIMAL(20, 6), nullable=False, default=0)
+    status = Column(String(16), nullable=False, default="active", index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentDailyLimitUsage(Base):
+    """Daily used amount for agent settlement-mode allocation."""
+
+    __tablename__ = "agent_daily_limit_usage"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "usage_date", "resource_type", "plan_id_key", name="uk_agent_daily_usage_resource"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    usage_date = Column(Date, nullable=False, index=True)
+    resource_type = Column(String(32), nullable=False)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    plan_id_key = Column(BigInteger, nullable=False, default=0)
+    used_amount = Column(DECIMAL(20, 6), nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentSettlementRecord(Base):
+    """Pending/settled ledger for agent credit-limit sales."""
+
+    __tablename__ = "agent_settlement_record"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    target_user_id = Column(BigInteger, nullable=True, index=True)
+    business_date = Column(Date, nullable=False, index=True)
+    resource_type = Column(String(32), nullable=False, index=True)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    plan_code_snapshot = Column(String(64), nullable=True)
+    plan_name_snapshot = Column(String(128), nullable=True)
+    plan_kind_snapshot = Column(String(32), nullable=True)
+    duration_days_snapshot = Column(Integer, nullable=True)
+    quota_metric_snapshot = Column(String(32), nullable=True)
+    quota_value_snapshot = Column(DECIMAL(20, 6), nullable=True)
+    quantity = Column(DECIMAL(20, 6), nullable=False, default=0)
+    settled_quantity = Column(DECIMAL(20, 6), nullable=False, default=0)
+    unit_amount = Column(DECIMAL(20, 6), nullable=True)
+    status = Column(String(16), nullable=False, default="pending", index=True)
+    source_action = Column(String(64), nullable=False)
+    related_subscription_id = Column(BigInteger, nullable=True, index=True)
+    related_balance_record_id = Column(BigInteger, nullable=True)
+    related_image_record_id = Column(BigInteger, nullable=True)
+    operator_user_id = Column(BigInteger, nullable=True, index=True)
+    remark = Column(String(255), nullable=True)
+    settled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentSettlementBatch(Base):
+    """Admin settlement operation batch."""
+
+    __tablename__ = "agent_settlement_batch"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    resource_type = Column(String(32), nullable=False, index=True)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    business_start_date = Column(Date, nullable=True)
+    business_end_date = Column(Date, nullable=True)
+    settled_quantity = Column(DECIMAL(20, 6), nullable=False, default=0)
+    operator_user_id = Column(BigInteger, nullable=True, index=True)
+    remark = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class AgentSettlementBatchItem(Base):
+    """Records consumed by an admin settlement batch."""
+
+    __tablename__ = "agent_settlement_batch_item"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    batch_id = Column(BigInteger, nullable=False, index=True)
+    settlement_record_id = Column(BigInteger, nullable=False, index=True)
+    settled_quantity = Column(DECIMAL(20, 6), nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())

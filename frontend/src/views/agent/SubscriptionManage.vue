@@ -6,7 +6,7 @@
           <a-icon type="crown" />
           套餐管理
         </h2>
-        <p class="page-subtitle">使用管理员分配给代理的套餐库存，为当前代理用户发放套餐</p>
+        <p class="page-subtitle">优先使用套餐库存；库存不足时会尝试使用今日授信额度并生成待结算记录</p>
       </div>
       <a-button type="primary" icon="reload" :loading="loading || recordLoading" @click="refreshAll">
         刷新
@@ -29,11 +29,14 @@
               <span v-if="record.plan_kind === 'daily_quota'">{{ formatQuota(record.quota_value, record.quota_metric) }}</span>
               <span v-else class="muted">不限量</span>
             </template>
-            <template slot="remaining" slot-scope="text">
-              <a-badge :count="Number(text || 0)" :number-style="{ backgroundColor: Number(text || 0) > 0 ? '#52c41a' : '#bfbfbf' }" />
+            <template slot="remaining" slot-scope="text, record">
+              <div class="quota-stock-cell">
+                <a-tag :color="Number(record.remaining_count || 0) > 0 ? 'green' : 'default'">库存 {{ Number(record.remaining_count || 0) }}</a-tag>
+                <a-tag :color="Number(record.daily_remaining_count || 0) > 0 ? 'blue' : 'default'">今日额度 {{ Number(record.daily_remaining_count || 0) }}</a-tag>
+              </div>
             </template>
             <template slot="action" slot-scope="text, record">
-              <a-button type="link" size="small" :disabled="Number(record.remaining_count || 0) <= 0" @click="openGrant(record)">
+              <a-button type="link" size="small" :disabled="!canGrantPlan(record)" @click="openGrant(record)">
                 <a-icon type="send" />
                 发放套餐
               </a-button>
@@ -177,7 +180,7 @@ export default {
         { title: '类型', key: 'planKind', width: 120, scopedSlots: { customRender: 'planKind' } },
         { title: '时长', key: 'duration', width: 100, scopedSlots: { customRender: 'duration' } },
         { title: '额度', key: 'quota', width: 140, scopedSlots: { customRender: 'quota' } },
-        { title: '剩余库存', dataIndex: 'remaining_count', key: 'remaining_count', width: 120, scopedSlots: { customRender: 'remaining' } },
+        { title: '库存/今日额度', dataIndex: 'remaining_count', key: 'remaining_count', width: 190, scopedSlots: { customRender: 'remaining' } },
         { title: '操作', key: 'action', width: 130, scopedSlots: { customRender: 'action' } }
       ],
       recordColumns: [
@@ -241,6 +244,10 @@ export default {
       this.fetchRecords()
     },
     openGrant(record) {
+      if (!this.canGrantPlan(record)) {
+        this.$message.warning('当前套餐库存和今日授信额度均不足')
+        return
+      }
       this.selectedPlan = record
       this.grantForm = {
         user_id: Number(this.$route.query.user_id || 0) || undefined,
@@ -322,6 +329,10 @@ export default {
         return `$${Number(value || 0).toFixed(2)}`
       }
       return `${Number(value || 0).toLocaleString('zh-CN')} Token`
+    },
+    canGrantPlan(record) {
+      const creditEnabled = record.credit_limit && record.credit_limit.status === 'active'
+      return Number(record.remaining_count || 0) > 0 || (creditEnabled && Number(record.daily_remaining_count || 0) > 0)
     },
     getStatusText(status) {
       const map = { active: '生效中', expired: '已过期', cancelled: '已取消' }
@@ -408,6 +419,12 @@ export default {
 
   .muted {
     color: #9ca3af;
+  }
+
+  .quota-stock-cell {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
   }
 
   /deep/ .ant-modal .ant-select {

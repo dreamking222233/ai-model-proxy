@@ -137,6 +137,13 @@
       @cancel="modalVisible = false"
     >
       <a-form layout="vertical">
+        <a-alert
+          v-if="assetForm.type === 'recharge'"
+          type="info"
+          show-icon
+          style="margin-bottom: 16px"
+          message="资产池不足时将自动使用今日授信额度，并生成待结算记录"
+        />
         <a-form-item label="操作类型">
           <a-radio-group v-model="assetForm.type" button-style="solid" style="width: 100%;">
             <a-radio-button value="recharge" style="width: 50%; text-align: center;">

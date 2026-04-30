@@ -11,6 +11,7 @@ from app.models.log import RequestLog
 from app.models.redemption import RedemptionCode
 from app.models.user import SysUser
 from app.schemas.common import ResponseModel
+from app.services.agent_settlement_service import AgentSettlementService
 from app.services.agent_service import AgentService
 from app.services.log_service import LogService
 
@@ -66,6 +67,7 @@ def get_workbench_summary(
             "low_stock_count": low_stock_count,
             "empty_stock_count": empty_stock_count,
         },
+        "credit_limit_summary": AgentSettlementService.get_agent_today_quota_summary(db, agent_id),
     })
 
 

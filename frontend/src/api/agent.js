@@ -62,6 +62,45 @@ export function rechargeAgentSubscriptionInventory(agentId, data) {
   })
 }
 
+export function listAgentDailyLimits(agentId) {
+  return request({
+    url: `/api/admin/agents/${agentId}/daily-limits`,
+    method: 'get'
+  })
+}
+
+export function updateAgentDailyLimits(agentId, data) {
+  return request({
+    url: `/api/admin/agents/${agentId}/daily-limits`,
+    method: 'put',
+    data
+  })
+}
+
+export function listAgentSettlementSummary(params) {
+  return request({
+    url: '/api/admin/agents/settlements/summary',
+    method: 'get',
+    params
+  })
+}
+
+export function listAgentSettlementRecords(params) {
+  return request({
+    url: '/api/admin/agents/settlements/records',
+    method: 'get',
+    params
+  })
+}
+
+export function settleAgentRecords(data) {
+  return request({
+    url: '/api/admin/agents/settlements/settle',
+    method: 'post',
+    data
+  })
+}
+
 export function listRedemptionAmountRules(params) {
   return request({
     url: '/api/admin/agents/amount-rules',

@@ -16,7 +16,9 @@ from app.models.agent import (
     AgentSubscriptionInventoryRecord,
 )
 from app.models.log import ConsumptionRecord, ImageCreditRecord, UserBalance, UserImageBalance
+from app.models.log import SubscriptionPlan
 from app.models.user import SysUser
+from app.services.agent_settlement_service import AgentSettlementService
 from app.services.subscription_service import SubscriptionService
 
 
@@ -209,7 +211,14 @@ class AgentAssetService:
 
         agent_balance = AgentAssetService._get_agent_balance_for_update(db, agent_id)
         if Decimal(str(agent_balance.balance or 0)) < amount_decimal:
-            raise ServiceException(400, "代理余额不足", "AGENT_BALANCE_INSUFFICIENT")
+            return AgentAssetService._grant_user_balance_with_credit_limit(
+                db,
+                agent_id=agent_id,
+                user_id=user_id,
+                amount=amount_decimal,
+                operator_user_id=operator_user_id,
+                remark=remark,
+            )
 
         user_balance = (
             db.query(UserBalance)
@@ -262,6 +271,72 @@ class AgentAssetService:
             "agent_balance": float(agent_balance.balance),
             "user_balance": float(user_balance.balance),
             "allocated_amount": float(amount_decimal),
+            "allocation_source": "asset_pool",
+        }
+
+    @staticmethod
+    def _grant_user_balance_with_credit_limit(
+        db: Session,
+        agent_id: int,
+        user_id: int,
+        amount: Decimal,
+        operator_user_id: int | None = None,
+        remark: str | None = None,
+    ) -> dict:
+        user_balance = (
+            db.query(UserBalance)
+            .filter(UserBalance.user_id == user_id)
+            .with_for_update()
+            .first()
+        )
+        if not user_balance:
+            raise ServiceException(404, "用户余额记录不存在", "BALANCE_NOT_FOUND")
+
+        AgentSettlementService.check_and_consume_daily_limit(
+            db,
+            agent_id=agent_id,
+            resource_type=AgentSettlementService.RESOURCE_BALANCE,
+            amount=amount,
+        )
+        user_before = Decimal(str(user_balance.balance or 0))
+        user_balance.balance = user_before + amount
+        user_balance.total_recharged = Decimal(str(user_balance.total_recharged or 0)) + amount
+
+        db.add(ConsumptionRecord(
+            user_id=user_id,
+            agent_id=agent_id,
+            request_id=None,
+            model_name=None,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            input_cost=Decimal("0"),
+            output_cost=Decimal("0"),
+            total_cost=-amount,
+            balance_before=user_before,
+            balance_after=user_balance.balance,
+        ))
+        settlement = AgentSettlementService.create_settlement_record(
+            db,
+            agent_id=agent_id,
+            target_user_id=user_id,
+            resource_type=AgentSettlementService.RESOURCE_BALANCE,
+            quantity=amount,
+            source_action="grant_user_balance",
+            operator_user_id=operator_user_id,
+            remark=remark,
+        )
+        db.commit()
+        db.refresh(user_balance)
+        agent_balance = db.query(AgentBalance).filter(AgentBalance.agent_id == agent_id).first()
+        return {
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "agent_balance": float(agent_balance.balance or 0) if agent_balance else 0.0,
+            "user_balance": float(user_balance.balance),
+            "allocated_amount": float(amount),
+            "allocation_source": "credit_limit",
+            "settlement_record_id": settlement.id,
         }
 
     @staticmethod
@@ -295,6 +370,36 @@ class AgentAssetService:
         user_before = Decimal(str(user_balance.balance or 0))
         if user_before < amount_decimal:
             raise ServiceException(400, "用户余额不足", "INSUFFICIENT_BALANCE")
+
+        if AgentSettlementService.has_unsettled_credit_records(db, agent_id, AgentSettlementService.RESOURCE_BALANCE):
+            user_balance.balance = user_before - amount_decimal
+            user_balance.total_consumed = Decimal(str(user_balance.total_consumed or 0)) + amount_decimal
+            db.add(ConsumptionRecord(
+                user_id=user_id,
+                agent_id=agent_id,
+                request_id=None,
+                model_name=None,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                input_cost=Decimal("0"),
+                output_cost=Decimal("0"),
+                total_cost=amount_decimal,
+                balance_before=user_before,
+                balance_after=user_balance.balance,
+            ))
+            db.commit()
+            db.refresh(agent_balance)
+            db.refresh(user_balance)
+            return {
+                "agent_id": agent_id,
+                "user_id": user_id,
+                "agent_balance": float(agent_balance.balance),
+                "user_balance": float(user_balance.balance),
+                "reclaimed_amount": float(amount_decimal),
+                "reclaim_source": "credit_limit_safe_deduct",
+            }
+
         agent_before = Decimal(str(agent_balance.balance or 0))
 
         user_balance.balance = user_before - amount_decimal
@@ -336,6 +441,7 @@ class AgentAssetService:
             "agent_balance": float(agent_balance.balance),
             "user_balance": float(user_balance.balance),
             "reclaimed_amount": float(amount_decimal),
+            "reclaim_source": "asset_pool",
         }
 
     @staticmethod
@@ -358,7 +464,14 @@ class AgentAssetService:
 
         agent_balance = AgentAssetService._get_agent_image_balance_for_update(db, agent_id)
         if Decimal(str(agent_balance.balance or 0)) < amount_decimal:
-            raise ServiceException(400, "代理图片积分不足", "AGENT_IMAGE_BALANCE_INSUFFICIENT")
+            return AgentAssetService._grant_user_image_credits_with_credit_limit(
+                db,
+                agent_id=agent_id,
+                user_id=user_id,
+                amount=amount_decimal,
+                operator_user_id=operator_user_id,
+                remark=remark,
+            )
 
         user_balance = (
             db.query(UserImageBalance)
@@ -417,6 +530,78 @@ class AgentAssetService:
             "agent_image_credit_balance": float(agent_balance.balance),
             "user_image_credit_balance": float(user_balance.balance),
             "allocated_amount": float(amount_decimal),
+            "allocation_source": "asset_pool",
+        }
+
+    @staticmethod
+    def _grant_user_image_credits_with_credit_limit(
+        db: Session,
+        agent_id: int,
+        user_id: int,
+        amount: Decimal,
+        operator_user_id: int | None = None,
+        remark: str | None = None,
+    ) -> dict:
+        AgentSettlementService.check_and_consume_daily_limit(
+            db,
+            agent_id=agent_id,
+            resource_type=AgentSettlementService.RESOURCE_IMAGE_CREDIT,
+            amount=amount,
+        )
+        user_balance = (
+            db.query(UserImageBalance)
+            .filter(UserImageBalance.user_id == user_id)
+            .with_for_update()
+            .first()
+        )
+        if not user_balance:
+            user_balance = UserImageBalance(user_id=user_id, balance=0, total_recharged=0, total_consumed=0)
+            db.add(user_balance)
+            db.flush()
+            user_balance = (
+                db.query(UserImageBalance)
+                .filter(UserImageBalance.user_id == user_id)
+                .with_for_update()
+                .first()
+            )
+
+        user_before = Decimal(str(user_balance.balance or 0))
+        user_balance.balance = user_before + amount
+        user_balance.total_recharged = Decimal(str(user_balance.total_recharged or 0)) + amount
+        db.add(ImageCreditRecord(
+            user_id=user_id,
+            agent_id=agent_id,
+            request_id=None,
+            model_name=None,
+            change_amount=amount,
+            balance_before=user_before,
+            balance_after=user_balance.balance,
+            multiplier=Decimal("1"),
+            action_type="recharge",
+            operator_id=operator_user_id,
+            remark=remark,
+        ))
+        settlement = AgentSettlementService.create_settlement_record(
+            db,
+            agent_id=agent_id,
+            target_user_id=user_id,
+            resource_type=AgentSettlementService.RESOURCE_IMAGE_CREDIT,
+            quantity=amount,
+            source_action="grant_user_image_credit",
+            operator_user_id=operator_user_id,
+            remark=remark,
+        )
+        db.commit()
+        db.refresh(user_balance)
+        agent_balance = db.query(AgentImageBalance).filter(AgentImageBalance.agent_id == agent_id).first()
+        return {
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "agent_image_credit_balance": float(agent_balance.balance or 0) if agent_balance else 0.0,
+            "user_image_credit_balance": float(user_balance.balance),
+            "allocated_amount": float(amount),
+            "allocation_source": "credit_limit",
+            "settlement_record_id": settlement.id,
         }
 
     @staticmethod
@@ -450,6 +635,35 @@ class AgentAssetService:
         user_before = Decimal(str(user_balance.balance or 0))
         if user_before < amount_decimal:
             raise ServiceException(400, "用户图片积分不足", "INSUFFICIENT_IMAGE_CREDITS")
+
+        if AgentSettlementService.has_unsettled_credit_records(db, agent_id, AgentSettlementService.RESOURCE_IMAGE_CREDIT):
+            user_balance.balance = user_before - amount_decimal
+            user_balance.total_consumed = Decimal(str(user_balance.total_consumed or 0)) + amount_decimal
+            db.add(ImageCreditRecord(
+                user_id=user_id,
+                agent_id=agent_id,
+                request_id=None,
+                model_name=None,
+                change_amount=-amount_decimal,
+                balance_before=user_before,
+                balance_after=user_balance.balance,
+                multiplier=Decimal("1"),
+                action_type="deduct",
+                operator_id=operator_user_id,
+                remark=remark,
+            ))
+            db.commit()
+            db.refresh(agent_balance)
+            db.refresh(user_balance)
+            return {
+                "agent_id": agent_id,
+                "user_id": user_id,
+                "agent_image_credit_balance": float(agent_balance.balance),
+                "user_image_credit_balance": float(user_balance.balance),
+                "reclaimed_amount": float(amount_decimal),
+                "reclaim_source": "credit_limit_safe_deduct",
+            }
+
         agent_before = Decimal(str(agent_balance.balance or 0))
 
         user_balance.balance = user_before - amount_decimal
@@ -489,6 +703,7 @@ class AgentAssetService:
             "agent_image_credit_balance": float(agent_balance.balance),
             "user_image_credit_balance": float(user_balance.balance),
             "reclaimed_amount": float(amount_decimal),
+            "reclaim_source": "asset_pool",
         }
 
     @staticmethod
@@ -551,7 +766,15 @@ class AgentAssetService:
         inventory = AgentAssetService._get_agent_subscription_inventory_for_update(db, agent_id, plan_id)
         before = int(inventory.remaining_count or 0)
         if before <= 0:
-            raise ServiceException(400, "代理套餐库存不足", "AGENT_SUBSCRIPTION_INVENTORY_INSUFFICIENT")
+            return AgentAssetService._grant_user_subscription_with_credit_limit(
+                db,
+                agent_id=agent_id,
+                user_id=user_id,
+                plan_id=plan_id,
+                operator_user_id=operator_user_id,
+                activation_mode=activation_mode,
+                remark=remark,
+            )
 
         inventory.total_used = int(inventory.total_used or 0) + 1
         inventory.remaining_count = before - 1
@@ -586,4 +809,59 @@ class AgentAssetService:
             "subscription_id": subscription_id,
             "remaining_count": inventory.remaining_count,
             "subscription": result,
+            "allocation_source": "asset_pool",
+        }
+
+    @staticmethod
+    def _grant_user_subscription_with_credit_limit(
+        db: Session,
+        agent_id: int,
+        user_id: int,
+        plan_id: int,
+        operator_user_id: int | None = None,
+        activation_mode: str = "append",
+        remark: str | None = None,
+    ) -> dict:
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
+        if not plan:
+            raise ServiceException(404, "套餐模板不存在", "PLAN_NOT_FOUND")
+        AgentSettlementService.check_and_consume_daily_limit(
+            db,
+            agent_id=agent_id,
+            resource_type=AgentSettlementService.RESOURCE_SUBSCRIPTION,
+            amount=1,
+            plan_id=plan_id,
+        )
+        result = SubscriptionService.activate_plan_subscription(
+            db,
+            user_id=user_id,
+            plan_id=plan_id,
+            operator_id=operator_user_id,
+            activation_mode=activation_mode,
+            auto_commit=False,
+            agent_id=agent_id,
+        )
+        subscription_id = result.get("id")
+        settlement = AgentSettlementService.create_settlement_record(
+            db,
+            agent_id=agent_id,
+            target_user_id=user_id,
+            resource_type=AgentSettlementService.RESOURCE_SUBSCRIPTION,
+            quantity=1,
+            source_action="grant_user_subscription",
+            operator_user_id=operator_user_id,
+            plan=plan,
+            related_subscription_id=subscription_id,
+            remark=remark,
+        )
+        db.commit()
+        return {
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "plan_id": plan_id,
+            "subscription_id": subscription_id,
+            "remaining_count": 0,
+            "subscription": result,
+            "allocation_source": "credit_limit",
+            "settlement_record_id": settlement.id,
         }

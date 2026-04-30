@@ -75,6 +75,12 @@ const routes = [
         meta: { title: '代理资产' }
       },
       {
+        path: 'agent-settlements',
+        name: 'AgentSettlementManage',
+        component: () => import('@/views/admin/AgentSettlementManage.vue'),
+        meta: { title: '代理结算' }
+      },
+      {
         path: 'logs',
         name: 'RequestLog',
         component: () => import('@/views/admin/RequestLog.vue'),

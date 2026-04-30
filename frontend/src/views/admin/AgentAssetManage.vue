@@ -40,6 +40,44 @@
       <a-table :columns="inventoryColumns" :data-source="inventoryList" row-key="id" :pagination="false" style="margin-top: 16px" />
     </a-card>
 
+    <a-card v-if="selectedAgent" title="每日授信额度" class="block">
+      <p style="margin-bottom: 16px; color: #666;">
+        当代理余额池或套餐库存不足时，系统会在这里配置的每日额度内允许代理继续发放，并生成待结算销售记录。
+      </p>
+      <a-table :columns="dailyLimitColumns" :data-source="dailyLimitRows" row-key="row_key" :pagination="false" :loading="loadingDailyLimits" :scroll="{ x: 820 }">
+        <template slot="resource" slot-scope="text, record">
+          <a-tag :color="record.resource_type === 'subscription' ? 'purple' : record.resource_type === 'image_credit' ? 'blue' : 'green'">
+            {{ formatResourceType(record.resource_type) }}
+          </a-tag>
+        </template>
+        <template slot="target" slot-scope="text, record">
+          <span v-if="record.resource_type === 'subscription'">{{ record.plan_name || `套餐 #${record.plan_id}` }}</span>
+          <span v-else>通用额度</span>
+        </template>
+        <template slot="limit" slot-scope="text, record">
+          <a-input-number
+            v-model="record.daily_limit"
+            :min="0"
+            :step="record.resource_type === 'subscription' ? 1 : 0.01"
+            :precision="record.resource_type === 'subscription' ? 0 : 6"
+            style="width: 160px"
+          />
+        </template>
+        <template slot="used" slot-scope="text, record">
+          {{ formatDailyLimitAmount(record.used_amount, record.resource_type) }}
+        </template>
+        <template slot="remaining" slot-scope="text, record">
+          {{ formatDailyLimitAmount(record.remaining_amount, record.resource_type) }}
+        </template>
+        <template slot="status" slot-scope="text, record">
+          <a-switch v-model="record.enabled" checked-children="启用" un-checked-children="停用" />
+        </template>
+      </a-table>
+      <div style="margin-top: 16px; text-align: right;">
+        <a-button type="primary" :loading="savingDailyLimits" @click="submitDailyLimits">保存每日额度</a-button>
+      </div>
+    </a-card>
+
     <a-card title="代理兑换码固定面额规则" class="block">
       <p style="margin-bottom: 16px; color: #666;">
         这里只控制代理端可选择的固定面额，不代表单独的兑换码额度池。代理生成兑换码时，实际扣减的是代理余额。
@@ -67,6 +105,8 @@ import {
   rechargeAgentImageCredits,
   listAgentSubscriptionInventory,
   rechargeAgentSubscriptionInventory,
+  listAgentDailyLimits,
+  updateAgentDailyLimits,
   listRedemptionAmountRules,
   createRedemptionAmountRule
 } from '@/api/agent'
@@ -85,9 +125,12 @@ export default {
       savingRecharge: false,
       savingInventory: false,
       savingRule: false,
+      loadingDailyLimits: false,
+      savingDailyLimits: false,
       rechargeForm: { balance_amount: 0, image_amount: 0, remark: '' },
       inventoryForm: { plan_id: undefined, count: 1, remark: '' },
       ruleForm: { amount: undefined, sort_order: 0, agent_id: undefined },
+      dailyLimitRows: [],
       inventoryColumns: [
         { title: '套餐名称', dataIndex: 'plan_name', key: 'plan_name' },
         { title: '套餐编码', dataIndex: 'plan_code', key: 'plan_code' },
@@ -100,6 +143,14 @@ export default {
         { title: '固定金额', dataIndex: 'amount', key: 'amount' },
         { title: '状态', dataIndex: 'status', key: 'status' },
         { title: '排序', dataIndex: 'sort_order', key: 'sort_order' }
+      ],
+      dailyLimitColumns: [
+        { title: '资源类型', key: 'resource', width: 120, scopedSlots: { customRender: 'resource' } },
+        { title: '额度对象', key: 'target', width: 220, scopedSlots: { customRender: 'target' } },
+        { title: '每日额度', key: 'limit', width: 180, scopedSlots: { customRender: 'limit' } },
+        { title: '今日已用', key: 'used', width: 140, scopedSlots: { customRender: 'used' } },
+        { title: '今日剩余', key: 'remaining', width: 140, scopedSlots: { customRender: 'remaining' } },
+        { title: '状态', key: 'status', width: 120, scopedSlots: { customRender: 'status' } }
       ]
     }
   },
@@ -110,6 +161,7 @@ export default {
       this.selectedAgentId = presetAgentId
       await this.fetchSelectedAgent()
       await this.fetchInventory()
+      await this.fetchDailyLimits()
     }
   },
   methods: {
@@ -128,6 +180,7 @@ export default {
     async handleAgentChange() {
       await this.fetchSelectedAgent()
       await this.fetchInventory()
+      await this.fetchDailyLimits()
     },
     async fetchSelectedAgent() {
       if (!this.selectedAgentId) {
@@ -144,6 +197,47 @@ export default {
       }
       const res = await listAgentSubscriptionInventory(this.selectedAgentId)
       this.inventoryList = res.data || []
+    },
+    buildDefaultDailyLimitRows(existingRows = []) {
+      const map = new Map()
+      existingRows.forEach(item => {
+        const key = `${item.resource_type}:${item.plan_id || 0}`
+        map.set(key, item)
+      })
+      const baseRows = [
+        { resource_type: 'balance', plan_id: null, plan_name: null },
+        { resource_type: 'image_credit', plan_id: null, plan_name: null },
+        ...this.plans.map(plan => ({
+          resource_type: 'subscription',
+          plan_id: plan.id,
+          plan_name: plan.plan_name
+        }))
+      ]
+      return baseRows.map(row => {
+        const key = `${row.resource_type}:${row.plan_id || 0}`
+        const existing = map.get(key) || {}
+        return {
+          ...row,
+          row_key: key,
+          daily_limit: Number(existing.daily_limit || 0),
+          used_amount: Number(existing.used_amount || 0),
+          remaining_amount: existing.remaining_amount !== undefined ? Number(existing.remaining_amount || 0) : Number(existing.daily_limit || 0),
+          enabled: (existing.status || 'active') === 'active'
+        }
+      })
+    },
+    async fetchDailyLimits() {
+      if (!this.selectedAgentId) {
+        this.dailyLimitRows = []
+        return
+      }
+      this.loadingDailyLimits = true
+      try {
+        const res = await listAgentDailyLimits(this.selectedAgentId)
+        this.dailyLimitRows = this.buildDefaultDailyLimitRows(res.data || [])
+      } finally {
+        this.loadingDailyLimits = false
+      }
     },
     async submitRecharge() {
       if (!this.selectedAgentId) return
@@ -194,6 +288,31 @@ export default {
         this.savingInventory = false
       }
     },
+    async submitDailyLimits() {
+      if (!this.selectedAgentId) return
+      const invalidPlanLimit = this.dailyLimitRows.some(row => (
+        row.resource_type === 'subscription' && !Number.isInteger(Number(row.daily_limit || 0))
+      ))
+      if (invalidPlanLimit) {
+        this.$message.warning('套餐每日授信额度必须是整数')
+        return
+      }
+      this.savingDailyLimits = true
+      try {
+        await updateAgentDailyLimits(this.selectedAgentId, {
+          items: this.dailyLimitRows.map(row => ({
+            resource_type: row.resource_type,
+            plan_id: row.plan_id || undefined,
+            daily_limit: Number(row.daily_limit || 0),
+            status: row.enabled ? 'active' : 'disabled'
+          }))
+        })
+        this.$message.success('每日授信额度保存成功')
+        await this.fetchDailyLimits()
+      } finally {
+        this.savingDailyLimits = false
+      }
+    },
     async submitRule() {
       const amount = Number(this.ruleForm.amount)
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -212,6 +331,19 @@ export default {
       } finally {
         this.savingRule = false
       }
+    },
+    formatResourceType(type) {
+      const map = { balance: '余额', image_credit: '图片积分', subscription: '套餐' }
+      return map[type] || type
+    },
+    formatDailyLimitAmount(value, type) {
+      if (type === 'subscription') {
+        return `${Number(value || 0).toFixed(0)} 份`
+      }
+      if (type === 'image_credit') {
+        return `${Number(value || 0).toFixed(3)} 积分`
+      }
+      return `$${Number(value || 0).toFixed(4)}`
     }
   }
 }

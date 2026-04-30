@@ -11,10 +11,13 @@ from app.schemas.agent import (
     AgentImageBalanceRecharge,
     AgentSubscriptionInventoryRecharge,
     AgentRedemptionAmountRuleCreate,
+    AgentDailyLimitBatchUpsert,
+    AgentSettlementSettleRequest,
 )
 from app.schemas.common import ResponseModel
 from app.services.agent_service import AgentService
 from app.services.agent_asset_service import AgentAssetService
+from app.services.agent_settlement_service import AgentSettlementService
 from app.services.redemption_service import RedemptionService
 
 router = APIRouter(prefix="/api/admin/agents", tags=["管理-代理管理"])
@@ -56,6 +59,72 @@ def list_agents(
 ):
     items, total = AgentService.list_agents(db, page, page_size, keyword)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/settlements/summary", response_model=ResponseModel)
+def list_agent_settlement_summary(
+    agent_id: int = Query(None),
+    resource_type: str = Query(None),
+    status: str = Query(None),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    result = AgentSettlementService.list_admin_settlement_summary(
+        db,
+        agent_id=agent_id,
+        resource_type=resource_type,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return ResponseModel(data=result)
+
+
+@router.get("/settlements/records", response_model=ResponseModel)
+def list_agent_settlement_records(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    agent_id: int = Query(None),
+    resource_type: str = Query(None),
+    status: str = Query(None),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    items, total = AgentSettlementService.list_admin_settlement_records(
+        db,
+        page=page,
+        page_size=page_size,
+        agent_id=agent_id,
+        resource_type=resource_type,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.post("/settlements/settle", response_model=ResponseModel)
+def settle_agent_records(
+    data: AgentSettlementSettleRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    result = AgentSettlementService.settle_records(
+        db,
+        agent_id=data.agent_id,
+        resource_type=data.resource_type,
+        quantity=data.quantity,
+        plan_id=data.plan_id,
+        start_date=data.start_date,
+        end_date=data.end_date,
+        operator_user_id=current_user.id,
+        remark=data.remark,
+    )
+    return ResponseModel(data=result, message="代理结算成功")
 
 
 @router.get("/{agent_id}", response_model=ResponseModel)
@@ -130,6 +199,30 @@ def list_agent_subscription_inventory(
     return ResponseModel(data=result)
 
 
+@router.get("/{agent_id}/daily-limits", response_model=ResponseModel)
+def list_agent_daily_limits(
+    agent_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    return ResponseModel(data=AgentSettlementService.list_limits(db, agent_id))
+
+
+@router.put("/{agent_id}/daily-limits", response_model=ResponseModel)
+def update_agent_daily_limits(
+    agent_id: int,
+    data: AgentDailyLimitBatchUpsert,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    result = AgentSettlementService.batch_upsert_limits(
+        db,
+        agent_id=agent_id,
+        items=[item.model_dump() for item in data.items],
+    )
+    return ResponseModel(data=result, message="代理每日授信额度保存成功")
+
+
 @router.post("/{agent_id}/subscription-inventory/recharge", response_model=ResponseModel)
 def recharge_agent_subscription_inventory(
     agent_id: int,
@@ -146,4 +239,3 @@ def recharge_agent_subscription_inventory(
         remark=data.remark,
     )
     return ResponseModel(data=result, message="代理套餐库存充值成功")
-

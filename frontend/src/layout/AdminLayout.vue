@@ -60,6 +60,10 @@
             <a-icon type="wallet" />
             <span>代理资产</span>
           </a-menu-item>
+          <a-menu-item key="/admin/agent-settlements">
+            <a-icon type="account-book" />
+            <span>代理结算</span>
+          </a-menu-item>
           <a-menu-item key="/admin/redemption">
             <a-icon type="gift" />
             <span>兑换码管理</span>

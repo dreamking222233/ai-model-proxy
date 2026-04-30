@@ -7,6 +7,7 @@ from app.models.user import SysUser
 from app.schemas.agent import AgentGrantSubscriptionRequest
 from app.schemas.common import ResponseModel
 from app.services.agent_asset_service import AgentAssetService
+from app.services.agent_settlement_service import AgentSettlementService
 from app.services.agent_service import AgentService
 from app.services.subscription_service import SubscriptionService
 
@@ -21,10 +22,19 @@ def list_plans(
     plans, total = SubscriptionService.list_plans(db, status="active", page=1, page_size=200)
     inventory = AgentService.list_agent_subscription_inventory(db, int(current_user.agent_id))
     inventory_map = {item["plan_id"]: item for item in inventory}
+    credit_limits = AgentSettlementService.list_limits(db, int(current_user.agent_id))
+    credit_limit_map = {
+        item["plan_id"]: item
+        for item in credit_limits
+        if item.get("resource_type") == AgentSettlementService.RESOURCE_SUBSCRIPTION
+    }
     for plan in plans:
         stock = inventory_map.get(plan["id"])
+        credit_limit = credit_limit_map.get(plan["id"])
         plan["inventory"] = stock
+        plan["credit_limit"] = credit_limit
         plan["remaining_count"] = stock["remaining_count"] if stock else 0
+        plan["daily_remaining_count"] = int(float(credit_limit["remaining_amount"])) if credit_limit else 0
     return ResponseModel(data={"list": plans, "total": total})
 
 

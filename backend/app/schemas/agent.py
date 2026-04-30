@@ -1,8 +1,9 @@
 """Agent request/response schemas."""
 
-from typing import Optional
+from decimal import Decimal, InvalidOperation
+from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AgentCreate(BaseModel):
@@ -72,3 +73,46 @@ class AgentGrantSubscriptionRequest(BaseModel):
     plan_id: int = Field(..., gt=0)
     activation_mode: Optional[str] = Field("append", max_length=16)
     remark: Optional[str] = Field(None, max_length=255)
+
+
+class AgentDailyLimitUpsert(BaseModel):
+    resource_type: str = Field(..., max_length=32)
+    plan_id: Optional[int] = Field(None, gt=0)
+    daily_limit: float = Field(..., ge=0)
+    status: Optional[str] = Field("active", max_length=16)
+
+    @model_validator(mode="after")
+    def validate_subscription_limit(self):
+        if self.resource_type == "subscription":
+            try:
+                value = Decimal(str(self.daily_limit))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("套餐每日额度格式不正确") from exc
+            if value != value.to_integral_value():
+                raise ValueError("套餐每日额度必须是整数")
+        return self
+
+
+class AgentDailyLimitBatchUpsert(BaseModel):
+    items: List[AgentDailyLimitUpsert] = Field(default_factory=list)
+
+
+class AgentSettlementSettleRequest(BaseModel):
+    agent_id: int = Field(..., gt=0)
+    resource_type: str = Field(..., max_length=32)
+    quantity: float = Field(..., gt=0)
+    plan_id: Optional[int] = Field(None, gt=0)
+    start_date: Optional[str] = Field(None, max_length=10)
+    end_date: Optional[str] = Field(None, max_length=10)
+    remark: Optional[str] = Field(None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_subscription_quantity(self):
+        if self.resource_type == "subscription":
+            try:
+                value = Decimal(str(self.quantity))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("套餐结算数量格式不正确") from exc
+            if value != value.to_integral_value():
+                raise ValueError("套餐结算数量必须是整数")
+        return self

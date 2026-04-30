@@ -83,6 +83,48 @@
       </div>
     </a-card>
 
+    <a-card class="panel-card credit-limit-panel" :bordered="false">
+      <div class="panel-header">
+        <div>
+          <h2>今日授信额度</h2>
+          <p>当资产池余额或套餐库存不足时，会使用管理员配置的每日授信额度，并生成待结算记录。</p>
+        </div>
+        <div class="pending-settlement">
+          待结算合计
+          <strong>{{ formatPendingSettlement }}</strong>
+        </div>
+      </div>
+      <a-table
+        :columns="creditLimitColumns"
+        :data-source="creditLimits"
+        row-key="row_key"
+        :pagination="false"
+        :scroll="{ x: 760 }"
+        :locale="{ emptyText: '暂无授信额度配置' }"
+      >
+        <template slot="resource" slot-scope="text, record">
+          <a-tag :color="record.resource_type === 'subscription' ? 'purple' : record.resource_type === 'image_credit' ? 'blue' : 'green'">
+            {{ formatResourceType(record.resource_type) }}
+          </a-tag>
+        </template>
+        <template slot="target" slot-scope="text, record">
+          {{ record.resource_type === 'subscription' ? (record.plan_name || `套餐 #${record.plan_id}`) : '通用额度' }}
+        </template>
+        <template slot="usage" slot-scope="text, record">
+          <div class="limit-usage">
+            <a-progress :percent="getLimitPercent(record)" :show-info="false" size="small" />
+            <span>{{ formatLimitAmount(record.used_amount, record.resource_type) }} / {{ formatLimitAmount(record.daily_limit, record.resource_type) }}</span>
+          </div>
+        </template>
+        <template slot="remaining" slot-scope="text, record">
+          <strong>{{ formatLimitAmount(record.remaining_amount, record.resource_type) }}</strong>
+        </template>
+        <template slot="status" slot-scope="text">
+          <a-badge :status="text === 'active' ? 'success' : 'default'" :text="text === 'active' ? '启用' : '停用'" />
+        </template>
+      </a-table>
+    </a-card>
+
     <a-row :gutter="[16, 16]">
       <a-col :xs="24" :lg="16">
         <a-card class="panel-card" :bordered="false">
@@ -186,6 +228,13 @@ export default {
         { title: '剩余库存', key: 'stock', width: 180, scopedSlots: { customRender: 'stock' } },
         { title: '已用/总充值', key: 'used', width: 130, scopedSlots: { customRender: 'used' } },
         { title: '库存状态', key: 'status', width: 110, scopedSlots: { customRender: 'status' } }
+      ],
+      creditLimitColumns: [
+        { title: '资源类型', key: 'resource', width: 120, scopedSlots: { customRender: 'resource' } },
+        { title: '对象', key: 'target', width: 220, scopedSlots: { customRender: 'target' } },
+        { title: '今日使用', key: 'usage', width: 240, scopedSlots: { customRender: 'usage' } },
+        { title: '今日剩余', key: 'remaining', width: 140, scopedSlots: { customRender: 'remaining' } },
+        { title: '状态', dataIndex: 'status', key: 'status', width: 120, scopedSlots: { customRender: 'status' } }
       ]
     }
   },
@@ -204,6 +253,18 @@ export default {
     },
     redemptionSummary() {
       return this.summary.redemption_summary || {}
+    },
+    creditLimitSummary() {
+      return this.summary.credit_limit_summary || {}
+    },
+    creditLimits() {
+      return (this.creditLimitSummary.daily_limits || []).map(item => ({
+        ...item,
+        row_key: `${item.resource_type}:${item.plan_id || 0}`
+      }))
+    },
+    formatPendingSettlement() {
+      return Number(this.creditLimitSummary.pending_settlement_total || 0).toFixed(4)
     },
     lowStockTotal() {
       return Number(this.subscriptionSummary.low_stock_count || 0) + Number(this.subscriptionSummary.empty_stock_count || 0)
@@ -227,6 +288,20 @@ export default {
     },
     formatNumber(value, precision) {
       return Number(value || 0).toFixed(precision)
+    },
+    formatResourceType(type) {
+      const map = { balance: '余额', image_credit: '图片积分', subscription: '套餐' }
+      return map[type] || type
+    },
+    formatLimitAmount(value, type) {
+      if (type === 'subscription') return `${Number(value || 0).toFixed(0)} 份`
+      if (type === 'image_credit') return `${Number(value || 0).toFixed(3)} 积分`
+      return `$${Number(value || 0).toFixed(4)}`
+    },
+    getLimitPercent(record) {
+      const total = Number(record.daily_limit || 0)
+      if (total <= 0) return 0
+      return Math.min(100, Math.round((Number(record.used_amount || 0) / total) * 100))
     },
     getStockPercent(record) {
       const total = Number(record.total_granted || 0)
@@ -466,6 +541,35 @@ export default {
 .quick-actions-panel {
   margin-bottom: 16px;
   background: rgba(255, 255, 255, 0.4);
+}
+.credit-limit-panel {
+  margin-bottom: 16px;
+}
+.pending-settlement {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff7e6;
+  color: #ad6800;
+  font-size: 12px;
+  font-weight: 700;
+  strong {
+    display: block;
+    margin-top: 2px;
+    color: #d46b08;
+    font-size: 18px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+.limit-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  span {
+    color: #64748b;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
 }
 .quick-actions-grid {
   display: grid;

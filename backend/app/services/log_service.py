@@ -708,10 +708,15 @@ class LogService:
         }
 
     @staticmethod
-    def get_token_ranking(db: Session, days: int = 1, limit: int = 5) -> list[dict]:
+    def get_token_ranking(db: Session, days: int = 1, limit: int = 10) -> list[dict]:
         """
         Get top users by token usage within the given time window.
         """
+        try:
+            resolved_limit = 10 if limit is None else int(limit)
+        except (TypeError, ValueError):
+            resolved_limit = 10
+        resolved_limit = min(max(resolved_limit, 1), 50)
         since, now = LogService._get_timezone_day_window(days)
         rows = (
             db.query(
@@ -738,7 +743,7 @@ class LogService:
                 func.max(RequestLog.created_at).desc(),
                 SysUser.id.asc(),
             )
-            .limit(limit)
+            .limit(resolved_limit)
             .all()
         )
 

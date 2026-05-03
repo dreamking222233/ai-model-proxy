@@ -25,11 +25,13 @@ def get_model_usage_stats(
 @router.get("/token-ranking", response_model=ResponseModel)
 def get_token_ranking(
     days: int = Query(1, ge=1, le=30),
+    limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    ranking = LogService.get_token_ranking(db, days, 5)
+    ranking = LogService.get_token_ranking(db, days, limit)
     return ResponseModel(data={
         "days": days,
+        "limit": limit,
         "ranking": ranking,
     })

@@ -6,8 +6,8 @@
         <div class="hero-content">
           <div class="hero-header">
             <div class="header-left">
-              <h1 class="hero-title">每周排行榜 <span>Top 10</span></h1>
-              <p class="hero-subtitle">根据 Token 消耗量实时更新</p>
+              <h1 class="hero-title">{{ rankingTitle }} <span>Top 10</span></h1>
+              <p class="hero-subtitle">按{{ rankingRangeLabel }} Token 消耗量实时更新</p>
             </div>
             <div class="header-right">
               <a-radio-group v-model="days" button-style="solid" class="glass-radio-group" @change="fetchRanking">
@@ -88,10 +88,6 @@
                   <div class="token-val">{{ formatNumber(item.total_tokens) }}</div>
                   <div class="token-unit">Tokens</div>
                 </div>
-                <div class="trend-indicator" :class="getRandomTrend()">
-                  <a-icon :type="getRandomTrend() === 'up' ? 'caret-up' : 'caret-down'" />
-                  <span>{{ Math.floor(Math.random() * 5) + 1 }}</span>
-                </div>
               </div>
             </div>
             <a-empty v-else-if="!loading && ranking.length <= 3 && ranking.length > 0" description="没有更多排名了" />
@@ -105,7 +101,6 @@
 
 <script>
 import { getTokenRanking } from '@/api/user'
-import { formatDate } from '@/utils'
 
 export default {
   name: 'UsageRanking',
@@ -115,31 +110,49 @@ export default {
     return {
       loading: false,
       days: 1,
-      ranking: []
+      ranking: [],
+      rankingRequestSeq: 0
+    }
+  },
+  computed: {
+    rankingRangeLabel() {
+      const labels = {
+        1: '今日',
+        7: '近 7 天',
+        30: '近 30 天'
+      }
+      return labels[this.days] || `近 ${this.days} 天`
+    },
+    rankingTitle() {
+      return `${this.rankingRangeLabel}排行榜`
     }
   },
   mounted() {
     this.fetchRanking()
   },
   methods: {
-    formatDate,
     formatNumber(value) {
       return Number(value || 0).toLocaleString()
     },
     async fetchRanking() {
+      const requestSeq = ++this.rankingRequestSeq
+      const requestedDays = this.days
       this.loading = true
+      this.ranking = []
       try {
-        const res = await getTokenRanking({ days: this.days })
+        const res = await getTokenRanking({ days: requestedDays, limit: 10 })
+        if (requestSeq !== this.rankingRequestSeq || requestedDays !== this.days) return
         const data = res.data || {}
         this.ranking = data.ranking || []
       } catch (err) {
-        this.$message.error('无法加载使用排行')
+        if (requestSeq === this.rankingRequestSeq) {
+          this.$message.error('无法加载使用排行')
+        }
       } finally {
-        this.loading = false
+        if (requestSeq === this.rankingRequestSeq) {
+          this.loading = false
+        }
       }
-    },
-    getRandomTrend() {
-      return Math.random() > 0.5 ? 'up' : 'down'
     }
   }
 }
@@ -428,19 +441,6 @@ export default {
         letter-spacing: 0.5px;
       }
     }
-
-    .trend-indicator {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      font-size: 12px;
-      font-weight: 700;
-
-      &.up { color: #f56565; }
-      &.down { color: #48bb78; }
-
-      span { margin-top: -2px; }
-    }
   }
 
   @keyframes rotate-float {
@@ -479,4 +479,3 @@ export default {
   }
 }
 </style>
-

@@ -89,7 +89,7 @@
               <span v-else class="muted">-</span>
             </template>
             <template slot="time" slot-scope="text">
-              <span v-if="text">{{ formatUtcDate(text) }}</span>
+              <span v-if="text">{{ formatDate(text) }}</span>
               <span v-else class="muted">-</span>
             </template>
           </a-table>
@@ -147,7 +147,7 @@
 </template>
 
 <script>
-import { formatUtcDate } from '@/utils'
+import { formatDate } from '@/utils'
 import { listAgentPlans, grantAgentSubscription, listAgentSubscriptionRecords, listAgentUsers, getAgentUser } from '@/api/agent'
 
 export default {
@@ -205,7 +205,7 @@ export default {
     this.refreshAll()
   },
   methods: {
-    formatUtcDate,
+    formatDate,
     refreshAll() {
       this.fetchPlans()
       this.fetchRecords()

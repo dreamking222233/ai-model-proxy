@@ -45,7 +45,7 @@ def _build_cache_log_fields() -> dict:
 class ProxySubscriptionCompatibilityTest(unittest.TestCase):
     @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state")
-    def test_stale_balance_user_with_active_unlimited_subscription_is_allowed(
+    def test_stale_balance_user_with_active_unlimited_subscription_checks_quota(
         self,
         mock_refresh,
         mock_check_quota,
@@ -57,7 +57,29 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         ProxyService._assert_text_request_allowed(db, user)
 
         mock_refresh.assert_called_once()
-        mock_check_quota.assert_not_called()
+        mock_check_quota.assert_called_once_with(db, user, quota_precheck=None)
+        db.query.assert_not_called()
+
+    @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state")
+    def test_active_unlimited_subscription_quota_exceeded_does_not_fallback_to_balance(
+        self,
+        mock_refresh,
+        mock_check_quota,
+    ):
+        db = MagicMock()
+        user = SimpleNamespace(id=1, subscription_type="unlimited", subscription_expires_at=None)
+        mock_refresh.return_value = SimpleNamespace(plan_kind_snapshot="unlimited")
+        mock_check_quota.side_effect = ServiceException(
+            403,
+            "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试",
+            SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
+        )
+
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._assert_text_request_allowed(db, user)
+
+        self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
         db.query.assert_not_called()
 
     @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
@@ -207,6 +229,67 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
         mock_get_or_create_cycle.assert_called_once()
 
+    @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
+    @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
+    def test_precheck_blocks_unlimited_request_that_would_exceed_daily_token_limit(
+        self,
+        mock_get_or_create_cycle,
+        mock_resolve_active_subscription,
+    ):
+        user = SimpleNamespace(id=1)
+        subscription = SimpleNamespace(
+            plan_kind_snapshot="unlimited",
+            quota_metric=None,
+            quota_value=Decimal("0"),
+        )
+        cycle = SimpleNamespace(used_amount=Decimal("199999999"))
+        mock_resolve_active_subscription.return_value = subscription
+        mock_get_or_create_cycle.return_value = cycle
+
+        with self.assertRaises(ServiceException) as ctx:
+            SubscriptionService.check_quota_before_request(
+                MagicMock(),
+                user,
+                quota_precheck={"estimated_total_tokens": Decimal("2")},
+            )
+
+        self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
+        mock_get_or_create_cycle.assert_called_once()
+
+    @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
+    def test_consume_unlimited_quota_records_daily_token_usage(
+        self,
+        mock_get_or_create_cycle,
+    ):
+        subscription = SimpleNamespace(
+            id=99,
+            plan_kind_snapshot="unlimited",
+            quota_metric=None,
+            quota_value=Decimal("0"),
+        )
+        cycle = SimpleNamespace(
+            id=7,
+            used_amount=Decimal("199999990"),
+            request_count=1,
+            last_request_id="old",
+            cycle_date=datetime.utcnow().date(),
+        )
+        mock_get_or_create_cycle.return_value = cycle
+
+        result = SubscriptionService.consume_quota_after_request(
+            MagicMock(),
+            subscription,
+            request_id="new",
+            raw_total_tokens=10,
+            total_cost=0.0,
+        )
+
+        self.assertEqual(cycle.used_amount, Decimal("200000000"))
+        self.assertEqual(cycle.request_count, 2)
+        self.assertEqual(cycle.last_request_id, "new")
+        self.assertEqual(result["quota_metric"], "total_tokens")
+        self.assertEqual(result["quota_limit_snapshot"], Decimal("200000000"))
+
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
     def test_consume_quota_rejects_post_request_overflow(
         self,
@@ -214,6 +297,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
     ):
         subscription = SimpleNamespace(
             id=99,
+            plan_kind_snapshot="daily_quota",
             quota_metric="total_tokens",
             quota_value=Decimal("100"),
         )
@@ -303,6 +387,65 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         consumption_record = write_db.add.call_args_list[0].args[0]
         self.assertEqual(consumption_record.billing_mode, "balance")
         self.assertIsNone(consumption_record.subscription_id)
+
+    @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
+    @patch("app.services.proxy_service.session_scope")
+    def test_post_request_unlimited_quota_overflow_does_not_fallback_to_balance_billing(
+        self,
+        mock_session_scope,
+        mock_resolve_active_subscription,
+        mock_consume_quota_after_request,
+        _mock_get_system_config,
+    ):
+        fresh_user = SimpleNamespace(id=1, agent_id=None, subscription_type="unlimited")
+        balance = SimpleNamespace(balance=Decimal("10"), total_consumed=Decimal("0"))
+
+        sys_user_query = MagicMock()
+        sys_user_query.filter.return_value = sys_user_query
+        sys_user_query.first.return_value = fresh_user
+        balance_query = MagicMock()
+        balance_query.filter.return_value = balance_query
+        balance_query.with_for_update.return_value = balance_query
+        balance_query.first.return_value = balance
+
+        query_iter = iter([sys_user_query, balance_query])
+        write_db = MagicMock()
+        write_db.query.side_effect = lambda *_args, **_kwargs: next(query_iter)
+        mock_session_scope.return_value = nullcontext(write_db)
+
+        mock_resolve_active_subscription.return_value = SimpleNamespace(
+            id=99,
+            plan_kind_snapshot="unlimited",
+        )
+        mock_consume_quota_after_request.side_effect = ServiceException(
+            403,
+            "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试",
+            SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
+        )
+
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._deduct_balance_and_log(
+                db=MagicMock(),
+                user=SimpleNamespace(id=1),
+                api_key_record=None,
+                unified_model=SimpleNamespace(model_name="gpt-4o", input_price_per_million=1, output_price_per_million=1),
+                request_id="req-unlimited-overflow-1",
+                requested_model="gpt-4o",
+                input_tokens=1000,
+                output_tokens=1000,
+                channel=SimpleNamespace(id=1, name="channel-a", protocol_type="openai"),
+                client_ip="127.0.0.1",
+                response_time_ms=100,
+                is_stream=False,
+                actual_model="gpt-4o",
+                request_type="chat",
+            )
+
+        self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
+        self.assertEqual(balance.balance, Decimal("10"))
+        write_db.add.assert_not_called()
 
 
 class VerifyApiKeySubscriptionRefreshTest(unittest.TestCase):

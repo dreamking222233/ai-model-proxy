@@ -40,7 +40,7 @@
               <span v-if="record.plan_kind === 'daily_quota'">
                 {{ record.quota_metric === 'total_tokens' ? formatNumber(record.quota_value) + ' Token/天' : '$' + Number(record.quota_value || 0).toFixed(2) + '/天' }}
               </span>
-              <span v-else>无限</span>
+              <span v-else>{{ formatUnlimitedLimit(record) }}</span>
             </template>
 
             <template slot="status" slot-scope="text">
@@ -101,7 +101,7 @@
               </a-form>
             </a-card>
 
-            <a-card title="旧版无限套餐开通" :bordered="false" class="grant-card">
+            <a-card title="旧版无限套餐开通（每日 2 亿 Token）" :bordered="false" class="grant-card">
               <a-form layout="vertical">
                 <a-form-item label="选择用户">
                   <a-select
@@ -188,6 +188,7 @@
                 <div v-if="record.plan_kind === 'daily_quota'" class="sub-text">
                   {{ record.quota_metric === 'total_tokens' ? formatNumber(record.quota_value) + ' Token/天' : '$' + Number(record.quota_value || 0).toFixed(2) + '/天' }}
                 </div>
+                <div v-else class="sub-text">{{ formatUnlimitedLimit(record) }}</div>
               </div>
             </template>
 
@@ -530,6 +531,10 @@ export default {
         return `$${Number(value || 0).toFixed(2)}`
       }
       return `${this.formatNumber(value)} Token`
+    },
+    formatUnlimitedLimit(record) {
+      const limit = Number((record && record.unlimited_daily_token_limit) || 200000000)
+      return `每日 ${this.formatNumber(limit)} Token`
     },
     getStatusBadge(status) {
       const map = { active: 'processing', expired: 'default', cancelled: 'error' }

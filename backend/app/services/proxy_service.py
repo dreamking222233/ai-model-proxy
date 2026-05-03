@@ -134,10 +134,16 @@ class ProxyService:
         # Persist subscription-state refresh before the request session is proactively released.
         db.commit()
         if active_subscription:
-            if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
+            if plan_kind in {
+                SubscriptionService.PLAN_KIND_DAILY_QUOTA,
+                SubscriptionService.PLAN_KIND_UNLIMITED,
+            }:
                 try:
                     SubscriptionService.check_quota_before_request(db, user, quota_precheck=quota_precheck)
                 except ServiceException as exc:
+                    if exc.error_code == SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE:
+                        raise
                     if exc.error_code != "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED":
                         raise
                     if ProxyService._can_fallback_to_balance_for_quota_precheck(db, user.id, quota_precheck):
@@ -7598,7 +7604,11 @@ class ProxyService:
                         )
                 else:
                     subscription_id = active_subscription.id
-                    if (active_subscription.plan_kind_snapshot or "unlimited") == "daily_quota":
+                    plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
+                    if plan_kind in {
+                        SubscriptionService.PLAN_KIND_DAILY_QUOTA,
+                        SubscriptionService.PLAN_KIND_UNLIMITED,
+                    }:
                         try:
                             quota_usage = SubscriptionService.consume_quota_after_request(
                                 write_db,
@@ -7617,6 +7627,8 @@ class ProxyService:
                             balance_before = float(balance.balance) if balance else 0.0
                             balance_after = float(balance.balance) if balance else 0.0
                         except ServiceException as exc:
+                            if exc.error_code == SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE:
+                                raise
                             if exc.error_code != "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED":
                                 raise
                             if ProxyService._balance_decimal(balance) >= Decimal(str(total_cost)):
@@ -7922,6 +7934,12 @@ class ProxyService:
                 raw_output_tokens=output_tokens,
                 raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
             )
+            if (
+                raise_on_failure
+                and isinstance(exc, ServiceException)
+                and exc.error_code == SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE
+            ):
+                raise
             if raise_on_failure:
                 raise ServiceException(
                     500,

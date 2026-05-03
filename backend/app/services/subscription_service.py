@@ -30,6 +30,8 @@ class SubscriptionService:
     QUOTA_METRIC_COST = "cost_usd"
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     DEFAULT_RESET_PERIOD = "day"
+    UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("200000000")
+    UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
 
     BUILTIN_PLANS = [
         {
@@ -41,7 +43,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 10,
-            "description": "1 天无限额度套餐",
+            "description": "1 天无限额度套餐，每日最多 2 亿 Token",
         },
         {
             "plan_code": "weekly-unlimited",
@@ -52,7 +54,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 20,
-            "description": "7 天无限额度套餐",
+            "description": "7 天无限额度套餐，每日最多 2 亿 Token",
         },
         {
             "plan_code": "monthly-unlimited",
@@ -63,7 +65,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 30,
-            "description": "30 天无限额度套餐",
+            "description": "30 天无限额度套餐，每日最多 2 亿 Token",
         },
         {
             "plan_code": "daily-10m-token",
@@ -164,8 +166,66 @@ class SubscriptionService:
             "end_time": None,
             "quota_metric": None,
             "quota_value": 0.0,
+            "unlimited_daily_token_limit": None,
             "current_cycle": None,
         }
+
+    @staticmethod
+    def _get_plan_kind(subscription: UserSubscription) -> str:
+        return getattr(subscription, "plan_kind_snapshot", None) or SubscriptionService.PLAN_KIND_UNLIMITED
+
+    @staticmethod
+    def _is_unlimited_subscription(subscription: UserSubscription) -> bool:
+        return SubscriptionService._get_plan_kind(subscription) == SubscriptionService.PLAN_KIND_UNLIMITED
+
+    @staticmethod
+    def _requires_daily_cycle(subscription: UserSubscription) -> bool:
+        return SubscriptionService._get_plan_kind(subscription) in {
+            SubscriptionService.PLAN_KIND_UNLIMITED,
+            SubscriptionService.PLAN_KIND_DAILY_QUOTA,
+        }
+
+    @staticmethod
+    def _get_effective_quota_metric(subscription: UserSubscription) -> str:
+        if SubscriptionService._is_unlimited_subscription(subscription):
+            return SubscriptionService.QUOTA_METRIC_TOKENS
+        return getattr(subscription, "quota_metric", None) or SubscriptionService.QUOTA_METRIC_TOKENS
+
+    @staticmethod
+    def _get_effective_quota_limit(subscription: UserSubscription) -> Decimal:
+        if SubscriptionService._is_unlimited_subscription(subscription):
+            return SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT
+        return SubscriptionService._normalize_decimal(getattr(subscription, "quota_value", None))
+
+    @staticmethod
+    def _get_unlimited_daily_token_limit(subscription: UserSubscription) -> Optional[float]:
+        if not SubscriptionService._is_unlimited_subscription(subscription):
+            return None
+        return float(SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT)
+
+    @staticmethod
+    def _build_quota_exceeded_error(plan_kind: str, estimated: bool = False) -> ServiceException:
+        if plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED:
+            if estimated:
+                message = "本次请求预计会超出实际使用额度，每日最多可使用 200,000,000 Token，请缩短上下文或降低输出上限后重试"
+            else:
+                message = "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试"
+            return ServiceException(
+                403,
+                message,
+                SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
+            )
+        if estimated:
+            return ServiceException(
+                403,
+                "本次请求预计会超出当日套餐剩余额度，请缩短上下文或降低输出上限后重试",
+                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+            )
+        return ServiceException(
+            403,
+            "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
+            "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+        )
 
     @staticmethod
     def _resolve_zoneinfo(tz_name: Optional[str]) -> ZoneInfo:
@@ -267,6 +327,9 @@ class SubscriptionService:
             "duration_days": plan.duration_days,
             "quota_metric": plan.quota_metric,
             "quota_value": float(plan.quota_value or 0),
+            "unlimited_daily_token_limit": float(SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT)
+            if plan.plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED
+            else None,
             "reset_period": plan.reset_period,
             "reset_timezone": plan.reset_timezone,
             "sort_order": plan.sort_order,
@@ -389,10 +452,13 @@ class SubscriptionService:
             "plan_code": subscription.plan_code_snapshot,
             "plan_name": subscription.plan_name,
             "plan_type": subscription.plan_type,
-            "plan_kind": subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED,
+            "plan_kind": SubscriptionService._get_plan_kind(subscription),
             "duration_days": int(subscription.duration_days_snapshot or 0),
-            "quota_metric": subscription.quota_metric,
+            "quota_metric": SubscriptionService._get_effective_quota_metric(subscription)
+            if SubscriptionService._requires_daily_cycle(subscription)
+            else subscription.quota_metric,
             "quota_value": float(subscription.quota_value or 0),
+            "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(subscription),
             "reset_period": subscription.reset_period,
             "reset_timezone": subscription.reset_timezone,
             "activation_mode": subscription.activation_mode,
@@ -404,7 +470,12 @@ class SubscriptionService:
             "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
             "updated_at": subscription.updated_at.isoformat() if subscription.updated_at else None,
             "usage_summary": usage_summary or SubscriptionService._empty_usage_summary(),
-            "current_cycle": current_cycle if isinstance(current_cycle, dict) else SubscriptionService._serialize_cycle(current_cycle, subscription.quota_value),
+            "current_cycle": current_cycle if isinstance(current_cycle, dict) else SubscriptionService._serialize_cycle(
+                current_cycle,
+                SubscriptionService._get_effective_quota_limit(subscription)
+                if SubscriptionService._requires_daily_cycle(subscription)
+                else subscription.quota_value,
+            ),
         }
         if user is not None:
             result["username"] = user.username
@@ -599,6 +670,8 @@ class SubscriptionService:
             usage_now,
             subscription.reset_timezone,
         )
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
+        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         query = db.query(SubscriptionUsageCycle).filter(
             SubscriptionUsageCycle.subscription_id == subscription.id,
             SubscriptionUsageCycle.cycle_date == cycle_date,
@@ -607,6 +680,10 @@ class SubscriptionService:
             query = query.with_for_update()
         cycle = query.first()
         if cycle:
+            if cycle.quota_metric != quota_metric:
+                cycle.quota_metric = quota_metric
+            if SubscriptionService._normalize_decimal(cycle.quota_limit) != quota_limit:
+                cycle.quota_limit = quota_limit
             return cycle
 
         savepoint = db.begin_nested()
@@ -617,8 +694,8 @@ class SubscriptionService:
                 cycle_date=cycle_date,
                 cycle_start_at=cycle_start_at,
                 cycle_end_at=cycle_end_at,
-                quota_metric=subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS,
-                quota_limit=subscription.quota_value or Decimal("0"),
+                quota_metric=quota_metric,
+                quota_limit=quota_limit,
                 used_amount=Decimal("0"),
                 request_count=0,
                 last_request_id=None,
@@ -655,14 +732,17 @@ class SubscriptionService:
             .first()
         )
         if cycle:
-            return SubscriptionService._serialize_cycle(cycle, subscription.quota_value)
-        quota_limit = SubscriptionService._normalize_decimal(subscription.quota_value)
+            return SubscriptionService._serialize_cycle(
+                cycle,
+                SubscriptionService._get_effective_quota_limit(subscription),
+            )
+        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         return {
             "id": None,
             "cycle_date": cycle_date.isoformat(),
             "cycle_start_at": cycle_start_at.isoformat(),
             "cycle_end_at": cycle_end_at.isoformat(),
-            "quota_metric": subscription.quota_metric,
+            "quota_metric": SubscriptionService._get_effective_quota_metric(subscription),
             "quota_limit": float(quota_limit),
             "used_amount": 0.0,
             "remaining_amount": float(quota_limit),
@@ -682,20 +762,24 @@ class SubscriptionService:
             return SubscriptionService._default_subscription_summary()
 
         current_cycle = None
-        if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+        if SubscriptionService._requires_daily_cycle(active_subscription):
             current_cycle = SubscriptionService._get_cycle_for_summary(db, active_subscription, usage_now)
+        plan_kind = SubscriptionService._get_plan_kind(active_subscription)
 
         return {
             "subscription_type": "quota"
-            if (active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA
+            if plan_kind == SubscriptionService.PLAN_KIND_DAILY_QUOTA
             else "unlimited",
             "plan_name": active_subscription.plan_name,
             "plan_code": active_subscription.plan_code_snapshot,
-            "plan_kind": active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED,
+            "plan_kind": plan_kind,
             "start_time": active_subscription.start_time.isoformat() if active_subscription.start_time else None,
             "end_time": active_subscription.end_time.isoformat() if active_subscription.end_time else None,
-            "quota_metric": active_subscription.quota_metric,
+            "quota_metric": SubscriptionService._get_effective_quota_metric(active_subscription)
+            if SubscriptionService._requires_daily_cycle(active_subscription)
+            else active_subscription.quota_metric,
             "quota_value": float(active_subscription.quota_value or 0),
+            "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(active_subscription),
             "current_cycle": current_cycle,
         }
 
@@ -711,11 +795,11 @@ class SubscriptionService:
         if not active_subscription:
             raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
 
-        plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
-        if plan_kind != SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+        plan_kind = SubscriptionService._get_plan_kind(active_subscription)
+        if not SubscriptionService._requires_daily_cycle(active_subscription):
             return {"subscription": active_subscription, "cycle": None}
 
-        quota_metric = active_subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS
+        quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
         estimated_consumed_amount = None
         if quota_precheck:
             metric_key = (
@@ -733,23 +817,15 @@ class SubscriptionService:
             usage_now,
             lock=estimated_consumed_amount is not None,
         )
-        quota_limit = SubscriptionService._normalize_decimal(active_subscription.quota_value)
+        quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         if used_amount >= quota_limit:
-            raise ServiceException(
-                403,
-                "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
-                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
-            )
+            raise SubscriptionService._build_quota_exceeded_error(plan_kind)
 
         if estimated_consumed_amount is not None:
             remaining_amount = quota_limit - used_amount
             if estimated_consumed_amount > remaining_amount:
-                raise ServiceException(
-                    403,
-                    "本次请求预计会超出当日套餐剩余额度，请缩短上下文或降低输出上限后重试",
-                    "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
-                )
+                raise SubscriptionService._build_quota_exceeded_error(plan_kind, estimated=True)
         return {"subscription": active_subscription, "cycle": cycle}
 
     @staticmethod
@@ -764,20 +840,17 @@ class SubscriptionService:
         usage_now = now or SubscriptionService.get_current_time()
         cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now, lock=True)
 
-        quota_metric = subscription.quota_metric or SubscriptionService.QUOTA_METRIC_TOKENS
+        plan_kind = SubscriptionService._get_plan_kind(subscription)
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
         if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
             consumed_amount = SubscriptionService._normalize_decimal(total_cost)
         else:
             consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
 
-        quota_limit = SubscriptionService._normalize_decimal(subscription.quota_value)
+        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         next_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount) + consumed_amount
         if next_used_amount > quota_limit:
-            raise ServiceException(
-                403,
-                "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
-                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
-            )
+            raise SubscriptionService._build_quota_exceeded_error(plan_kind)
 
         cycle.used_amount = next_used_amount
         cycle.request_count = int(cycle.request_count or 0) + 1
@@ -788,7 +861,7 @@ class SubscriptionService:
             "subscription_cycle_id": cycle.id,
             "quota_metric": quota_metric,
             "quota_consumed_amount": consumed_amount,
-            "quota_limit_snapshot": SubscriptionService._normalize_decimal(subscription.quota_value),
+            "quota_limit_snapshot": quota_limit,
             "quota_used_after": SubscriptionService._normalize_decimal(cycle.used_amount),
             "quota_cycle_date": cycle.cycle_date,
         }
@@ -981,7 +1054,7 @@ class SubscriptionService:
         result = []
         for subscription in subscriptions:
             current_cycle = None
-            if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            if SubscriptionService._requires_daily_cycle(subscription):
                 if SubscriptionService._is_effectively_active(subscription, usage_now):
                     current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
             result.append(
@@ -1029,7 +1102,7 @@ class SubscriptionService:
         result = []
         for subscription, user in rows:
             current_cycle = None
-            if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            if SubscriptionService._requires_daily_cycle(subscription):
                 if SubscriptionService._is_effectively_active(subscription, usage_now):
                     current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
             result.append(
@@ -1083,7 +1156,7 @@ class SubscriptionService:
         result = []
         for subscription, user in rows:
             current_cycle = None
-            if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            if SubscriptionService._requires_daily_cycle(subscription):
                 if SubscriptionService._is_effectively_active(subscription, usage_now):
                     current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
             result.append(
@@ -1118,7 +1191,7 @@ class SubscriptionService:
             SubscriptionService._empty_usage_summary(),
         )
         current_cycle = None
-        if (subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED) == SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+        if SubscriptionService._requires_daily_cycle(subscription):
             usage_now = SubscriptionService.get_current_time()
             if SubscriptionService._is_effectively_active(subscription, usage_now):
                 current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)

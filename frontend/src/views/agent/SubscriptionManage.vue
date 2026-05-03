@@ -19,7 +19,7 @@
           <a-table :columns="planColumns" :data-source="plans" :loading="loading" row-key="id" :pagination="false" :scroll="{ x: 900 }">
             <template slot="planKind" slot-scope="text, record">
               <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
-                {{ record.plan_kind === 'daily_quota' ? '每日限额' : '时间套餐' }}
+                {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限套餐' }}
               </a-tag>
             </template>
             <template slot="duration" slot-scope="text, record">
@@ -27,7 +27,7 @@
             </template>
             <template slot="quota" slot-scope="text, record">
               <span v-if="record.plan_kind === 'daily_quota'">{{ formatQuota(record.quota_value, record.quota_metric) }}</span>
-              <span v-else class="muted">不限量</span>
+              <span v-else>{{ formatUnlimitedLimit(record) }}</span>
             </template>
             <template slot="remaining" slot-scope="text, record">
               <div class="quota-stock-cell">
@@ -73,14 +73,14 @@
             </template>
             <template slot="planKind" slot-scope="text, record">
               <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
-                {{ record.plan_kind === 'daily_quota' ? '每日限额套餐' : '时间套餐' }}
+                {{ record.plan_kind === 'daily_quota' ? '每日限额套餐' : '无限套餐' }}
               </a-tag>
             </template>
             <template slot="status" slot-scope="text">
               <a-badge :status="getStatusBadge(text)" :text="getStatusText(text)" />
             </template>
             <template slot="quota" slot-scope="text, record">
-              {{ record.plan_kind === 'daily_quota' ? formatQuota(record.quota_value, record.quota_metric) : '不限量' }}
+              {{ record.plan_kind === 'daily_quota' ? formatQuota(record.quota_value, record.quota_metric) : formatUnlimitedLimit(record) }}
             </template>
             <template slot="usage" slot-scope="text, record">
               <span v-if="record.usage_summary">
@@ -329,6 +329,10 @@ export default {
         return `$${Number(value || 0).toFixed(2)}`
       }
       return `${Number(value || 0).toLocaleString('zh-CN')} Token`
+    },
+    formatUnlimitedLimit(record) {
+      const limit = Number((record && record.unlimited_daily_token_limit) || 200000000)
+      return `每日 ${limit.toLocaleString('zh-CN')} Token`
     },
     canGrantPlan(record) {
       const creditEnabled = record.credit_limit && record.credit_limit.status === 'active'

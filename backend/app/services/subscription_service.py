@@ -30,7 +30,7 @@ class SubscriptionService:
     QUOTA_METRIC_COST = "cost_usd"
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     DEFAULT_RESET_PERIOD = "day"
-    UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("200000000")
+    UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("300000000")
     UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
 
     BUILTIN_PLANS = [
@@ -43,7 +43,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 10,
-            "description": "1 天无限额度套餐，每日最多 2 亿 Token",
+            "description": "1 天无限额度套餐，每日最多 3 亿 Token",
         },
         {
             "plan_code": "weekly-unlimited",
@@ -54,7 +54,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 20,
-            "description": "7 天无限额度套餐，每日最多 2 亿 Token",
+            "description": "7 天无限额度套餐，每日最多 3 亿 Token",
         },
         {
             "plan_code": "monthly-unlimited",
@@ -65,7 +65,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 30,
-            "description": "30 天无限额度套餐，每日最多 2 亿 Token",
+            "description": "30 天无限额度套餐，每日最多 3 亿 Token",
         },
         {
             "plan_code": "daily-10m-token",
@@ -207,9 +207,9 @@ class SubscriptionService:
     def _build_quota_exceeded_error(plan_kind: str, estimated: bool = False) -> ServiceException:
         if plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED:
             if estimated:
-                message = "本次请求预计会超出实际使用额度，每日最多可使用 200,000,000 Token，请缩短上下文或降低输出上限后重试"
+                message = "本次请求预计会超出实际使用额度，每日最多可使用 300,000,000 Token，请缩短上下文或降低输出上限后重试"
             else:
-                message = "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试"
+                message = "已超出实际使用额度，每日最多可使用 300,000,000 Token，请明天再试"
             return ServiceException(
                 403,
                 message,

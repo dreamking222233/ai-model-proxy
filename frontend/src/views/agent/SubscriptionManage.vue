@@ -331,7 +331,7 @@ export default {
       return `${Number(value || 0).toLocaleString('zh-CN')} Token`
     },
     formatUnlimitedLimit(record) {
-      const limit = Number((record && record.unlimited_daily_token_limit) || 200000000)
+      const limit = Number((record && record.unlimited_daily_token_limit) || 300000000)
       return `每日 ${limit.toLocaleString('zh-CN')} Token`
     },
     canGrantPlan(record) {

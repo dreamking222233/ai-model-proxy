@@ -72,7 +72,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         mock_refresh.return_value = SimpleNamespace(plan_kind_snapshot="unlimited")
         mock_check_quota.side_effect = ServiceException(
             403,
-            "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试",
+            "已超出实际使用额度，每日最多可使用 300,000,000 Token，请明天再试",
             SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
         )
 
@@ -242,7 +242,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             quota_metric=None,
             quota_value=Decimal("0"),
         )
-        cycle = SimpleNamespace(used_amount=Decimal("199999999"))
+        cycle = SimpleNamespace(used_amount=Decimal("299999999"))
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
@@ -269,7 +269,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         )
         cycle = SimpleNamespace(
             id=7,
-            used_amount=Decimal("199999990"),
+            used_amount=Decimal("299999990"),
             request_count=1,
             last_request_id="old",
             cycle_date=datetime.utcnow().date(),
@@ -284,11 +284,11 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             total_cost=0.0,
         )
 
-        self.assertEqual(cycle.used_amount, Decimal("200000000"))
+        self.assertEqual(cycle.used_amount, Decimal("300000000"))
         self.assertEqual(cycle.request_count, 2)
         self.assertEqual(cycle.last_request_id, "new")
         self.assertEqual(result["quota_metric"], "total_tokens")
-        self.assertEqual(result["quota_limit_snapshot"], Decimal("200000000"))
+        self.assertEqual(result["quota_limit_snapshot"], Decimal("300000000"))
 
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
     def test_consume_quota_rejects_post_request_overflow(
@@ -421,7 +421,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         )
         mock_consume_quota_after_request.side_effect = ServiceException(
             403,
-            "已超出实际使用额度，每日最多可使用 200,000,000 Token，请明天再试",
+            "已超出实际使用额度，每日最多可使用 300,000,000 Token，请明天再试",
             SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
         )
 

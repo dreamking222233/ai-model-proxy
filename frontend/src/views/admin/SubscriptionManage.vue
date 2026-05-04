@@ -101,7 +101,7 @@
               </a-form>
             </a-card>
 
-            <a-card title="旧版无限套餐开通（每日 2 亿 Token）" :bordered="false" class="grant-card">
+            <a-card title="旧版无限套餐开通（每日 3 亿 Token）" :bordered="false" class="grant-card">
               <a-form layout="vertical">
                 <a-form-item label="选择用户">
                   <a-select
@@ -533,7 +533,7 @@ export default {
       return `${this.formatNumber(value)} Token`
     },
     formatUnlimitedLimit(record) {
-      const limit = Number((record && record.unlimited_daily_token_limit) || 200000000)
+      const limit = Number((record && record.unlimited_daily_token_limit) || 300000000)
       return `每日 ${this.formatNumber(limit)} Token`
     },
     getStatusBadge(status) {

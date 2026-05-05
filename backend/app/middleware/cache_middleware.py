@@ -1,37 +1,18 @@
-"""
-请求体缓存分析中间件。
+"""Non-stream passthrough wrapper.
 
-该中间件只执行系统内部的请求体分段缓存分析与 Redis 读写，不会改变发往上游
-的请求参数，也不会基于缓存短路返回旧响应。
+系统内部请求体分段缓存已停用。该包装器仅保留旧调用接口，避免改动所有代理
+分支；真实缓存只从 CPA/上游响应 usage 字段读取。
 """
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from app.database import release_session_connection
 from app.models.user import SysUser
-from app.services.request_body_cache_service import RequestBodyCacheService
 
 
 class CacheMiddleware:
-    """非流式请求体缓存分析中间件。"""
-
-    @staticmethod
-    def _safe_user_id(user: SysUser) -> Optional[int]:
-        try:
-            identity = sa_inspect(user).identity
-            if identity:
-                return identity[0]
-        except Exception:
-            pass
-        try:
-            raw_dict = object.__getattribute__(user, "__dict__")
-            if isinstance(raw_dict, dict) and "id" in raw_dict:
-                return raw_dict.get("id")
-        except Exception:
-            pass
-        return None
+    """非流式请求透传包装器。"""
 
     @staticmethod
     async def wrap_request(
@@ -45,23 +26,12 @@ class CacheMiddleware:
         requested_model: str,
         cache_state: Optional[Dict[str, Any]] = None,
     ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-        """Analyze request-body cache usage, then execute the upstream call unchanged."""
-        user_id = CacheMiddleware._safe_user_id(user)
-        cache_info = RequestBodyCacheService.analyze_request(
-            db=db,
-            user_id=user_id,
-            request_body=request_body,
-            request_format=request_format,
-            requested_model=requested_model,
-        )
+        """Execute the upstream call without internal request-body cache analysis."""
+        cache_info = None
         if cache_state is not None:
             cache_state["cache_info"] = cache_info
         release_session_connection(db)
-        try:
-            response = await upstream_call()
-        except Exception as exc:
-            setattr(exc, "_request_cache_info", cache_info)
-            raise
+        response = await upstream_call()
         return response, cache_info
 
     @staticmethod

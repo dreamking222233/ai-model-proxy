@@ -137,27 +137,17 @@
           </div>
           <div v-else class="token-cell">
             <div class="token-bar">
-              <div class="token-bar-segment token-bar-segment--input" :style="{ width: getTokenPercent(record.input_tokens, record.total_tokens) }"></div>
+              <div class="token-bar-segment token-bar-segment--input" :style="{ width: getTokenPercent(getBillableInputTokens(record), record.total_tokens) }"></div>
               <div class="token-bar-segment token-bar-segment--output" :style="{ width: getTokenPercent(record.output_tokens, record.total_tokens) }"></div>
             </div>
             <div class="token-detail">
-              <span class="token-item"><span class="token-dot token-dot--input"></span>入 {{ formatNumber(record.input_tokens || 0) }}</span>
+              <span class="token-item"><span class="token-dot token-dot--input"></span>入 {{ formatNumber(getBillableInputTokens(record)) }}</span>
               <span class="token-item"><span class="token-dot token-dot--output"></span>出 {{ formatNumber(record.output_tokens || 0) }}</span>
               <span class="token-item token-item--total">合计 {{ formatNumber(record.total_tokens || 0) }}</span>
             </div>
             <div v-if="hasPromptCacheUsage(record)" class="cache-detail">
-              <span class="cache-chip cache-chip--token">真实上游缓存</span>
-              <span class="cache-chip cache-chip--hit">{{ getPromptCacheStatusText(record) }}</span>
-              <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.upstream_cache_read_input_tokens || 0) }} tok</span>
-              <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} tok</span>
-              <span class="cache-chip cache-chip--token">实入 {{ formatNumber(record.upstream_input_tokens || 0) }} tok</span>
-            </div>
-            <div v-else-if="hasCacheSummary(record)" class="cache-detail">
-              <span class="cache-chip cache-chip--token">内部缓存</span>
-              <span class="cache-chip cache-chip--hit">{{ record.cache_status || 'BYPASS' }}</span>
-              <span class="cache-chip cache-chip--hit">读 {{ formatNumber(record.cache_hit_segments || 0) }} 段</span>
-              <span class="cache-chip cache-chip--miss">建 {{ formatNumber(record.cache_miss_segments || 0) }} 段</span>
-              <span class="cache-chip cache-chip--token">复用 ~{{ formatNumber(record.cache_reused_tokens || 0) }} tok</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0" class="cache-chip cache-chip--hit">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} tok</span>
+              <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cache-chip cache-chip--miss">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} tok</span>
             </div>
             <div v-if="hasConversationShadow(record)" class="cache-detail">
               <span class="cache-chip cache-chip--token">会话压缩</span>
@@ -225,6 +215,20 @@
         <a-descriptions-item label="响应时间">{{ selectedRecord.response_time_ms != null ? `${formatResponseTime(selectedRecord.response_time_ms)} s` : '-' }}</a-descriptions-item>
         <a-descriptions-item label="客户端 IP">{{ selectedRecord.client_ip || '-' }}</a-descriptions-item>
         <a-descriptions-item label="请求时间">{{ selectedRecord.created_at ? formatDate(selectedRecord.created_at) : '-' }}</a-descriptions-item>
+        <a-descriptions-item v-if="!isImageRequest(selectedRecord)" label="Token 用量">
+          <span>输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }}</span>
+          <span style="margin-left: 8px;">输出 {{ formatNumber(selectedRecord.output_tokens || 0) }}</span>
+          <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" style="margin-left: 8px;">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }}</span>
+          <span v-if="getBillableCacheReadTokens(selectedRecord) > 0" style="margin-left: 8px;">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }}</span>
+        </a-descriptions-item>
+        <a-descriptions-item v-if="!isImageRequest(selectedRecord)" label="计费明细">
+          <div class="modal-cache-summary">
+            <span>输入 ${{ formatCurrency(selectedRecord.input_cost || 0) }}</span>
+            <span>输出 ${{ formatCurrency(selectedRecord.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} tok = ${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}（输入价 10%）</span>
+            <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建不额外计费</span>
+          </div>
+        </a-descriptions-item>
       </a-descriptions>
 
       <div v-if="selectedRecord.error_message" class="error-message-section">
@@ -367,21 +371,11 @@ export default {
       if (!total || !part) return '0%'
       return Math.round((part / total) * 100) + '%'
     },
-    hasCacheSummary(record) {
-      if (!record) return false
-      return Boolean(
-        record.cache_status ||
-        Number(record.cache_hit_segments || 0) > 0 ||
-        Number(record.cache_miss_segments || 0) > 0 ||
-        Number(record.cache_bypass_segments || 0) > 0
-      )
-    },
     hasPromptCacheUsage(record) {
       if (!record) return false
       return Boolean(
         Number(record.upstream_cache_read_input_tokens || 0) > 0 ||
-        Number(record.upstream_cache_creation_input_tokens || 0) > 0 ||
-        ['READ', 'WRITE', 'MIXED', 'NONE'].includes(String(record.upstream_prompt_cache_status || ''))
+        Number(record.upstream_cache_creation_input_tokens || 0) > 0
       )
     },
     hasConversationShadow(record) {
@@ -435,6 +429,15 @@ export default {
     },
     formatNumber(num) {
       return Number(num || 0).toLocaleString('zh-CN')
+    },
+    formatCurrency(amount) {
+      return Number(amount || 0).toFixed(6)
+    },
+    getBillableInputTokens(record) {
+      return Number(record && (record.billable_input_tokens != null ? record.billable_input_tokens : record.input_tokens) || 0)
+    },
+    getBillableCacheReadTokens(record) {
+      return Number(record && (record.billable_cache_read_input_tokens != null ? record.billable_cache_read_input_tokens : record.upstream_cache_read_input_tokens) || 0)
     },
     getStatusText(status) {
       const map = { success: '成功', error: '失败', failed: '失败', timeout: '超时', pending: '处理中' }

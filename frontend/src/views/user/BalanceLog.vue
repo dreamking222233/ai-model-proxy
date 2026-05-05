@@ -173,11 +173,11 @@
             </div>
             <div v-else class="token-viz">
               <div class="viz-bar">
-                <div class="v-part input" :style="{ width: getTokenPercent(record.input_tokens, record.total_tokens) }"></div>
+                <div class="v-part input" :style="{ width: getTokenPercent(getBillableInputTokens(record), record.total_tokens) }"></div>
                 <div class="v-part output" :style="{ width: getTokenPercent(record.output_tokens, record.total_tokens) }"></div>
               </div>
               <div class="viz-row">
-                <span class="viz-item"><i class="dot i"></i> 输入 {{ formatNumber(record.input_tokens || 0) }}</span>
+                <span class="viz-item"><i class="dot i"></i> 输入 {{ formatNumber(getBillableInputTokens(record)) }}</span>
                 <span class="viz-item"><i class="dot o"></i> 输出 {{ formatNumber(record.output_tokens || 0) }}</span>
                 <span class="viz-total">{{ formatNumber(record.total_tokens || 0) }} <small>Token</small></span>
               </div>
@@ -186,15 +186,15 @@
                 <span v-if="record.quota_cycle_date"> / 周期 {{ record.quota_cycle_date }}</span>
               </div>
               <!-- Technology Badges (Cache/Compression) -->
-              <div class="tech-badges" v-if="hasPromptCacheUsage(record) || hasCacheSummary(record) || hasConversationShadow(record)">
+              <div class="tech-badges" v-if="hasPromptCacheUsage(record) || hasConversationShadow(record)">
                 <a-tooltip title="上游 Prompt 缓存读取">
-                  <span v-if="record.upstream_cache_read_input_tokens > 0" class="t-badge blue">缓存 +{{ formatNumberShort(record.upstream_cache_read_input_tokens) }}</span>
+                  <span v-if="getBillableCacheReadTokens(record) > 0" class="t-badge blue">缓存读取 {{ formatNumberShort(getBillableCacheReadTokens(record)) }}</span>
+                </a-tooltip>
+                <a-tooltip title="上游 Prompt 缓存创建，不额外计费">
+                  <span v-if="record.upstream_cache_creation_input_tokens > 0" class="t-badge gray">缓存创建 {{ formatNumberShort(record.upstream_cache_creation_input_tokens) }}</span>
                 </a-tooltip>
                 <a-tooltip title="会话上下文压缩节省 (预估)">
                   <span v-if="record.compression_saved_estimated_tokens > 0" class="t-badge green">省 {{ formatNumberShort(record.compression_saved_estimated_tokens) }}</span>
-                </a-tooltip>
-                <a-tooltip title="内部缓存复用">
-                  <span v-if="record.cache_reused_tokens > 0" class="t-badge orange">命中 {{ formatNumberShort(record.cache_reused_tokens) }}</span>
                 </a-tooltip>
               </div>
             </div>
@@ -269,9 +269,17 @@
             </template>
           </template>
           <template v-else>
-            <span>输入 {{ formatNumber(sel.input_tokens || 0) }}</span>
+            <span>输入 {{ formatNumber(getBillableInputTokens(sel)) }}</span>
             &nbsp;/&nbsp;
             <span>输出 {{ formatNumber(sel.output_tokens || 0) }}</span>
+            <template v-if="sel.upstream_cache_creation_input_tokens > 0">
+              &nbsp;/&nbsp;
+              <span>缓存创建 {{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }}</span>
+            </template>
+            <template v-if="getBillableCacheReadTokens(sel) > 0">
+              &nbsp;/&nbsp;
+              <span>缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }}</span>
+            </template>
             &nbsp;/&nbsp;
             <strong>合计 {{ formatNumber(sel.total_tokens || 0) }}</strong>
           </template>
@@ -294,19 +302,17 @@
         <a-descriptions-item v-if="hasPromptCacheUsage(sel)" label="上游 Prompt 缓存">
           <div class="modal-cache-summary">
             <a-tag color="blue">{{ getPromptCacheStatusText(sel) }}</a-tag>
-            <span>读取 {{ formatNumber(sel.upstream_cache_read_input_tokens || 0) }} Token</span>
-            <span>创建 {{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token</span>
-            <span>上游实入 {{ formatNumber(sel.upstream_input_tokens || 0) }} Token</span>
-            <span>逻辑输入 {{ formatNumber(sel.logical_input_tokens || sel.input_tokens || 0) }} Token</span>
+            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} Token</span>
+            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建 {{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token</span>
+            <span>计费输入 {{ formatNumber(getBillableInputTokens(sel)) }} Token</span>
           </div>
         </a-descriptions-item>
-        <a-descriptions-item v-if="hasCacheSummary(sel)" label="本地命中缓存">
+        <a-descriptions-item v-if="!isImageRequest(sel)" label="计费明细">
           <div class="modal-cache-summary">
-            <a-tag color="cyan">{{ sel.cache_status }}</a-tag>
-            <span>读取 {{ formatNumber(sel.cache_hit_segments || 0) }} 分段</span>
-            <span>创建 {{ formatNumber(sel.cache_miss_segments || 0) }} 分段</span>
-            <span>跳过 {{ formatNumber(sel.cache_bypass_segments || 0) }} 分段</span>
-            <span>复用 ~{{ formatNumber(sel.cache_reused_tokens || 0) }} Token</span>
+            <span>输入 ${{ Number(sel.input_cost || 0).toFixed(6) }}</span>
+            <span>输出 ${{ Number(sel.output_cost || 0).toFixed(6) }}</span>
+            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} Token = ${{ Number(sel.cache_read_cost || 0).toFixed(6) }}（输入价 10%）</span>
+            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建不额外计费</span>
           </div>
         </a-descriptions-item>
         <a-descriptions-item v-if="hasConversationShadow(sel)" label="上下文压缩">
@@ -370,7 +376,7 @@ export default {
       columns: [
         { title: '模型名称', dataIndex: 'requested_model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
         { title: '用量细则', dataIndex: 'total_tokens', key: 'tokens', width: 320, scopedSlots: { customRender: 'col_tokens' } },
-        { title: '预扣金额', dataIndex: 'total_cost', key: 'cost', width: 140, align: 'right', scopedSlots: { customRender: 'col_cost' } },
+        { title: '实际计费', dataIndex: 'total_cost', key: 'cost', width: 140, align: 'right', scopedSlots: { customRender: 'col_cost' } },
         { title: '请求状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'col_status' } },
         { title: '响应/并发', dataIndex: 'response_time_ms', key: 'rt', width: 130, align: 'right', scopedSlots: { customRender: 'col_rt' } },
         { title: '请求时间', dataIndex: 'created_at', key: 'time', width: 160, scopedSlots: { customRender: 'col_time' } }
@@ -543,13 +549,15 @@ export default {
     formatTime(t) {
       return formatLocalDate(t) || t || '-'
     },
-    hasCacheSummary(r) {
-      if (!r) return false
-      return Boolean(r.cache_status && r.cache_status !== 'BYPASS' || Number(r.cache_hit_segments) > 0 || Number(r.cache_miss_segments) > 0)
-    },
     hasPromptCacheUsage(r) {
       if (!r) return false
-      return Boolean(Number(r.upstream_cache_read_input_tokens) > 0 || Number(r.upstream_cache_creation_input_tokens) > 0 || ['READ', 'WRITE', 'MIXED', 'NONE'].includes(String(r.upstream_prompt_cache_status || '')))
+      return Boolean(Number(r.upstream_cache_read_input_tokens) > 0 || Number(r.upstream_cache_creation_input_tokens) > 0)
+    },
+    getBillableInputTokens(r) {
+      return Number(r && (r.billable_input_tokens != null ? r.billable_input_tokens : r.input_tokens) || 0)
+    },
+    getBillableCacheReadTokens(r) {
+      return Number(r && (r.billable_cache_read_input_tokens != null ? r.billable_cache_read_input_tokens : r.upstream_cache_read_input_tokens) || 0)
     },
     hasConversationShadow(r) {
       if (!r) return false

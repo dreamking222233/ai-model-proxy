@@ -59,9 +59,6 @@ def get_usage_logs(
             get_system_config(db, "anthropic_prompt_cache_user_visible", False)
         ))
         or bool(get_system_config(db, "conversation_state_user_visible", False))
-        or (bool(get_system_config(db, "request_body_cache_enabled", False)) and bool(
-            get_system_config(db, "request_body_cache_user_visible", False)
-        ))
     )
 
     return ResponseModel(data={

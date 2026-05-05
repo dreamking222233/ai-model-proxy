@@ -19,6 +19,7 @@ import os
 import re
 import time
 import uuid
+from urllib.parse import urlparse
 from contextlib import suppress
 from typing import Any, Optional
 
@@ -52,7 +53,6 @@ from app.services.conversation_shadow_service import ConversationShadowService
 from app.services.conversation_session_service import ConversationSessionService
 from app.services.compression_guard_service import CompressionGuardService
 from app.services.upstream_session_strategy_service import UpstreamSessionStrategyService
-from app.services.request_body_cache_service import RequestBodyCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
 from app.core.exceptions import ServiceException
@@ -836,11 +836,98 @@ class ProxyService:
         db: Session,
         usage_summary: dict[str, Any],
     ) -> int:
-        """Resolve billed input tokens for Anthropic prompt-cache requests."""
-        billing_mode = AnthropicPromptCacheService.get_billing_mode(db)
-        if billing_mode == "actual_upstream":
-            return int(usage_summary.get("input_tokens", 0) or 0)
-        return int(usage_summary.get("logical_input_tokens", 0) or 0)
+        """Resolve full-price input tokens for upstream prompt-cache requests."""
+        return int(usage_summary.get("input_tokens", 0) or 0)
+
+    @staticmethod
+    def _is_cpa_openai_cache_channel(channel: Channel | None) -> bool:
+        """Return whether this OpenAI-compatible channel exposes CPA cached_tokens."""
+        if not channel:
+            return False
+        base_url = str(getattr(channel, "base_url", "") or "").rstrip("/")
+        parsed = urlparse(base_url)
+        if parsed.port == 8317:
+            return True
+        return base_url.startswith("http://43.156.153.12:8317") or base_url.startswith(
+            "http://43.128.147.93:8317"
+        )
+
+    @staticmethod
+    def _extract_openai_prompt_cache_summary(
+        usage: Optional[dict[str, Any]],
+        channel: Channel | None = None,
+    ) -> dict[str, Any]:
+        """Parse CPA/OpenAI cached_tokens into the same upstream-cache shape."""
+        usage = usage or {}
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        details = usage.get("prompt_tokens_details")
+        has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
+        cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0
+        billable_input = max(prompt_tokens - cache_read, 0)
+
+        cache_creation = 0
+        if has_cache_details and cache_read == 0 and prompt_tokens > 0 and ProxyService._is_cpa_openai_cache_channel(channel):
+            cache_creation = prompt_tokens
+
+        if cache_read > 0 and cache_creation > 0:
+            status = "MIXED"
+        elif cache_read > 0:
+            status = "READ"
+        elif cache_creation > 0:
+            status = "WRITE"
+        else:
+            status = "BYPASS"
+
+        return {
+            "input_tokens": billable_input,
+            "output_tokens": completion_tokens,
+            "logical_input_tokens": prompt_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "cache_creation_5m_input_tokens": 0,
+            "cache_creation_1h_input_tokens": 0,
+            "prompt_cache_status": status,
+        }
+
+    @staticmethod
+    def _merge_upstream_cache_usage_into_cache_info(
+        cache_info: Optional[dict[str, Any]],
+        usage_summary: Optional[dict[str, Any]],
+        *,
+        source: str,
+    ) -> Optional[dict[str, Any]]:
+        """Merge upstream CPA/provider cache usage without internal cache segment data."""
+        if not usage_summary:
+            return cache_info
+        if (
+            int(usage_summary.get("cache_read_input_tokens", 0) or 0) <= 0
+            and int(usage_summary.get("cache_creation_input_tokens", 0) or 0) <= 0
+        ):
+            return cache_info
+        merged = copy.deepcopy(cache_info or {})
+        details = copy.deepcopy(merged.get("details") or {})
+        details["upstream_prompt_cache"] = {
+            "source": source,
+            "usage": copy.deepcopy(usage_summary),
+        }
+        merged["details"] = details
+        merged["logical_input_tokens"] = int(usage_summary.get("logical_input_tokens", 0) or 0)
+        merged["upstream_input_tokens"] = int(usage_summary.get("input_tokens", 0) or 0)
+        merged["upstream_cache_read_input_tokens"] = int(
+            usage_summary.get("cache_read_input_tokens", 0) or 0
+        )
+        merged["upstream_cache_creation_input_tokens"] = int(
+            usage_summary.get("cache_creation_input_tokens", 0) or 0
+        )
+        merged["upstream_cache_creation_5m_input_tokens"] = int(
+            usage_summary.get("cache_creation_5m_input_tokens", 0) or 0
+        )
+        merged["upstream_cache_creation_1h_input_tokens"] = int(
+            usage_summary.get("cache_creation_1h_input_tokens", 0) or 0
+        )
+        merged["upstream_prompt_cache_status"] = usage_summary.get("prompt_cache_status") or "BYPASS"
+        return merged
 
     @staticmethod
     def _merge_prompt_cache_state_into_cache_info(
@@ -2972,13 +3059,7 @@ class ProxyService:
                     upstream_model_name,
                     channel_request,
                 )
-                cache_info = RequestBodyCacheService.analyze_request(
-                    db=db,
-                    user_id=ProxyService._safe_object_id(user),
-                    request_body=channel_request,
-                    request_format="responses",
-                    requested_model=requested_model,
-                )
+                cache_info = None
                 last_cache_info = cache_info
                 release_session_connection(db)
                 started_at = time.time()
@@ -4516,6 +4597,9 @@ class ProxyService:
             """上游流式调用，同时通过 collector 收集 chunks"""
             input_tokens = 0
             output_tokens = 0
+            logical_input_tokens = 0
+            cache_read_input_tokens = 0
+            cache_creation_input_tokens = 0
 
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -4553,9 +4637,12 @@ class ProxyService:
                                 completion_event = json.dumps({
                                     "type": "response.completed",
                                     "usage": {
-                                        "input_tokens": input_tokens,
+                                        "input_tokens": logical_input_tokens or input_tokens,
                                         "output_tokens": output_tokens,
-                                        "total_tokens": input_tokens + output_tokens,
+                                        "total_tokens": (logical_input_tokens or input_tokens) + output_tokens,
+                                        "billable_input_tokens": input_tokens,
+                                        "cache_read_input_tokens": cache_read_input_tokens,
+                                        "cache_creation_input_tokens": cache_creation_input_tokens,
                                     },
                                 })
                                 yield f"data: {completion_event}\n\n"
@@ -4565,10 +4652,27 @@ class ProxyService:
                                 chunk = json.loads(data_str)
                                 usage = chunk.get("usage")
                                 if usage:
-                                    input_tokens = usage.get("prompt_tokens", 0)
-                                    output_tokens = usage.get("completion_tokens", 0)
+                                    usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
+                                    input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
+                                    output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
+                                    logical_input_tokens = int(
+                                        usage_summary.get("logical_input_tokens", input_tokens) or 0
+                                    )
+                                    cache_read_input_tokens = int(
+                                        usage_summary.get("cache_read_input_tokens", 0) or 0
+                                    )
+                                    cache_creation_input_tokens = int(
+                                        usage_summary.get("cache_creation_input_tokens", 0) or 0
+                                    )
                                     collected_usage["prompt_tokens"] = input_tokens
                                     collected_usage["completion_tokens"] = output_tokens
+                                    collected_usage["logical_input_tokens"] = logical_input_tokens
+                                    collected_usage["cache_read_input_tokens"] = cache_read_input_tokens
+                                    collected_usage["cache_creation_input_tokens"] = cache_creation_input_tokens
+                                    collected_usage["prompt_cache_status"] = usage_summary.get(
+                                        "prompt_cache_status", "BYPASS"
+                                    )
+                                    collected_usage["_upstream_cache_usage"] = usage_summary
 
                                 # 收集文本内容（包括 reasoning_content 和 content）
                                 choices = chunk.get("choices", [])
@@ -4618,7 +4722,7 @@ class ProxyService:
                     billing_callback=billing_callback,
                     cache_state=cache_state,
                 ):
-                    # 检测是否是缓存命中（wrap 内部会设置 cache_status）
+                    # Record first streamed output time for request timing.
                     if (
                         cache_state.get("first_stream_output_time") is None
                         and isinstance(sse_line, str)
@@ -4683,6 +4787,11 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
+                        stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+                            cache_state.get("cache_info"),
+                            (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
+                            source="openai_prompt_tokens_details",
+                        )
                         ProxyService._finalize_successful_text_request(
                             db,
                             user,
@@ -4697,7 +4806,7 @@ class ProxyService:
                             response_time_ms,
                             is_stream=True,
                             actual_model=request_data.get("model"),
-                            cache_info=cache_state.get("cache_info"),
+                            cache_info=stream_cache_info,
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -4776,20 +4885,26 @@ class ProxyService:
                 response_body, input_tokens, output_tokens = (
                     ProxyService._parse_sse_to_non_stream_openai(resp.text)
                 )
+                usage = response_body.get("usage", {}) if isinstance(response_body, dict) else {}
             else:
                 response_body = resp.json()
                 usage = response_body.get("usage", {})
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
             response_body = ProxyService._rewrite_openai_payload_model(response_body, requested_model)
+            usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
 
             # Return standardized response format for the shared middleware contract
             return {
                 "response": response_body,
                 "model": request_data.get("model"),
                 "usage": {
-                    "prompt_tokens": input_tokens,
+                    "prompt_tokens": usage_summary.get("input_tokens", input_tokens),
                     "completion_tokens": output_tokens,
+                    "logical_input_tokens": usage_summary.get("logical_input_tokens", input_tokens),
+                    "cache_read_input_tokens": usage_summary.get("cache_read_input_tokens", 0),
+                    "cache_creation_input_tokens": usage_summary.get("cache_creation_input_tokens", 0),
+                    "prompt_cache_status": usage_summary.get("prompt_cache_status", "BYPASS"),
                 }
             }
 
@@ -4809,18 +4924,24 @@ class ProxyService:
 
         # Extract response body and tokens
         response_body = cache_response.get("response", cache_response)
-        actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
-        actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
-
-        # Middleware is passthrough; billing tokens equal actual tokens
-        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
-            cache_info=cache_info,
-            user=user,
-            actual_tokens={
+        response_usage = cache_response.get("usage", {})
+        actual_input_tokens = response_usage.get("prompt_tokens", 0)
+        actual_output_tokens = response_usage.get("completion_tokens", 0)
+        cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+            cache_info,
+            {
                 "input_tokens": actual_input_tokens,
                 "output_tokens": actual_output_tokens,
-            }
+                "logical_input_tokens": response_usage.get("logical_input_tokens", actual_input_tokens),
+                "cache_read_input_tokens": response_usage.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": response_usage.get("cache_creation_input_tokens", 0),
+                "cache_creation_5m_input_tokens": 0,
+                "cache_creation_1h_input_tokens": 0,
+                "prompt_cache_status": response_usage.get("prompt_cache_status", "BYPASS"),
+            },
+            source="openai_prompt_tokens_details",
         )
+        billing_input_tokens, billing_output_tokens = actual_input_tokens, actual_output_tokens
 
         ProxyService._finalize_successful_text_request(
             db,
@@ -7037,6 +7158,7 @@ class ProxyService:
         """
         input_tokens = 0
         output_tokens = 0
+        usage_state: dict[str, Any] = {}
         collected_content = []
         collected_reasoning_content = []
         last_id = None
@@ -7074,6 +7196,7 @@ class ProxyService:
                 if usage:
                     input_tokens = usage.get("prompt_tokens", input_tokens)
                     output_tokens = usage.get("completion_tokens", output_tokens)
+                    usage_state.update(usage)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -7101,6 +7224,8 @@ class ProxyService:
                 "total_tokens": input_tokens + output_tokens,
             },
         }
+        if isinstance(usage_state.get("prompt_tokens_details"), dict):
+            response_body["usage"]["prompt_tokens_details"] = usage_state["prompt_tokens_details"]
 
         if full_reasoning_content:
             response_body["choices"][0]["message"]["reasoning_content"] = full_reasoning_content
@@ -7569,17 +7694,37 @@ class ProxyService:
             usage_now = SubscriptionService.get_current_time()
             raw_input_tokens = int(input_tokens or 0)
             raw_output_tokens = int(output_tokens or 0)
-            raw_total_tokens = raw_input_tokens + raw_output_tokens
+            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+            raw_cache_read_input_tokens = int(
+                cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
+            )
+            raw_total_tokens = raw_input_tokens + raw_output_tokens + raw_cache_read_input_tokens
 
             token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
+            token_multiplier_decimal = Decimal(str(token_multiplier))
             input_tokens = int(raw_input_tokens * token_multiplier)
             output_tokens = int(raw_output_tokens * token_multiplier)
-            total_tokens = input_tokens + output_tokens
+            cache_read_input_tokens = int(raw_cache_read_input_tokens * token_multiplier)
+            total_tokens = input_tokens + output_tokens + cache_read_input_tokens
 
             price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
-            input_cost = (input_tokens / 1_000_000) * float(unified_model.input_price_per_million) * price_multiplier
-            output_cost = (output_tokens / 1_000_000) * float(unified_model.output_price_per_million) * price_multiplier
-            total_cost = input_cost + output_cost
+            input_price = Decimal(str(unified_model.input_price_per_million or 0))
+            output_price = Decimal(str(unified_model.output_price_per_million or 0))
+            price_multiplier_decimal = Decimal(str(price_multiplier))
+            input_cost_decimal = (
+                Decimal(str(input_tokens)) / Decimal("1000000")
+            ) * input_price * price_multiplier_decimal
+            cache_read_cost_decimal = (
+                Decimal(str(cache_read_input_tokens)) / Decimal("1000000")
+            ) * input_price * Decimal("0.1") * price_multiplier_decimal
+            output_cost_decimal = (
+                Decimal(str(output_tokens)) / Decimal("1000000")
+            ) * output_price * price_multiplier_decimal
+            total_cost_decimal = input_cost_decimal + cache_read_cost_decimal + output_cost_decimal
+            input_cost = float(input_cost_decimal)
+            cache_read_cost = float(cache_read_cost_decimal)
+            output_cost = float(output_cost_decimal)
+            total_cost = float(total_cost_decimal)
 
             billing_mode = "balance"
             subscription_id: int | None = None
@@ -7667,7 +7812,6 @@ class ProxyService:
                         balance_before = float(balance.balance) if balance else 0.0
                         balance_after = float(balance.balance) if balance else 0.0
 
-            cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
             shadow_commit = None
             if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
                 shadow_commit = cache_info.get("_conversation_shadow_commit")
@@ -7702,6 +7846,7 @@ class ProxyService:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
+                    billable_input_tokens=input_tokens,
                     raw_input_tokens=raw_input_tokens,
                     raw_output_tokens=raw_output_tokens,
                     raw_total_tokens=raw_total_tokens,
@@ -7710,13 +7855,19 @@ class ProxyService:
                     upstream_cache_read_input_tokens=int(
                         cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
                     ),
+                    billable_cache_read_input_tokens=cache_read_input_tokens,
                     upstream_cache_creation_input_tokens=int(
                         cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
                     ),
                     upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
                     input_cost=Decimal(str(input_cost)),
+                    cache_read_cost=Decimal(str(cache_read_cost)),
                     output_cost=Decimal(str(output_cost)),
                     total_cost=Decimal(str(total_cost)),
+                    input_price_per_million_snapshot=input_price,
+                    output_price_per_million_snapshot=output_price,
+                    price_multiplier_snapshot=price_multiplier_decimal,
+                    token_multiplier_snapshot=token_multiplier_decimal,
                     balance_before=Decimal(str(balance_before)),
                     balance_after=Decimal(str(balance_after)),
                     billing_mode=billing_mode,
@@ -7750,6 +7901,7 @@ class ProxyService:
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
+                    billable_input_tokens=input_tokens,
                     raw_input_tokens=raw_input_tokens,
                     raw_output_tokens=raw_output_tokens,
                     raw_total_tokens=raw_total_tokens,
@@ -7767,6 +7919,7 @@ class ProxyService:
                     logical_input_tokens=logical_input_tokens,
                     upstream_input_tokens=cache_log_fields["upstream_input_tokens"],
                     upstream_cache_read_input_tokens=cache_log_fields["upstream_cache_read_input_tokens"],
+                    billable_cache_read_input_tokens=cache_read_input_tokens,
                     upstream_cache_creation_input_tokens=cache_log_fields["upstream_cache_creation_input_tokens"],
                     upstream_cache_creation_5m_input_tokens=cache_log_fields["upstream_cache_creation_5m_input_tokens"],
                     upstream_cache_creation_1h_input_tokens=cache_log_fields["upstream_cache_creation_1h_input_tokens"],
@@ -7791,6 +7944,11 @@ class ProxyService:
                     quota_limit_snapshot=quota_limit_snapshot,
                     quota_used_after=quota_used_after,
                     quota_cycle_date=quota_cycle_date,
+                    cache_read_cost=Decimal(str(cache_read_cost)),
+                    input_price_per_million_snapshot=input_price,
+                    output_price_per_million_snapshot=output_price,
+                    price_multiplier_snapshot=price_multiplier_decimal,
+                    token_multiplier_snapshot=token_multiplier_decimal,
                 )
             )
 

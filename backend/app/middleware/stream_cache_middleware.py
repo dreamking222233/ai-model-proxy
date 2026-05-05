@@ -1,18 +1,14 @@
-"""
-流式请求体缓存分析中间件。
+"""Streaming passthrough wrapper.
 
-该中间件只负责在流式请求发往上游前执行请求体分段缓存分析，不缓存或回放上游
-响应流。
+系统内部请求体分段缓存已停用。该包装器仅保留旧调用接口和流式 usage 收集能力。
 """
 import time
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 from app.database import release_session_connection
 from app.models.user import SysUser
-from app.services.request_body_cache_service import RequestBodyCacheService
 
 
 class StreamCollector:
@@ -41,23 +37,7 @@ class StreamCollector:
 
 
 class StreamCacheMiddleware:
-    """流式请求体缓存分析中间件。"""
-
-    @staticmethod
-    def _safe_user_id(user: SysUser) -> Optional[int]:
-        try:
-            identity = sa_inspect(user).identity
-            if identity:
-                return identity[0]
-        except Exception:
-            pass
-        try:
-            raw_dict = object.__getattribute__(user, "__dict__")
-            if isinstance(raw_dict, dict) and "id" in raw_dict:
-                return raw_dict.get("id")
-        except Exception:
-            pass
-        return None
+    """流式请求透传包装器。"""
 
     @staticmethod
     async def wrap_stream_request(
@@ -73,15 +53,8 @@ class StreamCacheMiddleware:
         billing_callback: Optional[Callable[[int, int, bool], None]] = None,
         cache_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Analyze request-body cache usage, then stream upstream response unchanged."""
-        user_id = StreamCacheMiddleware._safe_user_id(user)
-        cache_info = RequestBodyCacheService.analyze_request(
-            db=db,
-            user_id=user_id,
-            request_body=request_body,
-            request_format=request_format,
-            requested_model=model,
-        )
+        """Stream upstream response without internal request-body cache analysis."""
+        cache_info = None
         if cache_state is not None:
             cache_state["cache_info"] = cache_info
         collector = StreamCollector()
@@ -91,11 +64,7 @@ class StreamCacheMiddleware:
         if cache_state is not None:
             cache_state["collected_usage"] = collected_usage
         release_session_connection(db)
-        try:
-            async for chunk in upstream_call(collector, collected_usage):
-                if cache_state is not None and collected_usage.get("_first_stream_output_time") is not None:
-                    cache_state["first_stream_output_time"] = collected_usage["_first_stream_output_time"]
-                yield chunk
-        except Exception as exc:
-            setattr(exc, "_request_cache_info", cache_info)
-            raise
+        async for chunk in upstream_call(collector, collected_usage):
+            if cache_state is not None and collected_usage.get("_first_stream_output_time") is not None:
+                cache_state["first_stream_output_time"] = collected_usage["_first_stream_output_time"]
+            yield chunk

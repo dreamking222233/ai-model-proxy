@@ -186,15 +186,12 @@
                 <span v-if="record.quota_cycle_date"> / 周期 {{ record.quota_cycle_date }}</span>
               </div>
               <!-- Technology Badges (Cache/Compression) -->
-              <div class="tech-badges" v-if="hasPromptCacheUsage(record) || hasConversationShadow(record)">
+              <div class="tech-badges" v-if="hasPromptCacheUsage(record)">
                 <a-tooltip title="上游 Prompt 缓存读取">
                   <span v-if="getBillableCacheReadTokens(record) > 0" class="t-badge blue">缓存读取 {{ formatNumberShort(getBillableCacheReadTokens(record)) }}</span>
                 </a-tooltip>
                 <a-tooltip title="上游 Prompt 缓存创建，不额外计费">
                   <span v-if="record.upstream_cache_creation_input_tokens > 0" class="t-badge gray">缓存创建 {{ formatNumberShort(record.upstream_cache_creation_input_tokens) }}</span>
-                </a-tooltip>
-                <a-tooltip title="会话上下文压缩节省 (预估)">
-                  <span v-if="record.compression_saved_estimated_tokens > 0" class="t-badge green">省 {{ formatNumberShort(record.compression_saved_estimated_tokens) }}</span>
                 </a-tooltip>
               </div>
             </div>
@@ -322,15 +319,6 @@
             <span v-if="getBillableCacheReadTokens(sel) > 0">计费过程：缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(sel)) }} = ${{ formatCurrency(sel.cache_read_cost || 0) }}</span>
             <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token，不额外计费</span>
             <span>总计：${{ formatCurrency(sel.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
-          </div>
-        </a-descriptions-item>
-        <a-descriptions-item v-if="hasConversationShadow(sel)" label="上下文压缩">
-          <div class="modal-cache-summary">
-            <a-tag color="geekblue">{{ getCompressionStatusText(sel) }}</a-tag>
-            <span>匹配方式 {{ getConversationMatchText(sel) }}</span>
-            <span>原始估算 {{ formatNumber(sel.original_estimated_input_tokens || 0) }} Token</span>
-            <span>压缩后估算 {{ formatNumber(sel.compressed_estimated_input_tokens || 0) }} Token</span>
-            <span>理论节省 {{ formatNumber(sel.compression_saved_estimated_tokens || 0) }} Token</span>
           </div>
         </a-descriptions-item>
       </a-descriptions>
@@ -577,21 +565,9 @@ export default {
     getBillableCacheReadTokens(r) {
       return Number(r && (r.billable_cache_read_input_tokens != null ? r.billable_cache_read_input_tokens : r.upstream_cache_read_input_tokens) || 0)
     },
-    hasConversationShadow(r) {
-      if (!r) return false
-      return Boolean(r.compression_status && r.compression_status !== 'BYPASS' || r.conversation_session_id)
-    },
     getPromptCacheStatusText(r) {
       const map = { READ: '缓存读取', WRITE: '缓存创建', MIXED: '读写混合', NONE: '已尝试未命中', BYPASS: '未启用' }
       return map[String(r && r.upstream_prompt_cache_status || 'BYPASS')] || '未启用'
-    },
-    getCompressionStatusText(r) {
-      const map = { SHADOW_READY: 'Shadow可压缩', SHADOW_BYPASS_NEW_SESSION: '新会话', SHADOW_BYPASS_THRESHOLD: '未达阈值', SHADOW_BYPASS_RESET: '历史重置', ACTIVE_APPLIED: '已真实压缩', ACTIVE_FALLBACK_FULL: '压缩失败已回退', BYPASS: '未启用' }
-      return map[String(r && r.compression_status || 'BYPASS')] || String(r && r.compression_status || '')
-    },
-    getConversationMatchText(r) {
-      const map = { NEW: 'NEW', EXACT: 'EXACT', APPEND: 'APPEND', APPEND_TAIL_MUTATION: '尾部改写', RESET: 'RESET', BYPASS: 'BYPASS' }
-      return map[String(r && r.conversation_match_status || 'BYPASS')] || String(r && r.conversation_match_status || '')
     }
   }
 }

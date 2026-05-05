@@ -276,12 +276,6 @@
               <span v-if="getBillableCacheReadTokens(record) > 0" class="cache-chip cache-chip--hit">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }}</span>
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cache-chip cache-chip--miss">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
             </div>
-            <div v-if="hasConversationShadow(record)" class="cache-detail">
-              <span class="cache-chip cache-chip--token">会话压缩</span>
-              <span class="cache-chip cache-chip--hit">{{ getCompressionStatusText(record) }}</span>
-              <span class="cache-chip cache-chip--hit">{{ getConversationMatchText(record) }}</span>
-              <span class="cache-chip cache-chip--miss">预估省 {{ formatNumber(record.compression_saved_estimated_tokens || 0) }} tok</span>
-            </div>
           </div>
         </template>
 
@@ -393,21 +387,6 @@
               <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
               <span>总计：${{ formatCurrency(selectedRecord.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
             </div>
-          </a-descriptions-item>
-          <a-descriptions-item label="会话压缩 Shadow">
-            <div v-if="hasConversationShadow(selectedRecord)" class="modal-cache-summary">
-              <a-tag color="geekblue">{{ getCompressionStatusText(selectedRecord) }}</a-tag>
-              <span>会话 {{ selectedRecord.conversation_session_id || '-' }}</span>
-              <span>匹配 {{ getConversationMatchText(selectedRecord) }}</span>
-              <span>原始估算 {{ formatNumber(selectedRecord.original_estimated_input_tokens || 0) }} tok</span>
-              <span>压缩估算 {{ formatNumber(selectedRecord.compressed_estimated_input_tokens || 0) }} tok</span>
-              <span>理论节省 {{ formatNumber(selectedRecord.compression_saved_estimated_tokens || 0) }} tok</span>
-            </div>
-            <span v-else class="text-muted">未启用或未进入会话压缩 shadow</span>
-          </a-descriptions-item>
-          <a-descriptions-item label="压缩回退原因">
-            <span v-if="selectedRecord.compression_fallback_reason">{{ selectedRecord.compression_fallback_reason }}</span>
-            <span v-else class="text-muted">无</span>
           </a-descriptions-item>
         </a-descriptions>
 
@@ -712,14 +691,6 @@ export default {
         Number(record.upstream_cache_creation_input_tokens || 0) > 0
       )
     },
-    hasConversationShadow(record) {
-      if (!record) return false
-      return Boolean(
-        record.compression_status ||
-        Number(record.compression_saved_estimated_tokens || 0) > 0 ||
-        record.conversation_session_id
-      )
-    },
     getPromptCacheStatusText(record) {
       const map = {
         READ: '缓存读取',
@@ -729,29 +700,6 @@ export default {
         BYPASS: '未启用'
       }
       return map[String(record && record.upstream_prompt_cache_status || 'BYPASS')] || '未启用'
-    },
-    getCompressionStatusText(record) {
-      const map = {
-        SHADOW_READY: 'Shadow可压缩',
-        SHADOW_BYPASS_NEW_SESSION: '新会话',
-        SHADOW_BYPASS_THRESHOLD: '未达阈值',
-        SHADOW_BYPASS_RESET: '历史重置',
-        ACTIVE_APPLIED: '已真实压缩',
-        ACTIVE_FALLBACK_FULL: '压缩失败已回退',
-        BYPASS: '未启用'
-      }
-      return map[String(record && record.compression_status || 'BYPASS')] || String(record && record.compression_status || 'BYPASS')
-    },
-    getConversationMatchText(record) {
-      const map = {
-        NEW: 'NEW',
-        EXACT: 'EXACT',
-        APPEND: 'APPEND',
-        APPEND_TAIL_MUTATION: '尾部改写',
-        RESET: 'RESET',
-        BYPASS: 'BYPASS'
-      }
-      return map[String(record && record.conversation_match_status || 'BYPASS')] || String(record && record.conversation_match_status || 'BYPASS')
     },
     async fetchList() {
       this.loading = true

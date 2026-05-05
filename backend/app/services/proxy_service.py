@@ -49,10 +49,6 @@ from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
-from app.services.conversation_shadow_service import ConversationShadowService
-from app.services.conversation_session_service import ConversationSessionService
-from app.services.compression_guard_service import CompressionGuardService
-from app.services.upstream_session_strategy_service import UpstreamSessionStrategyService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
 from app.core.exceptions import ServiceException
@@ -950,11 +946,8 @@ class ProxyService:
         cache_info: Optional[dict[str, Any]],
         conversation_shadow_info: Optional[dict[str, Any]],
     ) -> Optional[dict[str, Any]]:
-        """Merge conversation shadow compaction info into shared cache_info."""
-        return ConversationShadowService.merge_into_cache_info(
-            cache_info,
-            conversation_shadow_info,
-        )
+        """Local conversation shadow compaction is disabled; keep cache info unchanged."""
+        return cache_info
 
     @staticmethod
     def _is_legacy_kiro_amazonq_host(channel: Channel, model_name: Optional[str] = None) -> bool:
@@ -4394,15 +4387,7 @@ class ProxyService:
             client_ip=client_ip,
             request_headers=request_headers,
         )
-        conversation_shadow_info = ConversationShadowService.analyze_request(
-            db,
-            user_id=ProxyService._safe_object_id(user),
-            requested_model=requested_model,
-            protocol_type="anthropic",
-            request_data=request_data,
-            request_headers=request_headers,
-            is_stream=bool(is_stream),
-        )
+        conversation_shadow_info = None
 
         try:
             # 2. Resolve model
@@ -6638,14 +6623,8 @@ class ProxyService:
         billing_input_tokens = 0
         billing_output_tokens = 0
         prompt_cache_state: dict[str, Any] = {}
-        conversation_runtime_info = copy.deepcopy(conversation_shadow_info) if conversation_shadow_info else None
-        if conversation_runtime_info:
-            conversation_runtime_info["upstream_session_mode"] = UpstreamSessionStrategyService.get_session_mode(channel)
-        active_compacted_request = (
-            copy.deepcopy(conversation_shadow_info.get("_conversation_compacted_request"))
-            if CompressionGuardService.should_apply_stream_compaction(conversation_shadow_info)
-            else None
-        )
+        conversation_runtime_info = None
+        active_compacted_request = None
 
         def billing_callback(input_tok: int, output_tok: int, is_hit: bool):
             nonlocal billing_input_tokens, billing_output_tokens
@@ -6717,7 +6696,7 @@ class ProxyService:
                                     )
                                     continue
 
-                                if request_attempt["is_compacted"] and CompressionGuardService.can_retry_stream_before_first_byte():
+                                if request_attempt["is_compacted"]:
                                     compression_fallback_reason = (
                                         f"compressed_request HTTP {response.status_code}: {body_text}"
                                     )
@@ -7029,17 +7008,8 @@ class ProxyService:
         request_data["stream"] = False
         original_request_data = copy.deepcopy(request_data)
         prompt_cache_state: dict[str, Any] = {}
-        conversation_runtime_info = copy.deepcopy(conversation_shadow_info) if conversation_shadow_info else None
-        if conversation_runtime_info:
-            conversation_runtime_info["upstream_session_mode"] = UpstreamSessionStrategyService.get_session_mode(channel)
-        active_compacted_request = (
-            copy.deepcopy(conversation_shadow_info.get("_conversation_compacted_request"))
-            if CompressionGuardService.should_apply_non_stream_compaction(
-                conversation_shadow_info,
-                is_stream=False,
-            )
-            else None
-        )
+        conversation_runtime_info = None
+        active_compacted_request = None
 
         # Define upstream call function for passthrough middleware
         async def upstream_call():
@@ -7109,10 +7079,7 @@ class ProxyService:
                                 )
                                 continue
 
-                            if request_attempt["is_compacted"] and CompressionGuardService.should_fallback_to_full_request(
-                                status_code=resp.status_code,
-                                response_text=body_text,
-                            ):
+                            if request_attempt["is_compacted"]:
                                 compression_fallback_reason = (
                                     f"compressed_request HTTP {resp.status_code}: {body_text}"
                                 )
@@ -7937,30 +7904,6 @@ class ProxyService:
                         balance_before = float(balance.balance) if balance else 0.0
                         balance_after = float(balance.balance) if balance else 0.0
 
-            shadow_commit = None
-            if cache_info and isinstance(cache_info.get("_conversation_shadow_commit"), dict):
-                shadow_commit = cache_info.get("_conversation_shadow_commit")
-            elif (
-                conversation_state_info
-                and isinstance(conversation_state_info.get("_conversation_shadow_commit"), dict)
-            ):
-                shadow_commit = conversation_state_info.get("_conversation_shadow_commit")
-
-            committed_session_id = ConversationSessionService.commit_success_state(
-                write_db,
-                user_id=fresh_user.id,
-                requested_model=requested_model,
-                protocol_type=channel.protocol_type or "",
-                channel_id=channel.id,
-                shadow_commit=shadow_commit,
-            )
-            if committed_session_id and not cache_log_fields.get("conversation_session_id"):
-                cache_log_fields["conversation_session_id"] = committed_session_id
-                if cache_info is not None:
-                    cache_info["conversation_session_id"] = committed_session_id
-                if conversation_state_info is not None:
-                    conversation_state_info["conversation_session_id"] = committed_session_id
-
             logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
             write_db.add(
                 ConsumptionRecord(
@@ -8085,12 +8028,6 @@ class ProxyService:
                 protocol_type=channel.protocol_type,
                 cache_info=cache_info,
             )
-            if cache_info and cache_info.get("_conversation_mark_cooldown"):
-                ConversationSessionService.mark_session_cooldown_by_session_id(
-                    write_db,
-                    cache_log_fields.get("conversation_session_id") or committed_session_id,
-                )
-
             if fresh_api_key_record:
                 fresh_api_key_record.total_requests += 1
                 fresh_api_key_record.total_tokens += total_tokens

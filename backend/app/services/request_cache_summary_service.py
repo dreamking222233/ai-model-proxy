@@ -72,23 +72,17 @@ class RequestCacheSummaryService:
                 cache_info.get("upstream_cache_creation_1h_input_tokens", 0) or 0
             ),
             "upstream_prompt_cache_status": cache_info.get("upstream_prompt_cache_status") or "BYPASS",
-            "conversation_session_id": cache_info.get("conversation_session_id"),
-            "conversation_match_status": cache_info.get("conversation_match_status"),
-            "compression_mode": cache_info.get("compression_mode"),
-            "compression_status": cache_info.get("compression_status"),
-            "original_estimated_input_tokens": int(
-                cache_info.get("original_estimated_input_tokens", 0) or 0
-            ),
-            "compressed_estimated_input_tokens": int(
-                cache_info.get("compressed_estimated_input_tokens", 0) or 0
-            ),
-            "compression_saved_estimated_tokens": int(
-                cache_info.get("compression_saved_estimated_tokens", 0) or 0
-            ),
-            "compression_ratio": float(cache_info.get("compression_ratio", 0) or 0),
-            "compression_fallback_reason": cache_info.get("compression_fallback_reason"),
-            "upstream_session_mode": cache_info.get("upstream_session_mode"),
-            "upstream_session_id": cache_info.get("upstream_session_id"),
+            "conversation_session_id": None,
+            "conversation_match_status": None,
+            "compression_mode": None,
+            "compression_status": None,
+            "original_estimated_input_tokens": 0,
+            "compressed_estimated_input_tokens": 0,
+            "compression_saved_estimated_tokens": 0,
+            "compression_ratio": 0.0,
+            "compression_fallback_reason": None,
+            "upstream_session_mode": None,
+            "upstream_session_id": None,
         }
 
     @staticmethod

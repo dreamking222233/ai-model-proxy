@@ -209,36 +209,6 @@
                 </div>
               </div>
 
-              <!-- 会话压缩卡片 -->
-              <div v-if="hasConversationShadow(record)" class="detail-card compression-card">
-                <div class="card-header">
-                  <div class="header-main">
-                    <a-icon type="compress" />
-                    <span>会话历史压缩</span>
-                  </div>
-                  <div class="header-side">
-                    <a-tag color="geekblue" class="status-tag">{{ getCompressionStatusText(record) }}</a-tag>
-                    <span class="match-mode">{{ getConversationMatchText(record) }}</span>
-                  </div>
-                </div>
-                <div class="card-body">
-                  <div class="stats-grid">
-                    <div class="stat-box">
-                      <div class="label">理论节省</div>
-                      <div class="value success">{{ formatNumber(record.compression_saved_estimated_tokens || 0) }}<span class="unit">tok</span></div>
-                    </div>
-                    <div class="stat-box">
-                      <div class="label">压缩后估算</div>
-                      <div class="value">{{ formatNumber(record.compressed_estimated_input_tokens || 0) }}<span class="unit">tok</span></div>
-                    </div>
-                    <div class="stat-box">
-                      <div class="label">会话标识码</div>
-                      <div class="value small-code"><code>{{ record.conversation_session_id ? record.conversation_session_id.substring(0,8) : '-' }}</code></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
             </div>
 
             <!-- 异常提示 -->
@@ -247,8 +217,8 @@
               <span>运行异常：{{ record.error_message.substring(0, 80) }}... <strong>点击查看完整堆栈</strong></span>
             </div>
 
-            <div v-if="!hasPromptCacheUsage(record) && !hasConversationShadow(record)" class="no-expanded-data">
-              <a-empty :image="simpleImage" description="该请求未触发额外的缓存或压缩优化。" />
+            <div v-if="!hasPromptCacheUsage(record)" class="no-expanded-data">
+              <a-empty :image="simpleImage" description="该请求未触发额外的上游缓存信息。" />
             </div>
           </div>
         </template>
@@ -424,21 +394,6 @@
               <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
               <span>总计：${{ formatCurrency(selectedRecord.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
             </div>
-          </a-descriptions-item>
-          <a-descriptions-item label="会话压缩 Shadow">
-            <div v-if="hasConversationShadow(selectedRecord)" class="modal-cache-summary">
-              <a-tag color="geekblue">{{ getCompressionStatusText(selectedRecord) }}</a-tag>
-              <span>会话 {{ selectedRecord.conversation_session_id || '-' }}</span>
-              <span>匹配 {{ getConversationMatchText(selectedRecord) }}</span>
-              <span>原始估算 {{ formatNumber(selectedRecord.original_estimated_input_tokens || 0) }} tok</span>
-              <span>压缩估算 {{ formatNumber(selectedRecord.compressed_estimated_input_tokens || 0) }} tok</span>
-              <span>理论节省 {{ formatNumber(selectedRecord.compression_saved_estimated_tokens || 0) }} tok</span>
-            </div>
-            <span v-else class="text-muted">未启用或未进入会话压缩 shadow</span>
-          </a-descriptions-item>
-          <a-descriptions-item label="压缩回退原因">
-            <span v-if="selectedRecord.compression_fallback_reason">{{ selectedRecord.compression_fallback_reason }}</span>
-            <span v-else class="text-muted">无</span>
           </a-descriptions-item>
         </a-descriptions>
 
@@ -646,14 +601,6 @@ export default {
         Number(record.upstream_cache_creation_input_tokens || 0) > 0
       )
     },
-    hasConversationShadow(record) {
-      if (!record) return false
-      return Boolean(
-        record.compression_status ||
-        Number(record.compression_saved_estimated_tokens || 0) > 0 ||
-        record.conversation_session_id
-      )
-    },
     getPromptCacheStatusText(record) {
       const map = {
         READ: '缓存读取',
@@ -663,29 +610,6 @@ export default {
         BYPASS: '未启用'
       }
       return map[String(record && record.upstream_prompt_cache_status || 'BYPASS')] || '未启用'
-    },
-    getCompressionStatusText(record) {
-      const map = {
-        SHADOW_READY: 'Shadow可压缩',
-        SHADOW_BYPASS_NEW_SESSION: '新会话',
-        SHADOW_BYPASS_THRESHOLD: '未达阈值',
-        SHADOW_BYPASS_RESET: '历史重置',
-        ACTIVE_APPLIED: '已真实压缩',
-        ACTIVE_FALLBACK_FULL: '压缩失败已回退',
-        BYPASS: '未启用'
-      }
-      return map[String(record && record.compression_status || 'BYPASS')] || String(record && record.compression_status || 'BYPASS')
-    },
-    getConversationMatchText(record) {
-      const map = {
-        NEW: 'NEW',
-        EXACT: 'EXACT',
-        APPEND: 'APPEND',
-        APPEND_TAIL_MUTATION: '尾部改写',
-        RESET: 'RESET',
-        BYPASS: 'BYPASS'
-      }
-      return map[String(record && record.conversation_match_status || 'BYPASS')] || String(record && record.conversation_match_status || 'BYPASS')
     },
     async fetchList() {
       this.loading = true

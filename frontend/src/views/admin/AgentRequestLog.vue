@@ -228,10 +228,14 @@
         </a-descriptions-item>
         <a-descriptions-item v-if="!isImageRequest(selectedRecord)" label="计费明细">
           <div class="modal-cache-summary">
-            <span>输入 ${{ formatCurrency(selectedRecord.input_cost || 0) }}</span>
-            <span>输出 ${{ formatCurrency(selectedRecord.output_cost || 0) }}</span>
-            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} tok = ${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}（输入价 10%）</span>
-            <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建不额外计费</span>
+            <span>输入价格：${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }} / 1M tokens</span>
+            <span>输出价格：${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }} / 1M tokens</span>
+            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">缓存读取价格：${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }} / 1M tokens（输入价 × 10%）</span>
+            <span>计费过程：输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }} = ${{ formatCurrency(selectedRecord.input_cost || 0) }}</span>
+            <span>计费过程：输出 {{ formatNumber(selectedRecord.output_tokens || 0) }} / 1M × ${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }} = ${{ formatCurrency(selectedRecord.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">计费过程：缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }} = ${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}</span>
+            <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
+            <span>总计：${{ formatCurrency(selectedRecord.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
           </div>
         </a-descriptions-item>
       </a-descriptions>
@@ -437,6 +441,12 @@ export default {
     },
     formatCurrency(amount) {
       return Number(amount || 0).toFixed(6)
+    },
+    formatPrice(amount) {
+      return Number(amount || 0).toFixed(6)
+    },
+    getCacheReadPricePerMillion(record) {
+      return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
     },
     getBillableInputTokens(record) {
       return Number(record && (record.billable_input_tokens != null ? record.billable_input_tokens : record.input_tokens) || 0)

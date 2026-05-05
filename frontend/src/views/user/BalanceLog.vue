@@ -314,10 +314,14 @@
         </a-descriptions-item>
         <a-descriptions-item v-if="!isImageRequest(sel)" label="计费明细">
           <div class="modal-cache-summary">
-            <span>输入 ${{ Number(sel.input_cost || 0).toFixed(6) }}</span>
-            <span>输出 ${{ Number(sel.output_cost || 0).toFixed(6) }}</span>
-            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} Token = ${{ Number(sel.cache_read_cost || 0).toFixed(6) }}（输入价 10%）</span>
-            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建不额外计费</span>
+            <span>输入价格：${{ formatPrice(sel.input_price_per_million_snapshot) }} / 1M tokens</span>
+            <span>输出价格：${{ formatPrice(sel.output_price_per_million_snapshot) }} / 1M tokens</span>
+            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取价格：${{ formatPrice(getCacheReadPricePerMillion(sel)) }} / 1M tokens（输入价 × 10%）</span>
+            <span>计费过程：输入 {{ formatNumber(getBillableInputTokens(sel)) }} / 1M × ${{ formatPrice(sel.input_price_per_million_snapshot) }} = ${{ formatCurrency(sel.input_cost || 0) }}</span>
+            <span>计费过程：输出 {{ formatNumber(sel.output_tokens || 0) }} / 1M × ${{ formatPrice(sel.output_price_per_million_snapshot) }} = ${{ formatCurrency(sel.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(sel) > 0">计费过程：缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(sel)) }} = ${{ formatCurrency(sel.cache_read_cost || 0) }}</span>
+            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token，不额外计费</span>
+            <span>总计：${{ formatCurrency(sel.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
           </div>
         </a-descriptions-item>
         <a-descriptions-item v-if="hasConversationShadow(sel)" label="上下文压缩">
@@ -544,6 +548,15 @@ export default {
     formatNumber(n) {
       if (n == null) return '0'
       return Number(n).toLocaleString()
+    },
+    formatCurrency(amount) {
+      return Number(amount || 0).toFixed(6)
+    },
+    formatPrice(amount) {
+      return Number(amount || 0).toFixed(6)
+    },
+    getCacheReadPricePerMillion(record) {
+      return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
     },
     formatQuotaAmount(value, metric) {
       if (metric === 'cost_usd') {

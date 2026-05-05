@@ -19,6 +19,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import suppress
 from typing import Any, Optional
 
 from datetime import datetime, timedelta
@@ -30,6 +31,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import release_session_connection, session_scope
 from app.models.user import SysUser, UserApiKey
 from app.models.channel import Channel
@@ -3559,15 +3561,7 @@ class ProxyService:
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Request-ID": request_id,
-            },
-        )
+        return ProxyService._build_streaming_response(event_generator(), request_id)
 
     @staticmethod
     async def _forward_responses_websocket_turn(
@@ -3751,6 +3745,64 @@ class ProxyService:
         """Render a Responses payload dict as an SSE event."""
         event_type = str(payload.get("type", "message") or "message")
         return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    @staticmethod
+    def _stream_response_headers(request_id: str) -> dict[str, str]:
+        """Headers that keep SSE unbuffered through Nginx/CDN layers."""
+        return {
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Request-ID": request_id,
+        }
+
+    @staticmethod
+    def _resolve_stream_heartbeat_interval() -> float:
+        try:
+            interval = float(settings.STREAM_HEARTBEAT_INTERVAL_SECONDS)
+        except (TypeError, ValueError):
+            interval = 20.0
+        return max(1.0, interval)
+
+    @staticmethod
+    async def _with_sse_heartbeat(source, *, comment: str = "keep-alive"):
+        """Yield SSE comment heartbeats while waiting for slow upstream chunks."""
+        interval = ProxyService._resolve_stream_heartbeat_interval()
+        iterator = source.__aiter__()
+        pending = asyncio.create_task(iterator.__anext__())
+
+        yield f": {comment}\n\n"
+        try:
+            while True:
+                done, _ = await asyncio.wait({pending}, timeout=interval)
+                if not done:
+                    yield f": {comment}\n\n"
+                    continue
+
+                try:
+                    chunk = pending.result()
+                except StopAsyncIteration:
+                    break
+
+                yield chunk
+                pending = asyncio.create_task(iterator.__anext__())
+        finally:
+            if pending and not pending.done():
+                pending.cancel()
+                with suppress(asyncio.CancelledError):
+                    await pending
+            aclose = getattr(iterator, "aclose", None)
+            if callable(aclose):
+                with suppress(Exception):
+                    await aclose()
+
+    @staticmethod
+    def _build_streaming_response(source, request_id: str) -> StreamingResponse:
+        return StreamingResponse(
+            ProxyService._with_sse_heartbeat(source),
+            media_type="text/event-stream",
+            headers=ProxyService._stream_response_headers(request_id),
+        )
 
     @staticmethod
     def _extract_responses_usage(payload: dict) -> tuple[int, int]:
@@ -4650,15 +4702,7 @@ class ProxyService:
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Request-ID": request_id,
-            },
-        )
+        return ProxyService._build_streaming_response(event_generator(), request_id)
 
     # ===================================================================
     # OpenAI non-streaming
@@ -5144,15 +5188,7 @@ class ProxyService:
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Request-ID": request_id,
-            },
-        )
+        return ProxyService._build_streaming_response(event_generator(), request_id)
 
     @staticmethod
     async def _non_stream_openai_via_anthropic_request(
@@ -6097,15 +6133,7 @@ class ProxyService:
                     extra=stream_debug_extra,
                 )
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Request-ID": request_id,
-            },
-        )
+        return ProxyService._build_streaming_response(event_generator(), request_id)
 
     @staticmethod
     def _should_use_responses_bridge(
@@ -6713,15 +6741,7 @@ class ProxyService:
                     extra=stream_debug_extra,
                 )
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Request-ID": request_id,
-            },
-        )
+        return ProxyService._build_streaming_response(event_generator(), request_id)
 
     # ===================================================================
     # Anthropic non-streaming

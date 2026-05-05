@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # Server
     SERVER_PORT: int = 8085
+    STREAM_HEARTBEAT_INTERVAL_SECONDS: int = 20
 
     # CORS
     CORS_ORIGINS: List[str] = [

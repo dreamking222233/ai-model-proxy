@@ -3064,7 +3064,7 @@ class ProxyService:
                 release_session_connection(db)
                 started_at = time.time()
                 try:
-                    completed_output, input_tokens, output_tokens, first_chunk_time = (
+                    completed_output, input_tokens, output_tokens, first_chunk_time, usage_summary = (
                         await ProxyService._forward_responses_websocket_turn(
                             websocket,
                             channel,
@@ -3074,6 +3074,11 @@ class ProxyService:
                         )
                     )
                     response_time_ms = ProxyService._calculate_elapsed_ms(started_at, first_chunk_time)
+                    cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+                        cache_info,
+                        usage_summary,
+                        source="responses_input_tokens_details",
+                    )
                     ProxyService._finalize_successful_text_request(
                         db,
                         user,
@@ -3496,9 +3501,28 @@ class ProxyService:
                     payload_type = str(payload.get("type", "") or "")
                     if payload_type == "response.completed":
                         completed = True
-                        input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                        usage = ProxyService._extract_responses_usage_dict(payload)
+                        usage_summary = ProxyService._extract_responses_prompt_cache_summary(
+                            usage,
+                            channel,
+                        )
+                        input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
+                        output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
                         collected_usage["prompt_tokens"] = input_tokens
                         collected_usage["completion_tokens"] = output_tokens
+                        collected_usage["logical_input_tokens"] = int(
+                            usage_summary.get("logical_input_tokens", input_tokens) or 0
+                        )
+                        collected_usage["cache_read_input_tokens"] = int(
+                            usage_summary.get("cache_read_input_tokens", 0) or 0
+                        )
+                        collected_usage["cache_creation_input_tokens"] = int(
+                            usage_summary.get("cache_creation_input_tokens", 0) or 0
+                        )
+                        collected_usage["prompt_cache_status"] = usage_summary.get(
+                            "prompt_cache_status", "BYPASS"
+                        )
+                        collected_usage["_upstream_cache_usage"] = usage_summary
                         # 记录结束
                         collector.add_chunk("", "stop")
                     elif payload_type == "error":
@@ -3622,6 +3646,11 @@ class ProxyService:
                             cache_info=error_cache_info,
                         )
                     else:
+                        stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+                            cache_state.get("cache_info"),
+                            (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
+                            source="responses_input_tokens_details",
+                        )
                         ProxyService._finalize_successful_text_request(
                             db,
                             user,
@@ -3636,7 +3665,7 @@ class ProxyService:
                             response_time_ms,
                             is_stream=True,
                             actual_model=request_data.get("model"),
-                            cache_info=cache_state.get("cache_info"),
+                            cache_info=stream_cache_info,
                             request_type="responses",
                         )
                 except Exception as accounting_err:
@@ -3651,11 +3680,12 @@ class ProxyService:
         request_data: dict,
         requested_model: str,
         request_headers: Optional[dict[str, str]] = None,
-    ) -> tuple[list, int, int, Optional[float]]:
+    ) -> tuple[list, int, int, Optional[float], dict[str, Any]]:
         """Forward one websocket turn to upstream ``/responses`` SSE."""
         completed_output: list = []
         input_tokens = 0
         output_tokens = 0
+        usage_summary: dict[str, Any] = {}
         completed = False
         sent_any_payload = False
         saw_error = False
@@ -3676,7 +3706,13 @@ class ProxyService:
                 if payload_type == "response.completed":
                     completed = True
                     completed_output = ProxyService._extract_responses_output(payload)
-                    input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                    usage = ProxyService._extract_responses_usage_dict(payload)
+                    usage_summary = ProxyService._extract_responses_prompt_cache_summary(
+                        usage,
+                        channel,
+                    )
+                    input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
+                    output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
                 elif payload_type == "error":
                     saw_error = True
                     error_message = (
@@ -3699,7 +3735,7 @@ class ProxyService:
             raise error from exc
 
         if completed:
-            return completed_output, input_tokens, output_tokens, first_chunk_time
+            return completed_output, input_tokens, output_tokens, first_chunk_time, usage_summary
 
         if saw_error:
             error = ResponsesTurnError(error_message or "Upstream responses error", can_retry=not sent_any_payload)
@@ -3886,17 +3922,68 @@ class ProxyService:
         )
 
     @staticmethod
-    def _extract_responses_usage(payload: dict) -> tuple[int, int]:
-        """Extract input/output token usage from a Responses payload."""
+    def _extract_responses_usage_dict(payload: dict) -> dict[str, Any]:
+        """Extract raw usage object from a Responses payload."""
         usage = {}
         if payload.get("type") == "response.completed":
             usage = payload.get("response", {}).get("usage", {}) or {}
         elif payload.get("object") == "response":
             usage = payload.get("usage", {}) or {}
+        return usage if isinstance(usage, dict) else {}
+
+    @staticmethod
+    def _extract_responses_usage(payload: dict) -> tuple[int, int]:
+        """Extract raw input/output token usage from a Responses payload."""
+        usage = ProxyService._extract_responses_usage_dict(payload)
         return (
             int(usage.get("input_tokens") or 0),
             int(usage.get("output_tokens") or 0),
         )
+
+    @staticmethod
+    def _extract_responses_prompt_cache_summary(
+        usage: Optional[dict[str, Any]],
+        channel: Channel | None = None,
+    ) -> dict[str, Any]:
+        """Parse Responses API cached input tokens into the shared cache-billing shape."""
+        usage = usage or {}
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        details = usage.get("input_tokens_details")
+        if not isinstance(details, dict):
+            details = usage.get("prompt_tokens_details")
+        has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
+        cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0
+        billable_input = max(input_tokens - cache_read, 0)
+
+        cache_creation = 0
+        if (
+            has_cache_details
+            and cache_read == 0
+            and input_tokens > 0
+            and ProxyService._is_cpa_openai_cache_channel(channel)
+        ):
+            cache_creation = input_tokens
+
+        if cache_read > 0 and cache_creation > 0:
+            status = "MIXED"
+        elif cache_read > 0:
+            status = "READ"
+        elif cache_creation > 0:
+            status = "WRITE"
+        else:
+            status = "BYPASS"
+
+        return {
+            "input_tokens": billable_input,
+            "output_tokens": output_tokens,
+            "logical_input_tokens": input_tokens,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_creation,
+            "cache_creation_5m_input_tokens": 0,
+            "cache_creation_1h_input_tokens": 0,
+            "prompt_cache_status": status,
+        }
 
     @staticmethod
     def _extract_responses_output(payload: dict) -> list:
@@ -3971,14 +4058,22 @@ class ProxyService:
                 resp.text
             )
             response_body = ProxyService._rewrite_response_model(response_body, requested_model)
+            usage_summary = ProxyService._extract_responses_prompt_cache_summary(
+                response_body.get("usage", {}) if isinstance(response_body, dict) else {},
+                channel,
+            )
 
             # Return standardized response format for the shared middleware contract
             return {
                 "response": response_body,
                 "model": request_data.get("model"),
                 "usage": {
-                    "prompt_tokens": input_tokens,
+                    "prompt_tokens": usage_summary.get("input_tokens", input_tokens),
                     "completion_tokens": output_tokens,
+                    "logical_input_tokens": usage_summary.get("logical_input_tokens", input_tokens),
+                    "cache_read_input_tokens": usage_summary.get("cache_read_input_tokens", 0),
+                    "cache_creation_input_tokens": usage_summary.get("cache_creation_input_tokens", 0),
+                    "prompt_cache_status": usage_summary.get("prompt_cache_status", "BYPASS"),
                 }
             }
 
@@ -4000,16 +4095,22 @@ class ProxyService:
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
-
-        # Middleware is passthrough; billing tokens equal actual tokens
-        billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
-            cache_info=cache_info,
-            user=user,
-            actual_tokens={
+        response_usage = cache_response.get("usage", {})
+        cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+            cache_info,
+            {
                 "input_tokens": actual_input_tokens,
                 "output_tokens": actual_output_tokens,
-            }
+                "logical_input_tokens": response_usage.get("logical_input_tokens", actual_input_tokens),
+                "cache_read_input_tokens": response_usage.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": response_usage.get("cache_creation_input_tokens", 0),
+                "cache_creation_5m_input_tokens": 0,
+                "cache_creation_1h_input_tokens": 0,
+                "prompt_cache_status": response_usage.get("prompt_cache_status", "BYPASS"),
+            },
+            source="responses_input_tokens_details",
         )
+        billing_input_tokens, billing_output_tokens = actual_input_tokens, actual_output_tokens
 
         ProxyService._finalize_successful_text_request(
             db,
@@ -6029,9 +6130,28 @@ class ProxyService:
                         for sse_line in ensure_message_start(final_response):
                             yield sse_line
 
-                        input_tokens, output_tokens = ProxyService._extract_responses_usage(payload)
+                        usage = ProxyService._extract_responses_usage_dict(payload)
+                        usage_summary = ProxyService._extract_responses_prompt_cache_summary(
+                            usage,
+                            channel,
+                        )
+                        input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
+                        output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
                         collected_usage["prompt_tokens"] = input_tokens
                         collected_usage["completion_tokens"] = output_tokens
+                        collected_usage["logical_input_tokens"] = int(
+                            usage_summary.get("logical_input_tokens", input_tokens) or 0
+                        )
+                        collected_usage["cache_read_input_tokens"] = int(
+                            usage_summary.get("cache_read_input_tokens", 0) or 0
+                        )
+                        collected_usage["cache_creation_input_tokens"] = int(
+                            usage_summary.get("cache_creation_input_tokens", 0) or 0
+                        )
+                        collected_usage["prompt_cache_status"] = usage_summary.get(
+                            "prompt_cache_status", "BYPASS"
+                        )
+                        collected_usage["_upstream_cache_usage"] = usage_summary
 
                         for sse_line in close_text_block():
                             yield sse_line
@@ -6189,8 +6309,13 @@ class ProxyService:
             finally:
                 response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
-                    merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+                    upstream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
                         cache_state.get("cache_info"),
+                        (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
+                        source="responses_input_tokens_details",
+                    )
+                    merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
+                        upstream_cache_info,
                         conversation_shadow_info,
                     )
                     if stream_error:

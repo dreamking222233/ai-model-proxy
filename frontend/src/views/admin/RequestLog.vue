@@ -226,7 +226,12 @@
 
         <template slot="total_cost" slot-scope="text, record">
           <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
-          <span v-else-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
+          <div v-else-if="text != null && text > 0" class="cost-breakdown-cell">
+            <span class="cost-text">${{ formatCurrency(text) }}</span>
+            <span class="cost-breakdown-line">入 {{ formatNumber(getBillableInputTokens(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+            <span class="cost-breakdown-line">出 {{ formatNumber(record.output_tokens || 0) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+          </div>
           <span v-else class="text-muted">$0.00</span>
         </template>
 
@@ -518,7 +523,7 @@ export default {
           title: '计费',
           dataIndex: 'total_cost',
           key: 'total_cost',
-          width: 100,
+          width: 180,
           align: 'right',
           scopedSlots: { customRender: 'total_cost' }
         },
@@ -1251,6 +1256,24 @@ export default {
     font-size: 12px;
     color: #fa8c16;
     font-weight: 500;
+  }
+
+  .cost-breakdown-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    line-height: 1.25;
+  }
+
+  .cost-breakdown-line {
+    font-size: 11px;
+    color: #8c8c8c;
+    white-space: nowrap;
+  }
+
+  .cost-breakdown-line--cache {
+    color: #096dd9;
   }
 
   /* ===== IP Code ===== */

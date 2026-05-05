@@ -276,7 +276,12 @@
 
         <template slot="total_cost" slot-scope="text, record">
           <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
-          <span v-else-if="text != null && text > 0" class="cost-text">${{ text.toFixed(6) }}</span>
+          <div v-else-if="text != null && text > 0" class="cost-breakdown-cell">
+            <span class="cost-text">${{ formatCurrency(text) }}</span>
+            <span class="cost-breakdown-line">入 {{ formatNumber(getBillableInputTokens(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+            <span class="cost-breakdown-line">出 {{ formatNumber(record.output_tokens || 0) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+          </div>
           <span v-else class="text-muted">$0.00</span>
         </template>
 
@@ -492,7 +497,7 @@ export default {
         { title: '用量', key: 'tokens', width: 300, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'responseTime', width: 110, align: 'right', scopedSlots: { customRender: 'responseTime' } },
-        { title: '计费', dataIndex: 'total_cost', key: 'total_cost', width: 100, align: 'right', scopedSlots: { customRender: 'total_cost' } },
+        { title: '计费', dataIndex: 'total_cost', key: 'total_cost', width: 180, align: 'right', scopedSlots: { customRender: 'total_cost' } },
         { title: 'IP地址', dataIndex: 'client_ip', key: 'client_ip', width: 130, scopedSlots: { customRender: 'client_ip' } },
         { title: '流式', dataIndex: 'is_stream', key: 'is_stream', width: 70, align: 'center', scopedSlots: { customRender: 'is_stream' } },
         { title: '时间', dataIndex: 'created_at', key: 'createdAt', width: 170, scopedSlots: { customRender: 'createdAt' } }
@@ -1210,6 +1215,24 @@ export default {
     font-size: 12px;
     color: #fa8c16;
     font-weight: 500;
+  }
+
+  .cost-breakdown-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    line-height: 1.25;
+  }
+
+  .cost-breakdown-line {
+    font-size: 11px;
+    color: #8c8c8c;
+    white-space: nowrap;
+  }
+
+  .cost-breakdown-line--cache {
+    color: #096dd9;
   }
 
   .ip-code {

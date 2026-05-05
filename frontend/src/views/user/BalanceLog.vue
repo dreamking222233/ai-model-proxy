@@ -204,7 +204,12 @@
           <template slot="col_cost" slot-scope="text, record">
             <div class="cost-cell">
               <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 💰</span>
-              <span v-else-if="text" class="price token">-${{ Math.abs(text || 0).toFixed(6) }}</span>
+              <template v-else-if="text">
+                <span class="price token">-${{ Math.abs(text || 0).toFixed(6) }}</span>
+                <span class="cost-breakdown-line">入 {{ formatNumber(getBillableInputTokens(record)) }} = ${{ Number(record.input_cost || 0).toFixed(6) }}</span>
+                <span class="cost-breakdown-line">出 {{ formatNumber(record.output_tokens || 0) }} = ${{ Number(record.output_cost || 0).toFixed(6) }}</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} = ${{ Number(record.cache_read_cost || 0).toFixed(6) }}</span>
+              </template>
               <span v-else class="price free">FREE</span>
             </div>
           </template>
@@ -376,7 +381,7 @@ export default {
       columns: [
         { title: '模型名称', dataIndex: 'requested_model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
         { title: '用量细则', dataIndex: 'total_tokens', key: 'tokens', width: 320, scopedSlots: { customRender: 'col_tokens' } },
-        { title: '实际计费', dataIndex: 'total_cost', key: 'cost', width: 140, align: 'right', scopedSlots: { customRender: 'col_cost' } },
+        { title: '实际计费', dataIndex: 'total_cost', key: 'cost', width: 210, align: 'right', scopedSlots: { customRender: 'col_cost' } },
         { title: '请求状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'col_status' } },
         { title: '响应/并发', dataIndex: 'response_time_ms', key: 'rt', width: 130, align: 'right', scopedSlots: { customRender: 'col_rt' } },
         { title: '请求时间', dataIndex: 'created_at', key: 'time', width: 160, scopedSlots: { customRender: 'col_time' } }
@@ -935,10 +940,26 @@ export default {
   }
 
   .cost-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    line-height: 1.25;
+
     .price { font-family: 'SF Mono', monospace; font-weight: 700; font-size: 14px; }
     .price.token { color: #f5222d; }
     .price.image { color: #722ed1; }
     .price.free { color: #52c41a; }
+
+    .cost-breakdown-line {
+      font-size: 11px;
+      color: #8c8c8c;
+      white-space: nowrap;
+
+      &.cache {
+        color: #096dd9;
+      }
+    }
   }
 
   .status-indicator {

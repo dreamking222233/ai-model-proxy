@@ -7,9 +7,9 @@ from typing import Optional
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, update
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.exceptions import ServiceException
 from app.models.log import (
@@ -32,6 +32,7 @@ class SubscriptionService:
     DEFAULT_RESET_PERIOD = "day"
     UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("300000000")
     UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
+    RETRYABLE_DB_ERROR_CODES = {1205, 1213}
 
     BUILTIN_PLANS = [
         {
@@ -196,6 +197,25 @@ class SubscriptionService:
         if SubscriptionService._is_unlimited_subscription(subscription):
             return SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT
         return SubscriptionService._normalize_decimal(getattr(subscription, "quota_value", None))
+
+    @staticmethod
+    def is_retryable_concurrency_error(exc: Exception) -> bool:
+        """Return whether one DB exception is safe to retry in a fresh transaction."""
+        if not isinstance(exc, OperationalError):
+            return False
+
+        error_code = None
+        orig = getattr(exc, "orig", None)
+        if orig is not None:
+            args = getattr(orig, "args", ())
+            if args:
+                error_code = args[0]
+
+        if error_code in SubscriptionService.RETRYABLE_DB_ERROR_CODES:
+            return True
+
+        message = str(orig or exc).lower()
+        return "lock wait timeout" in message or "deadlock found" in message
 
     @staticmethod
     def _get_unlimited_daily_token_limit(subscription: UserSubscription) -> Optional[float]:
@@ -720,6 +740,43 @@ class SubscriptionService:
         raise ServiceException(500, "加载套餐使用周期失败", "SUBSCRIPTION_CYCLE_LOAD_FAILED")
 
     @staticmethod
+    def _load_cycle_by_id(
+        db: Session,
+        cycle_id: int,
+    ) -> Optional[SubscriptionUsageCycle]:
+        return (
+            db.query(SubscriptionUsageCycle)
+            .filter(SubscriptionUsageCycle.id == cycle_id)
+            .first()
+        )
+
+    @staticmethod
+    def _apply_cycle_consumption_update(
+        db: Session,
+        *,
+        cycle_id: int,
+        consumed_amount: Decimal,
+        request_id: str,
+        quota_metric: str,
+        quota_limit: Decimal,
+    ) -> bool:
+        result = db.execute(
+            update(SubscriptionUsageCycle)
+            .where(
+                SubscriptionUsageCycle.id == cycle_id,
+                SubscriptionUsageCycle.used_amount + consumed_amount <= quota_limit,
+            )
+            .values(
+                quota_metric=quota_metric,
+                quota_limit=quota_limit,
+                used_amount=SubscriptionUsageCycle.used_amount + consumed_amount,
+                request_count=func.coalesce(SubscriptionUsageCycle.request_count, 0) + 1,
+                last_request_id=request_id,
+            )
+        )
+        return bool(result.rowcount)
+
+    @staticmethod
     def _get_cycle_for_summary(
         db: Session,
         subscription: UserSubscription,
@@ -818,12 +875,7 @@ class SubscriptionService:
             if raw_estimate is not None:
                 estimated_consumed_amount = SubscriptionService._normalize_decimal(raw_estimate)
 
-        cycle = SubscriptionService._get_or_create_cycle(
-            db,
-            active_subscription,
-            usage_now,
-            lock=estimated_consumed_amount is not None,
-        )
+        cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now)
         quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         if used_amount >= quota_limit:
@@ -845,8 +897,6 @@ class SubscriptionService:
         now: Optional[datetime] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
-        cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now, lock=True)
-
         plan_kind = SubscriptionService._get_plan_kind(subscription)
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
         if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
@@ -855,23 +905,40 @@ class SubscriptionService:
             consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
 
         quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
-        next_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount) + consumed_amount
-        if next_used_amount > quota_limit:
-            raise SubscriptionService._build_quota_exceeded_error(plan_kind)
+        cycle: Optional[SubscriptionUsageCycle] = None
+        for _attempt in range(2):
+            cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now)
+            updated = SubscriptionService._apply_cycle_consumption_update(
+                db,
+                cycle_id=cycle.id,
+                consumed_amount=consumed_amount,
+                request_id=request_id,
+                quota_metric=quota_metric,
+                quota_limit=quota_limit,
+            )
+            if updated:
+                db.flush()
+                refreshed_cycle = SubscriptionService._load_cycle_by_id(db, cycle.id)
+                if not refreshed_cycle:
+                    break
+                return {
+                    "subscription_cycle_id": refreshed_cycle.id,
+                    "quota_metric": quota_metric,
+                    "quota_consumed_amount": consumed_amount,
+                    "quota_limit_snapshot": quota_limit,
+                    "quota_used_after": SubscriptionService._normalize_decimal(refreshed_cycle.used_amount),
+                    "quota_cycle_date": refreshed_cycle.cycle_date,
+                }
 
-        cycle.used_amount = next_used_amount
-        cycle.request_count = int(cycle.request_count or 0) + 1
-        cycle.last_request_id = request_id
-        db.flush()
+            refreshed_cycle = SubscriptionService._load_cycle_by_id(db, cycle.id)
+            if not refreshed_cycle:
+                continue
 
-        return {
-            "subscription_cycle_id": cycle.id,
-            "quota_metric": quota_metric,
-            "quota_consumed_amount": consumed_amount,
-            "quota_limit_snapshot": quota_limit,
-            "quota_used_after": SubscriptionService._normalize_decimal(cycle.used_amount),
-            "quota_cycle_date": cycle.cycle_date,
-        }
+            refreshed_used_amount = SubscriptionService._normalize_decimal(refreshed_cycle.used_amount)
+            if refreshed_used_amount + consumed_amount > quota_limit:
+                raise SubscriptionService._build_quota_exceeded_error(plan_kind)
+
+        raise ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED")
 
     @staticmethod
     def _build_subscription_record(

@@ -228,6 +228,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
         mock_get_or_create_cycle.assert_called_once()
+        self.assertEqual(len(mock_get_or_create_cycle.call_args.args), 3)
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
@@ -255,11 +256,16 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
         mock_get_or_create_cycle.assert_called_once()
+        self.assertEqual(len(mock_get_or_create_cycle.call_args.args), 3)
 
+    @patch("app.services.subscription_service.SubscriptionService._load_cycle_by_id")
+    @patch("app.services.subscription_service.SubscriptionService._apply_cycle_consumption_update")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
     def test_consume_unlimited_quota_records_daily_token_usage(
         self,
         mock_get_or_create_cycle,
+        mock_apply_cycle_update,
+        mock_load_cycle_by_id,
     ):
         subscription = SimpleNamespace(
             id=99,
@@ -275,6 +281,12 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             cycle_date=datetime.utcnow().date(),
         )
         mock_get_or_create_cycle.return_value = cycle
+        mock_apply_cycle_update.return_value = True
+        mock_load_cycle_by_id.return_value = SimpleNamespace(
+            id=7,
+            used_amount=Decimal("300000000"),
+            cycle_date=cycle.cycle_date,
+        )
 
         result = SubscriptionService.consume_quota_after_request(
             MagicMock(),
@@ -284,16 +296,19 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             total_cost=0.0,
         )
 
-        self.assertEqual(cycle.used_amount, Decimal("300000000"))
-        self.assertEqual(cycle.request_count, 2)
-        self.assertEqual(cycle.last_request_id, "new")
         self.assertEqual(result["quota_metric"], "total_tokens")
         self.assertEqual(result["quota_limit_snapshot"], Decimal("300000000"))
+        self.assertEqual(result["quota_used_after"], Decimal("300000000"))
+        mock_apply_cycle_update.assert_called_once()
 
+    @patch("app.services.subscription_service.SubscriptionService._load_cycle_by_id")
+    @patch("app.services.subscription_service.SubscriptionService._apply_cycle_consumption_update")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
     def test_consume_quota_rejects_post_request_overflow(
         self,
         mock_get_or_create_cycle,
+        mock_apply_cycle_update,
+        mock_load_cycle_by_id,
     ):
         subscription = SimpleNamespace(
             id=99,
@@ -309,6 +324,12 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             cycle_date=datetime.utcnow().date(),
         )
         mock_get_or_create_cycle.return_value = cycle
+        mock_apply_cycle_update.return_value = False
+        mock_load_cycle_by_id.return_value = SimpleNamespace(
+            id=7,
+            used_amount=Decimal("95"),
+            cycle_date=cycle.cycle_date,
+        )
 
         with self.assertRaises(ServiceException) as ctx:
             SubscriptionService.consume_quota_after_request(
@@ -320,13 +341,11 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             )
 
         self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
-        self.assertEqual(cycle.used_amount, Decimal("95"))
-        self.assertEqual(cycle.request_count, 1)
+        mock_apply_cycle_update.assert_called_once()
 
     @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
     @patch("app.services.proxy_service.RequestCacheSummaryService.persist_request_cache_summary")
     @patch("app.services.proxy_service.RequestCacheSummaryService.build_request_log_fields", return_value=_build_cache_log_fields())
-    @patch("app.services.proxy_service.ConversationSessionService.commit_success_state", return_value=None)
     @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
@@ -335,7 +354,6 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_session_scope,
         mock_resolve_active_subscription,
         mock_consume_quota_after_request,
-        _mock_commit_success_state,
         _mock_build_request_log_fields,
         _mock_persist_request_cache_summary,
         _mock_get_system_config,

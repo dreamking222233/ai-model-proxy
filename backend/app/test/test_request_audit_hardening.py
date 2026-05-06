@@ -5,7 +5,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.exceptions import ServiceException
 from app.services.proxy_service import ProxyService
@@ -170,6 +170,7 @@ class ProxyRequestAuditHardeningTest(unittest.TestCase):
             client_ip="127.0.0.1",
             response_time_ms=321,
             charged_credits=Decimal("2"),
+            model_multiplier=Decimal("2"),
             image_size="1024x1024",
             image_count=1,
             request_type="image_generation",
@@ -184,6 +185,40 @@ class ProxyRequestAuditHardeningTest(unittest.TestCase):
         self.assertEqual(request_log.channel_id, 303)
         self.assertEqual(request_log.channel_name, "image-channel")
         self.assertEqual(request_log.protocol_type, "openai")
+
+    @patch("app.services.proxy_service.time.sleep", return_value=None)
+    @patch("app.services.proxy_service.ProxyService._deduct_balance_and_log_once")
+    def test_deduct_balance_and_log_retries_transient_db_lock_conflict(
+        self,
+        mock_deduct_balance_and_log_once,
+        mock_sleep,
+    ):
+        mock_deduct_balance_and_log_once.side_effect = [
+            OperationalError(
+                "UPDATE subscription_usage_cycle",
+                {},
+                Exception("Lock wait timeout exceeded; try restarting transaction"),
+            ),
+            None,
+        ]
+
+        ProxyService._deduct_balance_and_log(
+            db=MagicMock(),
+            user=SimpleNamespace(id=1),
+            api_key_record=None,
+            unified_model=SimpleNamespace(model_name="gpt-4o"),
+            request_id="req-retry-1",
+            requested_model="gpt-4o",
+            input_tokens=10,
+            output_tokens=5,
+            channel=SimpleNamespace(id=1, name="channel-a", protocol_type="openai"),
+            client_ip="127.0.0.1",
+            response_time_ms=100,
+            is_stream=False,
+        )
+
+        self.assertEqual(mock_deduct_balance_and_log_once.call_count, 2)
+        mock_sleep.assert_called_once()
 
 
 class SubscriptionCycleRaceRecoveryTest(unittest.TestCase):

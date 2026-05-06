@@ -70,6 +70,8 @@ _UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
 _TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
+_ACCOUNTING_RETRY_ATTEMPTS = 3
+_ACCOUNTING_RETRY_BASE_DELAY_SECONDS = 0.05
 
 
 class ResponsesTurnError(Exception):
@@ -7743,6 +7745,62 @@ class ProxyService:
 
     @staticmethod
     def _deduct_balance_and_log(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        unified_model: UnifiedModel,
+        request_id: str,
+        requested_model: str,
+        input_tokens: int,
+        output_tokens: int,
+        channel: Channel,
+        client_ip: str,
+        response_time_ms: int,
+        is_stream: bool,
+        request_type: str = "chat",
+        actual_model: Optional[str] = None,
+        cache_info: Optional[dict[str, Any]] = None,
+        conversation_state_info: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Run local accounting with limited retries for transient DB lock conflicts."""
+        for attempt in range(1, _ACCOUNTING_RETRY_ATTEMPTS + 1):
+            try:
+                ProxyService._deduct_balance_and_log_once(
+                    db=db,
+                    user=user,
+                    api_key_record=api_key_record,
+                    unified_model=unified_model,
+                    request_id=request_id,
+                    requested_model=requested_model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    channel=channel,
+                    client_ip=client_ip,
+                    response_time_ms=response_time_ms,
+                    is_stream=is_stream,
+                    request_type=request_type,
+                    actual_model=actual_model,
+                    cache_info=cache_info,
+                    conversation_state_info=conversation_state_info,
+                )
+                return
+            except Exception as exc:
+                if (
+                    not SubscriptionService.is_retryable_concurrency_error(exc)
+                    or attempt >= _ACCOUNTING_RETRY_ATTEMPTS
+                ):
+                    raise
+                logger.warning(
+                    "Retrying local accounting after transient DB conflict: request_id=%s attempt=%s/%s error=%s",
+                    request_id,
+                    attempt + 1,
+                    _ACCOUNTING_RETRY_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(_ACCOUNTING_RETRY_BASE_DELAY_SECONDS * attempt)
+
+    @staticmethod
+    def _deduct_balance_and_log_once(
         db: Session,
         user: SysUser,
         api_key_record: UserApiKey,

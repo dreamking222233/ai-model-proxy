@@ -81,10 +81,42 @@
         :loading="loading"
         :pagination="pagination"
         row-key="id"
+        :expanded-row-keys="expandedRowKeys"
+        :custom-row="customRow"
+        :expand-icon-column-index="-1"
+        :expand-icon-as-cell="false"
         :scroll="{ x: 1560 }"
         size="middle"
         @change="handleTableChange"
       >
+        <template slot="expandedRowRender" slot-scope="record">
+          <div class="compact-expand-panel">
+            <div class="compact-expand-line">
+              <span class="compact-expand-label">用量</span>
+              <span class="compact-expand-metric">入 {{ formatNumber(getBillableInputTokens(record)) }}</span>
+              <span class="compact-expand-metric">出 {{ formatNumber(record.output_tokens || 0) }}</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存读 {{ formatNumber(getBillableCacheReadTokens(record)) }}</span>
+              <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
+              <span class="compact-expand-metric compact-expand-metric--total">合计 {{ formatNumber(record.total_tokens || 0) }}</span>
+            </div>
+            <div class="compact-expand-line">
+              <span class="compact-expand-label">日志详情</span>
+              <span class="compact-expand-meta">输入价格 ${{ formatPrice(record.input_price_per_million_snapshot) }} / 1M tokens</span>
+              <span class="compact-expand-meta">补全价格 ${{ formatPrice(record.output_price_per_million_snapshot) }} / 1M tokens</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0 || record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存读取价格 ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M tokens</span>
+              <span class="compact-expand-meta">专属倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
+            </div>
+            <div class="compact-expand-line">
+              <span class="compact-expand-label">计费过程</span>
+              <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+              <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+              <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
+              <strong class="compact-expand-metric compact-expand-metric--total">总计 ${{ formatCurrency(record.total_cost || 0) }}</strong>
+            </div>
+          </div>
+        </template>
+
         <template slot="requestId" slot-scope="text">
           <div class="request-id-cell">
             <a-tooltip :title="text" placement="topLeft">
@@ -115,19 +147,6 @@
           </a-tooltip>
         </template>
 
-        <template slot="actual_model" slot-scope="text">
-          <a-tooltip v-if="text" :title="text" placement="topLeft">
-            <a-tag class="actual-model-tag actual-model-tag--ellipsis">{{ text }}</a-tag>
-          </a-tooltip>
-          <span v-else class="text-muted">-</span>
-        </template>
-
-        <template slot="channel_name" slot-scope="text">
-          <a-tooltip :title="text || '-'" placement="topLeft">
-            <span class="channel-cell channel-cell--ellipsis">{{ text || '-' }}</span>
-          </a-tooltip>
-        </template>
-
         <template slot="tokens" slot-scope="text, record">
           <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
             <div class="image-credit-row">
@@ -153,7 +172,7 @@
         </template>
 
         <template slot="status" slot-scope="text, record">
-          <div class="status-cell" @click="openDetail(record)">
+          <div class="status-cell" @click.stop="toggleExpandedRow(record)">
             <a-badge v-if="text === 'success'" status="success" text="成功" />
             <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
             <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
@@ -173,9 +192,10 @@
           <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
           <div v-else-if="text != null && text > 0" class="cost-breakdown-cell">
             <span class="cost-text">${{ formatCurrency(text) }}</span>
-            <span class="cost-breakdown-line">入 {{ formatNumber(getBillableInputTokens(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
-            <span class="cost-breakdown-line">出 {{ formatNumber(record.output_tokens || 0) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
-            <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+            <span class="cost-breakdown-line">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(getEffectiveInputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.input_cost || 0) }}</span>
+            <span class="cost-breakdown-line">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(getEffectiveOutputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.output_cost || 0) }}</span>
+            <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+            <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}，不额外计费</span>
           </div>
           <span v-else class="text-muted">$0.00</span>
         </template>
@@ -197,50 +217,208 @@
       </a-table>
     </div>
 
-    <a-modal v-model="detailVisible" title="代理请求详情" :width="720" :footer="null">
-      <a-descriptions :column="1" bordered size="small">
-        <a-descriptions-item label="请求 ID">
-          <div class="request-id-cell">
-            <code class="request-id-code">{{ selectedRecord.request_id || '-' }}</code>
-            <a-icon v-if="selectedRecord.request_id" type="copy" class="copy-icon-inline" @click="copyText(selectedRecord.request_id, '请求 ID')" />
+    <a-modal v-if="false"
+      v-model="detailVisible"
+      title="代理请求详情"
+      :width="980"
+      :footer="null"
+      :getContainer="getModalContainer"
+      :bodyStyle="{ padding: '0' }"
+      wrapClassName="request-detail-modal"
+    >
+      <div class="detail-modal-shell">
+        <div class="detail-hero">
+          <div class="detail-hero-main">
+            <div class="detail-title-row">
+              <span class="detail-title">代理请求详情</span>
+              <a-badge v-if="selectedRecord.status === 'success'" status="success" text="成功" />
+              <a-badge v-else-if="selectedRecord.status === 'error' || selectedRecord.status === 'failed'" status="error" text="失败" />
+              <a-badge v-else-if="selectedRecord.status === 'timeout'" status="warning" text="超时" />
+              <a-badge v-else-if="selectedRecord.status === 'pending'" status="processing" text="处理中" />
+              <a-badge v-else status="default" :text="String(selectedRecord.status || '-')" />
+              <a-tag v-if="selectedRecord.request_type" class="detail-chip">{{ getRequestTypeText(selectedRecord) }}</a-tag>
+            </div>
+            <div class="detail-subtitle">
+              <div class="detail-subtitle-line">
+                <span class="detail-label">请求 ID</span>
+                <code class="request-id-code">{{ selectedRecord.request_id || '-' }}</code>
+                <a-icon v-if="selectedRecord.request_id" type="copy" class="copy-icon-inline" @click="copyText(selectedRecord.request_id, '请求 ID')" />
+              </div>
+              <div class="detail-subtitle-line detail-subtitle-line--muted">
+                <span v-if="selectedRecord.username">用户 {{ selectedRecord.username }}</span>
+                <span v-if="selectedRecord.agent_id">代理 {{ getAgentName(selectedRecord.agent_id) }}</span>
+                <span v-if="selectedRecord.channel_name">渠道 {{ selectedRecord.channel_name }}</span>
+              </div>
+            </div>
           </div>
-        </a-descriptions-item>
-        <a-descriptions-item label="代理 ID">{{ selectedRecord.agent_id || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="用户">{{ selectedRecord.username || selectedRecord.user_id || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="请求模型"><a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag></a-descriptions-item>
-        <a-descriptions-item label="实际模型"><a-tag v-if="selectedRecord.actual_model" class="actual-model-tag">{{ selectedRecord.actual_model }}</a-tag><span v-else>-</span></a-descriptions-item>
-        <a-descriptions-item label="渠道">{{ selectedRecord.channel_name || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="状态">{{ getStatusText(selectedRecord.status) }}</a-descriptions-item>
-        <a-descriptions-item label="响应时间">{{ selectedRecord.response_time_ms != null ? `${formatResponseTime(selectedRecord.response_time_ms)} s` : '-' }}</a-descriptions-item>
-        <a-descriptions-item label="客户端 IP">{{ selectedRecord.client_ip || '-' }}</a-descriptions-item>
-        <a-descriptions-item label="请求时间">{{ selectedRecord.created_at ? formatDate(selectedRecord.created_at) : '-' }}</a-descriptions-item>
-        <a-descriptions-item v-if="!isImageRequest(selectedRecord)" label="Token 用量">
-          <span>输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }}</span>
-          <span style="margin-left: 8px;">输出 {{ formatNumber(selectedRecord.output_tokens || 0) }}</span>
-          <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" style="margin-left: 8px;">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }}</span>
-          <span v-if="getBillableCacheReadTokens(selectedRecord) > 0" style="margin-left: 8px;">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }}</span>
-        </a-descriptions-item>
-        <a-descriptions-item v-if="!isImageRequest(selectedRecord)" label="计费明细">
-          <div class="modal-cache-summary">
-            <span>输入价格：${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }} / 1M tokens</span>
-            <span>输出价格：${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }} / 1M tokens</span>
-            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">缓存读取价格：${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }} / 1M tokens（输入价 × 10%）</span>
-            <span>计费过程：输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }} = ${{ formatCurrency(selectedRecord.input_cost || 0) }}</span>
-            <span>计费过程：输出 {{ formatNumber(selectedRecord.output_tokens || 0) }} / 1M × ${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }} = ${{ formatCurrency(selectedRecord.output_cost || 0) }}</span>
-            <span v-if="getBillableCacheReadTokens(selectedRecord) > 0">计费过程：缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }} = ${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}</span>
-            <span v-if="selectedRecord.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
-            <span>总计：${{ formatCurrency(selectedRecord.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
+          <div class="detail-hero-metrics">
+            <div class="hero-metric">
+              <span class="hero-metric-label">响应时间</span>
+              <span v-if="selectedRecord.response_time_ms != null" class="hero-metric-value" :class="getResponseTimeClass(selectedRecord.response_time_ms)">
+                {{ formatResponseTime(selectedRecord.response_time_ms) }}<span class="response-time-unit">s</span>
+              </span>
+              <span v-else class="hero-metric-value text-muted">-</span>
+            </div>
+            <div class="hero-metric">
+              <span class="hero-metric-label">请求时间</span>
+              <span class="hero-metric-value">{{ selectedRecord.created_at ? formatDate(selectedRecord.created_at) : '-' }}</span>
+            </div>
+            <div class="hero-metric">
+              <span class="hero-metric-label">客户端 IP</span>
+              <code v-if="selectedRecord.client_ip" class="ip-code">{{ selectedRecord.client_ip }}</code>
+              <span v-else class="hero-metric-value text-muted">-</span>
+            </div>
           </div>
-        </a-descriptions-item>
-      </a-descriptions>
-
-      <div v-if="selectedRecord.error_message" class="error-message-section">
-        <div class="error-message-header">
-          <a-icon type="exclamation-circle" />
-          <span>错误详情</span>
         </div>
-        <pre>{{ selectedRecord.error_message }}</pre>
-        <a-button size="small" icon="copy" @click="copyText(selectedRecord.error_message, '错误信息')">复制错误信息</a-button>
+
+        <div class="detail-section">
+          <div class="detail-section-title">基础信息</div>
+          <div class="detail-grid detail-grid--meta">
+            <div class="detail-item">
+              <span class="detail-item-label">代理 ID</span>
+              <span class="detail-item-value">{{ selectedRecord.agent_id || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">用户</span>
+              <span class="detail-item-value">{{ selectedRecord.username || selectedRecord.user_id || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">请求模型</span>
+              <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">实际模型</span>
+              <a-tag v-if="selectedRecord.actual_model" class="actual-model-tag">{{ selectedRecord.actual_model }}</a-tag>
+              <span v-else class="detail-item-value text-muted">-</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">渠道</span>
+              <span class="detail-item-value">{{ selectedRecord.channel_name || '-' }}</span>
+            </div>
+            <div class="detail-item" v-if="selectedRecord.quota_metric">
+              <span class="detail-item-label">套餐额度结算</span>
+              <span class="detail-item-value">
+                {{ formatQuotaAmount(selectedRecord.quota_consumed_amount, selectedRecord.quota_metric) }}
+                <span v-if="selectedRecord.quota_cycle_date" class="detail-item-subtext">/ 周期 {{ selectedRecord.quota_cycle_date }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">用量概览</div>
+          <div v-if="isImageRequest(selectedRecord)" class="detail-empty-state">
+            <span class="detail-empty-text">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 图片积分 / {{ getImageCountDisplay(selectedRecord) }} 张</span>
+            <span v-if="getImageSizeText(selectedRecord)" class="detail-empty-hint">{{ getImageSizeText(selectedRecord) }}</span>
+          </div>
+          <div v-else class="detail-kpi-grid">
+            <div class="detail-kpi-card detail-kpi-card--input">
+              <span class="detail-kpi-label">输入</span>
+              <span class="detail-kpi-value">{{ formatNumber(getBillableInputTokens(selectedRecord)) }}</span>
+              <span class="detail-kpi-hint">原始 {{ formatNumber(getRawInputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }}</span>
+            </div>
+            <div class="detail-kpi-card detail-kpi-card--output">
+              <span class="detail-kpi-label">输出</span>
+              <span class="detail-kpi-value">{{ formatNumber(selectedRecord.output_tokens || 0) }}</span>
+              <span class="detail-kpi-hint">原始 {{ formatNumber(getRawOutputTokens(selectedRecord)) }}</span>
+            </div>
+            <div class="detail-kpi-card detail-kpi-card--total">
+              <span class="detail-kpi-label">合计</span>
+              <span class="detail-kpi-value">{{ formatNumber(selectedRecord.total_tokens || 0) }}</span>
+              <span class="detail-kpi-hint">本次总 Token</span>
+            </div>
+            <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="detail-kpi-card detail-kpi-card--cache">
+              <span class="detail-kpi-label">缓存读取</span>
+              <span class="detail-kpi-value">{{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }}</span>
+              <span class="detail-kpi-hint">按输入 Token 计费</span>
+            </div>
+            <div v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" class="detail-kpi-card detail-kpi-card--cache-create">
+              <span class="detail-kpi-label">缓存创建</span>
+              <span class="detail-kpi-value">{{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }}</span>
+              <span class="detail-kpi-hint">不额外计费</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="hasPromptCacheUsage(selectedRecord)" class="detail-section">
+          <div class="detail-section-title">真实上游缓存</div>
+          <div class="detail-chip-row">
+            <a-tag color="blue">{{ getPromptCacheStatusText(selectedRecord) }}</a-tag>
+            <a-tag v-if="getBillableCacheReadTokens(selectedRecord) > 0" color="geekblue">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} tok</a-tag>
+            <a-tag v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" color="cyan">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok</a-tag>
+            <a-tag color="purple">计费输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }} tok</a-tag>
+          </div>
+        </div>
+
+        <div v-if="!isImageRequest(selectedRecord)" class="detail-section">
+          <div class="detail-section-title">计费详情</div>
+          <div class="billing-panel">
+            <div class="billing-price-grid">
+              <div class="billing-price-card">
+                <span class="billing-price-label">输入单价</span>
+                <span class="billing-price-value">${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
+                <span class="billing-price-hint">/ 1M tokens × 价格倍率 {{ formatMultiplier(selectedRecord.price_multiplier_snapshot) }}</span>
+              </div>
+              <div class="billing-price-card">
+                <span class="billing-price-label">输出单价</span>
+                <span class="billing-price-value">${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }}</span>
+                <span class="billing-price-hint">/ 1M tokens × 价格倍率 {{ formatMultiplier(selectedRecord.price_multiplier_snapshot) }}</span>
+              </div>
+              <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-price-card">
+                <span class="billing-price-label">缓存读取单价</span>
+                <span class="billing-price-value">${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }}</span>
+                <span class="billing-price-hint">输入价 × 10%</span>
+              </div>
+            </div>
+            <div class="billing-formula-list">
+              <div class="billing-formula-row">
+                <span class="billing-formula-tag">输入</span>
+                <span class="billing-formula-text">原始 {{ formatNumber(getRawInputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
+                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.input_cost || 0) }}</strong>
+              </div>
+              <div class="billing-formula-row">
+                <span class="billing-formula-tag billing-formula-tag--output">输出</span>
+                <span class="billing-formula-text">原始 {{ formatNumber(getRawOutputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(selectedRecord.output_tokens || 0) }} / 1M × ${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }}</span>
+                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.output_cost || 0) }}</strong>
+              </div>
+              <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-formula-row billing-formula-row--cache">
+                <span class="billing-formula-tag billing-formula-tag--cache">缓存</span>
+                <span class="billing-formula-text">原始 {{ formatNumber(getRawCacheReadTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }}</span>
+                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}</strong>
+              </div>
+              <div v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" class="billing-formula-row billing-formula-row--muted">
+                <span class="billing-formula-tag billing-formula-tag--muted">创建</span>
+                <span class="billing-formula-text">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
+              </div>
+              <div class="billing-total-row">
+                <span class="billing-total-label">总计</span>
+                <strong class="billing-total-value">${{ formatCurrency(selectedRecord.total_cost || 0) }}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="selectedRecord.error_message" class="detail-section detail-section--error">
+          <div class="detail-section-title">错误详情</div>
+          <div class="error-message-section">
+            <div class="error-message-header">
+              <a-icon type="exclamation-circle" class="error-message-icon" />
+              <span class="error-message-title">错误详情</span>
+            </div>
+            <div class="error-message-content">
+              <pre>{{ selectedRecord.error_message }}</pre>
+            </div>
+            <a-button size="small" @click="copyText(selectedRecord.error_message, '错误信息')" class="error-copy-btn">
+              <a-icon type="copy" />
+              复制错误信息
+            </a-button>
+          </div>
+        </div>
+
+        <div v-else class="no-error-message">
+          <a-icon type="check-circle" />
+          <span>该请求没有错误信息</span>
+        </div>
       </div>
     </a-modal>
   </div>
@@ -275,13 +453,12 @@ export default {
         showTotal: total => `共 ${total} 条`,
         pageSizeOptions: ['10', '20', '50', '100']
       },
+      expandedRowKeys: [],
       columns: [
         { title: '请求 ID', dataIndex: 'request_id', key: 'requestId', width: 120, scopedSlots: { customRender: 'requestId' } },
         { title: '代理', dataIndex: 'agent_id', key: 'agent', width: 120, scopedSlots: { customRender: 'agent' } },
         { title: '用户', dataIndex: 'username', key: 'username', width: 130, scopedSlots: { customRender: 'username' } },
         { title: '请求模型', dataIndex: 'requested_model', key: 'requested_model', width: 150, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
-        { title: '实际模型', dataIndex: 'actual_model', key: 'actual_model', width: 150, ellipsis: true, scopedSlots: { customRender: 'actual_model' } },
-        { title: '渠道', dataIndex: 'channel_name', key: 'channel_name', width: 140, ellipsis: true, scopedSlots: { customRender: 'channel_name' } },
         { title: '用量', key: 'tokens', width: 290, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'responseTime', width: 110, align: 'right', scopedSlots: { customRender: 'responseTime' } },
@@ -328,6 +505,7 @@ export default {
     },
     async fetchList() {
       this.loading = true
+      this.expandedRowKeys = []
       try {
         const res = await listRequestLogs(this.buildParams())
         const data = res.data || {}
@@ -350,6 +528,23 @@ export default {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
       this.fetchList()
+    },
+    toggleExpandedRow(record) {
+      const key = record && record.id
+      if (key == null) return
+      this.expandedRowKeys = this.expandedRowKeys[0] === key ? [] : [key]
+    },
+    customRow(record) {
+      return {
+        on: {
+          click: (event) => {
+            const target = event && event.target
+            if (target && target.closest && target.closest('button,a,input,textarea,.copy-icon-inline,.copy-id-btn')) return
+            this.toggleExpandedRow(record)
+          }
+        },
+        style: { cursor: 'pointer' }
+      }
     },
     openDetail(record) {
       this.selectedRecord = { ...record }
@@ -408,14 +603,40 @@ export default {
     formatPrice(amount) {
       return Number(amount || 0).toFixed(6)
     },
+    formatMultiplier(value) {
+      const num = Number(value == null ? 1 : value)
+      if (!Number.isFinite(num)) return '1'
+      return num.toFixed(3).replace(/\.?0+$/, '')
+    },
     getCacheReadPricePerMillion(record) {
       return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
+    },
+    getEffectiveInputPricePerMillion(record) {
+      return Number(record && record.input_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+    },
+    getEffectiveOutputPricePerMillion(record) {
+      return Number(record && record.output_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+    },
+    getEffectiveCacheReadPricePerMillion(record) {
+      return this.getEffectiveInputPricePerMillion(record) * 0.1
     },
     getBillableInputTokens(record) {
       return Number(record && (record.billable_input_tokens != null ? record.billable_input_tokens : record.input_tokens) || 0)
     },
     getBillableCacheReadTokens(record) {
       return Number(record && (record.billable_cache_read_input_tokens != null ? record.billable_cache_read_input_tokens : record.upstream_cache_read_input_tokens) || 0)
+    },
+    getTokenMultiplier(record) {
+      return Number(record && record.token_multiplier_snapshot != null ? record.token_multiplier_snapshot : 1)
+    },
+    getRawInputTokens(record) {
+      return Number(record && (record.raw_input_tokens != null ? record.raw_input_tokens : record.input_tokens) || 0)
+    },
+    getRawOutputTokens(record) {
+      return Number(record && (record.raw_output_tokens != null ? record.raw_output_tokens : record.output_tokens) || 0)
+    },
+    getRawCacheReadTokens(record) {
+      return Number(record && (record.upstream_cache_read_input_tokens != null ? record.upstream_cache_read_input_tokens : 0) || 0)
     },
     getStatusText(status) {
       const map = { success: '成功', error: '失败', failed: '失败', timeout: '超时', pending: '处理中' }
@@ -432,6 +653,9 @@ export default {
       }).catch(() => {
         this.$message.error('复制失败')
       })
+    },
+    getModalContainer() {
+      return this.$el || document.body
     }
   }
 }
@@ -789,6 +1013,57 @@ export default {
     color: #096dd9;
   }
 
+  .compact-expand-panel {
+    padding: 10px 16px;
+    background: #fafbff;
+    border-top: 1px solid #eef1f6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .compact-expand-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #595959;
+    line-height: 1.4;
+  }
+
+  .compact-expand-label {
+    color: #8c8c8c;
+    min-width: 44px;
+    font-weight: 600;
+  }
+
+  .compact-expand-meta,
+  .compact-expand-metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #f5f5f5;
+  }
+
+  .compact-expand-metric--cache {
+    background: rgba(24, 144, 255, 0.12);
+    color: #096dd9;
+  }
+
+  .compact-expand-metric--cache-create {
+    background: rgba(250, 140, 22, 0.12);
+    color: #d46b08;
+  }
+
+  .compact-expand-metric--total {
+    background: rgba(82, 196, 26, 0.12);
+    color: #389e0d;
+    font-weight: 600;
+  }
+
   .stream-tag {
     font-size: 11px;
     border-radius: 4px;
@@ -800,33 +1075,419 @@ export default {
     color: #8c8c8c;
   }
 
+  .request-detail-modal {
+    /deep/ .ant-modal-content {
+      border-radius: 18px;
+      overflow: hidden;
+      background: #f7f9fc;
+    }
+
+    /deep/ .ant-modal-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #edf0f5;
+      background: #fff;
+    }
+
+    /deep/ .ant-modal-body {
+      background: #f7f9fc;
+    }
+  }
+
+  .detail-modal-shell {
+    padding: 24px;
+  }
+
+  .detail-hero,
+  .detail-section,
+  .no-error-message {
+    background: #fff;
+    border: 1px solid #edf0f5;
+    border-radius: 16px;
+    box-shadow: 0 6px 24px rgba(26, 26, 46, 0.04);
+  }
+
+  .detail-hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+
+  .detail-hero-main {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .detail-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .detail-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .detail-chip {
+    border-radius: 999px;
+    margin-right: 0;
+  }
+
+  .detail-subtitle {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .detail-subtitle-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: #595959;
+  }
+
+  .detail-subtitle-line--muted {
+    color: #8c8c8c;
+    font-size: 12px;
+  }
+
+  .detail-label,
+  .detail-item-label,
+  .hero-metric-label,
+  .billing-price-label,
+  .detail-kpi-label,
+  .billing-total-label {
+    font-size: 12px;
+    color: #8c8c8c;
+  }
+
+  .detail-hero-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    min-width: 320px;
+  }
+
+  .hero-metric {
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #fafbff 0%, #f5f7ff 100%);
+    border: 1px solid #edf0ff;
+    border-radius: 14px;
+  }
+
+  .hero-metric-label {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .hero-metric-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-section {
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+
+  .detail-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .detail-grid {
+    display: grid;
+    gap: 12px;
+  }
+
+  .detail-grid--meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-item {
+    padding: 12px 14px;
+    background: #fafbff;
+    border: 1px solid #edf0ff;
+    border-radius: 12px;
+    min-width: 0;
+  }
+
+  .detail-item-label {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .detail-item-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-item-subtext {
+    display: inline-block;
+    margin-left: 6px;
+    color: #8c8c8c;
+    font-weight: 400;
+  }
+
+  .detail-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .detail-kpi-card {
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid #edf0f5;
+    background: linear-gradient(180deg, #fff 0%, #fafbff 100%);
+  }
+
+  .detail-kpi-card--input {
+    border-color: rgba(102, 126, 234, 0.2);
+  }
+
+  .detail-kpi-card--output {
+    border-color: rgba(54, 207, 201, 0.2);
+  }
+
+  .detail-kpi-card--cache,
+  .detail-kpi-card--cache-create {
+    border-color: rgba(24, 144, 255, 0.18);
+  }
+
+  .detail-kpi-card--total {
+    border-color: rgba(250, 140, 22, 0.22);
+  }
+
+  .detail-kpi-value {
+    display: block;
+    margin: 4px 0;
+    font-size: 22px;
+    line-height: 1.1;
+    font-weight: 700;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-kpi-hint {
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.4;
+  }
+
+  .detail-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .billing-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .billing-price-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .billing-price-card {
+    padding: 14px;
+    border-radius: 14px;
+    background: #fafbff;
+    border: 1px solid #edf0ff;
+  }
+
+  .billing-price-value {
+    display: block;
+    margin: 4px 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .billing-price-hint {
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.4;
+  }
+
+  .billing-formula-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .billing-formula-row,
+  .billing-total-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: #fff;
+    border: 1px solid #f0f0f0;
+  }
+
+  .billing-formula-row--cache {
+    border-color: rgba(24, 144, 255, 0.18);
+    background: rgba(24, 144, 255, 0.03);
+  }
+
+  .billing-formula-row--muted {
+    background: #fafafa;
+  }
+
+  .billing-formula-tag {
+    flex-shrink: 0;
+    min-width: 44px;
+    text-align: center;
+    line-height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(102, 126, 234, 0.12);
+    color: #667eea;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .billing-formula-tag--output {
+    background: rgba(54, 207, 201, 0.12);
+    color: #08979c;
+  }
+
+  .billing-formula-tag--cache {
+    background: rgba(24, 144, 255, 0.12);
+    color: #096dd9;
+  }
+
+  .billing-formula-tag--muted {
+    background: #f5f5f5;
+    color: #8c8c8c;
+  }
+
+  .billing-formula-text {
+    flex: 1;
+    min-width: 0;
+    color: #595959;
+    line-height: 1.6;
+  }
+
+  .billing-formula-cost {
+    flex-shrink: 0;
+    font-size: 14px;
+    color: #1a1a2e;
+  }
+
+  .billing-total-row {
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, rgba(250, 140, 22, 0.08), rgba(250, 140, 22, 0.03));
+    border-color: rgba(250, 140, 22, 0.18);
+  }
+
+  .billing-total-value {
+    font-size: 18px;
+    color: #fa8c16;
+  }
+
+  .detail-empty-state {
+    padding: 16px;
+    border-radius: 12px;
+    background: #fafbff;
+    border: 1px dashed #d9e2ff;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .detail-empty-text {
+    font-weight: 600;
+    color: #1a1a2e;
+  }
+
+  .detail-empty-hint {
+    color: #8c8c8c;
+    font-size: 12px;
+  }
+
+  .detail-section--error {
+    margin-bottom: 0;
+  }
+
   .error-message-section {
-    margin-top: 20px;
     padding: 16px;
     background: #fff2f0;
     border: 1px solid #ffccc7;
-    border-radius: 8px;
+    border-radius: 12px;
+  }
 
-    .error-message-header {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 12px;
-      font-weight: 600;
-    }
+  .error-message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+
+  .error-message-icon {
+    color: #f5222d;
+  }
+
+  .error-message-title {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .error-message-content {
+    background: #fff;
+    border: 1px solid #ffa39e;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
 
     pre {
-      margin: 0 0 12px;
-      padding: 12px;
-      max-height: 260px;
-      overflow: auto;
-      background: #fff;
-      border: 1px solid #ffa39e;
-      border-radius: 4px;
+      margin: 0;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.6;
       color: #d32029;
       white-space: pre-wrap;
-      word-break: break-word;
+      word-wrap: break-word;
     }
+  }
+
+  .error-copy-btn {
+    margin-top: 12px;
+  }
+
+  .no-error-message {
+    margin-top: 0;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #52c41a;
   }
 }
 </style>

@@ -140,17 +140,49 @@
         </div>
 
         <!-- Enhanced Table -->
-        <a-table
-          :columns="columns"
-          :data-source="logs"
-          :loading="loading"
-          :pagination="pagination"
-          @change="handleTableChange"
-          row-key="id"
-          size="middle"
-          :scroll="{ x: 1000 }"
-          class="custom-table"
-        >
+      <a-table
+        :columns="columns"
+        :data-source="logs"
+        :loading="loading"
+        :pagination="pagination"
+        @change="handleTableChange"
+        :expanded-row-keys="expandedRowKeys"
+        :custom-row="customRow"
+        :expand-icon-column-index="-1"
+        :expand-icon-as-cell="false"
+        row-key="id"
+        size="middle"
+        :scroll="{ x: 1000 }"
+        class="custom-table"
+      >
+          <template slot="expandedRowRender" slot-scope="record">
+            <div class="compact-expand-panel">
+              <div class="compact-expand-line">
+                <span class="compact-expand-label">用量</span>
+                <span class="compact-expand-metric">入 {{ formatNumber(getBillableInputTokens(record)) }}</span>
+                <span class="compact-expand-metric">出 {{ formatNumber(record.output_tokens || 0) }}</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存读 {{ formatNumber(getBillableCacheReadTokens(record)) }}</span>
+                <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
+                <span class="compact-expand-metric compact-expand-metric--total">合计 {{ formatNumber(record.total_tokens || 0) }}</span>
+              </div>
+              <div class="compact-expand-line">
+                <span class="compact-expand-label">日志详情</span>
+                <span class="compact-expand-meta">输入价格 ${{ formatPrice(record.input_price_per_million_snapshot) }} / 1M tokens</span>
+                <span class="compact-expand-meta">补全价格 ${{ formatPrice(record.output_price_per_million_snapshot) }} / 1M tokens</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0 || record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存读取价格 ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M tokens</span>
+                <span class="compact-expand-meta">专属倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
+              </div>
+              <div class="compact-expand-line">
+                <span class="compact-expand-label">计费过程</span>
+                <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+                <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+                <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
+                <strong class="compact-expand-metric compact-expand-metric--total">总计 ${{ formatCurrency(record.total_cost || 0) }}</strong>
+              </div>
+            </div>
+          </template>
+
           <!-- 模型列 -->
           <template slot="col_model" slot-scope="text">
             <div class="model-cell">
@@ -198,26 +230,27 @@
           </template>
 
           <!-- 计费列 -->
-          <template slot="col_cost" slot-scope="text, record">
-            <div class="cost-cell">
-              <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 💰</span>
-              <template v-else-if="text">
-                <span class="price token">-${{ Math.abs(text || 0).toFixed(6) }}</span>
-                <span class="cost-breakdown-line">入 {{ formatNumber(getBillableInputTokens(record)) }} = ${{ Number(record.input_cost || 0).toFixed(6) }}</span>
-                <span class="cost-breakdown-line">出 {{ formatNumber(record.output_tokens || 0) }} = ${{ Number(record.output_cost || 0).toFixed(6) }}</span>
-                <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} = ${{ Number(record.cache_read_cost || 0).toFixed(6) }}</span>
-              </template>
-              <span v-else class="price free">FREE</span>
-            </div>
-          </template>
+        <template slot="col_cost" slot-scope="text, record">
+          <div class="cost-cell">
+            <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 💰</span>
+            <template v-else-if="text">
+              <span class="price token">-${{ Math.abs(text || 0).toFixed(6) }}</span>
+              <span class="cost-breakdown-line">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(getEffectiveInputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.input_cost || 0) }}</span>
+              <span class="cost-breakdown-line">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(getEffectiveOutputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.output_cost || 0) }}</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cache">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+              <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cost-breakdown-line cache">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}，不额外计费</span>
+            </template>
+            <span v-else class="price free">FREE</span>
+          </div>
+        </template>
 
-          <!-- 状态列 -->
-          <template slot="col_status" slot-scope="text, record">
-            <div class="status-indicator" :class="text" @click="handleRowClick(record)">
-              <span class="status-dot"></span>
-              <span class="status-text">{{ getStatusLabel(text) }}</span>
-            </div>
-          </template>
+        <!-- 状态列 -->
+        <template slot="col_status" slot-scope="text, record">
+          <div class="status-indicator" :class="text" @click.stop="toggleExpandedRow(record)">
+            <span class="status-dot"></span>
+            <span class="status-text">{{ getStatusLabel(text) }}</span>
+          </div>
+        </template>
 
           <!-- 响应时间列 -->
           <template slot="col_rt" slot-scope="text">
@@ -239,107 +272,6 @@
       </a-card>
     </div>
 
-    <!-- 详情弹窗 -->
-    <a-modal v-model="modalVisible" :title="modalTitle" :width="680" :footer="null">
-      <a-descriptions :column="1" bordered size="small">
-        <a-descriptions-item label="请求 ID">
-          <code class="request-id-code">{{ sel.request_id }}</code>
-        </a-descriptions-item>
-        <a-descriptions-item label="模型">
-          <a-tag class="model-tag">{{ sel.requested_model || '-' }}</a-tag>
-        </a-descriptions-item>
-        <a-descriptions-item label="状态">
-          <a-badge v-if="sel.status === 'success'" status="success" text="成功" />
-          <a-badge v-else-if="sel.status === 'error' || sel.status === 'failed'" status="error" text="失败" />
-          <a-badge v-else-if="sel.status === 'timeout'" status="warning" text="超时" />
-          <a-badge v-else status="default" :text="String(sel.status || '-')" />
-        </a-descriptions-item>
-        <a-descriptions-item label="响应时间">
-          <span v-if="sel.response_time_ms != null" class="response-time" :class="getRtClass(sel.response_time_ms)">
-            {{ formatResponseTime(sel.response_time_ms) }} <span class="response-time-unit">s</span>
-          </span>
-          <span v-else class="text-muted">-</span>
-        </a-descriptions-item>
-        <a-descriptions-item :label="isImageRequest(sel) ? '图片计费' : 'Token 用量'">
-          <template v-if="isImageRequest(sel)">
-            <span>{{ formatNumber(getImageCreditsDisplay(sel)) }} 图片积分</span>
-            &nbsp;/&nbsp;
-            <strong>{{ getImageCountDisplay(sel) }} 张图片</strong>
-            <template v-if="getImageSizeText(sel)">
-              &nbsp;/&nbsp;
-              <span>{{ getImageSizeText(sel) }}</span>
-            </template>
-          </template>
-          <template v-else>
-            <span>输入 {{ formatNumber(getBillableInputTokens(sel)) }}</span>
-            &nbsp;/&nbsp;
-            <span>输出 {{ formatNumber(sel.output_tokens || 0) }}</span>
-            <template v-if="sel.upstream_cache_creation_input_tokens > 0">
-              &nbsp;/&nbsp;
-              <span>缓存创建 {{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }}</span>
-            </template>
-            <template v-if="getBillableCacheReadTokens(sel) > 0">
-              &nbsp;/&nbsp;
-              <span>缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }}</span>
-            </template>
-            &nbsp;/&nbsp;
-            <strong>合计 {{ formatNumber(sel.total_tokens || 0) }}</strong>
-          </template>
-        </a-descriptions-item>
-        <a-descriptions-item :label="isImageRequest(sel) ? '计费方式' : '费用'">
-          <template v-if="isImageRequest(sel)">
-            <span class="image-credit-cost">{{ getBillingTypeText(sel) }}</span>
-          </template>
-          <template v-else>
-            <span v-if="sel.total_cost" class="total-cost">-${{ Math.abs(sel.total_cost).toFixed(6) }}</span>
-            <span v-else class="text-muted">-</span>
-          </template>
-        </a-descriptions-item>
-        <a-descriptions-item v-if="sel.quota_metric" label="套餐额度结算">
-          <span>{{ formatQuotaAmount(sel.quota_consumed_amount, sel.quota_metric) }}</span>
-          <span v-if="sel.quota_cycle_date"> / 周期 {{ sel.quota_cycle_date }}</span>
-          <span v-if="sel.quota_used_after"> / 累计后 {{ formatQuotaAmount(sel.quota_used_after, sel.quota_metric) }}</span>
-        </a-descriptions-item>
-        <a-descriptions-item label="请求时间">{{ formatTime(sel.created_at) }}</a-descriptions-item>
-        <a-descriptions-item v-if="hasPromptCacheUsage(sel)" label="上游 Prompt 缓存">
-          <div class="modal-cache-summary">
-            <a-tag color="blue">{{ getPromptCacheStatusText(sel) }}</a-tag>
-            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} Token</span>
-            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建 {{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token</span>
-            <span>计费输入 {{ formatNumber(getBillableInputTokens(sel)) }} Token</span>
-          </div>
-        </a-descriptions-item>
-        <a-descriptions-item v-if="!isImageRequest(sel)" label="计费明细">
-          <div class="modal-cache-summary">
-            <span>输入价格：${{ formatPrice(sel.input_price_per_million_snapshot) }} / 1M tokens</span>
-            <span>输出价格：${{ formatPrice(sel.output_price_per_million_snapshot) }} / 1M tokens</span>
-            <span v-if="getBillableCacheReadTokens(sel) > 0">缓存读取价格：${{ formatPrice(getCacheReadPricePerMillion(sel)) }} / 1M tokens（输入价 × 10%）</span>
-            <span>计费过程：输入 {{ formatNumber(getBillableInputTokens(sel)) }} / 1M × ${{ formatPrice(sel.input_price_per_million_snapshot) }} = ${{ formatCurrency(sel.input_cost || 0) }}</span>
-            <span>计费过程：输出 {{ formatNumber(sel.output_tokens || 0) }} / 1M × ${{ formatPrice(sel.output_price_per_million_snapshot) }} = ${{ formatCurrency(sel.output_cost || 0) }}</span>
-            <span v-if="getBillableCacheReadTokens(sel) > 0">计费过程：缓存读取 {{ formatNumber(getBillableCacheReadTokens(sel)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(sel)) }} = ${{ formatCurrency(sel.cache_read_cost || 0) }}</span>
-            <span v-if="sel.upstream_cache_creation_input_tokens > 0">缓存创建：{{ formatNumber(sel.upstream_cache_creation_input_tokens || 0) }} Token，不额外计费</span>
-            <span>总计：${{ formatCurrency(sel.total_cost || 0) }}（按模型输入/输出原价 1 倍计费）</span>
-          </div>
-        </a-descriptions-item>
-      </a-descriptions>
-
-      <div v-if="sel.error_message" class="error-message-section">
-        <div class="error-message-header">
-          <a-icon type="exclamation-circle" class="error-message-icon" />
-          <span class="error-message-title">错误详情</span>
-        </div>
-        <div class="error-message-content">
-          <pre>{{ sel.error_message }}</pre>
-        </div>
-        <a-button size="small" @click="copyError" style="margin-top: 8px;">
-          <a-icon type="copy" /> 复制
-        </a-button>
-      </div>
-      <div v-else class="no-error-message">
-        <a-icon type="check-circle" style="color: #52c41a; margin-right: 8px;" />
-        <span>该请求没有错误信息</span>
-      </div>
-    </a-modal>
   </div>
 </template>
 
@@ -370,6 +302,7 @@ export default {
         showTotal: t => `共 ${t} 条`,
         pageSizeOptions: ['15', '30', '50', '100']
       },
+      expandedRowKeys: [],
       columns: [
         { title: '模型名称', dataIndex: 'requested_model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
         { title: '用量细则', dataIndex: 'total_tokens', key: 'tokens', width: 320, scopedSlots: { customRender: 'col_tokens' } },
@@ -378,16 +311,9 @@ export default {
         { title: '响应/并发', dataIndex: 'response_time_ms', key: 'rt', width: 130, align: 'right', scopedSlots: { customRender: 'col_rt' } },
         { title: '请求时间', dataIndex: 'created_at', key: 'time', width: 160, scopedSlots: { customRender: 'col_time' } }
       ],
-      // 详情弹窗
-      modalVisible: false,
-      sel: {}
     }
   },
   computed: {
-    modalTitle() {
-      const map = { success: '核销详情 - 成功', error: '核销详情 - 失败', failed: '核销详情 - 失败', timeout: '核销详情 - 连接超时' }
-      return map[this.sel.status] || '交易详情'
-    },
     successRate() {
       if (!this.summary.total_requests) return '100'
       return ((this.summary.total_success / this.summary.total_requests) * 100).toFixed(1)
@@ -432,6 +358,7 @@ export default {
     },
     async fetchLogs() {
       this.loading = true
+      this.expandedRowKeys = []
       try {
         const params = { page: this.pagination.current, page_size: this.pagination.pageSize }
         if (this.statusFilter) params.status = this.statusFilter
@@ -447,14 +374,27 @@ export default {
         this.loading = false
       }
     },
-    handleRowClick(record) {
-      this.sel = { ...record }
-      this.modalVisible = true
+    toggleExpandedRow(record) {
+      const key = record && record.id
+      if (key == null) return
+      this.expandedRowKeys = this.expandedRowKeys[0] === key ? [] : [key]
     },
-    copyError() {
-      if (!this.sel.error_message) return
-      navigator.clipboard && navigator.clipboard.writeText(this.sel.error_message)
-        .then(() => this.$message.success('已复制'))
+    customRow(record) {
+      return {
+        on: {
+          click: (event) => {
+            const target = event && event.target
+            if (target && target.closest && target.closest('button,a,input,textarea,.copy-icon-inline,.copy-id-btn')) return
+            this.toggleExpandedRow(record)
+          }
+        },
+        style: { cursor: 'pointer' }
+      }
+    },
+    copyText(text, label = '内容') {
+      if (!text) return
+      navigator.clipboard && navigator.clipboard.writeText(text)
+        .then(() => this.$message.success(`${label}已复制`))
         .catch(() => this.$message.error('复制失败'))
     },
     // ---- helpers ----
@@ -500,6 +440,14 @@ export default {
       if (!this.isImageRequest(record)) return ''
       return String(record && record.image_size || '').trim()
     },
+    getRequestTypeText(record) {
+      const map = {
+        image_generation: '图片请求',
+        responses: 'Responses',
+        chat: '文本请求'
+      }
+      return map[String(record && record.request_type || 'chat')] || String(record && record.request_type || 'chat')
+    },
     getBillingTypeText(record) {
       if (this.isImageRequest(record)) {
         if (!this.isRequestSuccess(record)) {
@@ -543,8 +491,22 @@ export default {
     formatPrice(amount) {
       return Number(amount || 0).toFixed(6)
     },
+    formatMultiplier(value) {
+      const num = Number(value == null ? 1 : value)
+      if (!Number.isFinite(num)) return '1'
+      return num.toFixed(3).replace(/\.?0+$/, '')
+    },
     getCacheReadPricePerMillion(record) {
       return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
+    },
+    getEffectiveInputPricePerMillion(record) {
+      return Number(record && record.input_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+    },
+    getEffectiveOutputPricePerMillion(record) {
+      return Number(record && record.output_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+    },
+    getEffectiveCacheReadPricePerMillion(record) {
+      return this.getEffectiveInputPricePerMillion(record) * 0.1
     },
     formatQuotaAmount(value, metric) {
       if (metric === 'cost_usd') {
@@ -564,6 +526,15 @@ export default {
     },
     getBillableCacheReadTokens(r) {
       return Number(r && (r.billable_cache_read_input_tokens != null ? r.billable_cache_read_input_tokens : r.upstream_cache_read_input_tokens) || 0)
+    },
+    getRawInputTokens(r) {
+      return Number(r && (r.raw_input_tokens != null ? r.raw_input_tokens : r.input_tokens) || 0)
+    },
+    getRawOutputTokens(r) {
+      return Number(r && (r.raw_output_tokens != null ? r.raw_output_tokens : r.output_tokens) || 0)
+    },
+    getRawCacheReadTokens(r) {
+      return Number(r && (r.upstream_cache_read_input_tokens != null ? r.upstream_cache_read_input_tokens : 0) || 0)
     },
     getPromptCacheStatusText(r) {
       const map = { READ: '缓存读取', WRITE: '缓存创建', MIXED: '读写混合', NONE: '已尝试未命中', BYPASS: '未启用' }
@@ -951,6 +922,57 @@ export default {
     }
   }
 
+  .compact-expand-panel {
+    padding: 10px 16px;
+    background: #fafbff;
+    border-top: 1px solid #eef1f6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .compact-expand-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #595959;
+    line-height: 1.4;
+  }
+
+  .compact-expand-label {
+    color: #8c8c8c;
+    min-width: 44px;
+    font-weight: 600;
+  }
+
+  .compact-expand-meta,
+  .compact-expand-metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #f5f5f5;
+  }
+
+  .compact-expand-metric--cache {
+    background: rgba(24, 144, 255, 0.12);
+    color: #096dd9;
+  }
+
+  .compact-expand-metric--cache-create {
+    background: rgba(250, 140, 22, 0.12);
+    color: #d46b08;
+  }
+
+  .compact-expand-metric--total {
+    background: rgba(82, 196, 26, 0.12);
+    color: #389e0d;
+    font-weight: 600;
+  }
+
   .status-indicator {
     display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 20px;
     cursor: pointer; transition: all 0.2s; background: #f7fafc;
@@ -981,6 +1003,489 @@ export default {
     text-align: right;
     .t-date { font-size: 13px; color: #2d3748; font-weight: 500; }
     .t-time { font-size: 11px; color: #a0aec0; }
+  }
+
+  .request-detail-modal {
+    /deep/ .ant-modal-content {
+      border-radius: 18px;
+      overflow: hidden;
+      background: #f7f9fc;
+    }
+
+    /deep/ .ant-modal-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #edf0f5;
+      background: #fff;
+    }
+
+    /deep/ .ant-modal-body {
+      background: #f7f9fc;
+    }
+  }
+
+  .detail-modal-shell {
+    padding: 24px;
+  }
+
+  .detail-hero,
+  .detail-section,
+  .no-error-message {
+    background: #fff;
+    border: 1px solid #edf0f5;
+    border-radius: 16px;
+    box-shadow: 0 6px 24px rgba(26, 26, 46, 0.04);
+  }
+
+  .detail-hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+
+  .detail-hero-main {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .detail-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .detail-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .detail-chip {
+    border-radius: 999px;
+    margin-right: 0;
+  }
+
+  .detail-subtitle {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .detail-subtitle-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: #595959;
+  }
+
+  .detail-subtitle-line--muted {
+    color: #8c8c8c;
+    font-size: 12px;
+  }
+
+  .detail-label,
+  .detail-item-label,
+  .hero-metric-label,
+  .billing-price-label,
+  .detail-kpi-label,
+  .billing-total-label {
+    font-size: 12px;
+    color: #8c8c8c;
+  }
+
+  .detail-hero-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    min-width: 320px;
+  }
+
+  .hero-metric {
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #fafbff 0%, #f5f7ff 100%);
+    border: 1px solid #edf0ff;
+    border-radius: 14px;
+  }
+
+  .hero-metric-label {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .hero-metric-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-section {
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+
+  .detail-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .detail-grid {
+    display: grid;
+    gap: 12px;
+  }
+
+  .detail-grid--meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-item {
+    padding: 12px 14px;
+    background: #fafbff;
+    border: 1px solid #edf0ff;
+    border-radius: 12px;
+    min-width: 0;
+  }
+
+  .detail-item-label {
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .detail-item-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-item-subtext {
+    display: inline-block;
+    margin-left: 6px;
+    color: #8c8c8c;
+    font-weight: 400;
+  }
+
+  .detail-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .detail-kpi-card {
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid #edf0f5;
+    background: linear-gradient(180deg, #fff 0%, #fafbff 100%);
+  }
+
+  .detail-kpi-card--input {
+    border-color: rgba(102, 126, 234, 0.2);
+  }
+
+  .detail-kpi-card--output {
+    border-color: rgba(54, 207, 201, 0.2);
+  }
+
+  .detail-kpi-card--cache,
+  .detail-kpi-card--cache-create {
+    border-color: rgba(24, 144, 255, 0.18);
+  }
+
+  .detail-kpi-card--total {
+    border-color: rgba(250, 140, 22, 0.22);
+  }
+
+  .detail-kpi-value {
+    display: block;
+    margin: 4px 0;
+    font-size: 22px;
+    line-height: 1.1;
+    font-weight: 700;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .detail-kpi-hint {
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.4;
+  }
+
+  .detail-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .billing-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .billing-price-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .billing-price-card {
+    padding: 14px;
+    border-radius: 14px;
+    background: #fafbff;
+    border: 1px solid #edf0ff;
+  }
+
+  .billing-price-value {
+    display: block;
+    margin: 4px 0;
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .billing-price-hint {
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.4;
+  }
+
+  .billing-formula-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .billing-formula-row,
+  .billing-total-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: #fff;
+    border: 1px solid #f0f0f0;
+  }
+
+  .billing-formula-row--cache {
+    border-color: rgba(24, 144, 255, 0.18);
+    background: rgba(24, 144, 255, 0.03);
+  }
+
+  .billing-formula-row--muted {
+    background: #fafafa;
+  }
+
+  .billing-formula-tag {
+    flex-shrink: 0;
+    min-width: 44px;
+    text-align: center;
+    line-height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(102, 126, 234, 0.12);
+    color: #667eea;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .billing-formula-tag--output {
+    background: rgba(54, 207, 201, 0.12);
+    color: #08979c;
+  }
+
+  .billing-formula-tag--cache {
+    background: rgba(24, 144, 255, 0.12);
+    color: #096dd9;
+  }
+
+  .billing-formula-tag--muted {
+    background: #f5f5f5;
+    color: #8c8c8c;
+  }
+
+  .billing-formula-text {
+    flex: 1;
+    min-width: 0;
+    color: #595959;
+    line-height: 1.6;
+  }
+
+  .billing-formula-cost {
+    flex-shrink: 0;
+    font-size: 14px;
+    color: #1a1a2e;
+  }
+
+  .billing-total-row {
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, rgba(250, 140, 22, 0.08), rgba(250, 140, 22, 0.03));
+    border-color: rgba(250, 140, 22, 0.18);
+  }
+
+  .billing-total-value {
+    font-size: 18px;
+    color: #fa8c16;
+  }
+
+  .detail-empty-state {
+    padding: 16px;
+    border-radius: 12px;
+    background: #fafbff;
+    border: 1px dashed #d9e2ff;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .detail-empty-text {
+    font-weight: 600;
+    color: #1a1a2e;
+  }
+
+  .detail-empty-hint {
+    color: #8c8c8c;
+    font-size: 12px;
+  }
+
+  .detail-section--error {
+    margin-bottom: 0;
+  }
+
+  .error-message-section {
+    padding: 16px;
+    background: #fff2f0;
+    border: 1px solid #ffccc7;
+    border-radius: 12px;
+  }
+
+  .error-message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+
+  .error-message-icon {
+    color: #f5222d;
+  }
+
+  .error-message-title {
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+
+  .error-message-content {
+    background: #fff;
+    border: 1px solid #ffa39e;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+
+    pre {
+      margin: 0;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #d32029;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+  }
+
+  .error-copy-btn {
+    margin-top: 12px;
+  }
+
+  .no-error-message {
+    margin-top: 0;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #52c41a;
+  }
+
+  .request-id-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    color: #595959;
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .copy-icon-inline {
+    font-size: 12px;
+    color: #8c8c8c;
+    cursor: pointer;
+
+    &:hover {
+      color: #667eea;
+      transform: scale(1.12);
+    }
+  }
+
+  .model-tag,
+  .actual-model-tag {
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 1px 8px;
+    max-width: 100%;
+  }
+
+  .model-tag {
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(102, 126, 234, 0.05));
+    border-color: rgba(102, 126, 234, 0.3);
+    color: #667eea;
+  }
+
+  .actual-model-tag {
+    background: linear-gradient(135deg, rgba(82, 196, 26, 0.1), rgba(82, 196, 26, 0.05));
+    border-color: rgba(82, 196, 26, 0.3);
+    color: #52c41a;
+  }
+
+  .response-time {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+    font-weight: 500;
+
+    &--fast {
+      color: #52c41a;
+    }
+
+    &--normal {
+      color: #fa8c16;
+    }
+
+    &--slow {
+      color: #f5222d;
+    }
+
+    .response-time-unit {
+      font-size: 11px;
+      font-weight: 400;
+      opacity: 0.7;
+    }
+  }
+
+  .text-muted {
+    color: #bfbfbf;
   }
 
   /* ===== Table Customization ===== */

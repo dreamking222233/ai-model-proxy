@@ -96,7 +96,7 @@
           <div class="config-item">
             <div class="config-label">
               <a-icon type="code" />
-              Token倍率
+              统一Token倍率
             </div>
             <a-input-number
               v-model="tokenMultiplier"
@@ -110,7 +110,7 @@
             </a-input-number>
             <div class="config-hint">
               <a-icon type="bulb" />
-              1.0=原始Token，2.0=2倍Token
+              对输入、输出、缓存读取 token 统一乘以该倍率，用户端仅看到结果
             </div>
           </div>
         </a-col>
@@ -669,7 +669,7 @@ export default {
         'circuit_breaker_recovery': '熔断恢复时间',
         'health_check_test_message': '测试消息',
         'price_multiplier': '价格倍率',
-        'token_multiplier': 'Token倍率',
+        'token_multiplier': '统一Token倍率',
         'max_message_length': '最大消息长度',
         'max_context_tokens': '最大上下文Token数',
         'anthropic_prompt_cache_enabled': 'Anthropic Prompt Cache 开关',

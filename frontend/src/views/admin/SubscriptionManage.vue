@@ -98,7 +98,7 @@
               </a-form>
             </a-card>
 
-            <a-card title="旧版无限套餐开通（日/周卡每日 3 亿 Token，月卡每日 100 美元）" :bordered="false" class="grant-card">
+            <a-card title="旧版无限套餐开通（每日 100 美元）" :bordered="false" class="grant-card">
               <a-form layout="vertical">
                 <a-form-item label="选择用户">
                   <a-select

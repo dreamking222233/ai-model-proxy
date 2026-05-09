@@ -40,6 +40,7 @@ class SubscriptionService:
     RETRYABLE_DB_ERROR_CODES = {1205, 1213}
     ENJOY_PLAN_CODES = frozenset({"daily-10m-token", "weekly-10m-token", "monthly-10m-token"})
     MONTHLY_UNLIMITED_PLAN_CODES = frozenset({"monthly-unlimited"})
+    COST_LIMITED_UNLIMITED_PLAN_CODES = frozenset({"daily-unlimited", "weekly-unlimited", "monthly-unlimited"})
 
     BUILTIN_PLANS = [
         {
@@ -51,7 +52,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 10,
-            "description": "1 天无限额度套餐，每日最多 3 亿 Token",
+            "description": "1 天无限额度套餐，每日 100 美元额度",
         },
         {
             "plan_code": "weekly-unlimited",
@@ -62,7 +63,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 20,
-            "description": "7 天无限额度套餐，每日最多 3 亿 Token",
+            "description": "7 天无限额度套餐，每日 100 美元额度",
         },
         {
             "plan_code": "monthly-unlimited",
@@ -73,7 +74,7 @@ class SubscriptionService:
             "quota_metric": None,
             "quota_value": Decimal("0"),
             "sort_order": 30,
-            "description": "30 天无限额度套餐，每日最多 3 亿 Token",
+            "description": "30 天无限额度套餐，每日 100 美元额度",
         },
         {
             "plan_code": "daily-10m-token",
@@ -221,15 +222,15 @@ class SubscriptionService:
             return False
 
         plan_code = SubscriptionService._get_record_plan_code(record)
-        if plan_code in SubscriptionService.MONTHLY_UNLIMITED_PLAN_CODES:
+        if plan_code in SubscriptionService.COST_LIMITED_UNLIMITED_PLAN_CODES:
             return True
 
         duration_mode = SubscriptionService._get_record_duration_mode(record)
-        if duration_mode in {"month", "monthly"}:
+        plan_name = SubscriptionService._get_record_plan_name(record)
+        if duration_mode in {"month", "monthly", "day", "daily", "week", "weekly"} and "无限" in plan_name:
             return True
 
-        plan_name = SubscriptionService._get_record_plan_name(record)
-        return "月" in plan_name and "无限" in plan_name
+        return False
 
     @staticmethod
     def _is_enjoy_daily_quota_record(record: object) -> bool:
@@ -895,7 +896,19 @@ class SubscriptionService:
         cycle = query.first()
         if cycle:
             if cycle.quota_metric != quota_metric:
+                usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                    db,
+                    subscription,
+                    cycle_start_at,
+                    cycle_end_at,
+                    quota_metric,
+                )
                 cycle.quota_metric = quota_metric
+                cycle.quota_limit = quota_limit
+                cycle.used_amount = usage_snapshot["used_amount"]
+                cycle.request_count = usage_snapshot["request_count"]
+                cycle.last_request_id = usage_snapshot["last_request_id"]
+                return cycle
             if SubscriptionService._normalize_decimal(cycle.quota_limit) != quota_limit:
                 cycle.quota_limit = quota_limit
             return cycle
@@ -925,6 +938,57 @@ class SubscriptionService:
         if cycle:
             return cycle
         raise ServiceException(500, "加载套餐使用周期失败", "SUBSCRIPTION_CYCLE_LOAD_FAILED")
+
+    @staticmethod
+    def _rebuild_cycle_usage_snapshot(
+        db: Session,
+        subscription: UserSubscription,
+        cycle_start_at: datetime,
+        cycle_end_at: datetime,
+        quota_metric: str,
+    ) -> dict:
+        aggregate = (
+            db.query(
+                func.count(ConsumptionRecord.id).label("request_count"),
+                func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).label("total_cost"),
+                func.coalesce(func.sum(ConsumptionRecord.raw_total_tokens), 0).label("raw_total_tokens"),
+                func.coalesce(func.sum(ConsumptionRecord.total_tokens), 0).label("total_tokens"),
+            )
+            .filter(
+                SubscriptionService._subscription_usage_filter(subscription),
+                ConsumptionRecord.model_name.isnot(None),
+                ConsumptionRecord.created_at >= cycle_start_at,
+                ConsumptionRecord.created_at < cycle_end_at,
+            )
+            .first()
+        )
+
+        latest_record = (
+            db.query(ConsumptionRecord)
+            .filter(
+                SubscriptionService._subscription_usage_filter(subscription),
+                ConsumptionRecord.model_name.isnot(None),
+                ConsumptionRecord.created_at >= cycle_start_at,
+                ConsumptionRecord.created_at < cycle_end_at,
+            )
+            .order_by(ConsumptionRecord.id.desc())
+            .first()
+        )
+
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            used_amount = SubscriptionService._normalize_decimal(getattr(aggregate, "total_cost", 0))
+        else:
+            raw_total_tokens = SubscriptionService._normalize_decimal(
+                getattr(aggregate, "raw_total_tokens", 0)
+            )
+            total_tokens = SubscriptionService._normalize_decimal(getattr(aggregate, "total_tokens", 0))
+            used_amount = raw_total_tokens if raw_total_tokens > 0 else total_tokens
+
+        return {
+            "used_amount": used_amount,
+            "request_count": int(getattr(aggregate, "request_count", 0) or 0),
+            "last_request_id": getattr(latest_record, "request_id", None),
+        }
 
     @staticmethod
     def _load_cycle_by_id(
@@ -1218,13 +1282,13 @@ class SubscriptionService:
             activation_mode="append",
             quota_metric=(
                 SubscriptionService.QUOTA_METRIC_COST
-                if SubscriptionService._normalized_text(plan_type) == "monthly"
+                if SubscriptionService._normalized_text(plan_type) in {"daily", "weekly", "monthly"}
                 and start_time >= SubscriptionService.QUOTA_RULE_CUTOVER_AT
                 else None
             ),
             quota_value=(
                 SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT
-                if SubscriptionService._normalized_text(plan_type) == "monthly"
+                if SubscriptionService._normalized_text(plan_type) in {"daily", "weekly", "monthly"}
                 and start_time >= SubscriptionService.QUOTA_RULE_CUTOVER_AT
                 else Decimal("0")
             ),

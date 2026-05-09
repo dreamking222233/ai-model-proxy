@@ -7,7 +7,7 @@
           <div class="hero-header">
             <div class="header-left">
               <h1 class="hero-title">{{ rankingTitle }} <span>Top 10</span></h1>
-              <p class="hero-subtitle">按{{ rankingRangeLabel }} Token 消耗量实时更新</p>
+              <p class="hero-subtitle">按{{ rankingRangeLabel }}美元消费实时更新</p>
             </div>
             <div class="header-right">
               <a-radio-group v-model="days" button-style="solid" class="glass-radio-group" @change="fetchRanking">
@@ -29,7 +29,7 @@
               </div>
               <div class="user-info">
                 <div class="username">{{ ranking[1].username }}</div>
-                <div class="token-count">{{ formatNumber(ranking[1].total_tokens) }} Tokens</div>
+                <div class="token-count">${{ formatCurrency(ranking[1].total_cost) }}</div>
               </div>
             </div>
 
@@ -44,7 +44,7 @@
               </div>
               <div class="user-info">
                 <div class="username">{{ ranking[0].username }}</div>
-                <div class="token-count highlight">{{ formatNumber(ranking[0].total_tokens) }} Tokens</div>
+                <div class="token-count highlight">${{ formatCurrency(ranking[0].total_cost) }}</div>
               </div>
             </div>
 
@@ -58,7 +58,7 @@
               </div>
               <div class="user-info">
                 <div class="username">{{ ranking[2].username }}</div>
-                <div class="token-count">{{ formatNumber(ranking[2].total_tokens) }} Tokens</div>
+                <div class="token-count">${{ formatCurrency(ranking[2].total_cost) }}</div>
               </div>
             </div>
           </div>
@@ -85,8 +85,8 @@
                   <div class="sub-info">请求次数: {{ formatNumber(item.request_count) }}</div>
                 </div>
                 <div class="stats-info">
-                  <div class="token-val">{{ formatNumber(item.total_tokens) }}</div>
-                  <div class="token-unit">Tokens</div>
+                  <div class="token-val">${{ formatCurrency(item.total_cost) }}</div>
+                  <div class="token-unit">USD</div>
                 </div>
               </div>
             </div>
@@ -133,6 +133,13 @@ export default {
   methods: {
     formatNumber(value) {
       return Number(value || 0).toLocaleString()
+    },
+    formatCurrency(value) {
+      const amount = Number(value || 0)
+      if (!Number.isFinite(amount)) return '0.00'
+      if (amount >= 100) return amount.toFixed(2)
+      if (amount >= 1) return amount.toFixed(3)
+      return amount.toFixed(6)
     },
     async fetchRanking() {
       const requestSeq = ++this.rankingRequestSeq

@@ -768,7 +768,7 @@ class LogService:
     @staticmethod
     def get_token_ranking(db: Session, days: int = 1, limit: int = 10) -> list[dict]:
         """
-        Get top users by token usage within the given time window.
+        Get top users by USD consumption within the given time window.
         """
         try:
             resolved_limit = 10 if limit is None else int(limit)
@@ -782,6 +782,7 @@ class LogService:
                 SysUser.username,
                 SysUser.role,
                 SysUser.avatar,
+                func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).label("total_cost"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
                 func.coalesce(func.sum(RequestLog.input_tokens), 0).label("input_tokens"),
                 func.coalesce(func.sum(RequestLog.output_tokens), 0).label("output_tokens"),
@@ -789,6 +790,7 @@ class LogService:
                 func.max(RequestLog.created_at).label("last_used_at"),
             )
             .join(SysUser, SysUser.id == RequestLog.user_id)
+            .outerjoin(ConsumptionRecord, ConsumptionRecord.request_id == RequestLog.request_id)
             .filter(
                 RequestLog.user_id.isnot(None),
                 RequestLog.created_at >= since,
@@ -796,7 +798,7 @@ class LogService:
             )
             .group_by(SysUser.id, SysUser.username, SysUser.role, SysUser.avatar)
             .order_by(
-                func.coalesce(func.sum(RequestLog.total_tokens), 0).desc(),
+                func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).desc(),
                 func.count(RequestLog.id).desc(),
                 func.max(RequestLog.created_at).desc(),
                 SysUser.id.asc(),
@@ -812,6 +814,7 @@ class LogService:
                 "username": row.username,
                 "role": row.role,
                 "avatar": row.avatar,
+                "total_cost": float(row.total_cost or 0),
                 "total_tokens": int(row.total_tokens or 0),
                 "input_tokens": int(row.input_tokens or 0),
                 "output_tokens": int(row.output_tokens or 0),

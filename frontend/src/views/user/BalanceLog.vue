@@ -240,6 +240,7 @@
               <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cache">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cost-breakdown-line cache">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}，不额外计费</span>
             </template>
+            <span v-else-if="isAccountingFailureAfterSuccess(record)" class="price free">记账异常</span>
             <span v-else class="price free">FREE</span>
           </div>
         </template>
@@ -423,6 +424,9 @@ export default {
     },
     isRequestSuccess(record) {
       return !!record && String(record.status || '') === 'success'
+    },
+    isAccountingFailureAfterSuccess(record) {
+      return Boolean(record && record.accounting_failed_after_success)
     },
     getImageCreditsDisplay(record) {
       if (!this.isImageRequest(record)) return 0

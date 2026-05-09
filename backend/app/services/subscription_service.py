@@ -895,7 +895,13 @@ class SubscriptionService:
             query = query.with_for_update()
         cycle = query.first()
         if cycle:
-            if cycle.quota_metric != quota_metric:
+            cycle_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
+            should_rebuild_snapshot = cycle.quota_metric != quota_metric or (
+                quota_metric == SubscriptionService.QUOTA_METRIC_COST
+                and SubscriptionService._uses_official_cost_for_quota(subscription)
+                and cycle_used_amount > quota_limit
+            )
+            if should_rebuild_snapshot:
                 usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
                     db,
                     subscription,
@@ -1034,6 +1040,13 @@ class SubscriptionService:
         now: Optional[datetime] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
+        if SubscriptionService._is_effectively_active(subscription, usage_now):
+            cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now)
+            return SubscriptionService._serialize_cycle(
+                cycle,
+                SubscriptionService._get_effective_quota_limit(subscription),
+            )
+
         cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
             usage_now,
             subscription.reset_timezone,

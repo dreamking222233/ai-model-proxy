@@ -265,6 +265,7 @@
             <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
             <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}，不额外计费</span>
           </div>
+          <span v-else-if="isAccountingFailureAfterSuccess(record)" class="text-warning">记账异常</span>
           <span v-else class="text-muted">$0.00</span>
         </template>
 
@@ -522,7 +523,24 @@
           </div>
         </div>
 
-        <div v-if="selectedRecord.error_message" class="detail-section detail-section--error">
+        <div v-if="selectedRecord.accounting_failed_after_success" class="detail-section detail-section--error">
+          <div class="detail-section-title">记账异常</div>
+          <div class="error-message-section">
+            <div class="error-message-header">
+              <a-icon type="warning" class="error-message-icon" />
+              <span class="error-message-title">请求已成功返回，但本地记账失败</span>
+            </div>
+            <div class="error-message-content">
+              <pre>{{ selectedRecord.error_message }}</pre>
+            </div>
+            <a-button size="small" @click="copyErrorMessage" class="error-copy-btn">
+              <a-icon type="copy" />
+              复制异常信息
+            </a-button>
+          </div>
+        </div>
+
+        <div v-else-if="selectedRecord.error_message" class="detail-section detail-section--error">
           <div class="detail-section-title">错误详情</div>
           <div class="error-message-section">
             <div class="error-message-header">
@@ -731,6 +749,9 @@ export default {
     },
     isRequestSuccess(record) {
       return !!record && String(record.status || '') === 'success'
+    },
+    isAccountingFailureAfterSuccess(record) {
+      return Boolean(record && record.accounting_failed_after_success)
     },
     getImageCreditsDisplay(record) {
       if (!this.isImageRequest(record)) return 0

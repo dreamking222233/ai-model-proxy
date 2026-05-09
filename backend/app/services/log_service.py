@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_, not_
 from sqlalchemy.orm import Session
 
 from app.models.log import RequestLog, OperationLog, ConsumptionRecord, RequestCacheSummary
@@ -24,6 +24,7 @@ class LogService:
         "7d": 7,
         "30d": 30,
     }
+    ACCOUNTING_FAILURE_PREFIX = "本地计费或记账失败："
 
     @staticmethod
     def _public_actual_model_name(requested_model: Optional[str], actual_model: Optional[str]) -> Optional[str]:
@@ -128,6 +129,32 @@ class LogService:
             return None
 
     @staticmethod
+    def _is_accounting_failure_after_success(status: Optional[str], error_message: Optional[str], total_tokens: int) -> bool:
+        return (
+            str(status or "").lower() in {"error", "failed"}
+            and str(error_message or "").startswith(LogService.ACCOUNTING_FAILURE_PREFIX)
+            and int(total_tokens or 0) > 0
+        )
+
+    @staticmethod
+    def _visible_success_condition():
+        return or_(
+            RequestLog.status == "success",
+            and_(
+                RequestLog.status.in_(("error", "failed")),
+                RequestLog.error_message.like(f"{LogService.ACCOUNTING_FAILURE_PREFIX}%"),
+                func.coalesce(RequestLog.total_tokens, 0) > 0,
+            ),
+        )
+
+    @staticmethod
+    def _visible_failure_condition():
+        return and_(
+            RequestLog.status.in_(("error", "failed")),
+            not_(LogService._visible_success_condition()),
+        )
+
+    @staticmethod
     def list_request_logs(
         db: Session,
         page: int = 1,
@@ -177,7 +204,13 @@ class LogService:
         if model:
             query = query.filter(RequestLog.requested_model == model)
         if status:
-            query = query.filter(RequestLog.status == status)
+            normalized_status = str(status).strip().lower()
+            if normalized_status == "success":
+                query = query.filter(LogService._visible_success_condition())
+            elif normalized_status in {"error", "failed"}:
+                query = query.filter(LogService._visible_failure_condition())
+            else:
+                query = query.filter(RequestLog.status == status)
         start_dt, end_dt = LogService._parse_date_filters(start_date, end_date)
         if start_dt:
             query = query.filter(RequestLog.created_at >= start_dt)
@@ -249,7 +282,15 @@ class LogService:
                 "compression_fallback_reason": None,
                 "upstream_session_mode": None,
                 "upstream_session_id": None,
-                "status": log.status,
+                "raw_status": log.status,
+                "accounting_failed_after_success": LogService._is_accounting_failure_after_success(
+                    log.status,
+                    log.error_message,
+                    log.total_tokens,
+                ),
+                "status": "success"
+                if LogService._is_accounting_failure_after_success(log.status, log.error_message, log.total_tokens)
+                else log.status,
                 "error_message": log.error_message,
                 "client_ip": log.client_ip,
                 "subscription_cycle_id": log.subscription_cycle_id,
@@ -305,8 +346,8 @@ class LogService:
             func.coalesce(func.sum(RequestLog.upstream_cache_read_input_tokens), 0).label("cache_read_input_tokens"),
             func.coalesce(func.sum(RequestLog.upstream_cache_creation_input_tokens), 0).label("cache_creation_input_tokens"),
             func.coalesce(func.sum(RequestLog.image_credits_charged), 0).label("image_credits"),
-            func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
-            func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_count"),
+            func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_count"),
+            func.sum(func.IF(not_(LogService._visible_success_condition()), 1, 0)).label("failed_count"),
             func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
             func.max(RequestLog.created_at).label("last_request_at"),
         ).first()
@@ -411,6 +452,7 @@ class LogService:
             query = query.filter(RequestLog.agent_id == agent_id)
 
         if bucket_mode == "two_hour":
+            success_expr = LogService._visible_success_condition()
             bucket_expr = func.concat(
                 func.date_format(RequestLog.created_at, "%Y-%m-%d "),
                 func.lpad(func.floor(func.hour(RequestLog.created_at) / 2) * 2, 2, "0"),
@@ -420,8 +462,8 @@ class LogService:
                 query.with_entities(
                     bucket_expr.label("bucket_key"),
                     func.count(RequestLog.id).label("total_requests"),
-                    func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_requests"),
-                    func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_requests"),
+                    func.sum(func.IF(success_expr, 1, 0)).label("success_requests"),
+                    func.sum(func.IF(not_(success_expr), 1, 0)).label("failed_requests"),
                     func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
                     func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
                     func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
@@ -469,8 +511,8 @@ class LogService:
             query.with_entities(
                 func.date(RequestLog.created_at).label("date"),
                 func.count(RequestLog.id).label("total_requests"),
-                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_requests"),
-                func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_requests"),
+                func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_requests"),
+                func.sum(func.IF(not_(LogService._visible_success_condition()), 1, 0)).label("failed_requests"),
                 func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
                 func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
@@ -648,7 +690,7 @@ class LogService:
                 func.coalesce(func.sum(RequestLog.input_tokens), 0).label("input_tokens"),
                 func.coalesce(func.sum(RequestLog.output_tokens), 0).label("output_tokens"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
-                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+                func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_count"),
             )
             .filter(base_filter)
             .group_by(RequestLog.requested_model)
@@ -674,8 +716,8 @@ class LogService:
                 func.date(RequestLog.created_at).label("date"),
                 func.count(RequestLog.id).label("request_count"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
-                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
-                func.sum(func.IF(RequestLog.status != "success", 1, 0)).label("failed_count"),
+                func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_count"),
+                func.sum(func.IF(not_(LogService._visible_success_condition()), 1, 0)).label("failed_count"),
             )
             .filter(base_filter)
             .group_by(func.date(RequestLog.created_at))
@@ -914,7 +956,7 @@ class LogService:
         stats = query.with_entities(
             func.count(RequestLog.id).label("total_requests"),
             func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
-            func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+            func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_count"),
         ).first()
 
         total_requests = int(stats.total_requests or 0)
@@ -972,7 +1014,7 @@ class LogService:
                 func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00').label("minute"),
                 func.count(RequestLog.id).label("request_count"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
-                func.sum(func.IF(RequestLog.status == "success", 1, 0)).label("success_count"),
+                func.sum(func.IF(LogService._visible_success_condition(), 1, 0)).label("success_count"),
             )
             .group_by(func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00'))
             .order_by(func.date_format(RequestLog.created_at, '%Y-%m-%d %H:%i:00').asc())

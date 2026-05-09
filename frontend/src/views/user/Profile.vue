@@ -213,7 +213,7 @@ export default {
     subscriptionTitle() {
       const summary = this.userInfo.subscription_summary || {}
       if (!summary.subscription_type || summary.subscription_type === 'balance') return '按量余额模式'
-      if (summary.plan_kind === 'daily_quota' && summary.current_cycle) {
+      if (summary.current_cycle) {
         return `${summary.plan_name || '每日限额套餐'} / 今日剩余 ${Number(summary.current_cycle.remaining_amount || 0).toLocaleString('zh-CN')} ${summary.quota_metric === 'cost_usd' ? '美元' : 'Token'}`
       }
       return summary.plan_name || '时间套餐'

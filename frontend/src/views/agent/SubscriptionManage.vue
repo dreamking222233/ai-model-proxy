@@ -26,8 +26,7 @@
               {{ Number(record.duration_days || 0) }} 天
             </template>
             <template slot="quota" slot-scope="text, record">
-              <span v-if="record.plan_kind === 'daily_quota'">{{ formatQuota(record.quota_value, record.quota_metric) }}</span>
-              <span v-else>{{ formatUnlimitedLimit(record) }}</span>
+              <span>{{ formatPlanQuota(record) }}</span>
             </template>
             <template slot="remaining" slot-scope="text, record">
               <div class="quota-stock-cell">
@@ -80,11 +79,11 @@
               <a-badge :status="getStatusBadge(text)" :text="getStatusText(text)" />
             </template>
             <template slot="quota" slot-scope="text, record">
-              {{ record.plan_kind === 'daily_quota' ? formatQuota(record.quota_value, record.quota_metric) : formatUnlimitedLimit(record) }}
+              {{ formatPlanQuota(record) }}
             </template>
             <template slot="usage" slot-scope="text, record">
-              <span v-if="record.usage_summary">
-                {{ formatQuota(record.usage_summary.total_tokens, 'total_tokens') }}
+              <span v-if="record.current_cycle">
+                {{ formatQuota(record.current_cycle.used_amount, record.current_cycle.quota_metric || record.quota_metric) }}
               </span>
               <span v-else class="muted">-</span>
             </template>
@@ -189,7 +188,7 @@ export default {
         { title: '套餐类型', key: 'planKind', width: 130, scopedSlots: { customRender: 'planKind' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
         { title: '额度', key: 'quota', width: 140, scopedSlots: { customRender: 'quota' } },
-        { title: '已用 Token', key: 'usage', width: 140, scopedSlots: { customRender: 'usage' } },
+        { title: '当日已用', key: 'usage', width: 140, scopedSlots: { customRender: 'usage' } },
         { title: '开始时间', dataIndex: 'start_time', key: 'start_time', width: 170, scopedSlots: { customRender: 'time' } },
         { title: '结束时间', dataIndex: 'end_time', key: 'end_time', width: 170, scopedSlots: { customRender: 'time' } },
         { title: '发放时间', dataIndex: 'created_at', key: 'created_at', width: 170, scopedSlots: { customRender: 'time' } }
@@ -330,9 +329,27 @@ export default {
       }
       return `${Number(value || 0).toLocaleString('zh-CN')} Token`
     },
-    formatUnlimitedLimit(record) {
-      const limit = Number((record && record.unlimited_daily_token_limit) || 300000000)
-      return `每日 ${limit.toLocaleString('zh-CN')} Token`
+    getDisplayQuotaMetric(record) {
+      if (!record) return null
+      return record.resolved_quota_metric || record.quota_metric || ((record.unlimited_daily_token_limit || 0) > 0 ? 'total_tokens' : null)
+    },
+    getDisplayQuotaValue(record) {
+      if (!record) return 0
+      if (record.resolved_quota_value !== undefined && record.resolved_quota_value !== null) {
+        return record.resolved_quota_value
+      }
+      if (record.quota_value !== undefined && record.quota_value !== null && record.quota_value !== 0) {
+        return record.quota_value
+      }
+      return record.unlimited_daily_token_limit || 0
+    },
+    formatPlanQuota(record) {
+      const metric = this.getDisplayQuotaMetric(record)
+      const value = this.getDisplayQuotaValue(record)
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}/天`
+      }
+      return `每日 ${Number(value || 0).toLocaleString('zh-CN')} Token`
     },
     canGrantPlan(record) {
       const creditEnabled = record.credit_limit && record.credit_limit.status === 'active'

@@ -1138,13 +1138,19 @@ class ProxyService:
 
         if unified_model is not None and estimated_output_tokens is not None:
             price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+            input_price = Decimal(str(unified_model.input_price_per_million or 0))
+            output_price = Decimal(str(unified_model.output_price_per_million or 0))
             estimated_input_cost = (
                 Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
-            ) * Decimal(str(unified_model.input_price_per_million or 0)) * price_multiplier
+            ) * input_price * price_multiplier
             estimated_output_cost = (
                 Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")
-            ) * Decimal(str(unified_model.output_price_per_million or 0)) * price_multiplier
+            ) * output_price * price_multiplier
             quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
+            quota_precheck["estimated_quota_cost"] = (
+                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price
+                + (Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")) * output_price
+            )
 
         return quota_precheck
 
@@ -7875,6 +7881,12 @@ class ProxyService:
             cache_read_cost = float(cache_read_cost_decimal)
             output_cost = float(output_cost_decimal)
             total_cost = float(total_cost_decimal)
+            quota_cost_decimal = (
+                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price
+                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1")
+                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price
+            )
+            quota_cost = float(quota_cost_decimal)
 
             billing_mode = "balance"
             subscription_id: int | None = None
@@ -7931,6 +7943,7 @@ class ProxyService:
                                 request_id=request_id,
                                 raw_total_tokens=raw_total_tokens,
                                 total_cost=total_cost,
+                                quota_cost=quota_cost,
                                 now=usage_now,
                             )
                             subscription_cycle_id = quota_usage["subscription_cycle_id"]

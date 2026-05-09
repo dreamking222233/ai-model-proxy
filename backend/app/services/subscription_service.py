@@ -30,9 +30,16 @@ class SubscriptionService:
     QUOTA_METRIC_COST = "cost_usd"
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     DEFAULT_RESET_PERIOD = "day"
+    QUOTA_RULE_CUTOVER_AT = datetime(2026, 5, 10, 0, 0, 0)
     UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("300000000")
+    UNLIMITED_MONTHLY_DAILY_COST_LIMIT = Decimal("100")
+    LEGACY_UNLIMITED_MONTHLY_DAILY_COST_LIMIT = Decimal("120")
+    ENJOY_DAILY_COST_LIMIT = Decimal("50")
+    LEGACY_ENJOY_DAILY_COST_LIMIT = Decimal("60")
     UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
     RETRYABLE_DB_ERROR_CODES = {1205, 1213}
+    ENJOY_PLAN_CODES = frozenset({"daily-10m-token", "weekly-10m-token", "monthly-10m-token"})
+    MONTHLY_UNLIMITED_PLAN_CODES = frozenset({"monthly-unlimited"})
 
     BUILTIN_PLANS = [
         {
@@ -167,6 +174,8 @@ class SubscriptionService:
             "end_time": None,
             "quota_metric": None,
             "quota_value": 0.0,
+            "resolved_quota_metric": None,
+            "resolved_quota_value": 0.0,
             "unlimited_daily_token_limit": None,
             "current_cycle": None,
         }
@@ -174,6 +183,156 @@ class SubscriptionService:
     @staticmethod
     def _get_plan_kind(subscription: UserSubscription) -> str:
         return getattr(subscription, "plan_kind_snapshot", None) or SubscriptionService.PLAN_KIND_UNLIMITED
+
+    @staticmethod
+    def _normalized_text(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _get_record_plan_code(record: object) -> str:
+        return SubscriptionService._normalized_text(
+            getattr(record, "plan_code_snapshot", None) or getattr(record, "plan_code", None)
+        )
+
+    @staticmethod
+    def _get_record_plan_name(record: object) -> str:
+        return str(getattr(record, "plan_name", None) or "").strip()
+
+    @staticmethod
+    def _get_record_duration_mode(record: object) -> str:
+        return SubscriptionService._normalized_text(
+            getattr(record, "duration_mode", None) or getattr(record, "plan_type", None)
+        )
+
+    @staticmethod
+    def _is_record_created_before_quota_cutover(record: object) -> bool:
+        created_at = getattr(record, "created_at", None)
+        return isinstance(created_at, datetime) and created_at < SubscriptionService.QUOTA_RULE_CUTOVER_AT
+
+    @staticmethod
+    def _get_record_plan_kind(record: object) -> str:
+        return SubscriptionService._normalized_text(
+            getattr(record, "plan_kind_snapshot", None) or getattr(record, "plan_kind", None)
+        )
+
+    @staticmethod
+    def _is_monthly_unlimited_record(record: object) -> bool:
+        if SubscriptionService._get_record_plan_kind(record) != SubscriptionService.PLAN_KIND_UNLIMITED:
+            return False
+
+        plan_code = SubscriptionService._get_record_plan_code(record)
+        if plan_code in SubscriptionService.MONTHLY_UNLIMITED_PLAN_CODES:
+            return True
+
+        duration_mode = SubscriptionService._get_record_duration_mode(record)
+        if duration_mode in {"month", "monthly"}:
+            return True
+
+        plan_name = SubscriptionService._get_record_plan_name(record)
+        return "月" in plan_name and "无限" in plan_name
+
+    @staticmethod
+    def _is_enjoy_daily_quota_record(record: object) -> bool:
+        if SubscriptionService._get_record_plan_kind(record) != SubscriptionService.PLAN_KIND_DAILY_QUOTA:
+            return False
+
+        plan_code = SubscriptionService._get_record_plan_code(record)
+        if plan_code in SubscriptionService.ENJOY_PLAN_CODES:
+            return True
+
+        plan_name = SubscriptionService._get_record_plan_name(record)
+        return "畅享" in plan_name
+
+    @staticmethod
+    def _build_quota_strategy(
+        *,
+        quota_metric: str,
+        quota_limit: Decimal,
+        hard_limit: bool,
+        use_official_cost: bool,
+    ) -> dict:
+        return {
+            "quota_metric": quota_metric,
+            "quota_limit": SubscriptionService._normalize_decimal(quota_limit),
+            "hard_limit": hard_limit,
+            "use_official_cost": use_official_cost,
+        }
+
+    @staticmethod
+    def _resolve_subscription_quota_strategy(subscription: UserSubscription) -> dict:
+        if SubscriptionService._is_monthly_unlimited_record(subscription):
+            limit = (
+                SubscriptionService.LEGACY_UNLIMITED_MONTHLY_DAILY_COST_LIMIT
+                if SubscriptionService._is_record_created_before_quota_cutover(subscription)
+                else SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT
+            )
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=limit,
+                hard_limit=True,
+                use_official_cost=True,
+            )
+
+        if SubscriptionService._is_enjoy_daily_quota_record(subscription):
+            limit = (
+                SubscriptionService.LEGACY_ENJOY_DAILY_COST_LIMIT
+                if SubscriptionService._is_record_created_before_quota_cutover(subscription)
+                else SubscriptionService.ENJOY_DAILY_COST_LIMIT
+            )
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=limit,
+                hard_limit=False,
+                use_official_cost=True,
+            )
+
+        if SubscriptionService._is_unlimited_subscription(subscription):
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_TOKENS,
+                quota_limit=SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT,
+                hard_limit=True,
+                use_official_cost=False,
+            )
+
+        return SubscriptionService._build_quota_strategy(
+            quota_metric=getattr(subscription, "quota_metric", None) or SubscriptionService.QUOTA_METRIC_TOKENS,
+            quota_limit=getattr(subscription, "quota_value", None) or Decimal("0"),
+            hard_limit=False,
+            use_official_cost=False,
+        )
+
+    @staticmethod
+    def _resolve_plan_quota_strategy(plan: SubscriptionPlan) -> dict:
+        if SubscriptionService._is_monthly_unlimited_record(plan):
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT,
+                hard_limit=True,
+                use_official_cost=True,
+            )
+
+        if SubscriptionService._is_enjoy_daily_quota_record(plan):
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=SubscriptionService.ENJOY_DAILY_COST_LIMIT,
+                hard_limit=False,
+                use_official_cost=True,
+            )
+
+        if SubscriptionService._get_record_plan_kind(plan) == SubscriptionService.PLAN_KIND_UNLIMITED:
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_TOKENS,
+                quota_limit=SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT,
+                hard_limit=True,
+                use_official_cost=False,
+            )
+
+        return SubscriptionService._build_quota_strategy(
+            quota_metric=getattr(plan, "quota_metric", None) or SubscriptionService.QUOTA_METRIC_TOKENS,
+            quota_limit=getattr(plan, "quota_value", None) or Decimal("0"),
+            hard_limit=False,
+            use_official_cost=False,
+        )
 
     @staticmethod
     def _is_unlimited_subscription(subscription: UserSubscription) -> bool:
@@ -188,15 +347,15 @@ class SubscriptionService:
 
     @staticmethod
     def _get_effective_quota_metric(subscription: UserSubscription) -> str:
-        if SubscriptionService._is_unlimited_subscription(subscription):
-            return SubscriptionService.QUOTA_METRIC_TOKENS
-        return getattr(subscription, "quota_metric", None) or SubscriptionService.QUOTA_METRIC_TOKENS
+        return SubscriptionService._resolve_subscription_quota_strategy(subscription)["quota_metric"]
 
     @staticmethod
     def _get_effective_quota_limit(subscription: UserSubscription) -> Decimal:
-        if SubscriptionService._is_unlimited_subscription(subscription):
-            return SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT
-        return SubscriptionService._normalize_decimal(getattr(subscription, "quota_value", None))
+        return SubscriptionService._resolve_subscription_quota_strategy(subscription)["quota_limit"]
+
+    @staticmethod
+    def _uses_official_cost_for_quota(subscription: UserSubscription) -> bool:
+        return bool(SubscriptionService._resolve_subscription_quota_strategy(subscription)["use_official_cost"])
 
     @staticmethod
     def is_retryable_concurrency_error(exc: Exception) -> bool:
@@ -221,15 +380,29 @@ class SubscriptionService:
     def _get_unlimited_daily_token_limit(subscription: UserSubscription) -> Optional[float]:
         if not SubscriptionService._is_unlimited_subscription(subscription):
             return None
-        return float(SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT)
+        if SubscriptionService._get_effective_quota_metric(subscription) != SubscriptionService.QUOTA_METRIC_TOKENS:
+            return None
+        return float(SubscriptionService._get_effective_quota_limit(subscription))
 
     @staticmethod
-    def _build_quota_exceeded_error(plan_kind: str, estimated: bool = False) -> ServiceException:
-        if plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED:
+    def _format_quota_limit_text(quota_metric: str, quota_limit: Decimal) -> str:
+        limit_value = SubscriptionService._normalize_decimal(quota_limit)
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            return f"${limit_value.quantize(Decimal('0.01'))}"
+        return f"{int(limit_value):,} Token"
+
+    @staticmethod
+    def _build_quota_exceeded_error(subscription: UserSubscription, estimated: bool = False) -> ServiceException:
+        strategy = SubscriptionService._resolve_subscription_quota_strategy(subscription)
+        if strategy["hard_limit"]:
+            limit_text = SubscriptionService._format_quota_limit_text(
+                strategy["quota_metric"],
+                strategy["quota_limit"],
+            )
             if estimated:
-                message = "本次请求预计会超出实际使用额度，每日最多可使用 300,000,000 Token，请缩短上下文或降低输出上限后重试"
+                message = f"本次请求预计会超出实际使用额度，每日最多可使用 {limit_text}，请缩短上下文或降低输出上限后重试"
             else:
-                message = "已超出实际使用额度，每日最多可使用 300,000,000 Token，请明天再试"
+                message = f"已超出实际使用额度，每日最多可使用 {limit_text}，请明天再试"
             return ServiceException(
                 403,
                 message,
@@ -338,6 +511,9 @@ class SubscriptionService:
 
     @staticmethod
     def _serialize_plan(plan: SubscriptionPlan) -> dict:
+        resolved_strategy = SubscriptionService._resolve_plan_quota_strategy(plan)
+        resolved_quota_metric = resolved_strategy["quota_metric"]
+        resolved_quota_value = resolved_strategy["quota_limit"]
         return {
             "id": plan.id,
             "plan_code": plan.plan_code,
@@ -347,8 +523,11 @@ class SubscriptionService:
             "duration_days": plan.duration_days,
             "quota_metric": plan.quota_metric,
             "quota_value": float(plan.quota_value or 0),
-            "unlimited_daily_token_limit": float(SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT)
+            "resolved_quota_metric": resolved_quota_metric,
+            "resolved_quota_value": float(resolved_quota_value),
+            "unlimited_daily_token_limit": float(resolved_quota_value)
             if plan.plan_kind == SubscriptionService.PLAN_KIND_UNLIMITED
+            and resolved_quota_metric == SubscriptionService.QUOTA_METRIC_TOKENS
             else None,
             "reset_period": plan.reset_period,
             "reset_timezone": plan.reset_timezone,
@@ -465,6 +644,16 @@ class SubscriptionService:
         usage_summary: Optional[dict] = None,
         current_cycle: Optional[object] = None,
     ) -> dict:
+        effective_quota_metric = (
+            SubscriptionService._get_effective_quota_metric(subscription)
+            if SubscriptionService._requires_daily_cycle(subscription)
+            else subscription.quota_metric
+        )
+        effective_quota_value = (
+            SubscriptionService._get_effective_quota_limit(subscription)
+            if SubscriptionService._requires_daily_cycle(subscription)
+            else SubscriptionService._normalize_decimal(subscription.quota_value)
+        )
         result = {
             "id": subscription.id,
             "user_id": subscription.user_id,
@@ -474,10 +663,10 @@ class SubscriptionService:
             "plan_type": subscription.plan_type,
             "plan_kind": SubscriptionService._get_plan_kind(subscription),
             "duration_days": int(subscription.duration_days_snapshot or 0),
-            "quota_metric": SubscriptionService._get_effective_quota_metric(subscription)
-            if SubscriptionService._requires_daily_cycle(subscription)
-            else subscription.quota_metric,
-            "quota_value": float(subscription.quota_value or 0),
+            "quota_metric": effective_quota_metric,
+            "quota_value": float(effective_quota_value),
+            "resolved_quota_metric": effective_quota_metric,
+            "resolved_quota_value": float(effective_quota_value),
             "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(subscription),
             "reset_period": subscription.reset_period,
             "reset_timezone": subscription.reset_timezone,
@@ -492,9 +681,7 @@ class SubscriptionService:
             "usage_summary": usage_summary or SubscriptionService._empty_usage_summary(),
             "current_cycle": current_cycle if isinstance(current_cycle, dict) else SubscriptionService._serialize_cycle(
                 current_cycle,
-                SubscriptionService._get_effective_quota_limit(subscription)
-                if SubscriptionService._requires_daily_cycle(subscription)
-                else subscription.quota_value,
+                effective_quota_value,
             ),
         }
         if user is not None:
@@ -842,7 +1029,15 @@ class SubscriptionService:
             "quota_metric": SubscriptionService._get_effective_quota_metric(active_subscription)
             if SubscriptionService._requires_daily_cycle(active_subscription)
             else active_subscription.quota_metric,
-            "quota_value": float(active_subscription.quota_value or 0),
+            "quota_value": float(SubscriptionService._get_effective_quota_limit(active_subscription))
+            if SubscriptionService._requires_daily_cycle(active_subscription)
+            else float(active_subscription.quota_value or 0),
+            "resolved_quota_metric": SubscriptionService._get_effective_quota_metric(active_subscription)
+            if SubscriptionService._requires_daily_cycle(active_subscription)
+            else active_subscription.quota_metric,
+            "resolved_quota_value": float(SubscriptionService._get_effective_quota_limit(active_subscription))
+            if SubscriptionService._requires_daily_cycle(active_subscription)
+            else float(active_subscription.quota_value or 0),
             "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(active_subscription),
             "current_cycle": current_cycle,
         }
@@ -859,7 +1054,6 @@ class SubscriptionService:
         if not active_subscription:
             raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
 
-        plan_kind = SubscriptionService._get_plan_kind(active_subscription)
         if not SubscriptionService._requires_daily_cycle(active_subscription):
             return {"subscription": active_subscription, "cycle": None}
 
@@ -867,11 +1061,16 @@ class SubscriptionService:
         estimated_consumed_amount = None
         if quota_precheck:
             metric_key = (
-                "estimated_total_cost"
+                "estimated_quota_cost"
+                if quota_metric == SubscriptionService.QUOTA_METRIC_COST
+                and SubscriptionService._uses_official_cost_for_quota(active_subscription)
+                else "estimated_total_cost"
                 if quota_metric == SubscriptionService.QUOTA_METRIC_COST
                 else "estimated_total_tokens"
             )
             raw_estimate = quota_precheck.get(metric_key)
+            if raw_estimate is None and metric_key == "estimated_quota_cost":
+                raw_estimate = quota_precheck.get("estimated_total_cost")
             if raw_estimate is not None:
                 estimated_consumed_amount = SubscriptionService._normalize_decimal(raw_estimate)
 
@@ -879,12 +1078,12 @@ class SubscriptionService:
         quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         if used_amount >= quota_limit:
-            raise SubscriptionService._build_quota_exceeded_error(plan_kind)
+            raise SubscriptionService._build_quota_exceeded_error(active_subscription)
 
         if estimated_consumed_amount is not None:
             remaining_amount = quota_limit - used_amount
             if estimated_consumed_amount > remaining_amount:
-                raise SubscriptionService._build_quota_exceeded_error(plan_kind, estimated=True)
+                raise SubscriptionService._build_quota_exceeded_error(active_subscription, estimated=True)
         return {"subscription": active_subscription, "cycle": cycle}
 
     @staticmethod
@@ -894,13 +1093,17 @@ class SubscriptionService:
         request_id: str,
         raw_total_tokens: int,
         total_cost: float,
+        quota_cost: Optional[float] = None,
         now: Optional[datetime] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
-        plan_kind = SubscriptionService._get_plan_kind(subscription)
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
         if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
-            consumed_amount = SubscriptionService._normalize_decimal(total_cost)
+            consumed_amount = SubscriptionService._normalize_decimal(
+                quota_cost
+                if SubscriptionService._uses_official_cost_for_quota(subscription) and quota_cost is not None
+                else total_cost
+            )
         else:
             consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
 
@@ -936,7 +1139,7 @@ class SubscriptionService:
 
             refreshed_used_amount = SubscriptionService._normalize_decimal(refreshed_cycle.used_amount)
             if refreshed_used_amount + consumed_amount > quota_limit:
-                raise SubscriptionService._build_quota_exceeded_error(plan_kind)
+                raise SubscriptionService._build_quota_exceeded_error(subscription)
 
         raise ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED")
 
@@ -1013,8 +1216,18 @@ class SubscriptionService:
             start_time=start_time,
             end_time=end_time,
             activation_mode="append",
-            quota_metric=None,
-            quota_value=Decimal("0"),
+            quota_metric=(
+                SubscriptionService.QUOTA_METRIC_COST
+                if SubscriptionService._normalized_text(plan_type) == "monthly"
+                and start_time >= SubscriptionService.QUOTA_RULE_CUTOVER_AT
+                else None
+            ),
+            quota_value=(
+                SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT
+                if SubscriptionService._normalized_text(plan_type) == "monthly"
+                and start_time >= SubscriptionService.QUOTA_RULE_CUTOVER_AT
+                else Decimal("0")
+            ),
             agent_id=user.agent_id,
         )
         db.add(subscription)
@@ -1054,6 +1267,7 @@ class SubscriptionService:
             current_active.status = "cancelled"
 
         end_time = start_time + timedelta(days=int(plan.duration_days))
+        plan_strategy = SubscriptionService._resolve_plan_quota_strategy(plan)
         subscription = SubscriptionService._build_subscription_record(
             user_id=user_id,
             operator_id=operator_id,
@@ -1066,8 +1280,8 @@ class SubscriptionService:
             start_time=start_time,
             end_time=end_time,
             activation_mode=activation_mode,
-            quota_metric=plan.quota_metric,
-            quota_value=plan.quota_value,
+            quota_metric=plan_strategy["quota_metric"],
+            quota_value=plan_strategy["quota_limit"],
             reset_period=plan.reset_period,
             reset_timezone=plan.reset_timezone,
             agent_id=agent_id if agent_id is not None else user.agent_id,

@@ -37,10 +37,7 @@
             </template>
 
             <template slot="quota" slot-scope="text, record">
-              <span v-if="record.plan_kind === 'daily_quota'">
-                {{ record.quota_metric === 'total_tokens' ? formatNumber(record.quota_value) + ' Token/天' : '$' + Number(record.quota_value || 0).toFixed(2) + '/天' }}
-              </span>
-              <span v-else>{{ formatUnlimitedLimit(record) }}</span>
+              <span>{{ formatPlanQuota(record) }}</span>
             </template>
 
             <template slot="status" slot-scope="text">
@@ -101,7 +98,7 @@
               </a-form>
             </a-card>
 
-            <a-card title="旧版无限套餐开通（每日 3 亿 Token）" :bordered="false" class="grant-card">
+            <a-card title="旧版无限套餐开通（日/周卡每日 3 亿 Token，月卡每日 100 美元）" :bordered="false" class="grant-card">
               <a-form layout="vertical">
                 <a-form-item label="选择用户">
                   <a-select
@@ -185,10 +182,7 @@
                   {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
                 </a-tag>
                 <div class="sub-title">{{ record.plan_name }}</div>
-                <div v-if="record.plan_kind === 'daily_quota'" class="sub-text">
-                  {{ record.quota_metric === 'total_tokens' ? formatNumber(record.quota_value) + ' Token/天' : '$' + Number(record.quota_value || 0).toFixed(2) + '/天' }}
-                </div>
-                <div v-else class="sub-text">{{ formatUnlimitedLimit(record) }}</div>
+                <div class="sub-text">{{ formatPlanQuota(record) }}</div>
               </div>
             </template>
 
@@ -206,8 +200,8 @@
             <template slot="cycle" slot-scope="text, record">
               <div v-if="record.current_cycle" class="sub-text">
                 <div>{{ record.current_cycle.cycle_date }}</div>
-                <div>已用 {{ formatCycle(record.current_cycle.used_amount, record.quota_metric) }}</div>
-                <div>剩余 {{ formatCycle(record.current_cycle.remaining_amount, record.quota_metric) }}</div>
+                <div>已用 {{ formatCycle(record.current_cycle.used_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
+                <div>剩余 {{ formatCycle(record.current_cycle.remaining_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
               </div>
               <span v-else>-</span>
             </template>
@@ -532,9 +526,27 @@ export default {
       }
       return `${this.formatNumber(value)} Token`
     },
-    formatUnlimitedLimit(record) {
-      const limit = Number((record && record.unlimited_daily_token_limit) || 300000000)
-      return `每日 ${this.formatNumber(limit)} Token`
+    getDisplayQuotaMetric(record) {
+      if (!record) return null
+      return record.resolved_quota_metric || record.quota_metric || ((record.unlimited_daily_token_limit || 0) > 0 ? 'total_tokens' : null)
+    },
+    getDisplayQuotaValue(record) {
+      if (!record) return 0
+      if (record.resolved_quota_value !== undefined && record.resolved_quota_value !== null) {
+        return record.resolved_quota_value
+      }
+      if (record.quota_value !== undefined && record.quota_value !== null && record.quota_value !== 0) {
+        return record.quota_value
+      }
+      return record.unlimited_daily_token_limit || 0
+    },
+    formatPlanQuota(record) {
+      const metric = this.getDisplayQuotaMetric(record)
+      const value = this.getDisplayQuotaValue(record)
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}/天`
+      }
+      return `${this.formatNumber(value)} Token/天`
     },
     getStatusBadge(status) {
       const map = { active: 'processing', expired: 'default', cancelled: 'error' }
@@ -611,8 +623,8 @@ export default {
           plan_kind: record.plan_kind,
           duration_mode: record.duration_mode,
           duration_days: record.duration_days,
-          quota_metric: record.quota_metric || 'total_tokens',
-          quota_value: record.quota_value || 0,
+          quota_metric: record.resolved_quota_metric || record.quota_metric || 'total_tokens',
+          quota_value: record.resolved_quota_value || record.quota_value || 0,
           status: record.status,
           description: record.description
         }

@@ -653,7 +653,7 @@ export default {
       this.imageGenerating = true
       
       session.messages.push({ role: 'user', content: prompt, timestamp: Date.now(), requestKind: 'image_generation' })
-      var lastMsg = { role: 'assistant', kind: 'image_generating', content: '正在生成...', timestamp: Date.now(), meta: { aspectRatio: this.selectedAspectRatio } }
+      var lastMsg = { role: 'assistant', kind: 'image_generating', content: '正在生成...', timestamp: Date.now(), images: [], meta: { aspectRatio: this.selectedAspectRatio } }
       session.messages.push(lastMsg)
       saveSession(session, this.storageNamespace)
       this.refreshSessions()
@@ -661,7 +661,7 @@ export default {
       this.sendImageRequest(prompt).then(res => {
         return this.buildImageResultItems(session, res.data || []).then(images => {
           lastMsg.kind = 'image_result'
-          lastMsg.images = images
+          this.$set(lastMsg, 'images', images)
           lastMsg.meta = { model: this.currentModel, prompt, aspectRatio: this.selectedAspectRatio }
           this.imageGenerating = false
           saveSession(session, this.storageNamespace)

@@ -1398,6 +1398,7 @@ console.log(response.choices[0].message.content);`
         kind: 'image_generating',
         content: '正在生成图片...',
         timestamp: Date.now(),
+        images: [],
         meta: {
           aspectRatio: this.selectedAspectRatio
         }
@@ -1419,7 +1420,7 @@ console.log(response.choices[0].message.content);`
           if (lastMsg && lastMsg.role === 'assistant') {
             lastMsg.kind = 'image_result'
             lastMsg.content = '已生成 ' + String(images.length || data.length || 1) + ' 张图片'
-            lastMsg.images = images
+            self.$set(lastMsg, 'images', images)
             lastMsg.meta = {
               model: result.model || self.currentModel,
               prompt: prompt,
@@ -1489,6 +1490,7 @@ console.log(response.choices[0].message.content);`
         kind: 'image_generating',
         content: '正在编辑图片...',
         timestamp: Date.now(),
+        images: [],
         meta: {
           aspectRatio: this.selectedAspectRatio,
           sourceImageCacheKey: sourceCacheKey
@@ -1511,7 +1513,7 @@ console.log(response.choices[0].message.content);`
           if (lastMsg && lastMsg.role === 'assistant') {
             lastMsg.kind = 'image_result'
             lastMsg.content = '已完成图片编辑'
-            lastMsg.images = images
+            self.$set(lastMsg, 'images', images)
             lastMsg.meta = {
               model: result.model || self.currentModel,
               prompt: prompt,

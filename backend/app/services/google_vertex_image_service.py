@@ -204,7 +204,7 @@ class GoogleVertexImageService:
                     return images, extra_text, candidate_model
                 last_error = ServiceException(
                     503,
-                    f"Vertex model '{candidate_model}' returned no image data",
+                    f"Vertex 模型 '{candidate_model}' 未返回图片数据",
                     "VERTEX_IMAGE_GENERATION_FAILED",
                 )
             except ServiceException as exc:
@@ -213,7 +213,7 @@ class GoogleVertexImageService:
                 logger.warning("Vertex image candidate %s failed: %s", candidate_model, exc)
                 last_error = ServiceException(
                     400,
-                    f"Vertex image generation failed on model '{candidate_model}': {exc}",
+                    f"Vertex 模型 '{candidate_model}' 图片生成失败：{exc}",
                     "VERTEX_IMAGE_GENERATION_FAILED",
                 )
 
@@ -221,7 +221,7 @@ class GoogleVertexImageService:
             raise last_error
         raise ServiceException(
             503,
-            "Vertex image generation returned no image data",
+            "Vertex 图片生成成功，但未返回图片数据",
             "VERTEX_IMAGE_GENERATION_FAILED",
         )
 

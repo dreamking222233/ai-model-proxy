@@ -18,6 +18,7 @@ from app.models.model import (
 )
 from app.models.channel import Channel
 from app.core.exceptions import ServiceException
+from app.services.channel_service import ChannelService
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,18 @@ class ModelService:
         )
 
     @staticmethod
+    def supports_image_resolution_rules(
+        model_name: str,
+        model_type: str,
+        billing_type: str,
+    ) -> bool:
+        if str(model_type or "") != "image":
+            return False
+        if str(billing_type or "") != "image_credit":
+            return False
+        return bool(ModelService.get_image_resolution_capabilities(model_name))
+
+    @staticmethod
     def supports_image_edit(model_name: str) -> bool:
         return str(model_name or "") in ModelService.IMAGE_EDIT_CAPABILITIES
 
@@ -81,9 +94,9 @@ class ModelService:
         try:
             amount = Decimal(str(value)).quantize(Decimal("0.001"))
         except (InvalidOperation, TypeError, ValueError):
-            raise ServiceException(400, f"Invalid {field_name}", "INVALID_IMAGE_CREDIT_AMOUNT")
+            raise ServiceException(400, f"{field_name} 参数无效", "INVALID_IMAGE_CREDIT_AMOUNT")
         if amount <= Decimal("0"):
-            raise ServiceException(400, f"{field_name} must be greater than 0", "INVALID_IMAGE_CREDIT_AMOUNT")
+            raise ServiceException(400, f"{field_name} 必须大于 0", "INVALID_IMAGE_CREDIT_AMOUNT")
         return amount
 
     @staticmethod
@@ -110,16 +123,24 @@ class ModelService:
     ) -> list[dict]:
         if not rules:
             return []
-        if str(model_type or "") != "image" or str(protocol_type or "") != "google" or str(billing_type or "") != "image_credit":
+        if not ModelService.supports_image_resolution_rules(
+            model_name,
+            model_type,
+            billing_type,
+        ):
             raise ServiceException(
                 400,
-                "Image resolution rules are only supported for Google image models billed by image credits",
+                "仅支持为已声明尺寸能力的图片积分模型配置分辨率规则",
                 "IMAGE_RESOLUTION_RULES_NOT_SUPPORTED",
             )
 
-        allowed_sizes = set(ModelService.get_google_image_resolution_capabilities(model_name))
+        allowed_sizes = set(ModelService.get_image_resolution_capabilities(model_name))
         if not allowed_sizes:
-            raise ServiceException(400, f"Model '{model_name}' does not support configurable Google image sizes", "IMAGE_RESOLUTION_RULES_NOT_SUPPORTED")
+            raise ServiceException(
+                400,
+                f"模型 '{model_name}' 不支持配置图片尺寸规则",
+                "IMAGE_RESOLUTION_RULES_NOT_SUPPORTED",
+            )
 
         normalized_rules: list[dict] = []
         seen_codes: set[str] = set()
@@ -129,11 +150,11 @@ class ModelService:
         for item in rules:
             code = ModelService.normalize_google_image_size((item or {}).get("resolution_code"))
             if not code:
-                raise ServiceException(400, "Invalid resolution_code", "INVALID_IMAGE_SIZE")
+                raise ServiceException(400, "resolution_code 参数无效", "INVALID_IMAGE_SIZE")
             if code not in allowed_sizes:
-                raise ServiceException(400, f"Resolution '{code}' is not supported by model '{model_name}'", "IMAGE_SIZE_NOT_SUPPORTED")
+                raise ServiceException(400, f"模型 '{model_name}' 不支持分辨率 '{code}'", "IMAGE_SIZE_NOT_SUPPORTED")
             if code in seen_codes:
-                raise ServiceException(400, f"Duplicate resolution '{code}'", "DUPLICATE_IMAGE_RESOLUTION_RULE")
+                raise ServiceException(400, f"分辨率 '{code}' 重复配置", "DUPLICATE_IMAGE_RESOLUTION_RULE")
             seen_codes.add(code)
 
             enabled = 1 if bool((item or {}).get("enabled", 1)) else 0
@@ -155,12 +176,12 @@ class ModelService:
             })
 
         if not enabled_codes:
-            raise ServiceException(400, "At least one enabled image resolution is required", "INVALID_IMAGE_RESOLUTION_RULES")
+            raise ServiceException(400, "请至少启用一个图片分辨率", "INVALID_IMAGE_RESOLUTION_RULES")
         if len(default_codes) != 1:
-            raise ServiceException(400, "Exactly one default image resolution is required", "INVALID_IMAGE_RESOLUTION_RULES")
+            raise ServiceException(400, "必须且只能设置一个默认分辨率", "INVALID_IMAGE_RESOLUTION_RULES")
         default_code = default_codes[0]
         if default_code not in enabled_codes:
-            raise ServiceException(400, "Default image resolution must be enabled", "INVALID_IMAGE_RESOLUTION_RULES")
+            raise ServiceException(400, "默认分辨率必须处于启用状态", "INVALID_IMAGE_RESOLUTION_RULES")
 
         return normalized_rules
 
@@ -223,10 +244,51 @@ class ModelService:
             "output_price_per_million": ModelService._decimal_to_float(model.output_price_per_million),
             "billing_type": model.billing_type,
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
+            "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
+            "supports_image_edit": ModelService.supports_image_edit(model.model_name),
             "enabled": model.enabled,
             "description": model.description,
             "created_at": model.created_at.isoformat() if model.created_at else None,
             "updated_at": model.updated_at.isoformat() if model.updated_at else None,
+        }
+
+    @staticmethod
+    def _mapping_with_channel_to_dict(
+        mapping: ModelChannelMapping,
+        channel: Optional[Channel],
+    ) -> dict:
+        protocol_type = str(getattr(channel, "protocol_type", "") or "").lower() if channel else None
+        provider_variant = (
+            ChannelService._normalize_provider_variant(
+                getattr(channel, "protocol_type", None),
+                getattr(channel, "provider_variant", None),
+            )
+            if channel
+            else None
+        )
+        supported_image_sizes: list[str] = []
+        if protocol_type == "openai":
+            supported_image_sizes = list(
+                ChannelService.get_openai_image_channel_capabilities(provider_variant)
+            )
+
+        supports_image_edit = (
+            protocol_type == "openai"
+            and ChannelService.supports_openai_image_edit(provider_variant)
+        )
+
+        return {
+            "id": mapping.id,
+            "unified_model_id": mapping.unified_model_id,
+            "channel_id": mapping.channel_id,
+            "actual_model_name": mapping.actual_model_name,
+            "enabled": mapping.enabled,
+            "channel_name": channel.name if channel else None,
+            "channel_protocol_type": protocol_type,
+            "channel_provider_variant": provider_variant,
+            "supported_image_sizes": supported_image_sizes,
+            "supports_image_edit": supports_image_edit,
+            "created_at": mapping.created_at,
         }
 
     @staticmethod
@@ -267,7 +329,7 @@ class ModelService:
         # Check unique model_name
         existing = db.query(UnifiedModel).filter(UnifiedModel.model_name == d["model_name"]).first()
         if existing:
-            raise ServiceException(400, f"Model name '{d['model_name']}' already exists", "DUPLICATE_MODEL")
+            raise ServiceException(400, f"模型名称 '{d['model_name']}' 已存在", "DUPLICATE_MODEL")
 
         resolution_rules = ModelService._validate_resolution_rules(
             d["model_name"],
@@ -334,7 +396,7 @@ class ModelService:
                 if field == "model_name" and value != model.model_name:
                     existing = db.query(UnifiedModel).filter(UnifiedModel.model_name == value).first()
                     if existing:
-                        raise ServiceException(400, f"Model name '{value}' already exists", "DUPLICATE_MODEL")
+                        raise ServiceException(400, f"模型名称 '{value}' 已存在", "DUPLICATE_MODEL")
                 setattr(model, field, value)
 
         if resolution_rules is not None:
@@ -394,7 +456,20 @@ class ModelService:
             .limit(page_size)
             .all()
         )
-        return [ModelService._model_to_dict(m) for m in models], total
+        result = []
+        for model in models:
+            payload = ModelService._model_to_dict(model)
+            payload["image_resolution_rules"] = (
+                ModelService.list_image_resolution_rules(db, model.id)
+                if ModelService.supports_image_resolution_rules(
+                    model.model_name,
+                    model.model_type,
+                    model.billing_type,
+                )
+                else []
+            )
+            result.append(payload)
+        return result, total
 
     @staticmethod
     def get_model_with_mappings(db: Session, model_id: int) -> dict:
@@ -418,15 +493,7 @@ class ModelService:
         mapping_list = []
         for m in mappings:
             channel = db.query(Channel).filter(Channel.id == m.channel_id).first()
-            mapping_list.append({
-                "id": m.id,
-                "unified_model_id": m.unified_model_id,
-                "channel_id": m.channel_id,
-                "actual_model_name": m.actual_model_name,
-                "enabled": m.enabled,
-                "channel_name": channel.name if channel else None,
-                "created_at": m.created_at,
-            })
+            mapping_list.append(ModelService._mapping_with_channel_to_dict(m, channel))
 
         return {
             "model": ModelService._model_to_dict(model),
@@ -462,7 +529,7 @@ class ModelService:
             .first()
         )
         if existing:
-            raise ServiceException(400, "Mapping already exists for this model and channel", "DUPLICATE_MAPPING")
+            raise ServiceException(400, "当前模型与渠道的映射已存在", "DUPLICATE_MAPPING")
 
         mapping = ModelChannelMapping(
             unified_model_id=d["unified_model_id"],
@@ -512,15 +579,7 @@ class ModelService:
         result = []
         for m in mappings:
             channel = db.query(Channel).filter(Channel.id == m.channel_id).first()
-            result.append({
-                "id": m.id,
-                "unified_model_id": m.unified_model_id,
-                "channel_id": m.channel_id,
-                "actual_model_name": m.actual_model_name,
-                "enabled": m.enabled,
-                "channel_name": channel.name if channel else None,
-                "created_at": m.created_at,
-            })
+            result.append(ModelService._mapping_with_channel_to_dict(m, channel))
         return result
 
     # -----------------------------------------------------------------------

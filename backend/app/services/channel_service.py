@@ -18,6 +18,7 @@ class ChannelService:
 
     PROVIDER_VARIANT_DEFAULT = "default"
     PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE = "openai-image-compatible"
+    PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE = "openai-image-native-size"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
 
@@ -53,6 +54,8 @@ class ChannelService:
         )
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
             return 0
+        if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE:
+            return 0
         if protocol == "google" and normalized_variant in {
             ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,
             ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE,
@@ -68,7 +71,10 @@ class ChannelService:
         protocol = (protocol_type or "openai").lower()
         raw_variant = str(provider_variant or "").strip().lower()
         if protocol == "openai":
-            if raw_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+            if raw_variant in {
+                ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
+                ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+            }:
                 return raw_variant
             return ChannelService.PROVIDER_VARIANT_DEFAULT
         if protocol == "google":
@@ -81,19 +87,49 @@ class ChannelService:
         return ChannelService.PROVIDER_VARIANT_DEFAULT
 
     @staticmethod
+    def get_openai_image_channel_capabilities(provider_variant: Optional[str]) -> tuple[str, ...]:
+        normalized_variant = str(provider_variant or "").strip().lower()
+        if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE:
+            return ("1K", "2K", "4K")
+        if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+            return ("1K",)
+        return ("1K",)
+
+    @staticmethod
+    def supports_openai_image_edit(provider_variant: Optional[str]) -> bool:
+        normalized_variant = str(provider_variant or "").strip().lower()
+        return normalized_variant in {
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+        }
+
+    @staticmethod
     def _channel_to_dict(channel: Channel) -> dict:
         """Convert a Channel ORM instance to a serializable dict."""
         api_key = channel.api_key or ""
         masked_key = api_key[:8] + "****" + api_key[-4:] if len(api_key) > 12 else "****"
+        protocol_type = str(channel.protocol_type or "").lower()
+        provider_variant = ChannelService._normalize_provider_variant(
+            channel.protocol_type,
+            getattr(channel, "provider_variant", None),
+        )
+        supported_image_sizes = (
+            list(ChannelService.get_openai_image_channel_capabilities(provider_variant))
+            if protocol_type == "openai"
+            else []
+        )
         return {
             "id": channel.id,
             "name": channel.name,
             "base_url": channel.base_url,
             "api_key_display": masked_key,
             "protocol_type": channel.protocol_type,
-            "provider_variant": ChannelService._normalize_provider_variant(
-                channel.protocol_type,
-                getattr(channel, "provider_variant", None),
+            "provider_variant": provider_variant,
+            "supported_image_sizes": supported_image_sizes,
+            "supports_image_edit": (
+                ChannelService.supports_openai_image_edit(provider_variant)
+                if protocol_type == "openai"
+                else False
             ),
             "auth_header_type": (
                 getattr(channel, "auth_header_type", None)

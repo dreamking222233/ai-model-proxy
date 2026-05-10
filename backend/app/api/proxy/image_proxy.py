@@ -15,13 +15,13 @@ async def _parse_image_edit_form(request: Request) -> dict:
     form = await request.form()
     image_files = [item for item in form.getlist("image") if hasattr(item, "read")]
     if not image_files:
-        raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
+        raise ServiceException(400, "缺少必填字段：image", "INVALID_IMAGE_FILE")
 
     parsed_images = []
     for image_file in image_files:
         image_bytes = await image_file.read()
         if not image_bytes:
-            raise ServiceException(400, "Uploaded image is empty", "INVALID_IMAGE_FILE")
+            raise ServiceException(400, "上传的图片文件不能为空", "INVALID_IMAGE_FILE")
         parsed_images.append({
             "filename": getattr(image_file, "filename", None) or "upload.png",
             "content_type": getattr(image_file, "content_type", None) or "application/octet-stream",
@@ -36,6 +36,7 @@ async def _parse_image_edit_form(request: Request) -> dict:
         "image_size": form.get("image_size"),
         "imageSize": form.get("imageSize"),
         "size": form.get("size"),
+        "quality": form.get("quality"),
         "aspect_ratio": form.get("aspect_ratio"),
         # Keep the legacy single-image field for existing downstream logic.
         "image": parsed_images[0],

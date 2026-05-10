@@ -43,6 +43,27 @@
             </a-tag>
           </template>
 
+          <template slot="imageSizeCapabilities" slot-scope="text, record">
+            <div v-if="record.model_type === 'image'" class="capability-tags">
+              <a-tag
+                v-for="size in record.image_size_capabilities || []"
+                :key="`${record.id}-size-${size}`"
+                color="blue"
+              >
+                {{ size }}
+              </a-tag>
+              <span v-if="!(record.image_size_capabilities || []).length" class="muted-text">-</span>
+            </div>
+            <span v-else class="muted-text">-</span>
+          </template>
+
+          <template slot="supportsImageEdit" slot-scope="text, record">
+            <a-tag v-if="record.model_type === 'image'" :color="record.supports_image_edit ? 'green' : 'default'">
+              {{ record.supports_image_edit ? '支持' : '不支持' }}
+            </a-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+
           <template slot="inputPrice" slot-scope="text">
             {{ text != null ? text : '-' }}
           </template>
@@ -88,6 +109,36 @@
               <template slot="enabled" slot-scope="text">
                 <a-tag :color="text ? 'green' : 'red'">
                   {{ text ? '已启用' : '已禁用' }}
+                </a-tag>
+              </template>
+
+              <template slot="channelVariant" slot-scope="text, record">
+                <a-tag :color="getChannelVariantColor(record.channel_protocol_type, record.channel_provider_variant)">
+                  {{ getChannelVariantLabel(record.channel_protocol_type, record.channel_provider_variant) }}
+                </a-tag>
+              </template>
+
+              <template slot="supportedImageSizes" slot-scope="text, record">
+                <div class="capability-tags">
+                  <template v-if="record.channel_protocol_type === 'google'">
+                    <a-tag color="cyan">跟随模型</a-tag>
+                  </template>
+                  <template v-else-if="(record.supported_image_sizes || []).length">
+                    <a-tag
+                      v-for="size in record.supported_image_sizes"
+                      :key="`${record.id}-mapping-size-${size}`"
+                      color="blue"
+                    >
+                      {{ size }}
+                    </a-tag>
+                  </template>
+                  <span v-else class="muted-text">-</span>
+                </div>
+              </template>
+
+              <template slot="supportsImageEdit" slot-scope="text, record">
+                <a-tag :color="record.supports_image_edit ? 'green' : 'default'">
+                  {{ record.supports_image_edit ? '支持' : '不支持' }}
                 </a-tag>
               </template>
 
@@ -194,7 +245,7 @@
         <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="默认图片积分倍率">
           <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
         </a-form-item>
-        <a-form-item v-if="showImageResolutionConfig" label="Google 生图分辨率计费">
+        <a-form-item v-if="showImageResolutionConfig" label="生图模型分辨率计费">
           <div class="resolution-config-list">
             <div
               v-for="rule in modelForm.image_resolution_rules"
@@ -203,7 +254,7 @@
             >
               <div class="resolution-config-label">
                 <div class="resolution-title">{{ rule.resolution_code }}</div>
-                <div class="resolution-hint">官方支持档位</div>
+                <div class="resolution-hint">模型支持档位</div>
               </div>
               <a-switch :checked="!!rule.enabled" @change="val => handleResolutionEnabledChange(rule.resolution_code, val)" />
               <a-input-number
@@ -223,7 +274,7 @@
               </a-radio>
             </div>
           </div>
-          <div class="resolution-config-tip">仅允许配置当前模型官方支持的分辨率；默认档位必须是已启用分辨率。</div>
+          <div class="resolution-config-tip">仅允许配置当前模型支持的分辨率；默认档位必须是已启用分辨率。</div>
         </a-form-item>
         <a-row :gutter="16">
           <a-col :span="12">
@@ -268,9 +319,19 @@
               :key="ch.id"
               :value="ch.id"
             >
-              {{ ch.name }} (ID: {{ ch.id }})
+              {{ formatChannelOptionLabel(ch) }}
             </a-select-option>
           </a-select>
+          <div v-if="selectedModel && selectedModel.model_type === 'image'" class="mapping-hint">
+            当前模型启用分辨率:
+            <span v-if="selectedModelEnabledImageSizes.length">
+              {{ selectedModelEnabledImageSizes.join(' / ') }}
+            </span>
+            <span v-else>未配置</span>
+          </div>
+          <div v-if="mappingChannelHint" class="mapping-hint">
+            {{ mappingChannelHint }}
+          </div>
         </a-form-item>
         <a-form-item label="实际模型名">
           <a-input v-model="mappingForm.actual_model_name" placeholder="该渠道上的模型名称" />
@@ -336,7 +397,7 @@ import {
 } from '@/api/model'
 import { listChannels } from '@/api/channel'
 
-const GOOGLE_IMAGE_RULE_PRESETS = {
+const IMAGE_RESOLUTION_RULE_PRESETS = {
   'gemini-2.5-flash-image': [
     { resolution_code: '1K', enabled: 1, credit_cost: 1, is_default: 1, sort_order: 10 }
   ],
@@ -350,6 +411,11 @@ const GOOGLE_IMAGE_RULE_PRESETS = {
     { resolution_code: '1K', enabled: 1, credit_cost: 3, is_default: 1, sort_order: 10 },
     { resolution_code: '2K', enabled: 1, credit_cost: 4.5, is_default: 0, sort_order: 20 },
     { resolution_code: '4K', enabled: 1, credit_cost: 6, is_default: 0, sort_order: 30 }
+  ],
+  'gpt-image-2': [
+    { resolution_code: '1K', enabled: 1, credit_cost: 0.5, is_default: 1, sort_order: 10 },
+    { resolution_code: '2K', enabled: 1, credit_cost: 1, is_default: 0, sort_order: 20 },
+    { resolution_code: '4K', enabled: 1, credit_cost: 2, is_default: 0, sort_order: 30 }
   ]
 }
 
@@ -377,6 +443,8 @@ export default {
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 100, scopedSlots: { customRender: 'type' } },
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
         { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
+        { title: '尺寸能力', dataIndex: 'image_size_capabilities', key: 'imageSizeCapabilities', width: 180, scopedSlots: { customRender: 'imageSizeCapabilities' } },
+        { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
         { title: '输出价格', dataIndex: 'output_price_per_million', key: 'outputPrice', width: 110, scopedSlots: { customRender: 'outputPrice' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
@@ -409,6 +477,9 @@ export default {
       mappingColumns: [
         { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
         { title: '渠道名称', dataIndex: 'channel_name', key: 'channel_name' },
+        { title: '渠道类型', dataIndex: 'channel_provider_variant', key: 'channelVariant', width: 170, scopedSlots: { customRender: 'channelVariant' } },
+        { title: '分辨率能力', dataIndex: 'supported_image_sizes', key: 'supportedImageSizes', width: 180, scopedSlots: { customRender: 'supportedImageSizes' } },
+        { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '实际模型名', dataIndex: 'actual_model_name', key: 'actual_model_name' },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
         { title: '操作', key: 'action', width: 100, scopedSlots: { customRender: 'action' } }
@@ -464,12 +535,43 @@ export default {
     },
     showImageResolutionConfig() {
       return this.modelForm.model_type === 'image' &&
-        this.modelForm.protocol_type === 'google' &&
         this.modelForm.billing_type === 'image_credit' &&
         this.supportedImageResolutionPresets.length > 0
     },
     supportedImageResolutionPresets() {
-      return GOOGLE_IMAGE_RULE_PRESETS[this.modelForm.model_name] || []
+      return IMAGE_RESOLUTION_RULE_PRESETS[this.modelForm.model_name] || []
+    },
+    selectedModelEnabledImageSizes() {
+      if (!this.selectedModel || this.selectedModel.model_type !== 'image') {
+        return []
+      }
+      return (this.selectedModel.image_resolution_rules || [])
+        .filter(item => Number(item.enabled))
+        .map(item => item.resolution_code)
+    },
+    selectedChannelOption() {
+      return this.channelOptions.find(item => item.id === this.mappingForm.channel_id) || null
+    },
+    mappingChannelHint() {
+      if (!this.selectedModel || this.selectedModel.model_type !== 'image' || !this.selectedChannelOption) {
+        return ''
+      }
+      const channel = this.selectedChannelOption
+      if (channel.protocol_type === 'google') {
+        return '该 Google 图片渠道的分辨率能力跟随实际模型，适合配合 Gemini / Vertex 图片模型使用。'
+      }
+      if (channel.protocol_type !== 'openai') {
+        return '当前渠道不是图片专用渠道，映射到图片模型前请确认上游确实兼容图片接口。'
+      }
+      if (channel.provider_variant === 'openai-image-compatible') {
+        return '该渠道只支持默认 1K，系统会自动跳过它来承接 2K/4K 请求。建议同时补一个 Native Size 渠道。'
+      }
+      if (channel.provider_variant === 'openai-image-native-size') {
+        return channel.supports_image_edit
+          ? '该渠道支持 1K/2K/4K，并会原生透传 size/quality，可同时承接文生图和编辑图。'
+          : '该渠道支持 1K/2K/4K 原生尺寸。'
+      }
+      return '该渠道未声明图片分辨率能力，映射前请确认上游是否兼容当前图片模型。'
     }
   },
   watch: {
@@ -778,6 +880,62 @@ export default {
     filterModelOption(input, option) {
       return option.componentOptions.children[0].text.toLowerCase().includes(input.toLowerCase())
     },
+    formatChannelOptionLabel(channel) {
+      const protocolLabel = (channel.protocol_type || '-').toUpperCase()
+      const variantLabel = this.getChannelVariantLabel(channel.protocol_type, channel.provider_variant)
+      const sizeLabel = this.getChannelSizeLabel(channel)
+      const editLabel = channel.supports_image_edit ? '支持编辑图' : '不支持编辑图'
+      return `${channel.name} (ID: ${channel.id}) · ${protocolLabel} · ${variantLabel} · ${sizeLabel} · ${editLabel}`
+    },
+    getChannelVariantLabel(protocolType, providerVariant) {
+      const protocol = (protocolType || '').toLowerCase()
+      const normalized = (providerVariant || '').toLowerCase()
+      if (protocol === 'openai') {
+        if (normalized === 'openai-image-compatible') {
+          return 'OpenAI 图片兼容'
+        }
+        if (normalized === 'openai-image-native-size') {
+          return 'OpenAI 原生尺寸'
+        }
+        return 'OpenAI 默认'
+      }
+      if (protocol === 'google') {
+        if (normalized === 'google-vertex-image') {
+          return 'Google Vertex 图片'
+        }
+        return 'Google 官方图片'
+      }
+      if (protocol === 'anthropic') {
+        return 'Anthropic'
+      }
+      return providerVariant || '-'
+    },
+    getChannelVariantColor(protocolType, providerVariant) {
+      const protocol = (protocolType || '').toLowerCase()
+      const normalized = (providerVariant || '').toLowerCase()
+      if (protocol === 'openai' && normalized === 'openai-image-native-size') {
+        return 'green'
+      }
+      if (protocol === 'openai' && normalized === 'openai-image-compatible') {
+        return 'orange'
+      }
+      if (protocol === 'google') {
+        return 'blue'
+      }
+      return 'default'
+    },
+    getChannelSizeLabel(channel) {
+      if (!channel) {
+        return '-'
+      }
+      if (channel.protocol_type === 'google') {
+        return '分辨率跟随模型'
+      }
+      if (Array.isArray(channel.supported_image_sizes) && channel.supported_image_sizes.length) {
+        return `分辨率 ${channel.supported_image_sizes.join('/')}`
+      }
+      return '未声明分辨率'
+    },
 
     // ==================== Override Rules ====================
     handleTabChange(key) {
@@ -931,6 +1089,23 @@ export default {
   .resolution-config-tip {
     margin-top: 8px;
     font-size: 12px;
+    color: #8c8c8c;
+  }
+
+  .capability-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .mapping-hint {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.6;
+  }
+
+  .muted-text {
     color: #8c8c8c;
   }
 

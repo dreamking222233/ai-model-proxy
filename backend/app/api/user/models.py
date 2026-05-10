@@ -48,7 +48,15 @@ def list_available_models(
             "output_price": float(m.output_price_per_million) if m.output_price_per_million else 0,
             "billing_type": m.billing_type,
             "image_credit_multiplier": float(m.image_credit_multiplier or 1),
-            "image_resolution_rules": ModelService.list_image_resolution_rules(db, m.id) if m.model_type == "image" and m.protocol_type == "google" else [],
+            "image_resolution_rules": (
+                ModelService.list_image_resolution_rules(db, m.id)
+                if ModelService.supports_image_resolution_rules(
+                    m.model_name,
+                    m.model_type,
+                    m.billing_type,
+                )
+                else []
+            ),
             "channel_count": channel_count,
             "description": m.description,
         })
@@ -109,7 +117,11 @@ def list_chat_models(
             "image_credit_multiplier": float(m.image_credit_multiplier or 1),
             "image_resolution_rules": (
                 ModelService.list_image_resolution_rules(db, m.id)
-                if m.model_type == "image" and m.protocol_type == "google"
+                if ModelService.supports_image_resolution_rules(
+                    m.model_name,
+                    m.model_type,
+                    m.billing_type,
+                )
                 else []
             ),
             "image_size_capabilities": (

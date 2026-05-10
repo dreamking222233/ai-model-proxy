@@ -118,11 +118,11 @@ class ImageCreditService:
             .first()
         )
         if not balance:
-            raise ServiceException(404, "Image credit balance not found", "IMAGE_CREDIT_BALANCE_NOT_FOUND")
+            raise ServiceException(404, "图片积分账户不存在", "IMAGE_CREDIT_BALANCE_NOT_FOUND")
 
         balance_before = ImageCreditService._normalize_amount(balance.balance or 0, "balance", allow_zero=True)
         if balance_before < amount_decimal:
-            raise ServiceException(400, "Insufficient image credits", "INSUFFICIENT_IMAGE_CREDITS")
+            raise ServiceException(400, "图片积分不足，请联系管理员充值", "INSUFFICIENT_IMAGE_CREDITS")
 
         balance.balance = balance_before - amount_decimal
         balance.total_consumed = ImageCreditService._normalize_amount(balance.total_consumed or 0, "total_consumed", allow_zero=True) + amount_decimal
@@ -183,7 +183,7 @@ class ImageCreditService:
             .first()
         )
         if not balance:
-            raise ServiceException(404, "Image credit balance not found", "IMAGE_CREDIT_BALANCE_NOT_FOUND")
+            raise ServiceException(404, "图片积分账户不存在", "IMAGE_CREDIT_BALANCE_NOT_FOUND")
 
         balance_before = ImageCreditService._normalize_amount(balance.balance or 0, "balance", allow_zero=True)
         if balance_before < amount_decimal:

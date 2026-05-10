@@ -93,6 +93,31 @@
         </a-tag>
       </template>
 
+      <template slot="supported_image_sizes" slot-scope="text, record">
+        <div class="size-capabilities">
+          <template v-if="record.protocol_type === 'google'">
+            <a-tag color="cyan" class="protocol-tag">跟随模型</a-tag>
+          </template>
+          <template v-else-if="(record.supported_image_sizes || []).length">
+            <a-tag
+              v-for="size in record.supported_image_sizes"
+              :key="`${record.id}-size-${size}`"
+              color="blue"
+              class="protocol-tag"
+            >
+              {{ size }}
+            </a-tag>
+          </template>
+          <span v-else class="muted-text">-</span>
+        </div>
+      </template>
+
+      <template slot="supports_image_edit" slot-scope="text">
+        <a-tag :color="text ? 'green' : 'default'" class="protocol-tag">
+          {{ text ? '支持编辑图' : '不支持编辑图' }}
+        </a-tag>
+      </template>
+
       <template slot="enabled" slot-scope="text">
         <a-tag :color="text ? 'green' : 'red'" class="status-tag">
           {{ text ? '已启用' : '已禁用' }}
@@ -212,9 +237,10 @@
           >
             <a-select-option value="default">Default</a-select-option>
             <a-select-option value="openai-image-compatible">OpenAI Image Compatible</a-select-option>
+            <a-select-option value="openai-image-native-size">OpenAI Image Native Size</a-select-option>
           </a-select>
           <div class="form-hint">
-            Image Compatible 会将图片模型请求转发到上游 `images/generations` 接口，适合 `gpt-image-2` 这类图片生成网关。
+            Image Compatible 适合只支持默认 1K 的图片网关；Image Native Size 会向上游透传 `size/quality`，适合支持 1K/2K/4K 原生分辨率的图片网关。
           </div>
         </a-form-item>
         <a-form-item v-if="form.protocol_type === 'google'" label="Google 渠道类型">
@@ -334,6 +360,20 @@ export default {
           width: 170,
           scopedSlots: { customRender: 'provider_variant' }
         },
+        {
+          title: '分辨率能力',
+          dataIndex: 'supported_image_sizes',
+          key: 'supported_image_sizes',
+          width: 180,
+          scopedSlots: { customRender: 'supported_image_sizes' }
+        },
+        {
+          title: '编辑图',
+          dataIndex: 'supports_image_edit',
+          key: 'supports_image_edit',
+          width: 120,
+          scopedSlots: { customRender: 'supports_image_edit' }
+        },
         { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
         {
           title: '状态',
@@ -438,7 +478,11 @@ export default {
     getProviderVariantLabel(protocol, providerVariant) {
       const normalized = (providerVariant || '').toLowerCase()
       if (protocol === 'openai') {
-        return normalized === 'openai-image-compatible' ? 'OpenAI Image Compatible' : 'Default'
+        const openaiVariantMap = {
+          'openai-image-compatible': 'OpenAI Image Compatible',
+          'openai-image-native-size': 'OpenAI Image Native Size'
+        }
+        return openaiVariantMap[normalized] || 'Default'
       }
       if (protocol !== 'google') {
         return 'Default'
@@ -451,7 +495,14 @@ export default {
     },
     getProviderVariantColor(protocol, providerVariant) {
       if (protocol === 'openai') {
-        return (providerVariant || '').toLowerCase() === 'openai-image-compatible' ? 'geekblue' : 'default'
+        const normalized = (providerVariant || '').toLowerCase()
+        if (normalized === 'openai-image-compatible') {
+          return 'geekblue'
+        }
+        if (normalized === 'openai-image-native-size') {
+          return 'green'
+        }
+        return 'default'
       }
       if (protocol !== 'google') {
         return 'default'
@@ -517,10 +568,10 @@ export default {
         }
         this.form.health_check_enabled = false
       } else if (value === 'openai') {
-        if (!['default', 'openai-image-compatible'].includes(this.form.provider_variant)) {
+        if (!['default', 'openai-image-compatible', 'openai-image-native-size'].includes(this.form.provider_variant)) {
           this.form.provider_variant = 'default'
         }
-        this.form.health_check_enabled = this.form.provider_variant !== 'openai-image-compatible'
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size'].includes(this.form.provider_variant)
       } else {
         this.form.provider_variant = 'default'
         this.form.health_check_enabled = true
@@ -547,7 +598,7 @@ export default {
         return
       }
       if (this.form.protocol_type === 'openai') {
-        this.form.health_check_enabled = value !== 'openai-image-compatible'
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size'].includes(value)
       }
     },
     async fetchList() {
@@ -918,6 +969,16 @@ export default {
     .score-low {
       color: #f5222d;
       font-weight: 600;
+    }
+
+    .size-capabilities {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .muted-text {
+      color: #8c8c8c;
     }
 
     // Action links

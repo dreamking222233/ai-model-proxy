@@ -206,7 +206,11 @@ def get_channels_models(
                     "image_credit_multiplier": float(um.image_credit_multiplier or 1),
                     "image_resolution_rules": (
                         ModelService.list_image_resolution_rules(db, um.id)
-                        if um.model_type == "image" and um.protocol_type == "google"
+                        if ModelService.supports_image_resolution_rules(
+                            um.model_name,
+                            um.model_type,
+                            um.billing_type,
+                        )
                         else []
                     ),
                     "image_size_capabilities": (

@@ -65,7 +65,10 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
             protocol,
             getattr(channel, "provider_variant", None),
         )
-        if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+        if provider_variant in {
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+        }:
             return raw_target, "openai_image_generation"
         return raw_target, "openai_chat"
     if protocol == "google":

@@ -8534,6 +8534,127 @@ class ProxyService:
         )
 
     @staticmethod
+    def _parse_explicit_pixel_size(size_value: Any) -> Optional[tuple[int, int]]:
+        if size_value in (None, ""):
+            return None
+        match = re.match(r"^\s*(\d{2,5})x(\d{2,5})\s*$", str(size_value), flags=re.IGNORECASE)
+        if not match:
+            return None
+        width = int(match.group(1))
+        height = int(match.group(2))
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+
+    @staticmethod
+    def _normalize_pixel_size(size_value: Any) -> Optional[str]:
+        parsed = ProxyService._parse_explicit_pixel_size(size_value)
+        if not parsed:
+            return None
+        width, height = parsed
+        return f"{width}x{height}"
+
+    @staticmethod
+    def _resolve_image_size_from_pixels(size_value: Any) -> Optional[str]:
+        parsed = ProxyService._parse_explicit_pixel_size(size_value)
+        if not parsed:
+            return None
+        width, height = parsed
+        max_edge = max(width, height)
+        if max_edge <= 1792:
+            return "1K"
+        if max_edge <= 3584:
+            return "2K"
+        return "4K"
+
+    @staticmethod
+    def _infer_aspect_ratio_from_pixels(size_value: Any) -> Optional[str]:
+        parsed = ProxyService._parse_explicit_pixel_size(size_value)
+        if not parsed:
+            return None
+        width, height = parsed
+        ratio = width / height
+        candidates = {
+            "1:1": 1.0,
+            "16:9": 16 / 9,
+            "9:16": 9 / 16,
+            "3:2": 3 / 2,
+            "2:3": 2 / 3,
+            "4:3": 4 / 3,
+            "3:4": 3 / 4,
+        }
+        best_label = None
+        best_delta = None
+        for label, expected in candidates.items():
+            delta = abs(ratio - expected)
+            if best_delta is None or delta < best_delta:
+                best_delta = delta
+                best_label = label
+        if best_delta is not None and best_delta <= 0.08:
+            return best_label
+        return None
+
+    @staticmethod
+    def _build_native_openai_image_size(
+        image_size: Optional[str],
+        aspect_ratio: Optional[str],
+    ) -> Optional[str]:
+        if not image_size:
+            return None
+        normalized_ratio = str(aspect_ratio or "1:1")
+        presets = {
+            "1K": {
+                "1:1": "1024x1024",
+                "16:9": "1792x1024",
+                "9:16": "1024x1792",
+                "3:2": "1536x1024",
+                "2:3": "1024x1536",
+                "4:3": "1408x1024",
+                "3:4": "1024x1408",
+            },
+            "2K": {
+                "1:1": "2048x2048",
+                "16:9": "3584x2048",
+                "9:16": "2048x3584",
+                "3:2": "3072x2048",
+                "2:3": "2048x3072",
+                "4:3": "2816x2048",
+                "3:4": "2048x2816",
+            },
+            "4K": {
+                "1:1": "4096x4096",
+                "16:9": "3840x2160",
+                "9:16": "2160x3840",
+                "3:2": "4096x2731",
+                "2:3": "2731x4096",
+                "4:3": "3840x2880",
+                "3:4": "2880x3840",
+            },
+        }
+        size_presets = presets.get(str(image_size))
+        if not size_presets:
+            return None
+        return size_presets.get(normalized_ratio) or size_presets.get("1:1")
+
+    @staticmethod
+    def _resolve_openai_native_image_size(
+        request_data: dict,
+        image_size: Optional[str],
+        aspect_ratio: Optional[str],
+    ) -> Optional[str]:
+        explicit_size = ProxyService._normalize_pixel_size(request_data.get("size"))
+        if explicit_size:
+            return explicit_size
+        return ProxyService._build_native_openai_image_size(image_size, aspect_ratio)
+
+    @staticmethod
+    def _resolve_openai_image_quality(request_data: dict) -> Optional[str]:
+        quality = str(request_data.get("quality", "") or "").strip()
+        if not quality:
+            return "high"
+        return quality
+
+    @staticmethod
     def _resolve_openai_image_generation_url(base_url: str) -> str:
         normalized = str(base_url or "").rstrip("/")
         if normalized.endswith("/v1"):
@@ -8558,55 +8679,60 @@ class ProxyService:
             explicit_image_size = request_data.get("imageSize")
         legacy_size_value = request_data.get("size")
         requested_image_size = ProxyService._extract_requested_google_image_size(request_data)
+        pixel_based_image_size = ProxyService._resolve_image_size_from_pixels(legacy_size_value)
+        if requested_image_size and pixel_based_image_size and requested_image_size != pixel_based_image_size:
+            raise ServiceException(
+                400,
+                f"image_size 与 size 不一致：image_size={requested_image_size}，size 对应 {pixel_based_image_size}",
+                "INVALID_IMAGE_SIZE",
+            )
+        if requested_image_size is None and pixel_based_image_size:
+            requested_image_size = pixel_based_image_size
         if explicit_image_size is not None and requested_image_size is None:
-            raise ServiceException(400, "Invalid image_size, supported values are 512/1K/2K/4K", "INVALID_IMAGE_SIZE")
+            raise ServiceException(400, "image_size 参数无效，支持值为 512/1K/2K/4K", "INVALID_IMAGE_SIZE")
         if (
             explicit_image_size is None
             and legacy_size_value not in (None, "")
             and requested_image_size is None
             and ProxyService._map_image_size_to_aspect_ratio(legacy_size_value) is None
+            and ProxyService._parse_explicit_pixel_size(legacy_size_value) is None
         ):
-            raise ServiceException(400, "Invalid size parameter", "INVALID_IMAGE_SIZE")
+            raise ServiceException(400, "size 参数无效", "INVALID_IMAGE_SIZE")
+        all_rules = ModelService.list_image_resolution_rules(db, unified_model.id)
         requested_rule = ModelService.resolve_image_resolution_rule(db, unified_model.id, requested_image_size)
         default_rule = ModelService.resolve_image_resolution_rule(db, unified_model.id, None)
-
-        if requested_image_size and not requested_rule:
-            allowed_sizes = ModelService.get_image_resolution_capabilities(unified_model.model_name)
-            if requested_image_size not in allowed_sizes:
-                raise ServiceException(
-                    400,
-                    f"Image size '{requested_image_size}' is not supported by model '{unified_model.model_name}'",
-                    "IMAGE_SIZE_NOT_SUPPORTED",
-                )
-            if unified_model.model_name not in ModelService.PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES:
-                raise ServiceException(
-                    400,
-                    f"Image size '{requested_image_size}' is not enabled for model '{unified_model.model_name}'",
-                    "IMAGE_SIZE_NOT_ENABLED",
-                )
-
-        selected_rule = requested_rule or default_rule
-        if selected_rule:
-            return selected_rule["resolution_code"], Decimal(str(selected_rule["credit_cost"])).quantize(Decimal("0.001"))
 
         if requested_image_size:
             allowed_sizes = ModelService.get_image_resolution_capabilities(unified_model.model_name)
             if requested_image_size not in allowed_sizes:
                 raise ServiceException(
                     400,
-                    f"Image size '{requested_image_size}' is not supported by model '{unified_model.model_name}'",
+                    f"模型 '{unified_model.model_name}' 不支持图片尺寸 '{requested_image_size}'",
                     "IMAGE_SIZE_NOT_SUPPORTED",
                 )
+            if all_rules and not requested_rule:
+                raise ServiceException(
+                    400,
+                    f"模型 '{unified_model.model_name}' 未启用图片尺寸 '{requested_image_size}'",
+                    "IMAGE_SIZE_NOT_ENABLED",
+                )
+
+        if requested_rule:
+            return requested_rule["resolution_code"], Decimal(str(requested_rule["credit_cost"])).quantize(Decimal("0.001"))
+
+        if requested_image_size and not all_rules:
             return requested_image_size, Decimal(str(unified_model.image_credit_multiplier or 1)).quantize(Decimal("0.001"))
+
+        if default_rule:
+            selected_rule = default_rule
+            return selected_rule["resolution_code"], Decimal(str(selected_rule["credit_cost"])).quantize(Decimal("0.001"))
 
         return None, Decimal(str(unified_model.image_credit_multiplier or 1)).quantize(Decimal("0.001"))
 
     @staticmethod
     def _build_google_image_payload(request_data: dict, image_size: Optional[str] = None) -> dict:
         prompt = str(request_data.get("prompt", "") or "").strip()
-        aspect_ratio = request_data.get("aspect_ratio") or ProxyService._map_image_size_to_aspect_ratio(
-            request_data.get("size")
-        )
+        aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
         image_config: dict[str, Any] = {}
         if aspect_ratio:
             image_config["aspectRatio"] = aspect_ratio
@@ -8623,9 +8749,13 @@ class ProxyService:
 
     @staticmethod
     def _resolve_requested_aspect_ratio(request_data: dict) -> Optional[str]:
-        return request_data.get("aspect_ratio") or ProxyService._map_image_size_to_aspect_ratio(
-            request_data.get("size")
-        )
+        explicit_ratio = request_data.get("aspect_ratio")
+        if explicit_ratio:
+            return explicit_ratio
+        mapped_ratio = ProxyService._map_image_size_to_aspect_ratio(request_data.get("size"))
+        if mapped_ratio:
+            return mapped_ratio
+        return ProxyService._infer_aspect_ratio_from_pixels(request_data.get("size"))
 
     @staticmethod
     def _resolve_requested_image_count(request_data: dict) -> int:
@@ -8635,9 +8765,9 @@ class ProxyService:
         try:
             requested_n = int(raw_n)
         except (TypeError, ValueError):
-            raise ServiceException(400, "Invalid n parameter", "IMAGE_COUNT_NOT_SUPPORTED")
+            raise ServiceException(400, "n 参数无效", "IMAGE_COUNT_NOT_SUPPORTED")
         if requested_n < 1:
-            raise ServiceException(400, "n must be a positive integer", "IMAGE_COUNT_NOT_SUPPORTED")
+            raise ServiceException(400, "n 必须是大于 0 的整数", "IMAGE_COUNT_NOT_SUPPORTED")
         return requested_n
 
     @staticmethod
@@ -8645,13 +8775,13 @@ class ProxyService:
         requested_image_count: int,
         *,
         max_count: int = 1,
-        provider_label: str = "Current image channel",
+        provider_label: str = "当前图片渠道",
     ) -> None:
         if requested_image_count > max_count:
             if max_count <= 1:
-                detail = f"{provider_label} only supports n=1"
+                detail = f"{provider_label}仅支持 n=1"
             else:
-                detail = f"{provider_label} supports 1 <= n <= {max_count}"
+                detail = f"{provider_label}仅支持 1 <= n <= {max_count}"
             raise ServiceException(
                 400,
                 detail,
@@ -8671,7 +8801,7 @@ class ProxyService:
     def _validate_single_image_count(request_data: dict) -> None:
         requested_n = ProxyService._resolve_requested_image_count(request_data)
         if requested_n != 1:
-            raise ServiceException(400, "Only n=1 is supported", "IMAGE_COUNT_NOT_SUPPORTED")
+            raise ServiceException(400, "当前仅支持 n=1", "IMAGE_COUNT_NOT_SUPPORTED")
 
     @staticmethod
     def _extract_image_edit_inputs(request_data: dict) -> list[dict[str, Any]]:
@@ -8786,6 +8916,37 @@ class ProxyService:
             if revised_prompt:
                 revised_prompts.append(str(revised_prompt))
         return images, "\n".join(revised_prompts).strip() or None
+
+    @staticmethod
+    def _localize_openai_image_error_body(body_text: str) -> str:
+        raw_text = str(body_text or "").strip()
+        if not raw_text:
+            return "上游未返回详细错误信息"
+
+        error_message = raw_text
+        try:
+            payload = json.loads(raw_text)
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = error.get("message")
+                    if message:
+                        error_message = str(message).strip()
+        except Exception:
+            pass
+
+        normalized = error_message.lower()
+        if "stream disconnected before completion" in normalized:
+            return "上游连接在图片结果返回完成前中断，请稍后重试"
+        if "rate limit" in normalized:
+            return "上游触发限流，请稍后重试"
+        if "timeout" in normalized:
+            return "上游处理超时，请稍后重试"
+        if "invalid image" in normalized:
+            return "上游未能识别上传图片，请检查图片格式后重试"
+        if "content policy" in normalized:
+            return "上游因内容安全策略拒绝了本次图片请求"
+        return error_message
 
     @staticmethod
     def _build_image_response_payload(
@@ -8924,7 +9085,7 @@ class ProxyService:
         release_session_connection(db)
         ProxyService._validate_supported_image_count(
             requested_image_count,
-            provider_label="Google image channel",
+            provider_label="Google 图片渠道",
         )
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -8939,7 +9100,7 @@ class ProxyService:
                 body_text = response.text[:1000]
                 raise ServiceException(
                     400 if 400 <= response.status_code < 500 else 503,
-                    f"Google image generation failed: HTTP {response.status_code} {body_text}",
+                    f"Google 图片生成失败（HTTP {response.status_code}）：{body_text}",
                     "GOOGLE_IMAGE_GENERATION_FAILED",
                 )
             response_body = response.json()
@@ -8948,7 +9109,7 @@ class ProxyService:
         if not images:
             raise ServiceException(
                 503,
-                "Google image generation returned no image data",
+                "Google 图片生成成功，但未返回图片数据",
                 "GOOGLE_IMAGE_GENERATION_FAILED",
             )
 
@@ -9016,10 +9177,15 @@ class ProxyService:
         request_headers: Optional[dict[str, str]] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        provider_variant = ChannelService._normalize_provider_variant(
+            getattr(channel, "protocol_type", None),
+            getattr(channel, "provider_variant", None),
+        )
+        use_native_size = provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
         ProxyService._validate_supported_image_count(
             requested_image_count,
             max_count=4,
-            provider_label="ChatGPT Image Compatible channel",
+            provider_label="OpenAI 图片渠道",
         )
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -9029,14 +9195,27 @@ class ProxyService:
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
         payload = {
             "model": upstream_model_name,
-            "prompt": ProxyService._build_openai_image_prompt(
-                prompt,
-                image_size=image_size,
-                aspect_ratio=aspect_ratio,
-            ),
             "n": requested_image_count,
             "response_format": "b64_json",
         }
+        if use_native_size:
+            payload["prompt"] = prompt
+            native_size = ProxyService._resolve_openai_native_image_size(
+                request_data,
+                image_size,
+                aspect_ratio,
+            )
+            if native_size:
+                payload["size"] = native_size
+            quality = ProxyService._resolve_openai_image_quality(request_data)
+            if quality:
+                payload["quality"] = quality
+        else:
+            payload["prompt"] = ProxyService._build_openai_image_prompt(
+                prompt,
+                image_size=image_size,
+                aspect_ratio=aspect_ratio,
+            )
 
         timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         response = await ProxyService._post_with_retries(
@@ -9049,10 +9228,10 @@ class ProxyService:
             log_label="OpenAI image non-stream",
         )
         if response.status_code != 200:
-            body_text = response.text[:1000]
+            body_text = ProxyService._localize_openai_image_error_body(response.text[:1000])
             raise ServiceException(
                 400 if 400 <= response.status_code < 500 else 503,
-                f"OpenAI image generation failed: HTTP {response.status_code} {body_text}",
+                f"OpenAI 图片生成失败（HTTP {response.status_code}）：{body_text}",
                 "OPENAI_IMAGE_GENERATION_FAILED",
             )
         response_body = response.json()
@@ -9061,7 +9240,7 @@ class ProxyService:
         if not images:
             raise ServiceException(
                 503,
-                "OpenAI image generation returned no image data",
+                "OpenAI 图片生成成功，但未返回图片数据",
                 "OPENAI_IMAGE_GENERATION_FAILED",
             )
 
@@ -9128,7 +9307,12 @@ class ProxyService:
         start_time = time.time()
         image_files = ProxyService._extract_image_edit_inputs(request_data)
         if not image_files:
-            raise ServiceException(400, "Missing required field: image", "INVALID_IMAGE_FILE")
+            raise ServiceException(400, "缺少必填字段：image", "INVALID_IMAGE_FILE")
+        provider_variant = ChannelService._normalize_provider_variant(
+            getattr(channel, "protocol_type", None),
+            getattr(channel, "provider_variant", None),
+        )
+        use_native_size = provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
 
         base_url = channel.base_url.rstrip("/")
         url = ProxyService._resolve_openai_image_edit_url(base_url)
@@ -9136,7 +9320,7 @@ class ProxyService:
         headers.pop("Content-Type", None)
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
-        forwarded_prompt = ProxyService._build_openai_image_edit_prompt(
+        forwarded_prompt = prompt if use_native_size else ProxyService._build_openai_image_edit_prompt(
             prompt,
             image_size=image_size,
             aspect_ratio=aspect_ratio,
@@ -9163,6 +9347,17 @@ class ProxyService:
             ("n", (None, "1")),
             ("response_format", (None, "b64_json")),
         ])
+        if use_native_size:
+            native_size = ProxyService._resolve_openai_native_image_size(
+                request_data,
+                image_size,
+                aspect_ratio,
+            )
+            if native_size:
+                files.append(("size", (None, native_size)))
+            quality = ProxyService._resolve_openai_image_quality(request_data)
+            if quality:
+                files.append(("quality", (None, quality)))
 
         logger.info(
             "Image edit upstream forward request_id=%s url=%s requested_model=%s upstream_model=%s "
@@ -9184,10 +9379,10 @@ class ProxyService:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, files=files, headers=headers)
         if response.status_code != 200:
-            body_text = response.text[:1000]
+            body_text = ProxyService._localize_openai_image_error_body(response.text[:1000])
             raise ServiceException(
                 400 if 400 <= response.status_code < 500 else 503,
-                f"OpenAI image edit failed: HTTP {response.status_code} {body_text}",
+                f"OpenAI 图片编辑失败（HTTP {response.status_code}）：{body_text}",
                 "OPENAI_IMAGE_EDIT_FAILED",
             )
         response_body = response.json()
@@ -9196,7 +9391,7 @@ class ProxyService:
         if not images:
             raise ServiceException(
                 503,
-                "OpenAI image edit returned no image data",
+                "OpenAI 图片编辑成功，但未返回图片数据",
                 "OPENAI_IMAGE_EDIT_FAILED",
             )
 
@@ -9263,7 +9458,7 @@ class ProxyService:
         release_session_connection(db)
         ProxyService._validate_supported_image_count(
             requested_image_count,
-            provider_label="Vertex image channel",
+            provider_label="Vertex 图片渠道",
         )
         start_time = time.time()
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -9278,7 +9473,7 @@ class ProxyService:
         if not images:
             raise ServiceException(
                 503,
-                "Vertex image generation returned no image data",
+                "Vertex 图片生成成功，但未返回图片数据",
                 "VERTEX_IMAGE_GENERATION_FAILED",
             )
 
@@ -9421,7 +9616,7 @@ class ProxyService:
         if protocol_type != "openai":
             raise ServiceException(
                 400,
-                "Current channel does not support image edit",
+                "当前渠道不支持图片编辑",
                 "IMAGE_EDIT_NOT_SUPPORTED",
             )
         return await ProxyService._non_stream_openai_image_edit_request(
@@ -9439,6 +9634,37 @@ class ProxyService:
             image_size=image_size,
             request_headers=request_headers,
         )
+
+    @staticmethod
+    def _get_channel_supported_image_sizes(
+        channel: Channel,
+        unified_model: UnifiedModel,
+    ) -> tuple[str, ...]:
+        protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
+        provider_variant = ChannelService._normalize_provider_variant(
+            getattr(channel, "protocol_type", None),
+            getattr(channel, "provider_variant", None),
+        )
+        if protocol_type == "google":
+            return ModelService.get_image_resolution_capabilities(unified_model.model_name)
+        if protocol_type == "openai":
+            return ChannelService.get_openai_image_channel_capabilities(provider_variant)
+        return ()
+
+    @staticmethod
+    def _filter_channels_by_image_size(
+        channels: list[tuple[Channel, str]],
+        unified_model: UnifiedModel,
+        image_size: Optional[str],
+    ) -> list[tuple[Channel, str]]:
+        if not image_size:
+            return channels
+        filtered: list[tuple[Channel, str]] = []
+        for channel, actual_model_name in channels:
+            supported_sizes = ProxyService._get_channel_supported_image_sizes(channel, unified_model)
+            if not supported_sizes or image_size in supported_sizes:
+                filtered.append((channel, actual_model_name))
+        return filtered
 
     @staticmethod
     async def handle_image_request(
@@ -9487,7 +9713,14 @@ class ProxyService:
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
         channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ProxyService._filter_channels_by_image_size(
+            channels,
+            unified_model,
+            image_size,
+        )
         if not channels:
+            if image_size:
+                raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None
@@ -9641,7 +9874,14 @@ class ProxyService:
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
         channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ProxyService._filter_channels_by_image_size(
+            channels,
+            unified_model,
+            image_size,
+        )
         if not channels:
+            if image_size:
+                raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None

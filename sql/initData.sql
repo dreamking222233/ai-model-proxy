@@ -899,26 +899,29 @@ CREATE TABLE `redemption_code` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='兑换码表';
 
 -- ============================================================
--- 预置数据
+-- 最小系统初始化数据
 -- ============================================================
 
 -- 默认管理员账户 (密码: admin123)
-INSERT INTO `sys_user` (`username`, `email`, `password_hash`, `role`, `status`)
-VALUES ('admin', 'admin@example.com', '$2b$12$12TrajxYt22jQ3fm6EcpLOmOUZNhL676ooVq2ekIlyARRgG78LBUq', 'admin', 1);
+INSERT INTO `sys_user` (`id`, `username`, `email`, `password_hash`, `role`, `status`)
+VALUES (1, 'admin', 'admin@example.com', '$2b$12$12TrajxYt22jQ3fm6EcpLOmOUZNhL676ooVq2ekIlyARRgG78LBUq', 'admin', 1);
 
 -- 管理员余额
 INSERT INTO `user_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
-VALUES (1, 100.000000, 100.000000, 0);
+VALUES (1, 100.000000, 100.000000, 0.000000);
 
 -- 管理员图片积分余额
 INSERT INTO `user_image_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
 VALUES (1, 0.000, 0.000, 0.000);
 
--- 预置系统配置
+-- 系统配置
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES
 ('health_check_interval', '300', 'number', '健康检查间隔(秒)'),
 ('circuit_breaker_threshold', '5', 'number', '熔断器触发阈值(连续失败次数)'),
 ('circuit_breaker_recovery', '600', 'number', '熔断恢复时间(秒)'),
+('health_check_circuit_breaker_threshold', '8', 'number', '健康检查熔断阈值(连续失败次数)'),
+('health_check_recent_success_grace_seconds', '1800', 'number', '最近成功请求宽限期(秒)'),
+('image_channel_health_check_interval', '21600', 'number', '纯图片渠道健康检查间隔(秒)'),
 ('health_check_test_message', '你好', 'string', '健康检查测试消息'),
 ('request_timeout', '30', 'number', '请求超时时间(秒)'),
 ('max_retry_count', '3', 'number', '最大重试次数'),
@@ -926,13 +929,14 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('platform_site_name', '小乐AI', 'string', '平台直营站点名称'),
 ('platform_site_subtitle', '一站式 AI 模型调用服务，让智能触手可及', 'string', '平台直营站点副标题'),
 ('platform_announcement_title', '平台公告', 'string', '平台直营站点公告标题'),
-('platform_announcement_content', '尊敬的用户，欢迎使用 AI 模型中转平台！\n\n支持Claude和GPT及Gemini全系列模型!\n\n新用户注册，立即赠送 $5 体验额度', 'string', '平台直营站点公告内容'),
-('platform_support_wechat', 'Q-Free-M', 'string', '平台直营站点微信联系方式'),
-('platform_support_qq', '2222006406', 'string', '平台直营站点QQ联系方式'),
+('platform_announcement_content', '尊敬的用户，欢迎使用 AI 模型中转平台！\n\n请先在管理后台完成渠道和模型配置后再开放给用户使用。', 'string', '平台直营站点公告内容'),
+('platform_support_wechat', '', 'string', '平台直营站点微信联系方式'),
+('platform_support_qq', '', 'string', '平台直营站点QQ联系方式'),
 ('platform_allow_register', 'true', 'boolean', '平台直营站点是否允许自助注册'),
 ('max_context_tokens', '200000', 'number', '最大上下文Token数量限制'),
 ('max_message_length', '500000', 'number', '单条消息最大字符数限制'),
 ('price_multiplier', '1.0', 'number', '价格倍率（1.0=原价，2.0=2倍价格）'),
+('token_multiplier', '1.0', 'number', 'Token 统计倍率（1.0=原始Token）'),
 ('request_body_cache_enabled', 'false', 'boolean', '是否启用请求体分段缓存分析'),
 ('request_body_cache_user_visible', 'false', 'boolean', '用户端是否显示缓存读取/创建信息'),
 ('request_body_cache_ttl_seconds', '1800', 'number', '请求体缓存 TTL（秒）'),
@@ -959,199 +963,3 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('conversation_state_user_visible', 'false', 'boolean', '用户端是否显示会话压缩收益'),
 ('conversation_state_async_checkpoint_enabled', 'true', 'boolean', '是否启用异步会话检查点构建'),
 ('conversation_state_tool_compaction_enabled', 'false', 'boolean', '是否启用实验性的 tools/system 压缩');
-
--- ============================================================
--- 预置渠道配置
--- ============================================================
--- 注意: 以下 API Key 为示例数据，部署时请替换为实际的 API Key
-INSERT INTO `channel` (`id`, `name`, `base_url`, `api_key`, `protocol_type`, `priority`, `enabled`, `description`) VALUES
-(4, 'api.kxaug.xyz-Claude', 'https://api.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 2, 1, '主力渠道 - Claude模型'),
-(5, 'api.kxaug.xyz-GPT', 'https://api.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 2, 1, '主力渠道 - GPT/Codex模型'),
-(6, 'pay.kxaug.xyz-Claude', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - Claude模型'),
-(7, 'pay.kxaug.xyz-GPT', 'https://pay.kxaug.xyz/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 3, 1, '备用渠道 - GPT/Codex模型'),
-(8, 'mmaqq.top', 'https://mmaqq.top/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 4, 1, '保底渠道 - 全模型'),
-(9, '43.156.153.12-Claude', 'http://43.156.153.12:8080/v1', 'sk-qeBTyXmKefPLsYPBbX9Xk1hmW94EemEp', 'anthropic', 1, 1, '自建渠道，支持 claude-haiku-4.5, claude-sonnet-4.5, claude-sonnet-4'),
-(10, '43.156.153.12-codex', 'http://43.156.153.12:8317/v1', 'sk-YOUR-API-KEY-HERE', 'openai', 1, 1, 'GPT-5 Codex 系列模型渠道'),
-(11, '43.156.153.12-codex转claude', 'http://43.156.153.12:8317/v1', 'sk-YOUR-API-KEY-HERE', 'anthropic', 1, 1, 'Anthropic 协议入口，内部转发到 Codex Responses / gpt-5.4，供 Claude Code 使用');
-
--- ============================================================
--- 预置统一模型配置
--- ============================================================
-INSERT INTO `unified_model` (`id`, `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`, `input_price_per_million`, `output_price_per_million`, `enabled`, `description`) VALUES
-(3, 'claude-haiku-4-5-20251001', 'Claude Haiku 4.5', 'chat', 'openai', 8192, 3.000000, 15.000000, 0, 'Claude Haiku 4.5 (2025-10-01)'),
-(4, 'claude-sonnet-4-5', 'Claude Sonnet 4.5', 'chat', 'openai', 8192, 4.000000, 20.000000, 1, 'Claude Sonnet 4.5 (2025-09-29)'),
-(5, 'claude-haiku-4-5', 'Claude Haiku 4.5', 'chat', 'openai', 8192, 3.000000, 15.000000, 1, 'Claude Haiku 4.5 最新版'),
-(6, 'claude-sonnet-4-6', 'Claude Sonnet 4.6', 'chat', 'openai', 8192, 4.000000, 20.000000, 0, 'Claude Sonnet 4.6'),
-(7, 'gpt-5.1', 'GPT-5.1', 'chat', 'openai', 32768, 2.000000, 8.000000, 1, 'OpenAI GPT-5.1'),
-(8, 'gpt-5.2', 'GPT-5.2', 'chat', 'openai', 32768, 3.000000, 12.000000, 1, 'OpenAI GPT-5.2'),
-(9, 'gpt-5.1-codex', 'GPT-5.1 Codex', 'chat', 'openai', 32768, 3.000000, 12.000000, 1, 'OpenAI GPT-5.1 Codex'),
-(10, 'gpt-5.2-codex', 'GPT-5.2 Codex', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.2 Codex'),
-(11, 'gpt-5.3-codex', 'GPT-5.3 Codex', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.3 Codex'),
-(12, 'gpt-5.4', 'GPT-5.4', 'chat', 'openai', 32768, 5.000000, 20.000000, 1, 'OpenAI GPT-5.4'),
-(13, 'gemini-2.5-flash', 'Gemini 2.5 Flash', 'chat', 'openai', 65536, 0.150000, 0.600000, 1, 'Google Gemini 2.5 Flash'),
-(28, 'gpt-5.1-codex-mini', 'GPT-5.1 Codex Mini', 'chat', 'openai', 128000, 0.500000, 1.500000, 1, 'GPT-5.1 Codex Mini - 轻量级代码模型'),
-(29, 'gpt-5', 'GPT-5', 'chat', 'openai', 128000, 2.500000, 7.500000, 1, 'GPT-5 - 基础模型'),
-(30, 'gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 'chat', 'openai', 128000, 4.000000, 12.000000, 1, 'GPT-5.1 Codex Max - 高性能代码模型'),
-(31, 'gpt-5.4-mini', 'GPT-5.4 Mini', 'chat', 'openai', 128000, 0.800000, 2.400000, 1, 'GPT-5.4 Mini - 轻量级模型'),
-(32, 'gpt-5-codex', 'GPT-5 Codex', 'chat', 'openai', 128000, 3.000000, 9.000000, 1, 'GPT-5 Codex - 代码专用模型'),
-(33, 'gpt-5-codex-mini', 'GPT-5 Codex Mini', 'chat', 'openai', 128000, 0.600000, 1.800000, 1, 'GPT-5 Codex Mini - 轻量级代码模型'),
-(34, 'claude-opus-4-6', 'Claude Opus 4.6', 'chat', 'anthropic', 32768, 5.000000, 20.000000, 1, 'Claude Opus 4.6 alias exposed via Anthropic and routed to GPT-5.4 high reasoning on Codex Responses'),
-(26, 'claude-sonnet-4-5-thinking', 'Claude Sonnet 4.5 Thinking', 'chat', 'openai', 8192, 3.000000, 15.000000, 1, 'Claude Sonnet 4.5 with extended thinking capability'),
-(27, 'claude-haiku-4-5-thinking', 'Claude Haiku 4.5 Thinking', 'chat', 'openai', 8192, 0.800000, 4.000000, 1, 'Claude Haiku 4.5 with extended thinking capability');
-
-INSERT INTO `unified_model` (`id`, `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`, `input_price_per_million`, `output_price_per_million`, `enabled`, `description`) VALUES
-(35, 'grok-4.20-0309-non-reasoning', 'Grok 4.20 0309 Non-Reasoning', 'chat', 'openai', 128000, 2.000000, 6.000000, 1, 'xAI Grok 4.20 0309 非推理版（官方定价 2/6）'),
-(36, 'grok-4.20-0309', 'Grok 4.20 0309', 'chat', 'openai', 128000, 2.000000, 6.000000, 1, 'xAI Grok 4.20 0309（按 4.20 主档推断定价 2/6）'),
-(37, 'grok-4.20-0309-reasoning', 'Grok 4.20 0309 Reasoning', 'chat', 'openai', 128000, 2.000000, 6.000000, 1, 'xAI Grok 4.20 0309 推理版（官方定价 2/6）'),
-(38, 'grok-4.20-fast', 'Grok 4.20 Fast', 'chat', 'openai', 128000, 0.200000, 0.500000, 1, 'xAI Grok 4.20 Fast（参照 4.1 fast 档推断定价 0.2/0.5）'),
-(39, 'grok-4.20-auto', 'Grok 4.20 Auto', 'chat', 'openai', 128000, 2.000000, 6.000000, 1, 'xAI Grok 4.20 Auto（按 4.20 主档推断定价 2/6）'),
-(40, 'grok-4.20-expert', 'Grok 4.20 Expert', 'chat', 'openai', 128000, 2.000000, 6.000000, 1, 'xAI Grok 4.20 Expert（按 4.20 高阶档推断定价 2/6）')
-ON DUPLICATE KEY UPDATE
-    `display_name` = VALUES(`display_name`),
-    `protocol_type` = VALUES(`protocol_type`),
-    `max_tokens` = VALUES(`max_tokens`),
-    `input_price_per_million` = VALUES(`input_price_per_million`),
-    `output_price_per_million` = VALUES(`output_price_per_million`),
-    `enabled` = VALUES(`enabled`),
-    `description` = VALUES(`description`);
-
--- ============================================================
--- 预置模型-渠道映射配置
--- ============================================================
-INSERT INTO `model_channel_mapping` (`id`, `unified_model_id`, `channel_id`, `actual_model_name`, `enabled`) VALUES
--- Claude Haiku 4.5 (旧版本) 映射
-(2, 3, 4, 'claude-haiku-4-5-20251001', 1),
-(3, 3, 6, 'claude-haiku-4-5-20251001', 1),
-(4, 3, 8, 'claude-haiku-4-5-20251001', 1),
--- Claude Sonnet 4.5 映射
-(5, 4, 4, 'claude-sonnet-4-5-20250929', 1),
-(6, 4, 6, 'claude-sonnet-4-5-20250929', 1),
-(21, 4, 9, 'claude-sonnet-4.5', 1),
-(23, 4, 8, 'claude-sonnet-4-5', 1),
--- Claude Haiku 4.5 (最新版) 映射
-(7, 5, 8, 'claude-haiku-4-5', 1),
-(18, 5, 4, 'claude-haiku-4-5-20251001', 1),
-(19, 5, 6, 'claude-haiku-4-5-20251001', 1),
-(20, 5, 9, 'claude-haiku-4.5', 1),
--- Claude Sonnet 4.6 映射
-(8, 6, 8, 'claude-sonnet-4-6', 1),
-(22, 6, 9, 'claude-sonnet-4', 1),
--- GPT 5.1 映射
-(9, 7, 5, 'gpt-5.1', 1),
--- GPT 5.2 映射
-(10, 8, 5, 'gpt-5.2', 1),
-(11, 8, 7, 'gpt-5.2', 1),
--- GPT 5.1 Codex 映射
-(12, 9, 5, 'gpt-5.1-codex', 1),
--- GPT 5.2 Codex 映射
-(13, 10, 5, 'gpt-5.2-codex', 1),
-(14, 10, 7, 'gpt-5.2-codex', 1),
--- GPT 5.3 Codex 映射
-(15, 11, 7, 'gpt-5.3-codex', 1),
--- GPT 5.4 映射
-(16, 12, 7, 'gpt-5.4', 1),
--- Gemini 2.5 Flash 映射
-(17, 13, 8, 'gemini-2.5-flash', 1),
--- 43.156.153.12-codex 渠道映射（Responses API）
-(53, 28, 10, 'responses:gpt-5.1-codex-mini', 1),
-(54, 8, 10, 'responses:gpt-5.2', 1),
-(55, 10, 10, 'responses:gpt-5.2-codex', 1),
-(56, 11, 10, 'responses:gpt-5.3-codex', 1),
-(57, 29, 10, 'responses:gpt-5', 1),
-(58, 7, 10, 'responses:gpt-5.1', 1),
-(59, 30, 10, 'responses:gpt-5.1-codex-max', 1),
-(60, 12, 10, 'responses:gpt-5.4', 1),
-(61, 31, 10, 'responses:gpt-5.4-mini', 1),
-(62, 32, 10, 'responses:gpt-5-codex', 1),
-(63, 33, 10, 'responses:gpt-5-codex-mini', 1),
-(64, 9, 10, 'responses:gpt-5.1-codex', 1),
--- 43.156.153.12-codex转claude 渠道映射（Anthropic-facing / Responses-backed）
-(65, 34, 11, 'responses:gpt-5.4', 1),
--- Claude Sonnet 4.5 Thinking 映射
-(51, 26, 9, 'claude-sonnet-4-5-thinking', 1),
--- Claude Haiku 4.5 Thinking 映射
-(52, 27, 9, 'claude-haiku-4-5-thinking', 1);
-
--- 可选：Grok 文本渠道与模型映射
-SET @grok_api_key = NULL;
-SET @grok_base_url = 'http://167.88.186.145:8000/v1';
-SET @grok_openai_channel_name = 'Grok OpenAI';
-SET @grok_anthropic_channel_name = 'Grok Anthropic';
-
-INSERT INTO `channel` (`name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`, `priority`, `enabled`, `health_check_enabled`, `description`)
-SELECT
-    @grok_openai_channel_name,
-    @grok_base_url,
-    @grok_api_key,
-    'openai',
-    'default',
-    'authorization',
-    6,
-    1,
-    0,
-    'Grok 文本渠道（OpenAI Chat / Responses）'
-FROM DUAL
-WHERE @grok_api_key IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM `channel` WHERE `name` = @grok_openai_channel_name AND `base_url` = @grok_base_url
-  );
-
-INSERT INTO `channel` (`name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`, `priority`, `enabled`, `health_check_enabled`, `description`)
-SELECT
-    @grok_anthropic_channel_name,
-    @grok_base_url,
-    @grok_api_key,
-    'anthropic',
-    'default',
-    'authorization',
-    6,
-    1,
-    0,
-    'Grok 文本渠道（Anthropic Messages）'
-FROM DUAL
-WHERE @grok_api_key IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM `channel` WHERE `name` = @grok_anthropic_channel_name AND `base_url` = @grok_base_url
-  );
-
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, grok.model_name, 1
-FROM (
-    SELECT 'grok-4.20-0309-non-reasoning' AS model_name
-    UNION ALL SELECT 'grok-4.20-0309'
-    UNION ALL SELECT 'grok-4.20-0309-reasoning'
-    UNION ALL SELECT 'grok-4.20-fast'
-    UNION ALL SELECT 'grok-4.20-auto'
-    UNION ALL SELECT 'grok-4.20-expert'
-) grok
-JOIN `unified_model` um ON um.`model_name` = grok.`model_name`
-JOIN `channel` ch
-  ON ch.`base_url` = @grok_base_url
- AND ch.`name` IN (@grok_openai_channel_name, @grok_anthropic_channel_name)
-WHERE @grok_api_key IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM `model_channel_mapping` m
-    WHERE m.`unified_model_id` = um.id AND m.`channel_id` = ch.id
-  );
-
-SET @grok_api_key = NULL;
-SET @grok_base_url = NULL;
-SET @grok_openai_channel_name = NULL;
-SET @grok_anthropic_channel_name = NULL;
-
--- ============================================================
--- 预置模型覆盖规则配置
--- ============================================================
-INSERT INTO `model_override_rule` (`name`, `rule_type`, `source_pattern`, `target_unified_model_id`, `enabled`, `priority`) VALUES
-('claude-sonnet-4.5 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4.5', 4, 1, 1),
-('haiku-20251001 → haiku-4-5', 'redirect_specific', 'claude-haiku-4-5-20251001', 5, 1, 2),
-('sonnet-4-5-20250929 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-5-20250929', 4, 1, 3),
-('sonnet-4-6 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-6', 4, 1, 4),
-('sonnet-4 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4', 4, 1, 5),
-('sonnet-4-20250514 → sonnet-4-5', 'redirect_specific', 'claude-sonnet-4-20250514', 4, 1, 6),
-('claude-3.5-sonnet → sonnet-4-5', 'redirect_specific', 'claude-3.5-sonnet', 4, 1, 7),
-('claude-3-5-sonnet → sonnet-4-5', 'redirect_specific', 'claude-3-5-sonnet', 4, 1, 8),
-('claude-3-5-sonnet-* → sonnet-4-5', 'redirect_specific', 'claude-3-5-sonnet-*', 4, 1, 9),
-('claude-3-5-haiku → haiku-4-5', 'redirect_specific', 'claude-3-5-haiku', 5, 1, 10),
-('claude-3-5-haiku-* → haiku-4-5', 'redirect_specific', 'claude-3-5-haiku-*', 5, 1, 11),
-('claude-3.5-haiku → haiku-4-5', 'redirect_specific', 'claude-3.5-haiku', 5, 1, 12);

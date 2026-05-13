@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.log import UserBalance, ConsumptionRecord
+from app.models.log import UserBalance, ConsumptionRecord, RequestLog
 from app.core.exceptions import ServiceException
 
 
@@ -181,12 +181,34 @@ class BalanceService:
             .all()
         )
 
+        request_ids = sorted({
+            str(record.request_id).strip()
+            for record in records
+            if str(record.request_id or "").strip()
+            and not str(record.model_name or "").strip()
+        })
+        request_model_map: dict[str, str] = {}
+        if request_ids:
+            log_rows = (
+                db.query(RequestLog.request_id, RequestLog.requested_model)
+                .filter(RequestLog.request_id.in_(request_ids))
+                .all()
+            )
+            request_model_map = {
+                str(request_id): str(requested_model or "").strip()
+                for request_id, requested_model in log_rows
+                if str(request_id or "").strip() and str(requested_model or "").strip()
+            }
+
         result = [
             {
                 "id": r.id,
                 "user_id": r.user_id,
                 "request_id": r.request_id,
-                "model_name": r.model_name,
+                "model_name": (
+                    r.model_name
+                    or request_model_map.get(str(r.request_id or "").strip())
+                ),
                 "input_tokens": r.input_tokens,
                 "output_tokens": r.output_tokens,
                 "total_tokens": r.total_tokens,

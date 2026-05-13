@@ -115,10 +115,14 @@ class ProxyGoogleImageResolutionCompatibilityTest(unittest.TestCase):
         self.assertEqual(credit_cost, Decimal("4.500"))
 
     @patch("app.services.proxy_service.ModelService.get_google_image_resolution_capabilities", return_value=("1K", "2K", "4K"))
+    @patch("app.services.proxy_service.ModelService.list_image_resolution_rules", return_value=[
+        {"resolution_code": "1K", "enabled": 1, "credit_cost": 3.0, "is_default": 1, "sort_order": 10},
+    ])
     @patch("app.services.proxy_service.ModelService.resolve_image_resolution_rule", return_value=None)
     def test_resolve_image_billing_rule_rejects_enabled_but_missing_rule(
         self,
         _mock_resolve_rule,
+        _mock_list_rules,
         _mock_capabilities,
     ):
         with self.assertRaises(ServiceException) as ctx:
@@ -135,7 +139,7 @@ class ProxyGoogleImageResolutionCompatibilityTest(unittest.TestCase):
             ProxyService._resolve_image_billing_rule(
                 MagicMock(),
                 SimpleNamespace(id=1, model_name="gemini-3-pro-image-preview", image_credit_multiplier=3),
-                {"size": "1200x1200"},
+                {"size": "1200-by-1200"},
             )
 
         self.assertEqual(ctx.exception.error_code, "INVALID_IMAGE_SIZE")

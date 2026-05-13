@@ -32,6 +32,12 @@ class _DummyAsyncClient:
 
 
 class ProxyImageBillingHelperTest(unittest.TestCase):
+    def test_calculate_total_image_credits_multiplies_by_image_count(self):
+        self.assertEqual(
+            ProxyService._calculate_total_image_credits(Decimal("0.500"), 3),
+            Decimal("1.500"),
+        )
+
     def test_record_success_swallows_commit_failure_for_legacy_callers(self):
         db = MagicMock()
         db.commit.side_effect = RuntimeError("db unavailable")
@@ -78,6 +84,7 @@ class ProxyImageBillingHelperTest(unittest.TestCase):
                 "127.0.0.1",
                 1234,
                 charged_credits=Decimal("3.000"),
+                model_multiplier=Decimal("3.000"),
                 image_size="1K",
                 image_count=1,
             )
@@ -214,6 +221,46 @@ class ProxyImageBillingFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_log_failed_request.call_args.kwargs["image_credits_charged"], 0)
         self.assertEqual(mock_log_failed_request.call_args.kwargs["image_count"], 0)
         self.assertEqual(mock_log_failed_request.call_args.kwargs["image_size"], "1K")
+
+    @patch(
+        "app.services.proxy_service.ModelService.get_available_channels",
+        return_value=[],
+    )
+    @patch("app.services.proxy_service.ImageCreditService.check_balance")
+    @patch("app.services.proxy_service.ProxyService._resolve_image_billing_rule", return_value=("1K", Decimal("0.500")))
+    @patch("app.services.proxy_service.ModelService.resolve_model")
+    async def test_handle_image_request_multiplies_credit_precheck_by_n(
+        self,
+        mock_resolve_model,
+        _mock_resolve_billing_rule,
+        mock_check_balance,
+        _mock_get_channels,
+    ):
+        mock_resolve_model.return_value = SimpleNamespace(
+            id=99,
+            model_name="gpt-image-2",
+            model_type="image",
+            billing_type="image_credit",
+            image_credit_multiplier=Decimal("0.500"),
+        )
+        request_data = {
+            "model": "gpt-image-2",
+            "prompt": "draw a cat",
+            "response_format": "b64_json",
+            "n": 3,
+        }
+
+        with self.assertRaises(ServiceException) as ctx:
+            await ProxyService.handle_image_request(
+                self.db,
+                self.user,
+                self.api_key_record,
+                request_data,
+                "127.0.0.1",
+            )
+
+        self.assertEqual(ctx.exception.error_code, "NO_CHANNEL")
+        mock_check_balance.assert_called_once_with(self.db, self.user.id, Decimal("1.500"))
 
     @patch("app.services.proxy_service.ProxyService._log_failed_request")
     @patch("app.services.proxy_service.ProxyService._non_stream_image_request")

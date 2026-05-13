@@ -1,0 +1,376 @@
+{
+  "generated_at": "2026-05-12T00:00:00+08:00",
+  "project": "modelInvocationSystem",
+  "description": "小乐AI — 多租户 AI 模型中转平台",
+  "root_claude_md": "CLAUDE.md",
+  "scan_summary": {
+    "total_files_estimated": 320,
+    "files_scanned": 95,
+    "coverage_percent": 30,
+    "truncated": false,
+    "truncation_reason": null,
+    "ignored_dirs": [
+      { "path": "frontend/node_modules", "reason": ".gitignore 规则" },
+      { "path": "frontend/dist", "reason": ".gitignore 规则" },
+      { "path": "backend/__pycache__", "reason": ".gitignore 规则" },
+      { "path": "backend/app/__pycache__", "reason": ".gitignore 规则" }
+    ],
+    "large_files_skipped": [
+      { "path": "backend/app/services/proxy_service.py", "size_kb": 423, "reason": "超过 256KB 读取上限，已分页读取前 300 行" }
+    ]
+  },
+  "modules": [
+    {
+      "id": "backend",
+      "path": "backend",
+      "language": "Python",
+      "claude_md": "backend/CLAUDE.md",
+      "description": "FastAPI 后端：代理转发引擎、多渠道管理、计费、用户/代理商/管理员 API",
+      "entry_files": [
+        "backend/run.py",
+        "backend/app/main.py",
+        "backend/app/config.py",
+        "backend/app/database.py"
+      ],
+      "api_routes": {
+        "auth": "backend/app/api/auth.py",
+        "public": "backend/app/api/public/site.py",
+        "proxy_openai": "backend/app/api/proxy/openai_proxy.py",
+        "proxy_anthropic": "backend/app/api/proxy/anthropic_proxy.py",
+        "proxy_image": "backend/app/api/proxy/image_proxy.py",
+        "admin_channel": "backend/app/api/admin/channel.py",
+        "admin_model": "backend/app/api/admin/model.py",
+        "admin_user": "backend/app/api/admin/user.py",
+        "admin_agent": "backend/app/api/admin/agent.py",
+        "admin_log": "backend/app/api/admin/log.py",
+        "admin_health": "backend/app/api/admin/health.py",
+        "admin_system": "backend/app/api/admin/system.py",
+        "admin_redemption": "backend/app/api/admin/redemption.py",
+        "admin_subscription": "backend/app/api/admin/subscription.py",
+        "user_api_key": "backend/app/api/user/api_key.py",
+        "user_balance": "backend/app/api/user/balance.py",
+        "user_profile": "backend/app/api/user/profile.py",
+        "user_models": "backend/app/api/user/models.py",
+        "user_stats": "backend/app/api/user/stats.py",
+        "user_redemption": "backend/app/api/user/redemption.py",
+        "agent_user": "backend/app/api/agent/user.py",
+        "agent_log": "backend/app/api/agent/log.py",
+        "agent_stats": "backend/app/api/agent/stats.py",
+        "agent_system": "backend/app/api/agent/system.py",
+        "agent_subscription": "backend/app/api/agent/subscription.py",
+        "agent_redemption": "backend/app/api/agent/redemption.py"
+      },
+      "services": [
+        "backend/app/services/proxy_service.py",
+        "backend/app/services/auth_service.py",
+        "backend/app/services/agent_service.py",
+        "backend/app/services/balance_service.py",
+        "backend/app/services/channel_service.py",
+        "backend/app/services/model_service.py",
+        "backend/app/services/health_service.py",
+        "backend/app/services/log_service.py",
+        "backend/app/services/subscription_service.py",
+        "backend/app/services/redemption_service.py",
+        "backend/app/services/image_credit_service.py",
+        "backend/app/services/google_vertex_image_service.py",
+        "backend/app/services/api_key_service.py",
+        "backend/app/services/cache_service.py",
+        "backend/app/services/cache_stats_service.py",
+        "backend/app/services/cache_key_generator.py",
+        "backend/app/services/conversation_session_service.py",
+        "backend/app/services/conversation_match_service.py",
+        "backend/app/services/conversation_shadow_service.py",
+        "backend/app/services/history_compaction_service.py",
+        "backend/app/services/compression_guard_service.py",
+        "backend/app/services/upstream_session_strategy_service.py",
+        "backend/app/services/anthropic_prompt_cache_service.py",
+        "backend/app/services/request_body_cache_analyzer.py",
+        "backend/app/services/request_body_cache_service.py",
+        "backend/app/services/request_cache_summary_service.py",
+        "backend/app/services/agent_asset_service.py",
+        "backend/app/services/agent_settlement_service.py"
+      ],
+      "models": [
+        "backend/app/models/user.py",
+        "backend/app/models/channel.py",
+        "backend/app/models/model.py",
+        "backend/app/models/agent.py",
+        "backend/app/models/log.py",
+        "backend/app/models/redemption.py",
+        "backend/app/models/cache_log.py"
+      ],
+      "core": [
+        "backend/app/core/security.py",
+        "backend/app/core/dependencies.py",
+        "backend/app/core/exceptions.py",
+        "backend/app/core/middleware.py",
+        "backend/app/core/redis_client.py"
+      ],
+      "middleware": [
+        "backend/app/middleware/cache_middleware.py",
+        "backend/app/middleware/stream_cache_middleware.py"
+      ],
+      "tasks": [
+        "backend/app/tasks/__init__.py",
+        "backend/app/tasks/health_check.py"
+      ],
+      "tests": {
+        "directory": "backend/app/test",
+        "test_files": [
+          "backend/app/test/test_auth_service.py",
+          "backend/app/test/test_channel_health_hardening.py",
+          "backend/app/test/test_channel_health_monitor_switch.py",
+          "backend/app/test/test_proxy_channel_failure_hardening.py",
+          "backend/app/test/test_proxy_model_alias_rewrite.py",
+          "backend/app/test/test_image_billing.py",
+          "backend/app/test/test_vertex_image_channel.py",
+          "backend/app/test/test_openai_image_channel.py",
+          "backend/app/test/test_google_image_resolution_rules.py",
+          "backend/app/test/test_subscription_compatibility.py",
+          "backend/app/test/test_admin_dashboard_stats.py",
+          "backend/app/test/test_user_stats_ranking.py",
+          "backend/app/test/test_stream_heartbeat.py",
+          "backend/app/test/test_cpa_cache_billing.py",
+          "backend/app/test/test_request_audit_hardening.py",
+          "backend/app/test/test_model_admin_serialization.py",
+          "backend/app/test/test_anthropic_bridge_claude_code_guidance.py",
+          "backend/app/test/test_vertex_api.py",
+          "backend/app/test/cache/test_single_turn_chat_cache.py",
+          "backend/app/test/cache/test_multi_turn_chat_cache.py",
+          "backend/app/test/cache/test_chat_cache_lifecycle.py",
+          "backend/app/test/cache/test_anthropic_messages_cache.py"
+        ],
+        "integration_scripts": [
+          "backend/app/test/createImg/gpt_test_img.py",
+          "backend/app/test/createImg/cpa_test_codex_image.py",
+          "backend/app/test/createImg/cpa_test_codex_image_edit.py",
+          "backend/app/test/createImg/test_latest_image_api.py",
+          "backend/app/test/createImg/reference_gpt_image_2.py",
+          "backend/test_stream_cache.py",
+          "backend/test_anthropic_responses_bridge.py"
+        ]
+      },
+      "database": {
+        "engine": "MySQL 8.x",
+        "orm": "SQLAlchemy (synchronous)",
+        "driver": "pymysql",
+        "tables": [
+          "sys_user", "user_api_key",
+          "channel", "unified_model", "model_channel_mapping",
+          "model_override_rule", "model_image_resolution_rule",
+          "agent", "agent_balance", "agent_image_balance",
+          "agent_balance_record", "agent_image_credit_record",
+          "agent_subscription_inventory", "agent_subscription_inventory_record",
+          "agent_redemption_amount_rule", "agent_daily_limit", "agent_daily_limit_usage",
+          "agent_settlement_record", "agent_settlement_batch", "agent_settlement_batch_item",
+          "user_balance", "user_image_balance",
+          "consumption_record", "image_credit_record",
+          "request_log", "request_cache_summary",
+          "health_check_log", "operation_log", "system_config",
+          "redemption_code",
+          "subscription_plan", "user_subscription", "subscription_usage_cycle",
+          "conversation_session", "conversation_checkpoint"
+        ]
+      },
+      "coverage": {
+        "entry": "covered",
+        "api_routes": "covered",
+        "services": "partially_covered",
+        "models": "covered",
+        "tests": "covered",
+        "data_model": "covered",
+        "gaps": [
+          "proxy_service.py 仅读取前 300 行（文件 423KB），核心转发逻辑未完整扫描",
+          "subscription_service.py 未读取",
+          "log_service.py 未读取",
+          "channel_service.py 未读取",
+          "model_service.py 未读取",
+          "image_credit_service.py 未读取",
+          "google_vertex_image_service.py 未读取"
+        ]
+      }
+    },
+    {
+      "id": "frontend",
+      "path": "frontend",
+      "language": "JavaScript / Vue 2",
+      "claude_md": "frontend/CLAUDE.md",
+      "description": "Vue 2 前端：管理员/用户/代理商三套门户 + AI 对话界面",
+      "entry_files": [
+        "frontend/src/main.js",
+        "frontend/src/App.vue",
+        "frontend/src/router/index.js",
+        "frontend/src/store/index.js"
+      ],
+      "views": {
+        "admin": [
+          "frontend/src/views/admin/Dashboard.vue",
+          "frontend/src/views/admin/ChannelManage.vue",
+          "frontend/src/views/admin/ModelManage.vue",
+          "frontend/src/views/admin/UserManage.vue",
+          "frontend/src/views/admin/AgentManage.vue",
+          "frontend/src/views/admin/AgentAssetManage.vue",
+          "frontend/src/views/admin/AgentSettlementManage.vue",
+          "frontend/src/views/admin/RequestLog.vue",
+          "frontend/src/views/admin/AgentRequestLog.vue",
+          "frontend/src/views/admin/HealthMonitor.vue",
+          "frontend/src/views/admin/SystemConfig.vue",
+          "frontend/src/views/admin/RedemptionManage.vue",
+          "frontend/src/views/admin/SubscriptionManage.vue",
+          "frontend/src/views/admin/CacheManage.vue"
+        ],
+        "user": [
+          "frontend/src/views/user/Dashboard.vue",
+          "frontend/src/views/user/ApiKeyManage.vue",
+          "frontend/src/views/user/BalanceLog.vue",
+          "frontend/src/views/user/ModelList.vue",
+          "frontend/src/views/user/UsageStats.vue",
+          "frontend/src/views/user/UsageRanking.vue",
+          "frontend/src/views/user/UsageLog.vue",
+          "frontend/src/views/user/QuickStart.vue",
+          "frontend/src/views/user/Redemption.vue",
+          "frontend/src/views/user/Profile.vue",
+          "frontend/src/views/user/CacheStats.vue"
+        ],
+        "agent": [
+          "frontend/src/views/agent/Workbench.vue",
+          "frontend/src/views/agent/Dashboard.vue",
+          "frontend/src/views/agent/UserManage.vue",
+          "frontend/src/views/agent/RedemptionManage.vue",
+          "frontend/src/views/agent/SubscriptionManage.vue",
+          "frontend/src/views/agent/RequestLog.vue",
+          "frontend/src/views/agent/UsageRanking.vue",
+          "frontend/src/views/agent/SystemManage.vue"
+        ],
+        "common": [
+          "frontend/src/views/common/AiChat.vue",
+          "frontend/src/views/common/MobileChat.vue",
+          "frontend/src/views/Login.vue",
+          "frontend/src/views/Register.vue"
+        ]
+      },
+      "components": [
+        "frontend/src/components/chat/ChatMessage.vue",
+        "frontend/src/components/chat/ModelSelector.vue",
+        "frontend/src/components/chat/SessionList.vue"
+      ],
+      "api_modules": [
+        "frontend/src/api/auth.js",
+        "frontend/src/api/user.js",
+        "frontend/src/api/channel.js",
+        "frontend/src/api/model.js",
+        "frontend/src/api/agent.js",
+        "frontend/src/api/chat.js",
+        "frontend/src/api/redemption.js",
+        "frontend/src/api/subscription.js",
+        "frontend/src/api/system.js",
+        "frontend/src/api/public.js",
+        "frontend/src/api/request.js"
+      ],
+      "utils": [
+        "frontend/src/utils/auth.js",
+        "frontend/src/utils/request.js",
+        "frontend/src/utils/sse.js",
+        "frontend/src/utils/chatStorage.js",
+        "frontend/src/utils/index.js"
+      ],
+      "layouts": [
+        "frontend/src/layout/AdminLayout.vue",
+        "frontend/src/layout/UserLayout.vue",
+        "frontend/src/layout/AgentLayout.vue"
+      ],
+      "tests": {
+        "directory": null,
+        "test_files": [],
+        "gaps": ["无自动化测试配置（无 Jest/Cypress）"]
+      },
+      "coverage": {
+        "entry": "covered",
+        "routing": "covered",
+        "state_management": "covered",
+        "api_layer": "listed",
+        "views": "listed",
+        "components": "listed",
+        "gaps": [
+          "各 Vue 页面内部逻辑未深度读取",
+          "api/*.js 文件内容未读取",
+          "无测试文件"
+        ]
+      }
+    }
+  ],
+  "next_scan_recommendations": [
+    {
+      "priority": 1,
+      "path": "backend/app/services/proxy_service.py",
+      "reason": "核心转发引擎，423KB，仅读取前 300 行，需分页补全渠道选择、计费、流式处理等核心逻辑"
+    },
+    {
+      "priority": 2,
+      "path": "backend/app/services/subscription_service.py",
+      "reason": "套餐计费核心逻辑，未读取"
+    },
+    {
+      "priority": 3,
+      "path": "backend/app/services/channel_service.py",
+      "reason": "渠道选择与故障转移逻辑，未读取"
+    },
+    {
+      "priority": 4,
+      "path": "backend/app/services/model_service.py",
+      "reason": "模型解析与别名重写逻辑，未读取"
+    },
+    {
+      "priority": 5,
+      "path": "frontend/src/views/common/AiChat.vue",
+      "reason": "AI 对话核心页面，SSE 流式处理逻辑，未读取"
+    },
+    {
+      "priority": 6,
+      "path": "frontend/src/api/chat.js",
+      "reason": "AI 对话 API 封装，未读取"
+    },
+    {
+      "priority": 7,
+      "path": "backend/app/services/google_vertex_image_service.py",
+      "reason": "Google Vertex 图片生成服务，未读取"
+    },
+    {
+      "priority": 8,
+      "path": "backend/app/services/log_service.py",
+      "reason": "日志查询与统计服务，未读取"
+    }
+  ],
+  "tech_stack": {
+    "backend": {
+      "language": "Python 3.11+",
+      "framework": "FastAPI",
+      "server": "Uvicorn",
+      "orm": "SQLAlchemy (synchronous)",
+      "database": "MySQL 8.x",
+      "cache": "Redis",
+      "scheduler": "APScheduler",
+      "http_client": "httpx (async)",
+      "auth": "JWT (python-jose) + bcrypt (passlib)",
+      "validation": "Pydantic v2"
+    },
+    "frontend": {
+      "language": "JavaScript (ES6+)",
+      "framework": "Vue 2",
+      "state_management": "Vuex 3",
+      "router": "Vue Router 3",
+      "ui_library": "Ant Design Vue 1.x",
+      "http_client": "axios",
+      "build_tool": "Vue CLI (webpack)"
+    }
+  },
+  "architecture_patterns": [
+    "多租户白标（Agent 代理商体系）",
+    "多渠道故障转移 + 熔断器",
+    "双计费模式（按量余额 / 套餐配额）",
+    "SSE 流式代理 + WebSocket 代理",
+    "Redis 热状态 + MySQL 持久化（会话管理）",
+    "Anthropic Prompt Cache 透传",
+    "模型别名重写与覆盖规则"
+  ]
+}

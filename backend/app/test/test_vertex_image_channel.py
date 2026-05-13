@@ -21,6 +21,26 @@ class ChannelProviderVariantTest(unittest.TestCase):
             ChannelService.PROVIDER_VARIANT_DEFAULT,
         )
 
+    def test_openai_native_image_variant_is_preserved(self):
+        self.assertEqual(
+            ChannelService._normalize_provider_variant("openai", "openai-image-native-size"),
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+        )
+
+    def test_openai_image_channel_capabilities_differentiate_variants(self):
+        self.assertEqual(
+            ChannelService.get_openai_image_channel_capabilities(
+                ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE
+            ),
+            ("1K",),
+        )
+        self.assertEqual(
+            ChannelService.get_openai_image_channel_capabilities(
+                ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
+            ),
+            ("1K", "2K", "4K"),
+        )
+
 
 class GoogleVertexImageHelperTest(unittest.TestCase):
     def test_parse_model_candidates_supports_fallback_list(self):

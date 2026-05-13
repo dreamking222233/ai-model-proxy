@@ -418,7 +418,25 @@ CREATE TABLE `model_channel_mapping` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型-渠道映射表';
 
 -- ============================================================
--- 6. model_override_rule - 模型覆盖规则表
+-- 6. model_image_resolution_rule - 模型图片分辨率计费规则表
+-- ============================================================
+CREATE TABLE `model_image_resolution_rule` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `unified_model_id` BIGINT UNSIGNED NOT NULL,
+    `resolution_code` VARCHAR(16) NOT NULL COMMENT '512/1K/2K/4K',
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `credit_cost` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '该分辨率消耗的图片积分',
+    `is_default` TINYINT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_model_resolution_code` (`unified_model_id`, `resolution_code`),
+    KEY `idx_model_image_resolution_model_id` (`unified_model_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型图片分辨率计费规则表';
+
+-- ============================================================
+-- 6.1 model_override_rule - 模型覆盖规则表
 -- ============================================================
 CREATE TABLE `model_override_rule` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -847,30 +865,6 @@ CREATE TABLE `conversation_checkpoint` (
     KEY `idx_session_id` (`session_id`),
     KEY `idx_source_hash` (`source_hash`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话检查点表';
-
--- ============================================================
--- 15. cache_log - 缓存日志表
--- ============================================================
-CREATE TABLE `cache_log` (
-    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-    `cache_key` VARCHAR(64) NOT NULL COMMENT 'Cache Key (SHA256)',
-    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
-    `model` VARCHAR(100) NOT NULL COMMENT '模型名称',
-    `prompt_tokens` INT NOT NULL COMMENT 'Prompt Tokens',
-    `completion_tokens` INT NOT NULL COMMENT 'Completion Tokens',
-    `cache_status` ENUM('HIT', 'MISS', 'BYPASS') NOT NULL COMMENT '缓存状态',
-    `saved_tokens` INT DEFAULT 0 COMMENT '节省的 Tokens',
-    `saved_cost` DECIMAL(10, 6) DEFAULT 0.00 COMMENT '节省的费用',
-    `ttl` INT NOT NULL COMMENT '缓存时长（秒）',
-    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    PRIMARY KEY (`id`),
-    KEY `idx_cache_key` (`cache_key`),
-    KEY `idx_user_id` (`user_id`),
-    KEY `idx_created_at` (`created_at`),
-    KEY `idx_cache_status` (`cache_status`),
-    KEY `idx_user_created` (`user_id`, `created_at`),
-    KEY `idx_user_status_created` (`user_id`, `cache_status`, `created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='缓存日志表';
 
 -- ============================================================
 -- 16. redemption_code - 兑换码表

@@ -101,9 +101,9 @@
           size="middle"
           :scroll="{ x: 900 }"
         >
-          <template slot="requested_model" slot-scope="text">
+          <template slot="requested_model" slot-scope="text, record">
             <div class="model-meta">
-              <a-tag class="premium-model-tag">{{ text }}</a-tag>
+              <a-tag class="premium-model-tag">{{ getDisplayModel(record) }}</a-tag>
             </div>
           </template>
 
@@ -145,7 +145,7 @@
       <a-modal v-model="errorModalVisible" :title="'请求详情 - ' + selectedRecord.id" :width="700" :footer="null" :bodyStyle="{ padding: '32px' }">
         <div class="modal-glass-content">
           <a-descriptions :column="2" bordered class="premium-desc">
-            <a-descriptions-item label="模型"><a-tag color="blue">{{ selectedRecord.requested_model }}</a-tag></a-descriptions-item>
+            <a-descriptions-item label="模型"><a-tag color="blue">{{ getDisplayModel(selectedRecord) }}</a-tag></a-descriptions-item>
             <a-descriptions-item label="响应耗时">{{ formatResponseTime(selectedRecord.response_time_ms) }}s</a-descriptions-item>
             <a-descriptions-item label="Token (入)">{{ selectedRecord.input_tokens }}</a-descriptions-item>
             <a-descriptions-item label="Token (出)">{{ selectedRecord.output_tokens }}</a-descriptions-item>
@@ -186,7 +186,7 @@ export default {
         pageSizeOptions: ['20', '50', '100']
       },
       columns: [
-        { title: '模型', dataIndex: 'requested_model', key: 'requested_model', width: 180, scopedSlots: { customRender: 'requested_model' } },
+        { title: '模型', dataIndex: 'model', key: 'model', width: 180, scopedSlots: { customRender: 'requested_model' } },
         { title: '消耗明细 (Tokens)', dataIndex: 'total_tokens', key: 'token_usage', width: 280, scopedSlots: { customRender: 'token_usage' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '耗时', dataIndex: 'response_time_ms', key: 'response_time_ms', width: 110, align: 'right', scopedSlots: { customRender: 'response_time_ms' } },
@@ -201,6 +201,9 @@ export default {
     chartWidth() { return Math.max(this.perMinuteStats.length * 70, 800) + 'px' }
   },
   methods: {
+    getDisplayModel(record) {
+      return (record && (record.model || record.requested_model)) || '-'
+    },
     async fetchLogs() {
       this.loading = true
       try {

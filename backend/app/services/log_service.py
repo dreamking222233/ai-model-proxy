@@ -167,6 +167,7 @@ class LogService:
         end_date: Optional[str] = None,
         agent_only: bool = False,
         platform_only: bool = False,
+        include_internal_fields: bool = False,
     ) -> tuple[list[dict], int]:
         """
         List request logs with pagination and optional filters.
@@ -225,8 +226,9 @@ class LogService:
             .all()
         )
 
-        result = [
-            {
+        result = []
+        for log, username, input_cost, output_cost, record_cache_read_cost, total_cost, cache_details in rows:
+            item = {
                 "id": log.id,
                 "request_id": log.request_id,
                 "user_id": log.user_id,
@@ -234,12 +236,7 @@ class LogService:
                 "username": username,
                 "user_api_key_id": log.user_api_key_id,
                 "channel_id": log.channel_id,
-                "channel_name": log.channel_name,
-                "requested_model": log.requested_model,
-                "actual_model": LogService._public_actual_model_name(
-                    log.requested_model,
-                    log.actual_model,
-                ),
+                "model": log.requested_model or "-",
                 "protocol_type": log.protocol_type,
                 "request_type": log.request_type,
                 "billing_type": log.billing_type,
@@ -312,8 +309,14 @@ class LogService:
                 "cache_details": LogService._load_cache_details(cache_details),
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
-            for log, username, input_cost, output_cost, record_cache_read_cost, total_cost, cache_details in rows
-        ]
+            if include_internal_fields:
+                item["channel_name"] = log.channel_name
+                item["requested_model"] = log.requested_model
+                item["actual_model"] = LogService._public_actual_model_name(
+                    log.requested_model,
+                    log.actual_model,
+                )
+            result.append(item)
         return result, total
 
     @staticmethod

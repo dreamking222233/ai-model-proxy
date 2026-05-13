@@ -220,9 +220,9 @@
           </span>
         </template>
 
-        <template slot="requested_model" slot-scope="text">
-          <a-tooltip :title="text || '-'" placement="topLeft">
-            <a-tag class="model-tag model-tag--ellipsis">{{ text || '-' }}</a-tag>
+        <template slot="requested_model" slot-scope="text, record">
+          <a-tooltip :title="getDisplayModel(record)" placement="topLeft">
+            <a-tag class="model-tag model-tag--ellipsis">{{ getDisplayModel(record) }}</a-tag>
           </a-tooltip>
         </template>
 
@@ -385,7 +385,7 @@
             </div>
             <div class="detail-item">
               <span class="detail-item-label">请求模型</span>
-              <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
+              <a-tag class="model-tag">{{ getDisplayModel(selectedRecord) }}</a-tag>
             </div>
             <div class="detail-item">
               <span class="detail-item-label">计费方式</span>
@@ -574,7 +574,7 @@ export default {
       columns: [
         { title: 'ID', dataIndex: 'request_id', key: 'requestId', width: 66, align: 'center', scopedSlots: { customRender: 'requestId' } },
         { title: '用户', dataIndex: 'username', key: 'username', width: 120, scopedSlots: { customRender: 'username' } },
-        { title: '请求模型', dataIndex: 'requested_model', key: 'requested_model', width: 140, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
+        { title: '请求模型', dataIndex: 'model', key: 'model', width: 140, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
         { title: '用量', key: 'tokens', width: 300, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'responseTime', width: 110, align: 'right', scopedSlots: { customRender: 'responseTime' } },
@@ -610,6 +610,9 @@ export default {
   methods: {
     formatDate,
     formatUtcDate,
+    getDisplayModel(record) {
+      return (record && (record.model || record.requested_model)) || '-'
+    },
     buildRequestParams() {
       const params = {
         page: this.pagination.current,

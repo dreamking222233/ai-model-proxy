@@ -33,8 +33,6 @@ def list_request_logs(
         start_date=start_date,
         end_date=end_date,
     )
-    for item in items:
-        item["actual_model"] = None
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 

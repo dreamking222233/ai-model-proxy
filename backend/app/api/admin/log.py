@@ -27,7 +27,7 @@ def list_request_logs(
     current_user: SysUser = Depends(require_admin),
 ):
     items, total = LogService.list_request_logs(
-        db, page, page_size, user_id, agent_id, model, status, start_date, end_date, agent_only, platform_only
+        db, page, page_size, user_id, agent_id, model, status, start_date, end_date, agent_only, platform_only, True
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 

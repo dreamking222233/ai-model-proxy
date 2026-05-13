@@ -186,10 +186,10 @@
           </template>
 
           <!-- 模型列 -->
-          <template slot="col_model" slot-scope="text">
+          <template slot="col_model" slot-scope="text, record">
             <div class="model-cell">
-              <div class="model-avatar-mini" :style="{ background: getAvatarBg(text) }">{{ (text || '?').charAt(0).toUpperCase() }}</div>
-              <span class="model-name-text">{{ text }}</span>
+              <div class="model-avatar-mini" :style="{ background: getAvatarBg(getDisplayModel(record)) }">{{ getDisplayModel(record).charAt(0).toUpperCase() }}</div>
+              <span class="model-name-text">{{ getDisplayModel(record) }}</span>
             </div>
           </template>
 
@@ -322,7 +322,7 @@ export default {
       },
       expandedRowKeys: [],
       columns: [
-        { title: '模型名称', dataIndex: 'requested_model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
+        { title: '模型名称', dataIndex: 'model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
         { title: '用量细则', dataIndex: 'total_tokens', key: 'tokens', width: 320, scopedSlots: { customRender: 'col_tokens' } },
         { title: '实际计费', dataIndex: 'total_cost', key: 'cost', width: 210, align: 'right', scopedSlots: { customRender: 'col_cost' } },
         { title: '请求状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'col_status' } },
@@ -511,6 +511,9 @@ export default {
     },
     formatPrice(amount) {
       return Number(amount || 0).toFixed(6)
+    },
+    getDisplayModel(record) {
+      return (record && (record.model || record.requested_model)) || '-'
     },
     formatMultiplier(value) {
       const num = Number(value == null ? 1 : value)

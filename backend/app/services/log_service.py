@@ -155,10 +155,8 @@ class LogService:
         )
 
     @staticmethod
-    def list_request_logs(
-        db: Session,
-        page: int = 1,
-        page_size: int = 20,
+    def _apply_request_log_filters(
+        query,
         user_id: Optional[int] = None,
         agent_id: Optional[int] = None,
         model: Optional[str] = None,
@@ -167,33 +165,7 @@ class LogService:
         end_date: Optional[str] = None,
         agent_only: bool = False,
         platform_only: bool = False,
-        include_internal_fields: bool = False,
-    ) -> tuple[list[dict], int]:
-        """
-        List request logs with pagination and optional filters.
-
-        Args:
-            start_date / end_date: ISO date strings (YYYY-MM-DD).
-
-        Returns:
-            Tuple of (list of log dicts, total count).
-        """
-        query = db.query(
-            RequestLog,
-            SysUser.username,
-            ConsumptionRecord.input_cost,
-            ConsumptionRecord.output_cost,
-            ConsumptionRecord.cache_read_cost,
-            ConsumptionRecord.total_cost,
-            RequestCacheSummary.details_json,
-        ).outerjoin(
-            SysUser, RequestLog.user_id == SysUser.id
-        ).outerjoin(
-            ConsumptionRecord, RequestLog.request_id == ConsumptionRecord.request_id
-        ).outerjoin(
-            RequestCacheSummary, RequestLog.request_id == RequestCacheSummary.request_id
-        )
-
+    ):
         if user_id is not None:
             query = query.filter(RequestLog.user_id == user_id)
         if agent_id is not None:
@@ -217,23 +189,107 @@ class LogService:
             query = query.filter(RequestLog.created_at >= start_dt)
         if end_dt:
             query = query.filter(RequestLog.created_at < end_dt)
+        return query
 
-        total = query.count()
-        rows = (
-            query.order_by(RequestLog.id.desc())
+    @staticmethod
+    def list_request_logs(
+        db: Session,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: Optional[int] = None,
+        agent_id: Optional[int] = None,
+        model: Optional[str] = None,
+        status: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        agent_only: bool = False,
+        platform_only: bool = False,
+        include_internal_fields: bool = False,
+    ) -> tuple[list[dict], int]:
+        """
+        List request logs with pagination and optional filters.
+
+        Args:
+            start_date / end_date: ISO date strings (YYYY-MM-DD).
+
+        Returns:
+            Tuple of (list of log dicts, total count).
+        """
+        base_query = LogService._apply_request_log_filters(
+            db.query(RequestLog),
+            user_id=user_id,
+            agent_id=agent_id,
+            model=model,
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+            agent_only=agent_only,
+            platform_only=platform_only,
+        )
+
+        total = base_query.order_by(None).count()
+        logs = (
+            base_query.order_by(RequestLog.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
         )
+        if not logs:
+            return [], total
+
+        user_ids = {log.user_id for log in logs if log.user_id is not None}
+        request_ids = [log.request_id for log in logs if log.request_id]
+
+        user_map = {}
+        if user_ids:
+            user_map = {
+                row.id: row.username
+                for row in db.query(SysUser.id, SysUser.username).filter(SysUser.id.in_(user_ids)).all()
+            }
+
+        consumption_map = {}
+        if request_ids:
+            consumption_rows = (
+                db.query(
+                    ConsumptionRecord.request_id,
+                    ConsumptionRecord.input_cost,
+                    ConsumptionRecord.output_cost,
+                    ConsumptionRecord.cache_read_cost,
+                    ConsumptionRecord.total_cost,
+                    ConsumptionRecord.created_at,
+                    ConsumptionRecord.id,
+                )
+                .filter(ConsumptionRecord.request_id.in_(request_ids))
+                .order_by(ConsumptionRecord.created_at.desc(), ConsumptionRecord.id.desc())
+                .all()
+            )
+            for row in consumption_rows:
+                if row.request_id not in consumption_map:
+                    consumption_map[row.request_id] = row
+
+        cache_summary_map = {}
+        if request_ids:
+            cache_summary_rows = (
+                db.query(RequestCacheSummary.request_id, RequestCacheSummary.details_json)
+                .filter(RequestCacheSummary.request_id.in_(request_ids))
+                .all()
+            )
+            cache_summary_map = {row.request_id: row.details_json for row in cache_summary_rows}
 
         result = []
-        for log, username, input_cost, output_cost, record_cache_read_cost, total_cost, cache_details in rows:
+        for log in logs:
+            consumption = consumption_map.get(log.request_id)
+            input_cost = getattr(consumption, "input_cost", 0)
+            output_cost = getattr(consumption, "output_cost", 0)
+            record_cache_read_cost = getattr(consumption, "cache_read_cost", 0)
+            total_cost = getattr(consumption, "total_cost", 0)
+            cache_details = cache_summary_map.get(log.request_id)
             item = {
                 "id": log.id,
                 "request_id": log.request_id,
                 "user_id": log.user_id,
                 "agent_id": log.agent_id,
-                "username": username,
+                "username": user_map.get(log.user_id),
                 "user_api_key_id": log.user_api_key_id,
                 "channel_id": log.channel_id,
                 "model": log.requested_model or "-",

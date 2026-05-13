@@ -1,7 +1,7 @@
 """ORM models for health_check_log, request_log, system_config, operation_log, user_balance, consumption_record."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, Date, func, UniqueConstraint,
+    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, Date, func, UniqueConstraint, Index,
 )
 
 from app.database import Base
@@ -26,6 +26,13 @@ class RequestLog(Base):
     """Request log entry."""
 
     __tablename__ = "request_log"
+    __table_args__ = (
+        Index("idx_request_log_agent_id_id", "agent_id", "id"),
+        Index("idx_request_log_user_id_id", "user_id", "id"),
+        Index("idx_request_log_requested_model_id", "requested_model", "id"),
+        Index("idx_request_log_status_id", "status", "id"),
+        Index("idx_request_log_created_at_id", "created_at", "id"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     request_id = Column(String(36), nullable=False, unique=True, comment="UUID")

@@ -547,7 +547,12 @@ CREATE TABLE `request_log` (
     KEY `idx_created_at` (`created_at`),
     KEY `idx_status` (`status`),
     KEY `idx_requested_model` (`requested_model`),
-    KEY `idx_conversation_session_id` (`conversation_session_id`)
+    KEY `idx_conversation_session_id` (`conversation_session_id`),
+    KEY `idx_request_log_agent_id_id` (`agent_id`, `id`),
+    KEY `idx_request_log_user_id_id` (`user_id`, `id`),
+    KEY `idx_request_log_requested_model_id` (`requested_model`, `id`),
+    KEY `idx_request_log_status_id` (`status`, `id`),
+    KEY `idx_request_log_created_at_id` (`created_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='请求日志表';
 
 -- ============================================================

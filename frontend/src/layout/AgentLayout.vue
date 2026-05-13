@@ -8,7 +8,7 @@
     >
       <div class="logo" :class="{ 'logo-collapsed': collapsed }">
         <div class="logo-icon-wrap">
-          <a-icon type="apartment" class="logo-icon" />
+          <img :src="require('@/assets/logo.png')" class="logo-img" alt="logo" />
         </div>
         <transition name="logo-text-fade">
           <span v-if="!collapsed" class="logo-text">代理控制台</span>
@@ -189,7 +189,7 @@ export default {
   background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3));
   border: 1px solid rgba(102, 126, 234, 0.2);
 }
-.logo-icon { color: #a8b8ff; font-size: 18px; }
+.logo-img { width: 24px; height: 24px; object-fit: contain; }
 .logo-text { color: #fff; font-weight: 700; letter-spacing: 0.8px; }
 .role-badge {
   display: flex;

@@ -10,7 +10,7 @@
       <!-- Logo 区域 -->
       <div class="logo" :class="{ 'logo-collapsed': collapsed }">
         <div class="logo-icon-wrap">
-          <a-icon type="thunderbolt" class="logo-icon" />
+          <img :src="require('@/assets/logo.png')" class="logo-img" alt="logo" />
         </div>
         <transition name="logo-text-fade">
           <span v-if="!collapsed" class="logo-text">AI 模型中转</span>
@@ -273,11 +273,10 @@ export default {
   }
 }
 
-.logo-icon {
-  font-size: 18px;
-  color: #a8b8ff !important;
-  -webkit-text-fill-color: #a8b8ff !important;
-  background: none !important;
+.logo-img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
 }
 
 .logo-text {

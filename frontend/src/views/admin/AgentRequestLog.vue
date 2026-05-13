@@ -104,13 +104,15 @@
               <span class="compact-expand-meta">输入价格 ${{ formatPrice(record.input_price_per_million_snapshot) }} / 1M tokens</span>
               <span class="compact-expand-meta">补全价格 ${{ formatPrice(record.output_price_per_million_snapshot) }} / 1M tokens</span>
               <span v-if="getBillableCacheReadTokens(record) > 0 || record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存读取价格 ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M tokens</span>
-              <span class="compact-expand-meta">专属倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
+              <span class="compact-expand-meta">基础价格倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
+              <span class="compact-expand-meta">综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
+              <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
             </div>
             <div class="compact-expand-line">
               <span class="compact-expand-label">计费过程</span>
-              <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
-              <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
-              <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(record.price_multiplier_snapshot) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+              <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+              <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+              <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
               <strong class="compact-expand-metric compact-expand-metric--total">总计 ${{ formatCurrency(record.total_cost || 0) }}</strong>
             </div>
@@ -167,6 +169,7 @@
             <div v-if="hasPromptCacheUsage(record)" class="cache-detail">
               <span v-if="getBillableCacheReadTokens(record) > 0" class="cache-chip cache-chip--hit">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} tok</span>
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cache-chip cache-chip--miss">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} tok</span>
+              <span v-if="isFastMode(record)" class="cache-chip cache-chip--token">Fast x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</span>
             </div>
           </div>
         </template>
@@ -191,11 +194,23 @@
         <template slot="total_cost" slot-scope="text, record">
           <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
           <div v-else-if="text != null && text > 0" class="cost-breakdown-cell">
-            <span class="cost-text">${{ formatCurrency(text) }}</span>
-            <span class="cost-breakdown-line">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(getEffectiveInputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.input_cost || 0) }}</span>
-            <span class="cost-breakdown-line">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(getEffectiveOutputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.output_cost || 0) }}</span>
-            <span v-if="getBillableCacheReadTokens(record) > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
-            <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cost-breakdown-line cost-breakdown-line--cache">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}，不额外计费</span>
+            <a-tooltip placement="left">
+              <template slot="title">
+                <div class="cost-tooltip-content">
+                  <div class="tooltip-line">输入: {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(getEffectiveInputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.input_cost || 0) }}</div>
+                  <div class="tooltip-line">输出: {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(getEffectiveOutputPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.output_cost || 0) }}</div>
+                  <div v-if="getBillableCacheReadTokens(record) > 0" class="tooltip-line cache">缓存: {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</div>
+                  <div v-if="record.upstream_cache_creation_input_tokens > 0" class="tooltip-line cache">缓存创建: {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} (FREE)</div>
+                  <div v-if="isFastMode(record)" class="tooltip-line fast">Fast 模式: x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</div>
+                </div>
+              </template>
+              <div class="price-container">
+                <span class="cost-text">${{ formatCurrency(text) }}</span>
+                <span class="billing-mode" :class="{ 'fast': isFastMode(record) }">
+                  {{ isFastMode(record) ? 'Fast' : '普通' }}
+                </span>
+              </div>
+            </a-tooltip>
           </div>
           <span v-else class="text-muted">$0.00</span>
         </template>
@@ -347,6 +362,7 @@
             <a-tag v-if="getBillableCacheReadTokens(selectedRecord) > 0" color="geekblue">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} tok</a-tag>
             <a-tag v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" color="cyan">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok</a-tag>
             <a-tag color="purple">计费输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }} tok</a-tag>
+            <a-tag v-if="isFastMode(selectedRecord)" color="volcano">Fast x{{ formatMultiplier(getFastPriceMultiplier(selectedRecord)) }}</a-tag>
           </div>
         </div>
 
@@ -357,12 +373,12 @@
               <div class="billing-price-card">
                 <span class="billing-price-label">输入单价</span>
                 <span class="billing-price-value">${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
-                <span class="billing-price-hint">/ 1M tokens × 价格倍率 {{ formatMultiplier(selectedRecord.price_multiplier_snapshot) }}</span>
+                <span class="billing-price-hint">/ 1M tokens × 综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(selectedRecord)) }}</span>
               </div>
               <div class="billing-price-card">
                 <span class="billing-price-label">输出单价</span>
                 <span class="billing-price-value">${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }}</span>
-                <span class="billing-price-hint">/ 1M tokens × 价格倍率 {{ formatMultiplier(selectedRecord.price_multiplier_snapshot) }}</span>
+                <span class="billing-price-hint">/ 1M tokens × 综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(selectedRecord)) }}</span>
               </div>
               <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-price-card">
                 <span class="billing-price-label">缓存读取单价</span>
@@ -371,6 +387,10 @@
               </div>
             </div>
             <div class="billing-formula-list">
+              <div v-if="isFastMode(selectedRecord)" class="billing-formula-row billing-formula-row--muted">
+                <span class="billing-formula-tag billing-formula-tag--muted">Fast</span>
+                <span class="billing-formula-text">service_tier={{ selectedRecord.service_tier || 'priority' }}，输入/输出/缓存读取价格按模型单价 x{{ formatMultiplier(getFastPriceMultiplier(selectedRecord)) }}</span>
+              </div>
               <div class="billing-formula-row">
                 <span class="billing-formula-tag">输入</span>
                 <span class="billing-formula-text">原始 {{ formatNumber(getRawInputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
@@ -608,14 +628,25 @@ export default {
       if (!Number.isFinite(num)) return '1'
       return num.toFixed(3).replace(/\.?0+$/, '')
     },
+    getFastPriceMultiplier(record) {
+      const num = Number(record && record.fast_price_multiplier_snapshot != null ? record.fast_price_multiplier_snapshot : 1)
+      if (!Number.isFinite(num) || num <= 0) return 1
+      return num
+    },
+    getEffectivePriceMultiplier(record) {
+      return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record)
+    },
+    isFastMode(record) {
+      return this.getFastPriceMultiplier(record) > 1 || String(record && record.service_tier || '') === 'priority'
+    },
     getCacheReadPricePerMillion(record) {
       return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
     },
     getEffectiveInputPricePerMillion(record) {
-      return Number(record && record.input_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+      return Number(record && record.input_price_per_million_snapshot || 0) * this.getEffectivePriceMultiplier(record)
     },
     getEffectiveOutputPricePerMillion(record) {
-      return Number(record && record.output_price_per_million_snapshot || 0) * Number(record && record.price_multiplier_snapshot || 1)
+      return Number(record && record.output_price_per_million_snapshot || 0) * this.getEffectivePriceMultiplier(record)
     },
     getEffectiveCacheReadPricePerMillion(record) {
       return this.getEffectiveInputPricePerMillion(record) * 0.1
@@ -948,6 +979,57 @@ export default {
     }
   }
 
+  .cost-text {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 14px;
+    color: #fa8c16;
+    font-weight: 700;
+    cursor: help;
+    border-bottom: 1px dotted rgba(250, 140, 22, 0.3);
+  }
+
+  .cost-breakdown-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    line-height: 1.25;
+
+    .price-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .billing-mode {
+      font-size: 10px;
+      color: #bfbfbf;
+      font-weight: 600;
+      &.fast { color: #fa8c16; background: rgba(250, 140, 22, 0.08); padding: 0 4px; border-radius: 4px; }
+    }
+
+    .fast-detail-tag {
+      font-weight: 600;
+      border: none;
+      border-radius: 4px;
+      line-height: 20px;
+      height: 20px;
+    }
+  }
+
+  .cost-tooltip-content {
+    padding: 4px;
+    .tooltip-line {
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: nowrap;
+      &.cache { color: #69c0ff; }
+      &.fast { color: #b37feb; font-weight: 600; }
+    }
+  }
+
+  /* ===== Response Time ===== */
+
   .image-credit-main,
   .image-credit-cost {
     color: #722ed1;
@@ -965,42 +1047,20 @@ export default {
     cursor: pointer;
   }
 
-  .response-time,
-  .cost-text {
+  .response-time {
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 13px;
     font-weight: 500;
-  }
 
-  .response-time--fast {
-    color: #52c41a;
-  }
-
-  .response-time--normal {
-    color: #fa8c16;
-  }
-
-  .response-time--slow,
-  .error-message-header {
-    color: #f5222d;
-  }
-
-  .response-time-unit {
-    font-size: 11px;
-    font-weight: 400;
-    opacity: 0.7;
-  }
-
-  .cost-text {
-    color: #fa8c16;
-  }
-
-  .cost-breakdown-cell {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-    line-height: 1.25;
+    &--fast { color: #52c41a; }
+    &--normal { color: #fa8c16; }
+    &--slow { color: #f5222d; }
+    
+    &-unit {
+      font-size: 11px;
+      font-weight: 400;
+      opacity: 0.7;
+    }
   }
 
   .cost-breakdown-line {

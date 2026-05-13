@@ -207,6 +207,8 @@ class BalanceService:
                 "input_price_per_million_snapshot": float(r.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
+                "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),
+                "service_tier": r.service_tier,
                 "token_multiplier_snapshot": float(r.token_multiplier_snapshot or 1),
                 "balance_before": float(r.balance_before),
                 "balance_after": float(r.balance_after),

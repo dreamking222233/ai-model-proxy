@@ -104,6 +104,9 @@ class ProxyService:
         "TaskGet",
         "TaskList",
     }
+    _RESPONSES_FAST_SERVICE_TIER = "priority"
+    _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
+    _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
 
     # ----- Model identity system prompt mapping -----
     _MODEL_VENDOR_MAP = [
@@ -352,6 +355,96 @@ class ProxyService:
             return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         except TypeError:
             return str(value)
+
+    @staticmethod
+    def _normalize_service_tier(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        return text or None
+
+    @staticmethod
+    def _build_text_billing_context(
+        protocol: str,
+        request_data: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        normalized_protocol = str(protocol or "").strip().lower()
+        service_tier = None
+        fast_price_multiplier = ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
+
+        if normalized_protocol == "responses" and isinstance(request_data, dict):
+            service_tier = ProxyService._normalize_service_tier(request_data.get("service_tier"))
+            if service_tier == ProxyService._RESPONSES_FAST_SERVICE_TIER:
+                fast_price_multiplier = ProxyService._RESPONSES_FAST_PRICE_MULTIPLIER
+
+        return {
+            "protocol": normalized_protocol,
+            "service_tier": service_tier,
+            "fast_price_multiplier": fast_price_multiplier,
+            "fast_mode_enabled": fast_price_multiplier > ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT,
+        }
+
+    @staticmethod
+    def _get_fast_price_multiplier_decimal(
+        billing_context: Optional[dict[str, Any]] = None,
+    ) -> Decimal:
+        context = billing_context or {}
+        value = context.get("fast_price_multiplier")
+        if isinstance(value, Decimal):
+            return value
+        if value is None or value == "":
+            return ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
+        try:
+            multiplier = Decimal(str(value))
+        except Exception:
+            return ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
+        if multiplier <= 0:
+            return ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
+        return multiplier
+
+    @staticmethod
+    def _log_responses_request_json(
+        stage: str,
+        request_id: str,
+        request_data: dict,
+        *,
+        requested_model: Optional[str] = None,
+        channel: Channel | None = None,
+        client_ip: Optional[str] = None,
+    ) -> None:
+        """Emit full Responses request JSON for Codex fast-mode inspection."""
+        enabled = os.getenv("RESPONSES_REQUEST_JSON_LOG", "1").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return
+
+        payload_json = ProxyService._stable_debug_dump(request_data)
+        summary = {
+            "keys": sorted(request_data.keys()),
+            "model": request_data.get("model"),
+            "service_tier": request_data.get("service_tier"),
+            "reasoning": ProxyService._compact_for_debug_log(request_data.get("reasoning")),
+            "text": ProxyService._compact_for_debug_log(request_data.get("text")),
+            "include": ProxyService._compact_for_debug_log(request_data.get("include")),
+            "stream": request_data.get("stream"),
+            "store": request_data.get("store"),
+            "tool_choice": ProxyService._compact_for_debug_log(request_data.get("tool_choice")),
+            "parallel_tool_calls": request_data.get("parallel_tool_calls"),
+        }
+        logger.info(
+            "Responses request json stage=%s request_id=%s requested_model=%s actual_model=%s "
+            "channel=%s channel_id=%s client_ip=%s size_chars=%s summary=%s payload=%s",
+            stage,
+            request_id,
+            requested_model,
+            ProxyService._public_actual_model_name(
+                requested_model,
+                request_data.get("model"),
+            ),
+            channel.name if channel else None,
+            channel.id if channel else None,
+            client_ip,
+            len(payload_json),
+            json.dumps(summary, ensure_ascii=False),
+            payload_json,
+        )
 
     @staticmethod
     def _debug_hash(value: Any) -> str:
@@ -1139,19 +1232,24 @@ class ProxyService:
 
         if unified_model is not None and estimated_output_tokens is not None:
             price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+            billing_context = ProxyService._build_text_billing_context(protocol, request_data)
+            fast_price_multiplier = ProxyService._get_fast_price_multiplier_decimal(billing_context)
+            effective_price_multiplier = price_multiplier * fast_price_multiplier
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
             estimated_input_cost = (
                 Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
-            ) * input_price * price_multiplier
+            ) * input_price * effective_price_multiplier
             estimated_output_cost = (
                 Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")
-            ) * output_price * price_multiplier
+            ) * output_price * effective_price_multiplier
             quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
             quota_precheck["estimated_quota_cost"] = (
-                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price
-                + (Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")) * output_price
+                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price * fast_price_multiplier
+                + (Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")) * output_price * fast_price_multiplier
             )
+            quota_precheck["service_tier"] = billing_context.get("service_tier")
+            quota_precheck["fast_price_multiplier_snapshot"] = fast_price_multiplier
 
         return quota_precheck
 
@@ -2849,6 +2947,14 @@ class ProxyService:
         requested_model = str(client_request.get("model", "") or "")
         is_stream = bool(client_request.get("stream", True))
         client_request["stream"] = is_stream
+        request_billing_context = ProxyService._build_text_billing_context("responses", client_request)
+        ProxyService._log_responses_request_json(
+            "incoming",
+            request_id,
+            client_request,
+            requested_model=requested_model,
+            client_ip=client_ip,
+        )
 
         # Inject model identity system prompt
         ProxyService._inject_model_identity(client_request, requested_model, "responses")
@@ -2891,6 +2997,14 @@ class ProxyService:
                 channel_request = ProxyService._prepare_responses_request_body(
                     upstream_model_name,
                     channel_request,
+                )
+                ProxyService._log_responses_request_json(
+                    "prepared",
+                    request_id,
+                    channel_request,
+                    requested_model=requested_model,
+                    channel=channel,
+                    client_ip=client_ip,
                 )
 
                 if is_stream:
@@ -2955,6 +3069,7 @@ class ProxyService:
             db, user, api_key_record, request_id, requested_model,
             client_ip, is_stream, error_detail,
             cache_info=request_cache_info,
+            billing_context=request_billing_context,
         )
         if request_error:
             raise request_error
@@ -2994,6 +3109,14 @@ class ProxyService:
                 ))
                 continue
 
+            ProxyService._log_responses_request_json(
+                "websocket_incoming",
+                request_id,
+                incoming_request,
+                requested_model=str(incoming_request.get("model", "") or ""),
+                client_ip=client_ip,
+            )
+
             try:
                 normalized_request, state_request, is_prewarm = (
                     ProxyService._normalize_responses_websocket_request(
@@ -3025,6 +3148,13 @@ class ProxyService:
 
             # Inject model identity system prompt for websocket requests
             ProxyService._inject_model_identity(normalized_request, requested_model, "responses")
+            ProxyService._log_responses_request_json(
+                "websocket_normalized",
+                request_id,
+                normalized_request,
+                requested_model=requested_model,
+                client_ip=client_ip,
+            )
 
             try:
                 unified_model, channels = ProxyService._prepare_responses_request_context(
@@ -3060,6 +3190,15 @@ class ProxyService:
                 channel_request = ProxyService._prepare_responses_request_body(
                     upstream_model_name,
                     channel_request,
+                )
+                billing_context = ProxyService._build_text_billing_context("responses", channel_request)
+                ProxyService._log_responses_request_json(
+                    "websocket_prepared",
+                    request_id,
+                    channel_request,
+                    requested_model=requested_model,
+                    channel=channel,
+                    client_ip=client_ip,
                 )
                 cache_info = None
                 last_cache_info = cache_info
@@ -3097,6 +3236,7 @@ class ProxyService:
                         actual_model=channel_request.get("model"),
                         cache_info=cache_info,
                         request_type="responses",
+                        billing_context=billing_context,
                     )
                     last_response_output = completed_output
                     turn_completed = True
@@ -3118,6 +3258,7 @@ class ProxyService:
                             client_ip, True, str(exc), channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=cache_info,
+                            billing_context=billing_context,
                         )
                         return
                     continue
@@ -3134,6 +3275,7 @@ class ProxyService:
                         client_ip, True, str(exc), channel=channel,
                         response_time_ms=response_time_ms,
                         cache_info=cache_info,
+                        billing_context=billing_context,
                     )
                     return
 
@@ -3145,6 +3287,7 @@ class ProxyService:
                 db, user, api_key_record, request_id, requested_model,
                 client_ip, True, error_detail,
                 cache_info=last_cache_info,
+                billing_context=ProxyService._build_text_billing_context("responses", normalized_request),
             )
             await websocket.send_text(json.dumps(
                 ProxyService._build_responses_error_payload(
@@ -3475,6 +3618,7 @@ class ProxyService:
         release_session_connection(db)
         start_time = time.time()
         model_name = request_data.get("model", requested_model)
+        billing_context = ProxyService._build_text_billing_context("responses", request_data)
 
         billing_input_tokens = 0
         billing_output_tokens = 0
@@ -3646,6 +3790,7 @@ class ProxyService:
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
+                            billing_context=billing_context,
                         )
                     else:
                         stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
@@ -3669,6 +3814,7 @@ class ProxyService:
                             actual_model=request_data.get("model"),
                             cache_info=stream_cache_info,
                             request_type="responses",
+                            billing_context=billing_context,
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
@@ -4036,6 +4182,7 @@ class ProxyService:
         """Forward a non-streaming Responses request to upstream ``/responses``."""
         release_session_connection(db)
         start_time = time.time()
+        billing_context = ProxyService._build_text_billing_context("responses", request_data)
         base_url = channel.base_url.rstrip("/")
         url = f"{base_url}/responses"
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
@@ -4131,6 +4278,7 @@ class ProxyService:
             cache_info=cache_info,
             request_type="responses",
             raise_on_failure=True,
+            billing_context=billing_context,
         )
 
         response_headers = {"X-Request-ID": request_id}
@@ -7768,6 +7916,7 @@ class ProxyService:
         actual_model: Optional[str] = None,
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> None:
         """Run local accounting with limited retries for transient DB lock conflicts."""
         for attempt in range(1, _ACCOUNTING_RETRY_ATTEMPTS + 1):
@@ -7789,6 +7938,7 @@ class ProxyService:
                     actual_model=actual_model,
                     cache_info=cache_info,
                     conversation_state_info=conversation_state_info,
+                    billing_context=billing_context,
                 )
                 return
             except Exception as exc:
@@ -7824,6 +7974,7 @@ class ProxyService:
         actual_model: Optional[str] = None,
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> None:
         """
         Calculate cost, deduct from user balance (for balance mode) or just record usage (for unlimited mode),
@@ -7865,27 +8016,36 @@ class ProxyService:
             total_tokens = input_tokens + output_tokens + cache_read_input_tokens
 
             price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
+            service_tier = ProxyService._normalize_service_tier(
+                (billing_context or {}).get("service_tier")
+            )
+            fast_price_multiplier_decimal = ProxyService._get_fast_price_multiplier_decimal(
+                billing_context
+            )
+            effective_price_multiplier_decimal = (
+                Decimal(str(price_multiplier)) * fast_price_multiplier_decimal
+            )
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
             price_multiplier_decimal = Decimal(str(price_multiplier))
             input_cost_decimal = (
                 Decimal(str(input_tokens)) / Decimal("1000000")
-            ) * input_price * price_multiplier_decimal
+            ) * input_price * effective_price_multiplier_decimal
             cache_read_cost_decimal = (
                 Decimal(str(cache_read_input_tokens)) / Decimal("1000000")
-            ) * input_price * Decimal("0.1") * price_multiplier_decimal
+            ) * input_price * Decimal("0.1") * effective_price_multiplier_decimal
             output_cost_decimal = (
                 Decimal(str(output_tokens)) / Decimal("1000000")
-            ) * output_price * price_multiplier_decimal
+            ) * output_price * effective_price_multiplier_decimal
             total_cost_decimal = input_cost_decimal + cache_read_cost_decimal + output_cost_decimal
             input_cost = float(input_cost_decimal)
             cache_read_cost = float(cache_read_cost_decimal)
             output_cost = float(output_cost_decimal)
             total_cost = float(total_cost_decimal)
             quota_cost_decimal = (
-                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price
-                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1")
-                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price
+                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * fast_price_multiplier_decimal
+                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * fast_price_multiplier_decimal
+                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * fast_price_multiplier_decimal
             )
             quota_cost = float(quota_cost_decimal)
 
@@ -8008,7 +8168,9 @@ class ProxyService:
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
+                    fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
                     token_multiplier_snapshot=token_multiplier_decimal,
+                    service_tier=service_tier,
                     balance_before=Decimal(str(balance_before)),
                     balance_after=Decimal(str(balance_after)),
                     billing_mode=billing_mode,
@@ -8089,7 +8251,9 @@ class ProxyService:
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
+                    fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
                     token_multiplier_snapshot=token_multiplier_decimal,
+                    service_tier=service_tier,
                 )
             )
 
@@ -8195,6 +8359,7 @@ class ProxyService:
         request_type: str = "chat",
         fallback_billing_type: Optional[str] = None,
         raise_on_failure: bool = False,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> None:
         ProxyService._record_success(db, channel)
         try:
@@ -8215,6 +8380,7 @@ class ProxyService:
                 actual_model=actual_model,
                 cache_info=cache_info,
                 conversation_state_info=conversation_state_info,
+                billing_context=billing_context,
             )
         except Exception as exc:
             logger.error(
@@ -8246,6 +8412,7 @@ class ProxyService:
                 raw_input_tokens=input_tokens,
                 raw_output_tokens=output_tokens,
                 raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+                billing_context=billing_context,
             )
             if (
                 raise_on_failure
@@ -8285,6 +8452,7 @@ class ProxyService:
         image_credits_charged: Decimal | int | float = Decimal("0"),
         image_count: int = 0,
         image_size: Optional[str] = None,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Log a failed request without deducting balance."""
         try:
@@ -8294,6 +8462,12 @@ class ProxyService:
                 user_id = ProxyService._safe_object_id(user)
                 api_key_id = ProxyService._safe_object_id(api_key_record)
                 cache_log_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+                service_tier = ProxyService._normalize_service_tier(
+                    (billing_context or {}).get("service_tier")
+                )
+                fast_price_multiplier = ProxyService._get_fast_price_multiplier_decimal(
+                    billing_context
+                )
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
@@ -8347,6 +8521,8 @@ class ProxyService:
                         compression_fallback_reason=cache_log_fields["compression_fallback_reason"],
                         upstream_session_mode=cache_log_fields["upstream_session_mode"],
                         upstream_session_id=cache_log_fields["upstream_session_id"],
+                        service_tier=service_tier,
+                        fast_price_multiplier_snapshot=fast_price_multiplier,
                         status="error",
                         error_message=error_message[:2000] if error_message else None,
                         client_ip=client_ip,

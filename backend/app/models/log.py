@@ -87,10 +87,12 @@ class RequestLog(Base):
     quota_limit_snapshot = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_cycle_date = Column(Date, nullable=True)
+    service_tier = Column(String(32), nullable=True, comment="Responses service tier snapshot")
     cache_read_cost = Column(DECIMAL(12, 6), nullable=True, default=0)
     input_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     output_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    fast_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     token_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
@@ -194,6 +196,7 @@ class ConsumptionRecord(Base):
     input_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     output_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    fast_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     token_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     balance_before = Column(DECIMAL(12, 6), nullable=False, default=0)
     balance_after = Column(DECIMAL(12, 6), nullable=False, default=0)
@@ -205,6 +208,7 @@ class ConsumptionRecord(Base):
     quota_limit_snapshot = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_cycle_date = Column(Date, nullable=True)
+    service_tier = Column(String(32), nullable=True, comment="Responses service tier snapshot")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

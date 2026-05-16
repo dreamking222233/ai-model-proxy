@@ -35,6 +35,12 @@ from app.models.log import (
     SubscriptionUsageCycle,
 )
 from app.models.redemption import RedemptionCode
+from app.models.payment import (
+    PaymentRechargeOrder,
+    AgentCashBalance,
+    AgentCashLedger,
+    AgentCashWithdrawal,
+)
 
 __all__ = [
     "SysUser",
@@ -72,4 +78,8 @@ __all__ = [
     "SubscriptionPlan",
     "SubscriptionUsageCycle",
     "RedemptionCode",
+    "PaymentRechargeOrder",
+    "AgentCashBalance",
+    "AgentCashLedger",
+    "AgentCashWithdrawal",
 ]

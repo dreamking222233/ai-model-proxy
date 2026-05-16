@@ -15,7 +15,7 @@
             </div>
           </div>
           <div class="wallet-actions">
-            <a-button type="primary" class="topup-btn" @click="$router.push('/user/redemption')">
+            <a-button v-if="onlineRechargeEnabled" type="primary" class="topup-btn" @click="$router.push('/user/recharge')">
               <a-icon type="plus-circle" /> 立即充值
             </a-button>
           </div>
@@ -294,7 +294,7 @@
 </template>
 
 <script>
-import { getUsageLogs, getProfile, getModelUsageStats } from '@/api/user'
+import { getUsageLogs, getProfile, getModelUsageStats, getSiteConfig } from '@/api/user'
 import { formatDate as formatLocalDate } from '@/utils'
 
 export default {
@@ -305,6 +305,7 @@ export default {
       logs: [],
       dateRange: [],
       statusFilter: undefined,
+      siteConfig: {},
       userInfo: { balance: 0, image_credit_balance: 0 },
       summary: {
         total_requests: 0,
@@ -338,6 +339,9 @@ export default {
     },
     subscriptionSummary() {
       return this.userInfo.subscription_summary || {}
+    },
+    onlineRechargeEnabled() {
+      return Boolean(this.siteConfig.online_recharge_enabled)
     }
   },
   created() {
@@ -348,6 +352,15 @@ export default {
       this.fetchLogs()
       this.fetchSummary()
       this.fetchProfile()
+      this.fetchSiteConfig()
+    },
+    async fetchSiteConfig() {
+      try {
+        const res = await getSiteConfig()
+        this.siteConfig = res.data || {}
+      } catch (err) {
+        this.siteConfig = {}
+      }
     },
     onFilterChange() {
       this.pagination.current = 1

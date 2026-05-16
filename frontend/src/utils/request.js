@@ -14,6 +14,9 @@ service.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`
     }
+    if (typeof window !== 'undefined' && window.location) {
+      config.headers['X-Site-Host'] = window.location.host
+    }
     return config
   },
   error => {
@@ -36,6 +39,14 @@ service.interceptors.response.use(
   },
   error => {
     console.error('Response error:', error)
+    const payload = error?.response?.data
+    if (payload && typeof payload === 'object') {
+      const normalizedError = new Error(payload.message || error.message || 'Error')
+      normalizedError.code = payload.code
+      normalizedError.payload = payload
+      normalizedError.status = error?.response?.status
+      return Promise.reject(normalizedError)
+    }
     return Promise.reject(error)
   }
 )

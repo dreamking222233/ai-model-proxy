@@ -8,6 +8,9 @@
       <template slot="status" slot-scope="text">
         <a-tag :color="text === 'active' ? 'green' : 'red'">{{ text === 'active' ? '启用' : '停用' }}</a-tag>
       </template>
+      <template slot="onlineRecharge" slot-scope="text">
+        <a-tag :color="text ? 'green' : 'default'">{{ text ? '开启' : '关闭' }}</a-tag>
+      </template>
       <template slot="balance" slot-scope="text">
         $ {{ Number(text || 0).toFixed(4) }}
       </template>
@@ -42,6 +45,9 @@
         <a-form-model-item label="允许注册">
           <a-switch v-model="allowRegisterBool" />
         </a-form-model-item>
+        <a-form-model-item label="在线充值">
+          <a-switch v-model="onlineRechargeBool" />
+        </a-form-model-item>
       </a-form-model>
     </a-modal>
 
@@ -75,7 +81,8 @@ export default {
         owner_email: '',
         owner_password: '',
         site_title: '',
-        allow_self_register: 1
+        allow_self_register: 1,
+        online_recharge_enabled: 1
       },
       columns: [
         { title: '代理编码', dataIndex: 'agent_code', key: 'agent_code' },
@@ -83,6 +90,7 @@ export default {
         { title: '前台域名', dataIndex: 'frontend_domain', key: 'frontend_domain' },
         { title: 'API 接入地址', dataIndex: 'quickstart_api_base_url', key: 'quickstart_api_base_url', scopedSlots: { customRender: 'apiBaseUrl' } },
         { title: '状态', dataIndex: 'status', key: 'status', scopedSlots: { customRender: 'status' } },
+        { title: '在线充值', dataIndex: 'online_recharge_enabled', key: 'online_recharge_enabled', scopedSlots: { customRender: 'onlineRecharge' } },
         { title: '余额池', dataIndex: 'balance', key: 'balance', scopedSlots: { customRender: 'balance' } },
         { title: '图片积分池', dataIndex: 'image_credit_balance', key: 'image_credit_balance', scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '操作', key: 'action', scopedSlots: { customRender: 'action' } }
@@ -96,6 +104,14 @@ export default {
       },
       set(val) {
         this.form.allow_self_register = val ? 1 : 0
+      }
+    },
+    onlineRechargeBool: {
+      get() {
+        return this.form.online_recharge_enabled === 1
+      },
+      set(val) {
+        this.form.online_recharge_enabled = val ? 1 : 0
       }
     }
   },
@@ -133,7 +149,8 @@ export default {
         owner_email: '',
         owner_password: '',
         site_title: '',
-        allow_self_register: 1
+        allow_self_register: 1,
+        online_recharge_enabled: 1
       }
       this.modalVisible = true
     },
@@ -144,7 +161,8 @@ export default {
         agent_name: record.agent_name,
         frontend_domain: record.frontend_domain,
         site_title: record.site_title,
-        allow_self_register: record.allow_self_register ? 1 : 0
+        allow_self_register: record.allow_self_register ? 1 : 0,
+        online_recharge_enabled: record.online_recharge_enabled ? 1 : 0
       }
       this.modalVisible = true
     },

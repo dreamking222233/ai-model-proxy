@@ -50,6 +50,10 @@
             <a-icon type="gift" />
             <span>兑换码充值</span>
           </a-menu-item>
+          <a-menu-item v-if="showRechargeMenu" key="/user/recharge">
+            <a-icon type="wallet" />
+            <span>在线充值</span>
+          </a-menu-item>
           <a-menu-item key="/user/models">
             <a-icon type="appstore" />
             <span>模型列表</span>
@@ -142,6 +146,9 @@ export default {
     },
     siteName() {
       return this.siteConfig.site_name || 'AI 模型中转'
+    },
+    showRechargeMenu() {
+      return Boolean(this.siteConfig.online_recharge_enabled)
     },
     isFullscreen() {
       return this.$route.meta && this.$route.meta.fullscreen === true

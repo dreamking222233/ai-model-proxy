@@ -27,6 +27,7 @@ class Agent(Base):
     support_qq = Column(String(64), nullable=True)
     quickstart_api_base_url = Column(String(512), nullable=True)
     allow_self_register = Column(SmallInteger, nullable=False, default=1)
+    online_recharge_enabled = Column(SmallInteger, nullable=False, default=1)
     theme_config_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

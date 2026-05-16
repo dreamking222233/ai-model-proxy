@@ -28,6 +28,8 @@ class AgentSiteContext:
     agent: Optional[Agent] = None
     request_host: str = ""
     resolved_from: str = "host"
+    origin_url: str = ""
+    referer_url: str = ""
 
     @property
     def agent_id(self) -> Optional[int]:
@@ -154,12 +156,21 @@ class AgentService:
             "support_qq": agent.support_qq,
             "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
             "allow_self_register": bool(agent.allow_self_register),
+            "online_recharge_enabled": bool(agent.online_recharge_enabled),
             "theme_config_json": agent.theme_config_json,
             "balance": float(balance.balance) if balance else 0.0,
             "image_credit_balance": float(image_balance.balance) if image_balance else 0.0,
             "created_at": agent.created_at.isoformat() if agent.created_at else None,
             "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
         }
+
+    @staticmethod
+    def is_online_recharge_enabled(context: AgentSiteContext) -> bool:
+        if not bool(settings.ALIPAY_ENABLED):
+            return False
+        if context.site_scope != "agent" or not context.agent:
+            return True
+        return bool(getattr(context.agent, "online_recharge_enabled", 1))
 
     @staticmethod
     def get_site_context(
@@ -198,6 +209,8 @@ class AgentService:
                 agent=agent,
                 request_host=request_host,
                 resolved_from=resolved_from,
+                origin_url=str(origin or "").strip(),
+                referer_url=str(referer or "").strip(),
             )
 
         effective_host = resolved_host or request_host
@@ -208,6 +221,8 @@ class AgentService:
             agent=None,
             request_host=request_host,
             resolved_from=resolved_from,
+            origin_url=str(origin or "").strip(),
+            referer_url=str(referer or "").strip(),
         )
 
     @staticmethod
@@ -248,6 +263,7 @@ class AgentService:
                 "support_qq": agent.support_qq or "",
                 "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
                 "allow_register": bool(agent.allow_self_register),
+                "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
                 "theme_config": agent.theme_config_json,
                 "frontend_domain": agent.frontend_domain,
                 "api_domain": agent.api_domain,
@@ -266,6 +282,7 @@ class AgentService:
             "support_qq": config_map["platform_support_qq"],
             "quickstart_api_base_url": config_map["api_base_url"],
             "allow_register": str(config_map["platform_allow_register"]).lower() in {"1", "true", "yes"},
+            "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
             "theme_config": None,
             "frontend_domain": None,
             "api_domain": None,
@@ -436,6 +453,7 @@ class AgentService:
             support_qq=payload.get("support_qq"),
             quickstart_api_base_url=payload.get("quickstart_api_base_url") or AgentService.get_shared_api_base_url(),
             allow_self_register=int(payload.get("allow_self_register", 1)),
+            online_recharge_enabled=int(payload.get("online_recharge_enabled", 1)),
             theme_config_json=payload.get("theme_config_json"),
         )
         db.add(agent)
@@ -522,6 +540,8 @@ class AgentService:
 
         if "allow_self_register" in payload and payload["allow_self_register"] is not None:
             agent.allow_self_register = int(payload["allow_self_register"])
+        if "online_recharge_enabled" in payload and payload["online_recharge_enabled"] is not None:
+            agent.online_recharge_enabled = int(payload["online_recharge_enabled"])
 
         if "owner_user_id" in payload and payload.get("owner_user_id") is not None:
             owner = db.query(SysUser).filter(SysUser.id == payload["owner_user_id"]).first()

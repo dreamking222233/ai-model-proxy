@@ -17,7 +17,9 @@ import app.models  # noqa: F401
 # Import routers
 from app.api.auth import router as auth_router
 from app.api.public.site import router as public_site_router
+from app.api.public.payment import router as public_payment_router
 from app.api.admin.agent import router as admin_agent_router
+from app.api.admin.payment import router as admin_payment_router
 from app.api.admin.channel import router as admin_channel_router
 from app.api.admin.model import router as admin_model_router
 from app.api.admin.user import router as admin_user_router
@@ -28,11 +30,13 @@ from app.api.admin.redemption import router as admin_redemption_router
 from app.api.admin.subscription import router as admin_subscription_router
 from app.api.user.api_key import router as user_api_key_router
 from app.api.user.balance import router as user_balance_router
+from app.api.user.payment import router as user_payment_router
 from app.api.user.profile import router as user_profile_router
 from app.api.user.models import router as user_models_router
 from app.api.user.stats import router as user_stats_router
 from app.api.user.redemption import router as user_redemption_router
 from app.api.agent.user import router as agent_user_router
+from app.api.agent.payment import router as agent_payment_router
 from app.api.agent.log import router as agent_log_router
 from app.api.agent.stats import router as agent_stats_router
 from app.api.agent.system import router as agent_system_router
@@ -114,6 +118,7 @@ register_exception_handlers(app)
 # Register routers - Auth
 app.include_router(auth_router)
 app.include_router(public_site_router)
+app.include_router(public_payment_router)
 
 # Register routers - Admin
 app.include_router(admin_channel_router)
@@ -125,10 +130,12 @@ app.include_router(admin_health_router)
 app.include_router(admin_system_router)
 app.include_router(admin_redemption_router)
 app.include_router(admin_subscription_router)
+app.include_router(admin_payment_router)
 
 # Register routers - User
 app.include_router(user_api_key_router)
 app.include_router(user_balance_router)
+app.include_router(user_payment_router)
 app.include_router(user_profile_router)
 app.include_router(user_models_router)
 app.include_router(user_stats_router)
@@ -136,6 +143,7 @@ app.include_router(user_redemption_router)
 
 # Register routers - Agent
 app.include_router(agent_user_router)
+app.include_router(agent_payment_router)
 app.include_router(agent_log_router)
 app.include_router(agent_stats_router)
 app.include_router(agent_system_router)

@@ -56,6 +56,10 @@
             <a-icon type="trophy" />
             <span>使用排行</span>
           </a-menu-item>
+          <a-menu-item key="/agent/payments">
+            <a-icon type="wallet" />
+            <span>充值记录</span>
+          </a-menu-item>
           <a-menu-item key="/agent/system">
             <a-icon type="setting" />
             <span>系统管理</span>

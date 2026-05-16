@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import secrets
+from decimal import Decimal
+from pathlib import Path
 from typing import List
 
 from pydantic_settings import BaseSettings
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Settings(BaseSettings):
@@ -71,8 +76,21 @@ class Settings(BaseSettings):
     PLATFORM_SUPPORT_QQ: str = "2222006406"
     PLATFORM_ALLOW_REGISTER: bool = True
 
+    # Alipay payment
+    ALIPAY_ENABLED: bool = False
+    ALIPAY_SERVER_URL: str = "https://openapi.alipay.com/gateway.do"
+    ALIPAY_APP_ID: str = ""
+    ALIPAY_APP_PRIVATE_KEY: str = ""
+    ALIPAY_PUBLIC_KEY: str = ""
+    ALIPAY_SIGN_TYPE: str = "RSA2"
+    ALIPAY_NOTIFY_URL: str = ""
+    ALIPAY_RETURN_PATH: str = "/user/recharge"
+    PAYMENT_PUBLIC_BASE_URL: str = "https://api.xiaoleai.team"
+    RECHARGE_USER_CNY_TO_USD_RATE: Decimal = Decimal("5")
+    RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE: Decimal = Decimal("10")
+
     class Config:
-        env_file = ".env"
+        env_file = str(BACKEND_ROOT / ".env")
         env_file_encoding = "utf-8"
 
 

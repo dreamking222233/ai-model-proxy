@@ -81,6 +81,12 @@ const routes = [
         meta: { title: '代理结算' }
       },
       {
+        path: 'agent-cash',
+        name: 'AgentCashManage',
+        component: () => import('@/views/admin/AgentCashManage.vue'),
+        meta: { title: '代理提现' }
+      },
+      {
         path: 'logs',
         name: 'RequestLog',
         component: () => import('@/views/admin/RequestLog.vue'),
@@ -201,6 +207,12 @@ const routes = [
         meta: { title: '兑换码充值' }
       },
       {
+        path: 'recharge',
+        name: 'Recharge',
+        component: () => import('@/views/user/Recharge.vue'),
+        meta: { title: '在线充值' }
+      },
+      {
         path: 'profile',
         name: 'UserProfile',
         component: () => import('@/views/user/Profile.vue'),
@@ -258,6 +270,12 @@ const routes = [
         name: 'AgentUsageRanking',
         component: () => import('@/views/agent/UsageRanking.vue'),
         meta: { title: '使用排行' }
+      },
+      {
+        path: 'payments',
+        name: 'AgentPaymentManage',
+        component: () => import('@/views/agent/PaymentManage.vue'),
+        meta: { title: '充值记录' }
       },
       {
         path: 'system',

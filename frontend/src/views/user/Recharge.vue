@@ -255,7 +255,6 @@ export default {
       autoSyncRemaining: 0,
       userBalance: 0,
       pricingPackages: [
-        { amount: 1, popular: false },
         { amount: 10, popular: false },
         { amount: 20, popular: false },
         { amount: 50, popular: true },
@@ -263,9 +262,9 @@ export default {
         { amount: 200, popular: false },
         { amount: 500, popular: false }
       ],
-      quickAmounts: [1, 10, 20, 50, 100, 200, 500],
+      quickAmounts: [10, 20, 50, 100, 200, 500],
       form: {
-        amount_cny: 1
+        amount_cny: 10
       },
 
       currentOrder: {},

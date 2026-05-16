@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 class UserRechargeOrderCreateRequest(BaseModel):
     """Create online recharge order request."""
 
-    amount_cny: Decimal = Field(..., gt=0)
+    amount_cny: Decimal = Field(..., ge=1)
 
 
 class AgentCashAdjustRequest(BaseModel):

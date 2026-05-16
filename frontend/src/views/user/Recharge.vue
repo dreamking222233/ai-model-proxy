@@ -89,7 +89,7 @@
                 <span class="prefix">￥</span>
                 <a-input-number
                   v-model="form.amount_cny"
-                  :min="0.01"
+                  :min="1"
                   :step="0.01"
                   :precision="2"
                   placeholder="0.00"
@@ -255,7 +255,7 @@ export default {
       autoSyncRemaining: 0,
       userBalance: 0,
       pricingPackages: [
-        { amount: 0.01, popular: false },
+        { amount: 1, popular: false },
         { amount: 10, popular: false },
         { amount: 20, popular: false },
         { amount: 50, popular: true },
@@ -263,9 +263,9 @@ export default {
         { amount: 200, popular: false },
         { amount: 500, popular: false }
       ],
-      quickAmounts: [0.01, 10, 20, 50, 100, 200, 500],
+      quickAmounts: [1, 10, 20, 50, 100, 200, 500],
       form: {
-        amount_cny: 0.01
+        amount_cny: 1
       },
 
       currentOrder: {},
@@ -403,8 +403,8 @@ export default {
         return
       }
       const amount = Number(this.form.amount_cny || 0)
-      if (amount <= 0) {
-        this.$message.warning('请输入有效的充值金额')
+      if (amount < 1) {
+        this.$message.warning('充值金额最低为 1 元')
         return
       }
       this.creating = true

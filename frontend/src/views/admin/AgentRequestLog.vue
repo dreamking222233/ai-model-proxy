@@ -175,7 +175,7 @@
         </template>
 
         <template slot="status" slot-scope="text, record">
-          <div class="status-cell" @click.stop="toggleExpandedRow(record)">
+          <div class="status-cell" @click.stop="openDetail(record)">
             <a-badge v-if="text === 'success'" status="success" text="成功" />
             <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
             <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
@@ -232,7 +232,7 @@
       </a-table>
     </div>
 
-    <a-modal v-if="false"
+    <a-modal
       v-model="detailVisible"
       title="代理请求详情"
       :width="980"

@@ -329,7 +329,7 @@
         </template>
 
         <template slot="status" slot-scope="text, record">
-          <div style="cursor: pointer;" @click.stop="toggleExpandedRow(record)">
+          <div style="cursor: pointer;" @click.stop="handleStatusClick(record)">
             <a-badge v-if="text === 'success'" status="success" text="成功" />
             <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
             <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
@@ -358,7 +358,7 @@
     </div>
 
     <!-- Error Detail Modal -->
-    <a-modal v-if="false"
+    <a-modal
       v-model="errorModalVisible"
       :title="errorModalTitle"
       :width="980"

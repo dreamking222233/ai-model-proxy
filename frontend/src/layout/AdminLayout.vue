@@ -68,6 +68,10 @@
             <a-icon type="wallet" />
             <span>代理提现</span>
           </a-menu-item>
+          <a-menu-item key="/admin/payment-orders">
+            <a-icon type="transaction" />
+            <span>支付明细</span>
+          </a-menu-item>
           <a-menu-item key="/admin/redemption">
             <a-icon type="gift" />
             <span>兑换码管理</span>

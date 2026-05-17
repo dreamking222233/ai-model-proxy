@@ -87,6 +87,12 @@ const routes = [
         meta: { title: '代理提现' }
       },
       {
+        path: 'payment-orders',
+        name: 'PaymentOrderManage',
+        component: () => import('@/views/admin/PaymentOrderManage.vue'),
+        meta: { title: '支付明细' }
+      },
+      {
         path: 'logs',
         name: 'RequestLog',
         component: () => import('@/views/admin/RequestLog.vue'),

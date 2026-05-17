@@ -46,6 +46,14 @@ export function listAdminAgentCashOrders(params) {
   })
 }
 
+export function listAdminPaymentOrders(params) {
+  return request({
+    url: '/api/admin/payments/agent-cash/orders',
+    method: 'get',
+    params
+  })
+}
+
 export function listAdminAgentCashWithdrawals(params) {
   return request({
     url: '/api/admin/payments/agent-cash/withdrawals',

@@ -32,10 +32,23 @@ def list_agent_cash_orders(
     agent_id: int = Query(None),
     user_id: int = Query(None),
     status: str = Query(None),
+    payment_channel: str = Query(None),
+    site_scope: str = Query(None),
+    keyword: str = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
-    items, total = AgentCashService.list_recharge_orders(db, page, page_size, agent_id, user_id, status)
+    items, total = AgentCashService.list_recharge_orders(
+        db,
+        page,
+        page_size,
+        agent_id,
+        user_id,
+        status,
+        payment_channel,
+        site_scope,
+        keyword,
+    )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 

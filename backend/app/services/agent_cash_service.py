@@ -53,6 +53,7 @@ class AgentCashService:
 
     @staticmethod
     def _serialize_order(order: PaymentRechargeOrder, user: SysUser | None = None, agent: Agent | None = None) -> dict:
+        customer_type = "agent" if order.agent_id else "platform"
         return {
             "id": order.id,
             "order_no": order.order_no,
@@ -63,6 +64,9 @@ class AgentCashService:
             "site_scope": order.site_scope,
             "source_host": order.source_host,
             "payment_channel": order.payment_channel,
+            "payment_channel_text": {"alipay": "支付宝", "wechat": "微信"}.get(order.payment_channel, order.payment_channel or "-"),
+            "customer_type": customer_type,
+            "customer_type_text": "代理客户" if customer_type == "agent" else "直属用户",
             "amount_cny": float(order.amount_cny or 0),
             "credited_usd": float(order.credited_usd or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
@@ -206,6 +210,9 @@ class AgentCashService:
         agent_id: int | None = None,
         user_id: int | None = None,
         status: str | None = None,
+        payment_channel: str | None = None,
+        site_scope: str | None = None,
+        keyword: str | None = None,
     ) -> tuple[list[dict], int]:
         query = db.query(PaymentRechargeOrder)
         if agent_id is not None:
@@ -214,6 +221,45 @@ class AgentCashService:
             query = query.filter(PaymentRechargeOrder.user_id == user_id)
         if status:
             query = query.filter(PaymentRechargeOrder.status == status)
+        if payment_channel:
+            query = query.filter(PaymentRechargeOrder.payment_channel == payment_channel)
+        if site_scope == "platform":
+            query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
+        elif site_scope == "agent":
+            query = query.filter(PaymentRechargeOrder.agent_id.is_not(None))
+
+        if keyword:
+            keyword_text = str(keyword).strip()
+            like = f"%{keyword_text}%"
+            matched_user_ids = [
+                int(item.id)
+                for item in db.query(SysUser.id)
+                .filter(SysUser.username.like(like))
+                .all()
+            ]
+            matched_agent_ids = [
+                int(item.id)
+                for item in db.query(Agent.id)
+                .filter(
+                    or_(
+                        Agent.agent_name.like(like),
+                        Agent.agent_code.like(like),
+                        Agent.frontend_domain.like(like),
+                        Agent.api_domain.like(like),
+                    )
+                )
+                .all()
+            ]
+            filters = [
+                PaymentRechargeOrder.order_no.like(like),
+                PaymentRechargeOrder.alipay_trade_no.like(like),
+                PaymentRechargeOrder.source_host.like(like),
+            ]
+            if matched_user_ids:
+                filters.append(PaymentRechargeOrder.user_id.in_(matched_user_ids))
+            if matched_agent_ids:
+                filters.append(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
+            query = query.filter(or_(*filters))
 
         total = query.count()
         rows = (

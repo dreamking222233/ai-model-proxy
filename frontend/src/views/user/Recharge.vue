@@ -241,7 +241,7 @@
 <script>
 import { createUserRechargeOrder, getUserRechargeOrder, listUserRechargeOrders, syncUserRechargeOrder } from '@/api/payment'
 import { getSiteConfig, getBalance } from '@/api/user'
-import { formatUtcDate } from '@/utils'
+import { formatBeijingTime } from '@/utils'
 
 export default {
   name: 'Recharge',
@@ -324,7 +324,7 @@ export default {
   },
   methods: {
     formatTime(value) {
-      return value ? formatUtcDate(value, 'YYYY-MM-DD HH:mm:ss') : '-'
+      return value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss') : '-'
     },
     formatMoney(value) {
       return Number(value || 0).toFixed(2)

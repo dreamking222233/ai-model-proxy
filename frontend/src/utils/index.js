@@ -81,6 +81,41 @@ export function formatUtcDate(date, fmt = 'YYYY-MM-DD HH:mm:ss') {
   return result
 }
 
+export function formatBeijingTime(date, fmt = 'YYYY-MM-DD HH:mm:ss') {
+  if (!date) return ''
+  const d = parseUtcDate(date)
+  if (!d) return ''
+
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(d).reduce((acc, item) => {
+    acc[item.type] = item.value
+    return acc
+  }, {})
+
+  const map = {
+    'YYYY': parts.year,
+    'MM': parts.month,
+    'DD': parts.day,
+    'HH': parts.hour,
+    'mm': parts.minute,
+    'ss': parts.second
+  }
+
+  let result = fmt
+  for (const [key, value] of Object.entries(map)) {
+    result = result.replace(key, value)
+  }
+  return result
+}
+
 /**
  * Mask an API key, showing the first 7 characters followed by ****.
  * @param {string} key - The API key to mask

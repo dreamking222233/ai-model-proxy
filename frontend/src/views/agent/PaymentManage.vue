@@ -88,7 +88,7 @@
 
 <script>
 import { getAgentPaymentSummary, listAgentPaymentOrders, listAgentPaymentWithdrawals } from '@/api/payment'
-import { formatUtcDate } from '@/utils'
+import { formatBeijingTime } from '@/utils'
 
 export default {
   name: 'PaymentManage',
@@ -139,7 +139,7 @@ export default {
   },
   methods: {
     formatTime(value) {
-      return value ? formatUtcDate(value, 'YYYY-MM-DD HH:mm:ss') : '-'
+      return value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss') : '-'
     },
     formatMoney(value) {
       return Number(value || 0).toFixed(2)

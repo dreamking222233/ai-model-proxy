@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.core.cors import DynamicCORSMiddleware
 from app.database import get_pool_status_snapshot
 from app.core.exceptions import register_exception_handlers
 from app.core.middleware import RequestLoggingMiddleware
@@ -108,6 +109,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(DynamicCORSMiddleware)
 
 # Custom middleware
 app.add_middleware(RequestLoggingMiddleware)

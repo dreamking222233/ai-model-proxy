@@ -95,3 +95,40 @@ class AuthServiceForgotPasswordTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentDomainNormalizationTest(unittest.TestCase):
+    def test_normalize_domain_input_accepts_custom_domain_with_scheme(self):
+        from app.services.agent_service import AgentService
+
+        normalized = AgentService.normalize_domain_input(
+            "https://Test.Example.com:443",
+            field_label="前台域名",
+            error_code="INVALID_AGENT_FRONTEND_DOMAIN",
+        )
+
+        self.assertEqual(normalized, "test.example.com")
+
+    def test_normalize_domain_input_rejects_path(self):
+        from app.services.agent_service import AgentService
+
+        with self.assertRaises(ServiceException) as ctx:
+            AgentService.normalize_domain_input(
+                "https://test.example.com/recharge",
+                field_label="前台域名",
+                error_code="INVALID_AGENT_FRONTEND_DOMAIN",
+            )
+
+        self.assertEqual(ctx.exception.error_code, "INVALID_AGENT_FRONTEND_DOMAIN")
+
+    def test_normalize_domain_input_rejects_platform_frontend_domain(self):
+        from app.services.agent_service import AgentService
+
+        with self.assertRaises(ServiceException) as ctx:
+            AgentService.normalize_domain_input(
+                "www.xiaoleai.team",
+                field_label="前台域名",
+                error_code="INVALID_AGENT_FRONTEND_DOMAIN",
+            )
+
+        self.assertEqual(ctx.exception.error_code, "INVALID_AGENT_FRONTEND_DOMAIN")

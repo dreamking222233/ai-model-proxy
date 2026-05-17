@@ -31,7 +31,10 @@
       <a-form-model :model="form" layout="vertical">
         <a-form-model-item label="代理编码"><a-input v-model="form.agent_code" /></a-form-model-item>
         <a-form-model-item label="代理名称"><a-input v-model="form.agent_name" /></a-form-model-item>
-        <a-form-model-item label="前台域名"><a-input v-model="form.frontend_domain" /></a-form-model-item>
+        <a-form-model-item label="前台域名">
+          <a-input v-model="form.frontend_domain" placeholder="例如 test.xiaoleai.team 或 test.test.com" />
+          <div class="field-tip">支持二级域名或自定义域名，填写纯域名即可，不要带 http/https、端口和路径。</div>
+        </a-form-model-item>
         <template v-if="!editing">
           <a-divider orientation="left">代理登录账号</a-divider>
           <a-form-model-item label="登录账号"><a-input v-model="form.owner_username" /></a-form-model-item>
@@ -60,6 +63,35 @@ import {
   createAgent,
   updateAgent
 } from '@/api/agent'
+
+function normalizeDomainInput(value) {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text) {
+    return ''
+  }
+  if (/\s/.test(text)) {
+    throw new Error('域名不能包含空格')
+  }
+  let candidate = text
+  if (candidate.includes('://')) {
+    try {
+      candidate = new URL(candidate).host
+    } catch (error) {
+      throw new Error('域名格式不正确')
+    }
+  }
+  if (candidate.includes('/')) {
+    throw new Error('域名不能包含路径')
+  }
+  const normalized = candidate.split(':')[0]
+  if (!normalized) {
+    throw new Error('域名不能为空')
+  }
+  if (normalized !== 'localhost' && normalized !== '127.0.0.1' && !normalized.includes('.')) {
+    throw new Error('域名格式不正确')
+  }
+  return normalized
+}
 
 export default {
   name: 'AgentManage',
@@ -159,7 +191,7 @@ export default {
       this.form = {
         agent_code: record.agent_code,
         agent_name: record.agent_name,
-        frontend_domain: record.frontend_domain,
+        frontend_domain: record.frontend_domain || '',
         site_title: record.site_title,
         allow_self_register: record.allow_self_register ? 1 : 0,
         online_recharge_enabled: record.online_recharge_enabled ? 1 : 0
@@ -170,6 +202,12 @@ export default {
       this.submitting = true
       try {
         const payload = { ...this.form }
+        try {
+          payload.frontend_domain = normalizeDomainInput(payload.frontend_domain)
+        } catch (error) {
+          this.$message.error(error.message || '前台域名格式不正确')
+          return
+        }
         if (this.editing) {
           delete payload.owner_username
           delete payload.owner_email
@@ -215,6 +253,12 @@ export default {
   background: #f5f7ff;
   color: #3f4c7a;
   border: 1px solid #d9e1ff;
+}
+.field-tip {
+  margin-top: 6px;
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .shared-api-value { font-family: monospace; }
 </style>

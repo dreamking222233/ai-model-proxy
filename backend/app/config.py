@@ -43,6 +43,7 @@ class Settings(BaseSettings):
         r"^https?://([a-z0-9-]+\.)*xiaoleai\.team(:\d+)?$|"
         r"^https?://([a-z0-9-]+\.)*(localhost|127\.0\.0\.1|local)(:\d+)?$"
     )
+    DYNAMIC_CORS_CACHE_TTL_SECONDS: int = 300
 
     # Platform hosts
     PLATFORM_FRONTEND_HOSTS: List[str] = [

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -88,6 +89,51 @@ class AgentService:
     def is_local_dev_host(host: Optional[str]) -> bool:
         normalized = AgentService.normalize_host(host)
         return normalized in {"localhost", "127.0.0.1"}
+
+    @staticmethod
+    def _validate_domain_host(normalized: str, *, field_label: str, error_code: str) -> str:
+        if not normalized:
+            return ""
+        if normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_FRONTEND_HOSTS}:
+            raise ServiceException(400, f"{field_label}不能使用平台站点域名", error_code)
+        if normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_API_HOSTS}:
+            raise ServiceException(400, f"{field_label}不能使用平台 API 域名", error_code)
+        if normalized in {"localhost", "127.0.0.1"} or normalized.endswith(".localhost") or normalized.endswith(".local"):
+            return normalized
+        try:
+            ipaddress.ip_address(normalized)
+            return normalized
+        except ValueError:
+            pass
+        labels = normalized.split(".")
+        if len(labels) < 2:
+            raise ServiceException(400, f"{field_label}格式不正确", error_code)
+        for label in labels:
+            if not label or len(label) > 63:
+                raise ServiceException(400, f"{field_label}格式不正确", error_code)
+            if label.startswith("-") or label.endswith("-"):
+                raise ServiceException(400, f"{field_label}格式不正确", error_code)
+            if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in label):
+                raise ServiceException(400, f"{field_label}格式不正确", error_code)
+        return normalized
+
+    @staticmethod
+    def normalize_domain_input(raw_value: Optional[str], *, field_label: str, error_code: str) -> str:
+        value = str(raw_value or "").strip()
+        if not value or value.lower() in {"null", "undefined"}:
+            return ""
+        if any(ch.isspace() for ch in value):
+            raise ServiceException(400, f"{field_label}不能包含空格", error_code)
+        parsed = urlparse(value if "://" in value else f"//{value}")
+        if parsed.params or parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ServiceException(400, f"{field_label}格式不正确", error_code)
+        candidate = parsed.netloc or parsed.path
+        if parsed.netloc and parsed.path not in {"", "/"}:
+            raise ServiceException(400, f"{field_label}不能包含路径", error_code)
+        if not parsed.netloc and "/" in parsed.path:
+            raise ServiceException(400, f"{field_label}不能包含路径", error_code)
+        normalized = AgentService.normalize_host(candidate)
+        return AgentService._validate_domain_host(normalized, field_label=field_label, error_code=error_code)
 
     @staticmethod
     def get_agent_by_frontend_host(db: Session, host: str) -> Optional[Agent]:
@@ -405,11 +451,19 @@ class AgentService:
             payload["owner_username"] = str(payload["owner_username"]).strip()
         if "owner_email" in payload and payload["owner_email"] is not None:
             payload["owner_email"] = str(payload["owner_email"]).strip().lower()
-        for key in ("frontend_domain", "api_domain"):
-            if key in payload:
-                payload[key] = AgentService.normalize_host(payload.get(key))
-        if payload.get("api_domain") and AgentService.is_platform_api_host(payload.get("api_domain")):
-            payload["api_domain"] = None
+        if "frontend_domain" in payload:
+            payload["frontend_domain"] = AgentService.normalize_domain_input(
+                payload.get("frontend_domain"),
+                field_label="前台域名",
+                error_code="INVALID_AGENT_FRONTEND_DOMAIN",
+            )
+        if "api_domain" in payload:
+            api_domain = AgentService.normalize_domain_input(
+                payload.get("api_domain"),
+                field_label="代理 API 域名",
+                error_code="INVALID_AGENT_API_DOMAIN",
+            )
+            payload["api_domain"] = None if AgentService.is_platform_api_host(api_domain) else api_domain
         if "quickstart_api_base_url" in payload and payload.get("quickstart_api_base_url"):
             payload["quickstart_api_base_url"] = str(payload["quickstart_api_base_url"]).strip().rstrip("/")
         elif "quickstart_api_base_url" in payload:
@@ -494,6 +548,8 @@ class AgentService:
         db.add(AgentBalance(agent_id=agent.id, balance=0, total_recharged=0, total_allocated=0, total_reclaimed=0))
         db.add(AgentImageBalance(agent_id=agent.id, balance=0, total_recharged=0, total_allocated=0, total_reclaimed=0))
         db.commit()
+        from app.core.cors import invalidate_dynamic_origin_cache
+        invalidate_dynamic_origin_cache()
         db.refresh(agent)
         return AgentService.get_agent(db, agent.id)
 
@@ -554,6 +610,8 @@ class AgentService:
             agent.owner_user_id = owner.id
 
         db.commit()
+        from app.core.cors import invalidate_dynamic_origin_cache
+        invalidate_dynamic_origin_cache()
         db.refresh(agent)
         return AgentService.get_agent(db, agent.id)
 

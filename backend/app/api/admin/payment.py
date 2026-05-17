@@ -35,6 +35,11 @@ def list_agent_cash_orders(
     payment_channel: str = Query(None),
     site_scope: str = Query(None),
     keyword: str = Query(None),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    time_field: str = Query("created_at"),
+    agent_keyword: str = Query(None),
+    source_host: str = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
@@ -48,6 +53,11 @@ def list_agent_cash_orders(
         payment_channel,
         site_scope,
         keyword,
+        start_date,
+        end_date,
+        time_field,
+        agent_keyword,
+        source_host,
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 

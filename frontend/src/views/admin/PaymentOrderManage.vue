@@ -17,6 +17,11 @@
           style="width: 340px"
           @search="handleSearch"
         />
+        <a-select v-model="filters.time_field" placeholder="时间字段" style="width: 140px" @change="handleSearch">
+          <a-select-option value="created_at">创建时间</a-select-option>
+          <a-select-option value="paid_at">支付时间</a-select-option>
+        </a-select>
+        <a-range-picker format="YYYY-MM-DD" @change="handleDateChange" />
         <a-select v-model="filters.site_scope" allowClear placeholder="客户类型" style="width: 140px" @change="handleSearch">
           <a-select-option value="platform">直属用户</a-select-option>
           <a-select-option value="agent">代理客户</a-select-option>
@@ -31,6 +36,21 @@
           <a-select-option value="closed">已关闭</a-select-option>
           <a-select-option value="failed">失败</a-select-option>
         </a-select>
+        <a-input
+          v-model="filters.agent_keyword"
+          allowClear
+          placeholder="归属代理名称/编码/域名"
+          style="width: 220px"
+          @pressEnter="handleSearch"
+        />
+        <a-input
+          v-model="filters.source_host"
+          allowClear
+          placeholder="来源域名"
+          style="width: 180px"
+          @pressEnter="handleSearch"
+        />
+        <a-button @click="resetFilters">重置筛选</a-button>
       </div>
 
       <a-table
@@ -97,9 +117,14 @@ export default {
       list: [],
       filters: {
         keyword: '',
+        time_field: 'created_at',
+        start_date: undefined,
+        end_date: undefined,
         site_scope: undefined,
         payment_channel: undefined,
-        status: undefined
+        status: undefined,
+        agent_keyword: '',
+        source_host: ''
       },
       pagination: {
         current: 1,
@@ -149,6 +174,25 @@ export default {
       this.pagination.current = 1
       this.fetchList()
     },
+    handleDateChange(_, dateStrings) {
+      this.filters.start_date = dateStrings && dateStrings[0] ? dateStrings[0] : undefined
+      this.filters.end_date = dateStrings && dateStrings[1] ? dateStrings[1] : undefined
+      this.handleSearch()
+    },
+    resetFilters() {
+      this.filters = {
+        keyword: '',
+        time_field: 'created_at',
+        start_date: undefined,
+        end_date: undefined,
+        site_scope: undefined,
+        payment_channel: undefined,
+        status: undefined,
+        agent_keyword: '',
+        source_host: ''
+      }
+      this.handleSearch()
+    },
     handleTableChange(pagination) {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
@@ -161,9 +205,14 @@ export default {
           page: this.pagination.current,
           page_size: this.pagination.pageSize,
           keyword: this.filters.keyword || undefined,
+          time_field: this.filters.time_field || 'created_at',
+          start_date: this.filters.start_date || undefined,
+          end_date: this.filters.end_date || undefined,
           site_scope: this.filters.site_scope || undefined,
           payment_channel: this.filters.payment_channel || undefined,
-          status: this.filters.status || undefined
+          status: this.filters.status || undefined,
+          agent_keyword: this.filters.agent_keyword || undefined,
+          source_host: this.filters.source_host || undefined
         })
         const data = res.data || {}
         this.list = data.list || []

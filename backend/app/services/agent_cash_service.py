@@ -1,7 +1,7 @@
 """Agent cash balance and withdrawal service."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from sqlalchemy import func, or_
@@ -16,12 +16,25 @@ from app.models.payment import (
     PaymentRechargeOrder,
 )
 from app.models.user import SysUser
+from app.services.payment_service import PaymentService
 
 
 class AgentCashService:
     """Operations for agent RMB cash balance."""
 
     MONEY_SCALE = Decimal("0.01")
+
+    @staticmethod
+    def _parse_date(value: str | None, field_name: str) -> datetime | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ServiceException(400, f"{field_name} 格式应为 YYYY-MM-DD", "INVALID_DATE_RANGE") from exc
 
     @staticmethod
     def _normalize_money(value, code: str = "INVALID_AGENT_CASH_AMOUNT", allow_negative: bool = False) -> Decimal:
@@ -74,8 +87,8 @@ class AgentCashService:
             "trade_status": order.trade_status,
             "subject": order.subject,
             "alipay_trade_no": order.alipay_trade_no,
-            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "paid_at": PaymentService._serialize_dt(order.paid_at, assume_utc=True),
+            "created_at": PaymentService._serialize_dt(order.created_at, assume_utc=False),
         }
 
     @staticmethod
@@ -89,8 +102,8 @@ class AgentCashService:
             "transfer_method": row.transfer_method,
             "operator_user_id": row.operator_user_id,
             "remark": row.remark,
-            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "completed_at": PaymentService._serialize_dt(row.completed_at, assume_utc=True),
+            "created_at": PaymentService._serialize_dt(row.created_at, assume_utc=False),
         }
 
     @staticmethod
@@ -213,6 +226,11 @@ class AgentCashService:
         payment_channel: str | None = None,
         site_scope: str | None = None,
         keyword: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        time_field: str | None = "created_at",
+        agent_keyword: str | None = None,
+        source_host: str | None = None,
     ) -> tuple[list[dict], int]:
         query = db.query(PaymentRechargeOrder)
         if agent_id is not None:
@@ -227,6 +245,36 @@ class AgentCashService:
             query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
         elif site_scope == "agent":
             query = query.filter(PaymentRechargeOrder.agent_id.is_not(None))
+
+        if source_host:
+            query = query.filter(PaymentRechargeOrder.source_host.like(f"%{str(source_host).strip()}%"))
+
+        if agent_keyword:
+            like = f"%{str(agent_keyword).strip()}%"
+            matched_agent_ids = [
+                int(item.id)
+                for item in db.query(Agent.id)
+                .filter(
+                    or_(
+                        Agent.agent_name.like(like),
+                        Agent.agent_code.like(like),
+                        Agent.frontend_domain.like(like),
+                        Agent.api_domain.like(like),
+                    )
+                )
+                .all()
+            ]
+            if not matched_agent_ids:
+                return [], 0
+            query = query.filter(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
+
+        date_field = PaymentRechargeOrder.paid_at if str(time_field or "created_at").strip() == "paid_at" else PaymentRechargeOrder.created_at
+        start_dt = AgentCashService._parse_date(start_date, "开始日期")
+        end_dt = AgentCashService._parse_date(end_date, "结束日期")
+        if start_dt:
+            query = query.filter(date_field >= start_dt)
+        if end_dt:
+            query = query.filter(date_field < (end_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)))
 
         if keyword:
             keyword_text = str(keyword).strip()

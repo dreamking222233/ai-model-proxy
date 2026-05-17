@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -40,6 +40,15 @@ class PaymentService:
     ORDER_EXPIRE_MINUTES = 30
     PAY_CHANNEL = "alipay"
     ACCEPTED_TRADE_STATUSES = {"TRADE_SUCCESS", "TRADE_FINISHED"}
+
+    @staticmethod
+    def _serialize_dt(dt: datetime | None, *, assume_utc: bool) -> str | None:
+        if not dt:
+            return None
+        if dt.tzinfo is not None:
+            return dt.isoformat()
+        tz = timezone.utc if assume_utc else timezone(timedelta(hours=8))
+        return dt.replace(tzinfo=tz).isoformat()
 
     @staticmethod
     def _quantize(value, scale: Decimal, code: str, allow_zero: bool = False) -> Decimal:
@@ -695,9 +704,9 @@ class PaymentService:
             "subject": order.subject,
             "return_url_snapshot": order.return_url_snapshot,
             "alipay_trade_no": order.alipay_trade_no,
-            "paid_at": order.paid_at.isoformat() if order.paid_at else None,
-            "expired_at": order.expired_at.isoformat() if order.expired_at else None,
-            "closed_at": order.closed_at.isoformat() if order.closed_at else None,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-            "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+            "paid_at": PaymentService._serialize_dt(order.paid_at, assume_utc=True),
+            "expired_at": PaymentService._serialize_dt(order.expired_at, assume_utc=True),
+            "closed_at": PaymentService._serialize_dt(order.closed_at, assume_utc=True),
+            "created_at": PaymentService._serialize_dt(order.created_at, assume_utc=False),
+            "updated_at": PaymentService._serialize_dt(order.updated_at, assume_utc=False),
         }

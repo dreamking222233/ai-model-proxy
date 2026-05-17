@@ -338,6 +338,12 @@
           </div>
         </template>
 
+        <template slot="detailAction" slot-scope="text, record">
+          <a-button type="link" size="small" @click.stop="handleStatusClick(record)">
+            查看详情
+          </a-button>
+        </template>
+
         <template slot="responseTime" slot-scope="text">
           <span v-if="text != null" class="response-time" :class="getResponseTimeClass(text)">
             {{ formatResponseTime(text) }} <span class="response-time-unit">s</span>
@@ -667,6 +673,13 @@ export default {
           width: 90,
           align: 'center',
           scopedSlots: { customRender: 'status' }
+        },
+        {
+          title: '详情',
+          key: 'detailAction',
+          width: 100,
+          align: 'center',
+          scopedSlots: { customRender: 'detailAction' }
         },
         {
           title: '响应时间',

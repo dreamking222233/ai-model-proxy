@@ -184,6 +184,12 @@
           </div>
         </template>
 
+        <template slot="detailAction" slot-scope="text, record">
+          <a-button type="link" size="small" @click.stop="openDetail(record)">
+            查看详情
+          </a-button>
+        </template>
+
         <template slot="responseTime" slot-scope="text">
           <span v-if="text != null" class="response-time" :class="getResponseTimeClass(text)">
             {{ formatResponseTime(text) }} <span class="response-time-unit">s</span>
@@ -481,6 +487,7 @@ export default {
         { title: '请求模型', dataIndex: 'requested_model', key: 'requested_model', width: 150, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
         { title: '用量', key: 'tokens', width: 290, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
+        { title: '详情', key: 'detailAction', width: 100, align: 'center', scopedSlots: { customRender: 'detailAction' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'responseTime', width: 110, align: 'right', scopedSlots: { customRender: 'responseTime' } },
         { title: '计费', dataIndex: 'total_cost', key: 'total_cost', width: 180, align: 'right', scopedSlots: { customRender: 'total_cost' } },
         { title: 'IP地址', dataIndex: 'client_ip', key: 'client_ip', width: 130, scopedSlots: { customRender: 'client_ip' } },

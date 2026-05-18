@@ -93,7 +93,7 @@
                       @click="handleImportToCcSwitch(record)"
                       :loading="record._revealing"
                     >
-                      <a-icon type="export" />
+                      <img :src="ccswitchLogoUrl" alt="CC Switch" class="ccswitch-logo-icon" />
                     </a-button>
                   </a-tooltip>
                   <a-tooltip v-if="record._revealedKey" title="隐藏密钥">
@@ -258,10 +258,84 @@
         
         <div class="modal-footer-actions">
           <a-button block type="primary" @click="handleImportCreatedKeyToCcSwitch" class="import-btn">
-            导入到 CC Switch（Codex）
+            导入到 CC Switch
           </a-button>
           <a-button block type="primary" @click="showKeyModalVisible = false" class="finish-btn">
             我已妥善保存，关闭
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal
+      v-model="importModalVisible"
+      :footer="null"
+      class="glass-modal import-modal"
+      centered
+      :width="520"
+      :getContainer="false"
+    >
+      <div class="import-modal-content">
+        <div class="import-modal-brand">
+          <img :src="ccswitchLogoUrl" alt="CC Switch" class="import-brand-logo" />
+          <h3 class="modal-title-text import-brand-title">选择 CC Switch 导入目标</h3>
+        </div>
+        <p class="modal-subtitle">同一个 API Key 可按不同 CLI 目标生成不同的供应商配置。</p>
+
+        <a-radio-group v-model="importTargetApp" class="target-radio-group">
+          <label class="target-card" :class="{ active: importTargetApp === 'codex' }">
+            <a-radio value="codex" />
+            <div class="target-card-body">
+              <div class="target-title">Codex</div>
+              <div class="target-desc">使用 OpenAI 兼容接入，endpoint 为 {{ relayOpenaiBase || '-' }}</div>
+            </div>
+          </label>
+          <label class="target-card" :class="{ active: importTargetApp === 'claude' }">
+            <a-radio value="claude" />
+            <div class="target-card-body">
+              <div class="target-title">Claude Code</div>
+              <div class="target-desc">使用 Anthropic 兼容接入，endpoint 为 {{ relayBase || '-' }}</div>
+            </div>
+          </label>
+          <label class="target-card" :class="{ active: importTargetApp === 'openclaw' }">
+            <a-radio value="openclaw" />
+            <div class="target-card-body">
+              <div class="target-title">OpenClaw</div>
+              <div class="target-desc">CC Switch 当前按 OpenAI 兼容模式导入，endpoint 为 {{ relayOpenaiBase || '-' }}</div>
+            </div>
+          </label>
+          <label class="target-card" :class="{ active: importTargetApp === 'hermes' }">
+            <a-radio value="hermes" />
+            <div class="target-card-body">
+              <div class="target-title">Hermes</div>
+              <div class="target-desc">CC Switch 当前按 chat_completions 模式导入，endpoint 为 {{ relayOpenaiBase || '-' }}</div>
+            </div>
+          </label>
+        </a-radio-group>
+
+        <div class="import-preview" v-if="pendingImport.name">
+          <div class="preview-row">
+            <span class="preview-label">供应商名称</span>
+            <code>{{ ccswitchProviderNamePrefix }} / {{ pendingImport.name }}</code>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label">导入目标</span>
+            <code>{{ currentImportAppLabel }}</code>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label">API 端点</span>
+            <code>{{ currentImportEndpoint || '-' }}</code>
+          </div>
+        </div>
+
+        <div v-if="currentImportHint" class="import-hint-banner">
+          {{ currentImportHint }}
+        </div>
+
+        <div class="modal-btns import-modal-btns">
+          <a-button @click="importModalVisible = false" class="cancel-btn">取消</a-button>
+          <a-button type="primary" @click="confirmImportToCcSwitch" class="submit-btn">
+            导入到 CC Switch
           </a-button>
         </div>
       </div>
@@ -287,6 +361,13 @@ export default {
       showKeyModalVisible: false,
       createdKey: '',
       createdKeyName: '',
+      importModalVisible: false,
+      importTargetApp: 'codex',
+      pendingImport: {
+        key: '',
+        name: '',
+        status: ''
+      },
       apiBase: '',
       siteName: '',
       copyStates: {},
@@ -301,11 +382,35 @@ export default {
     }
   },
   computed: {
+    ccswitchLogoUrl() {
+      return 'https://www.ccswitch.io/assets/cc-switch-logo-BPrI77SG.png'
+    },
     relayBase() {
       return (this.apiBase || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '')
     },
     relayOpenaiBase() {
       return this.relayBase ? `${this.relayBase}/v1` : ''
+    },
+    currentImportEndpoint() {
+      return this.importTargetApp === 'claude' ? this.relayBase : this.relayOpenaiBase
+    },
+    currentImportAppLabel() {
+      const labels = {
+        codex: 'Codex',
+        claude: 'Claude Code',
+        openclaw: 'OpenClaw',
+        hermes: 'Hermes'
+      }
+      return labels[this.importTargetApp] || 'Codex'
+    },
+    currentImportHint() {
+      if (this.importTargetApp === 'openclaw') {
+        return '说明：CC Switch 的 OpenClaw Deep Link 导入当前会写成 openai-completions，因此这里使用带 /v1 的 OpenAI 兼容地址。'
+      }
+      if (this.importTargetApp === 'hermes') {
+        return '说明：CC Switch 的 Hermes Deep Link 导入当前会写成 chat_completions，因此这里使用带 /v1 的 OpenAI 兼容地址。'
+      }
+      return ''
     },
     ccswitchProviderNamePrefix() {
       return this.siteName || '当前站点'
@@ -441,12 +546,24 @@ export default {
       }
       document.body.removeChild(textarea)
     },
-    buildCcSwitchDeepLink(apiKey, keyName) {
+    openImportModal(payload) {
+      this.pendingImport = {
+        key: payload.key || '',
+        name: payload.name || '',
+        status: payload.status || ''
+      }
+      this.importTargetApp = 'codex'
+      this.importModalVisible = true
+    },
+    buildCcSwitchDeepLink(apiKey, keyName, targetApp) {
+      const supportedApps = ['codex', 'claude', 'openclaw', 'hermes']
+      const app = supportedApps.includes(targetApp) ? targetApp : 'codex'
+      const endpoint = targetApp === 'claude' ? this.relayBase : this.relayOpenaiBase
       const params = new URLSearchParams({
         resource: 'provider',
-        app: 'codex',
+        app,
         name: `${this.ccswitchProviderNamePrefix} / ${keyName}`,
-        endpoint: this.relayOpenaiBase,
+        endpoint,
         apiKey
       })
       return `ccswitch://v1/import?${params.toString()}`
@@ -461,7 +578,7 @@ export default {
       this.$message.info('已尝试唤起 CC Switch；如果没有反应，请确认本机已安装并注册 ccswitch:// 协议')
     },
     async handleImportToCcSwitch(record) {
-      if (!this.relayOpenaiBase) {
+      if (!this.relayBase || !this.relayOpenaiBase) {
         this.$message.error('当前站点 API 地址未就绪，暂时无法生成 CC Switch 导入链接')
         return
       }
@@ -472,18 +589,38 @@ export default {
       if (record.status !== 'active') {
         this.$message.warning('当前密钥未启用，导入到 CC Switch 后仍无法正常调用，建议先启用')
       }
-      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(apiKey, record.name))
+      this.openImportModal({
+        key: apiKey,
+        name: record.name,
+        status: record.status
+      })
     },
     handleImportCreatedKeyToCcSwitch() {
       if (!this.createdKey) {
         this.$message.error('当前没有可导入的 API Key')
         return
       }
-      if (!this.relayOpenaiBase) {
+      if (!this.relayBase || !this.relayOpenaiBase) {
         this.$message.error('当前站点 API 地址未就绪，暂时无法生成 CC Switch 导入链接')
         return
       }
-      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(this.createdKey, this.createdKeyName || '新建密钥'))
+      this.openImportModal({
+        key: this.createdKey,
+        name: this.createdKeyName || '新建密钥',
+        status: 'active'
+      })
+    },
+    confirmImportToCcSwitch() {
+      if (!this.pendingImport.key || !this.pendingImport.name) {
+        this.$message.error('当前没有可导入的 API Key')
+        return
+      }
+      if (!this.currentImportEndpoint) {
+        this.$message.error('当前导入目标缺少可用 endpoint，请稍后重试')
+        return
+      }
+      this.importModalVisible = false
+      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(this.pendingImport.key, this.pendingImport.name, this.importTargetApp))
     },
     handleToggleStatus(record) {
       const isDisabling = record.status === 'active'
@@ -684,6 +821,14 @@ export default {
       &:hover { color: #667eea; background: #eef2ff; transform: translateY(-1px); }
       .success-icon { color: #52c41a; }
     }
+
+    .ccswitch-logo-icon {
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+      display: block;
+      border-radius: 4px;
+    }
   }
 
   /* ===== Usage Overview ===== */
@@ -766,6 +911,130 @@ export default {
 
     .modal-title-text { font-size: 26px; font-weight: 900; color: #1a1a2e; margin-bottom: 16px; letter-spacing: -0.5px; }
     .modal-subtitle { color: #64748b; font-size: 15px; line-height: 1.6; margin-bottom: 40px; padding: 0 10px; }
+  }
+
+  .import-modal-content {
+    padding: 44px 40px 40px;
+  }
+
+  .import-modal-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+
+  .import-brand-logo {
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 12px 28px rgba(59, 130, 246, 0.18);
+  }
+
+  .import-brand-title {
+    margin-bottom: 0;
+  }
+
+  .target-radio-group {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 24px;
+
+    /deep/ .ant-radio-wrapper {
+      margin-right: 0;
+    }
+  }
+
+  .target-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px 20px;
+    border-radius: 18px;
+    border: 1px solid #e2e8f0;
+    background: rgba(248, 250, 252, 0.9);
+    cursor: pointer;
+    transition: all 0.25s;
+
+    &:hover,
+    &.active {
+      border-color: #667eea;
+      background: rgba(238, 242, 255, 0.9);
+      box-shadow: 0 10px 24px rgba(102, 126, 234, 0.12);
+    }
+  }
+
+  .target-card-body {
+    flex: 1;
+  }
+
+  .target-title {
+    font-size: 16px;
+    font-weight: 800;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+  }
+
+  .target-desc {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #64748b;
+    word-break: break-all;
+  }
+
+  .import-preview {
+    margin-bottom: 28px;
+    padding: 18px 20px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+  }
+
+  .preview-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    font-size: 13px;
+    color: #475569;
+
+    & + .preview-row {
+      margin-top: 12px;
+    }
+
+    code {
+      flex: 1;
+      text-align: right;
+      word-break: break-all;
+      color: #1e293b;
+      background: transparent;
+      font-family: 'JetBrains Mono', monospace;
+    }
+  }
+
+  .preview-label {
+    flex-shrink: 0;
+    color: #94a3b8;
+    font-weight: 700;
+  }
+
+  .import-hint-banner {
+    margin-bottom: 28px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: #fff7e6;
+    border: 1px solid #ffe58f;
+    color: #ad6800;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .import-modal-btns {
+    margin-top: 0;
   }
 
   .modern-form {

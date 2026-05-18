@@ -133,10 +133,15 @@ sudo chown $USER:$USER modelInvocationSystem
 # 使用 scp 或 git 上传项目
 # 示例: scp -r /path/to/local/project user@server:/opt/modelInvocationSystem
 
-# 导入数据库结构
-cd /opt/modelInvocationSystem/backend
-mysql -u modelinvoke_user -p modelinvoke < sql/init.sql
+# 导入数据库结构和最小初始化数据
+cd /opt/modelInvocationSystem
+mysql -u modelinvoke_user -p modelinvoke < sql/initData.sql
 ```
+
+说明：
+- `sql/initData.sql` 是当前唯一的数据库初始化脚本，包含完整建表语句和最小系统初始化数据。
+- 脚本会先清理当前数据库中的旧视图和同名表，再重建结构并写入默认管理员与系统配置。
+- 导入完成后，请尽快登录管理后台修改默认管理员密码以及 `system_config` 中的站点和接口地址配置。
 
 ---
 

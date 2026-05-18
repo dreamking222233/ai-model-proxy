@@ -85,6 +85,17 @@
                       <a-icon :type="copyStates['copy-' + record.id] ? 'check' : (record._revealedKey ? 'copy' : 'eye')" :class="{ 'success-icon': copyStates['copy-' + record.id] }" />
                     </a-button>
                   </a-tooltip>
+                  <a-tooltip title="导入到 CC Switch">
+                    <a-button
+                      type="link"
+                      size="small"
+                      class="ccswitch-btn"
+                      @click="handleImportToCcSwitch(record)"
+                      :loading="record._revealing"
+                    >
+                      <a-icon type="export" />
+                    </a-button>
+                  </a-tooltip>
                   <a-tooltip v-if="record._revealedKey" title="隐藏密钥">
                     <a-button
                       type="link"
@@ -246,6 +257,9 @@
         </div>
         
         <div class="modal-footer-actions">
+          <a-button block type="primary" @click="handleImportCreatedKeyToCcSwitch" class="import-btn">
+            导入到 CC Switch（Codex）
+          </a-button>
           <a-button block type="primary" @click="showKeyModalVisible = false" class="finish-btn">
             我已妥善保存，关闭
           </a-button>
@@ -256,7 +270,7 @@
 </template>
 
 <script>
-import { listApiKeys, createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey } from '@/api/user'
+import { listApiKeys, createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, getSiteConfig } from '@/api/user'
 import { formatUtcDate } from '@/utils'
 
 export default {
@@ -272,6 +286,9 @@ export default {
       },
       showKeyModalVisible: false,
       createdKey: '',
+      createdKeyName: '',
+      apiBase: '',
+      siteName: '',
       copyStates: {},
       columns: [
         { title: '密钥名称', dataIndex: 'name', key: 'name', width: 180, fixed: 'left', scopedSlots: { customRender: 'name' } },
@@ -284,6 +301,15 @@ export default {
     }
   },
   computed: {
+    relayBase() {
+      return (this.apiBase || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '')
+    },
+    relayOpenaiBase() {
+      return this.relayBase ? `${this.relayBase}/v1` : ''
+    },
+    ccswitchProviderNamePrefix() {
+      return this.siteName || '当前站点'
+    },
     activeKeysCount() {
       return this.apiKeys.filter(k => k.status === 'active').length
     },
@@ -295,9 +321,24 @@ export default {
     }
   },
   created() {
+    this.fetchSiteConfig()
     this.fetchApiKeys()
   },
   methods: {
+    async fetchSiteConfig() {
+      try {
+        const res = await getSiteConfig()
+        const config = res.data || {}
+        this.siteName = config.site_name || ''
+        if (config.api_base_url) {
+          this.apiBase = config.api_base_url
+          return
+        }
+      } catch (e) {
+        console.error('Failed to fetch site config:', e)
+      }
+      this.apiBase = window.location.origin
+    },
     async fetchApiKeys() {
       this.loading = true
       try {
@@ -329,6 +370,7 @@ export default {
       try {
         const res = await createApiKey({ name: this.createForm.name.trim() })
         this.createdKey = res.data.key || res.data.api_key || ''
+        this.createdKeyName = res.data.name || this.createForm.name.trim()
         this.createModalVisible = false
         this.showKeyModalVisible = true
         this.fetchApiKeys()
@@ -339,15 +381,23 @@ export default {
       }
     },
     async handleReveal(record) {
+      await this.ensureRevealedKey(record)
+    },
+    async ensureRevealedKey(record) {
+      if (record._revealedKey) {
+        return record._revealedKey
+      }
       const index = this.apiKeys.findIndex(k => k.id === record.id)
-      if (index < 0) return
+      if (index < 0) return ''
       this.$set(this.apiKeys[index], '_revealing', true)
       try {
         const res = await revealApiKey(record.id)
         const key = res.data.key || ''
         this.$set(this.apiKeys[index], '_revealedKey', key)
+        return key
       } catch (e) {
         this.$message.error('无法揭取密钥安全令牌')
+        return ''
       } finally {
         this.$set(this.apiKeys[index], '_revealing', false)
       }
@@ -390,6 +440,50 @@ export default {
         this.$message.error('复制失败，请尝试手动复制')
       }
       document.body.removeChild(textarea)
+    },
+    buildCcSwitchDeepLink(apiKey, keyName) {
+      const params = new URLSearchParams({
+        resource: 'provider',
+        app: 'codex',
+        name: `${this.ccswitchProviderNamePrefix} / ${keyName}`,
+        endpoint: this.relayOpenaiBase,
+        apiKey
+      })
+      return `ccswitch://v1/import?${params.toString()}`
+    },
+    openCcSwitchDeepLink(url) {
+      const link = document.createElement('a')
+      link.href = url
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      this.$message.info('已尝试唤起 CC Switch；如果没有反应，请确认本机已安装并注册 ccswitch:// 协议')
+    },
+    async handleImportToCcSwitch(record) {
+      if (!this.relayOpenaiBase) {
+        this.$message.error('当前站点 API 地址未就绪，暂时无法生成 CC Switch 导入链接')
+        return
+      }
+      const apiKey = await this.ensureRevealedKey(record)
+      if (!apiKey) {
+        return
+      }
+      if (record.status !== 'active') {
+        this.$message.warning('当前密钥未启用，导入到 CC Switch 后仍无法正常调用，建议先启用')
+      }
+      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(apiKey, record.name))
+    },
+    handleImportCreatedKeyToCcSwitch() {
+      if (!this.createdKey) {
+        this.$message.error('当前没有可导入的 API Key')
+        return
+      }
+      if (!this.relayOpenaiBase) {
+        this.$message.error('当前站点 API 地址未就绪，暂时无法生成 CC Switch 导入链接')
+        return
+      }
+      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(this.createdKey, this.createdKeyName || '新建密钥'))
     },
     handleToggleStatus(record) {
       const isDisabling = record.status === 'active'
@@ -584,7 +678,7 @@ export default {
     }
     
     .key-actions { display: flex; gap: 6px; }
-    .reveal-btn, .hide-btn {
+    .reveal-btn, .hide-btn, .ccswitch-btn {
       width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
       border-radius: 8px; background: #f1f5f9; color: #94a3b8; transition: all 0.3s;
       &:hover { color: #667eea; background: #eef2ff; transform: translateY(-1px); }
@@ -749,7 +843,13 @@ export default {
       }
     }
     
-    .modal-footer-actions { padding: 0 48px 60px; }
+    .modal-footer-actions { padding: 0 48px 60px; display: flex; flex-direction: column; gap: 14px; }
+    .import-btn {
+      height: 64px; border-radius: 22px; font-weight: 800; font-size: 17px;
+      background: linear-gradient(135deg, #667eea, #764ba2); border: none; color: #fff;
+      box-shadow: 0 16px 40px rgba(102, 126, 234, 0.28);
+      &:hover { transform: translateY(-3px); box-shadow: 0 20px 48px rgba(102, 126, 234, 0.35); }
+    }
     .finish-btn {
       height: 64px; border-radius: 22px; font-weight: 800; font-size: 17px;
       background: #f1f5f9; border: none; color: #475569; transition: all 0.3s;

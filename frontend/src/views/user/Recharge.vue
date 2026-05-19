@@ -40,13 +40,6 @@
               </div>
             </div>
           </div>
-          <div v-if="siteScope === 'agent'" class="glass-card tip-card">
-            <div class="card-icon"><a-icon type="environment" /></div>
-            <div class="card-info">
-              <span class="card-label">站点归属</span>
-              <div class="card-text">代理站点充值，自动归属当前站点</div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

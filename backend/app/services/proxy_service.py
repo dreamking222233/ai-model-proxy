@@ -8833,15 +8833,29 @@ class ProxyService:
         return quality
 
     @staticmethod
-    def _resolve_openai_image_generation_url(base_url: str) -> str:
+    def _resolve_openai_image_generation_url(
+        base_url: str,
+        provider_variant: Optional[str] = None,
+    ) -> str:
         normalized = str(base_url or "").rstrip("/")
+        if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE:
+            if normalized.endswith("/v1"):
+                return f"{normalized}/image/created"
+            return f"{normalized}/v1/image/created"
         if normalized.endswith("/v1"):
             return f"{normalized}/images/generations"
         return f"{normalized}/v1/images/generations"
 
     @staticmethod
-    def _resolve_openai_image_edit_url(base_url: str) -> str:
+    def _resolve_openai_image_edit_url(
+        base_url: str,
+        provider_variant: Optional[str] = None,
+    ) -> str:
         normalized = str(base_url or "").rstrip("/")
+        if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE:
+            if normalized.endswith("/v1"):
+                return f"{normalized}/image/edit"
+            return f"{normalized}/v1/image/edit"
         if normalized.endswith("/v1"):
             return f"{normalized}/images/edits"
         return f"{normalized}/v1/images/edits"
@@ -9367,7 +9381,7 @@ class ProxyService:
         )
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
-        url = ProxyService._resolve_openai_image_generation_url(base_url)
+        url = ProxyService._resolve_openai_image_generation_url(base_url, provider_variant)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         prompt = str(request_data.get("prompt", "") or "").strip()
         aspect_ratio = ProxyService._resolve_requested_aspect_ratio(request_data)
@@ -9493,7 +9507,7 @@ class ProxyService:
         use_native_size = provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
 
         base_url = channel.base_url.rstrip("/")
-        url = ProxyService._resolve_openai_image_edit_url(base_url)
+        url = ProxyService._resolve_openai_image_edit_url(base_url, provider_variant)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         headers.pop("Content-Type", None)
         prompt = str(request_data.get("prompt", "") or "").strip()

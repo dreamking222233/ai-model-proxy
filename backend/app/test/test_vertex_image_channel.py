@@ -27,6 +27,12 @@ class ChannelProviderVariantTest(unittest.TestCase):
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
         )
 
+    def test_openai_modelinvoke_image_variant_is_preserved(self):
+        self.assertEqual(
+            ChannelService._normalize_provider_variant("openai", "openai-image-modelinvoke"),
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
+        )
+
     def test_openai_image_channel_capabilities_differentiate_variants(self):
         self.assertEqual(
             ChannelService.get_openai_image_channel_capabilities(

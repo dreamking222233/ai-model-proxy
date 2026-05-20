@@ -563,6 +563,9 @@ export default {
       if (channel.protocol_type !== 'openai') {
         return '当前渠道不是图片专用渠道，映射到图片模型前请确认上游确实兼容图片接口。'
       }
+      if (channel.provider_variant === 'openai-image-modelinvoke') {
+        return '该渠道是 XiaoLe 类型图片上游，适配当前系统作为上游的图片接口，生成走 /v1/image/created，编辑走 /v1/image/edit，默认承接 1K 图片请求。'
+      }
       if (channel.provider_variant === 'openai-image-compatible') {
         return '该渠道只支持默认 1K，系统会自动跳过它来承接 2K/4K 请求。建议同时补一个 Native Size 渠道。'
       }
@@ -897,6 +900,9 @@ export default {
         if (normalized === 'openai-image-native-size') {
           return 'OpenAI 原生尺寸'
         }
+        if (normalized === 'openai-image-modelinvoke') {
+          return 'XiaoLe 类型图片上游'
+        }
         return 'OpenAI 默认'
       }
       if (protocol === 'google') {
@@ -915,6 +921,9 @@ export default {
       const normalized = (providerVariant || '').toLowerCase()
       if (protocol === 'openai' && normalized === 'openai-image-native-size') {
         return 'green'
+      }
+      if (protocol === 'openai' && normalized === 'openai-image-modelinvoke') {
+        return 'cyan'
       }
       if (protocol === 'openai' && normalized === 'openai-image-compatible') {
         return 'orange'

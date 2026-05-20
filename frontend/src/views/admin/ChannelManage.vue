@@ -238,9 +238,10 @@
             <a-select-option value="default">Default</a-select-option>
             <a-select-option value="openai-image-compatible">OpenAI Image Compatible</a-select-option>
             <a-select-option value="openai-image-native-size">OpenAI Image Native Size</a-select-option>
+            <a-select-option value="openai-image-modelinvoke">XiaoLe 类型图片上游</a-select-option>
           </a-select>
           <div class="form-hint">
-            Image Compatible 适合只支持默认 1K 的图片网关；Image Native Size 会向上游透传 `size/quality`，适合支持 1K/2K/4K 原生分辨率的图片网关。
+            Image Compatible 适合只支持默认 1K 的图片网关；Image Native Size 会向上游透传 `size/quality`，适合支持 1K/2K/4K 原生分辨率的图片网关；XiaoLe 类型图片上游会把图片请求转到当前系统的 `/v1/image/created` 和 `/v1/image/edit`。
           </div>
         </a-form-item>
         <a-form-item v-if="form.protocol_type === 'google'" label="Google 渠道类型">
@@ -480,7 +481,8 @@ export default {
       if (protocol === 'openai') {
         const openaiVariantMap = {
           'openai-image-compatible': 'OpenAI Image Compatible',
-          'openai-image-native-size': 'OpenAI Image Native Size'
+          'openai-image-native-size': 'OpenAI Image Native Size',
+          'openai-image-modelinvoke': 'XiaoLe 类型图片上游'
         }
         return openaiVariantMap[normalized] || 'Default'
       }
@@ -501,6 +503,9 @@ export default {
         }
         if (normalized === 'openai-image-native-size') {
           return 'green'
+        }
+        if (normalized === 'openai-image-modelinvoke') {
+          return 'cyan'
         }
         return 'default'
       }
@@ -568,10 +573,10 @@ export default {
         }
         this.form.health_check_enabled = false
       } else if (value === 'openai') {
-        if (!['default', 'openai-image-compatible', 'openai-image-native-size'].includes(this.form.provider_variant)) {
+        if (!['default', 'openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke'].includes(this.form.provider_variant)) {
           this.form.provider_variant = 'default'
         }
-        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size'].includes(this.form.provider_variant)
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke'].includes(this.form.provider_variant)
       } else {
         this.form.provider_variant = 'default'
         this.form.health_check_enabled = true
@@ -598,7 +603,7 @@ export default {
         return
       }
       if (this.form.protocol_type === 'openai') {
-        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size'].includes(value)
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke'].includes(value)
       }
     },
     async fetchList() {

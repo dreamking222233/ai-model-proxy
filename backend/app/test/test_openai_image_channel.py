@@ -4,7 +4,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.health_service import _resolve_health_target
+from app.services.channel_service import ChannelService
+from app.services.health_service import _resolve_health_target, _resolve_openai_image_health_url
 from app.core.exceptions import ServiceException
 from app.services.proxy_service import ProxyService
 
@@ -63,6 +64,15 @@ class OpenAIImagePromptAdaptationTest(unittest.TestCase):
             "http://43.156.153.12:3000/v1/images/generations",
         )
 
+    def test_resolve_openai_image_generation_url_supports_modelinvoke_variant(self):
+        self.assertEqual(
+            ProxyService._resolve_openai_image_generation_url(
+                "http://43.156.153.12:3000",
+                "openai-image-modelinvoke",
+            ),
+            "http://43.156.153.12:3000/v1/image/created",
+        )
+
     def test_resolve_openai_image_edit_url_supports_root_and_v1_base(self):
         self.assertEqual(
             ProxyService._resolve_openai_image_edit_url("http://43.156.153.12:3000"),
@@ -71,6 +81,15 @@ class OpenAIImagePromptAdaptationTest(unittest.TestCase):
         self.assertEqual(
             ProxyService._resolve_openai_image_edit_url("http://43.156.153.12:3000/v1"),
             "http://43.156.153.12:3000/v1/images/edits",
+        )
+
+    def test_resolve_openai_image_edit_url_supports_modelinvoke_variant(self):
+        self.assertEqual(
+            ProxyService._resolve_openai_image_edit_url(
+                "http://43.156.153.12:3000",
+                "openai-image-modelinvoke",
+            ),
+            "http://43.156.153.12:3000/v1/image/edit",
         )
 
     def test_localize_openai_image_error_body_translates_stream_disconnect(self):
@@ -174,6 +193,38 @@ class OpenAIImageRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "openai-image-response")
         mock_openai_request.assert_awaited_once()
         mock_google_request.assert_not_awaited()
+
+    @patch(
+        "app.services.proxy_service.ProxyService._non_stream_openai_image_request",
+        new_callable=AsyncMock,
+    )
+    async def test_non_stream_image_request_routes_modelinvoke_openai_image_channel(
+        self,
+        mock_openai_request,
+    ):
+        mock_openai_request.return_value = "modelinvoke-response"
+        channel = SimpleNamespace(
+            protocol_type="openai",
+            provider_variant="openai-image-modelinvoke",
+        )
+
+        result = await ProxyService._non_stream_image_request(
+            SimpleNamespace(),
+            SimpleNamespace(id=1),
+            SimpleNamespace(id=2),
+            channel,
+            SimpleNamespace(id=3),
+            {"prompt": "draw"},
+            "req-modelinvoke-1",
+            "gpt-image-2",
+            "gpt-image-2",
+            "127.0.0.1",
+            Decimal("1.000"),
+            image_size="1K",
+        )
+
+        self.assertEqual(result, "modelinvoke-response")
+        mock_openai_request.assert_awaited_once()
 
     def test_filter_channels_by_image_size_skips_1k_only_compatible_channel(self):
         unified_model = SimpleNamespace(model_name="gpt-image-2")
@@ -416,6 +467,13 @@ class OpenAIImageRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_body["usage"]["image_size"], "4K")
         self.assertEqual(response_body["usage"]["image_credits_charged"], 2.0)
 
+    def test_openai_image_modelinvoke_variant_supports_edit(self):
+        self.assertTrue(
+            ChannelService.supports_openai_image_edit(
+                ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE
+            )
+        )
+
 
 class OpenAIImageHealthTargetTest(unittest.TestCase):
     def test_resolve_health_target_for_openai_image_channel(self):
@@ -426,6 +484,26 @@ class OpenAIImageHealthTargetTest(unittest.TestCase):
         model_name, upstream_api = _resolve_health_target(channel, "gpt-image-2")
         self.assertEqual(model_name, "gpt-image-2")
         self.assertEqual(upstream_api, "openai_image_generation")
+
+    def test_resolve_health_target_for_modelinvoke_image_channel(self):
+        channel = SimpleNamespace(
+            protocol_type="openai",
+            provider_variant="openai-image-modelinvoke",
+        )
+        model_name, upstream_api = _resolve_health_target(channel, "gpt-image-2")
+        self.assertEqual(model_name, "gpt-image-2")
+        self.assertEqual(upstream_api, "openai_image_generation")
+
+    def test_resolve_openai_image_health_url_for_modelinvoke_variant(self):
+        channel = SimpleNamespace(
+            protocol_type="openai",
+            provider_variant="openai-image-modelinvoke",
+            base_url="http://43.156.153.12:3000",
+        )
+        self.assertEqual(
+            _resolve_openai_image_health_url(channel),
+            "http://43.156.153.12:3000/v1/image/created",
+        )
 
     def test_resolve_health_target_for_openai_native_size_channel(self):
         channel = SimpleNamespace(

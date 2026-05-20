@@ -16,6 +16,10 @@ class ChannelHealthMonitorSwitchTest(unittest.TestCase):
             ChannelService._resolve_default_health_check_enabled("google", "google-vertex-image"),
             0,
         )
+        self.assertEqual(
+            ChannelService._resolve_default_health_check_enabled("openai", "openai-image-modelinvoke"),
+            0,
+        )
 
     def test_non_google_channel_defaults_to_health_monitor_enabled(self):
         self.assertEqual(

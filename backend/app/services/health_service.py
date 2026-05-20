@@ -68,6 +68,7 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
         if provider_variant in {
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
         }:
             return raw_target, "openai_image_generation"
         return raw_target, "openai_chat"
@@ -80,6 +81,22 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
             return raw_target, "google_vertex_sdk"
         return raw_target, "google_generate_content"
     return raw_target, "openai_chat"
+
+
+def _resolve_openai_image_health_url(channel: Channel) -> str:
+    """Build the upstream image generation health-check URL for an OpenAI image channel."""
+    base_url = channel.base_url.rstrip("/")
+    provider_variant = ChannelService._normalize_provider_variant(
+        getattr(channel, "protocol_type", None),
+        getattr(channel, "provider_variant", None),
+    )
+    if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE:
+        if base_url.endswith("/v1"):
+            return f"{base_url}/image/created"
+        return f"{base_url}/v1/image/created"
+    if base_url.endswith("/v1"):
+        return f"{base_url}/images/generations"
+    return f"{base_url}/v1/images/generations"
 
 
 def _select_health_check_model(db: Session, channel: Channel) -> Optional[str]:
@@ -445,11 +462,7 @@ class HealthService:
                 "store": False,
             }
         elif upstream_api == "openai_image_generation":
-            url = (
-                f"{base_url}/images/generations"
-                if base_url.endswith("/v1")
-                else f"{base_url}/v1/images/generations"
-            )
+            url = _resolve_openai_image_health_url(channel)
             payload = {
                 "model": upstream_model_name,
                 "prompt": "生成一张包含字母 OK 的简单测试图片",

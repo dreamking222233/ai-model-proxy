@@ -31,10 +31,33 @@
       </a-col>
     </a-row>
 
+    <a-row :gutter="[16, 16]">
+      <a-col :xs="24" :md="12">
+        <div class="split-card">
+          <span>余额充值分润</span>
+          <strong>￥{{ formatMoney(summary.balance_agent_income_cny) }}</strong>
+          <small>充值总额 ￥{{ formatMoney(summary.balance_amount_cny) }}，到账 ${{ formatUsd(summary.balance_credited_usd) }}</small>
+        </div>
+      </a-col>
+      <a-col :xs="24" :md="12">
+        <div class="split-card image">
+          <span>图片积分充值分润</span>
+          <strong>￥{{ formatMoney(summary.image_credit_agent_income_cny) }}</strong>
+          <small>充值总额 ￥{{ formatMoney(summary.image_credit_amount_cny) }}，到账 {{ formatCredits(summary.image_credit_credited_amount) }} 积分</small>
+        </div>
+      </a-col>
+    </a-row>
+
     <a-card class="panel-card" :bordered="false">
       <div class="panel-head">
         <h3>用户充值订单</h3>
-        <span>用户支付金额与代理增加的现金余额是两套数字</span>
+        <div class="panel-tools">
+          <span>用户支付金额与代理增加的现金余额是两套数字</span>
+          <a-select v-model="orderFilters.recharge_type" allowClear placeholder="充值类型" style="width: 140px" @change="handleOrderFilterChange">
+            <a-select-option value="balance">余额</a-select-option>
+            <a-select-option value="image_credit">图片积分</a-select-option>
+          </a-select>
+        </div>
       </div>
       <a-table
         :columns="orderColumns"
@@ -42,12 +65,16 @@
         :loading="loadingOrders"
         :pagination="orderPagination"
         row-key="order_no"
+        :scroll="{ x: 900 }"
         @change="handleOrderTableChange"
       >
+        <template slot="rechargeType" slot-scope="text">
+          <a-tag :color="text === 'image_credit' ? 'cyan' : 'blue'">{{ rechargeTypeText(text) }}</a-tag>
+        </template>
         <template slot="userMoney" slot-scope="text, record">
           <div class="money-stack">
             <strong>￥{{ formatMoney(record.amount_cny) }}</strong>
-            <small>到账 ${{ formatUsd(record.credited_usd) }}</small>
+            <small>到账 {{ orderCreditText(record) }}</small>
           </div>
         </template>
         <template slot="commission" slot-scope="text">
@@ -97,13 +124,22 @@ export default {
       summary: {
         balance: 0,
         total_amount_cny: 0,
-        total_agent_income_cny: 0
+        total_agent_income_cny: 0,
+        balance_amount_cny: 0,
+        balance_credited_usd: 0,
+        balance_agent_income_cny: 0,
+        image_credit_amount_cny: 0,
+        image_credit_credited_amount: 0,
+        image_credit_agent_income_cny: 0
       },
       orders: [],
       withdrawals: [],
       loadingSummary: false,
       loadingOrders: false,
       loadingWithdrawals: false,
+      orderFilters: {
+        recharge_type: undefined
+      },
       orderPagination: {
         current: 1,
         pageSize: 12,
@@ -121,6 +157,7 @@ export default {
       orderColumns: [
         { title: '订单号', dataIndex: 'order_no', key: 'order_no', width: 200 },
         { title: '用户', dataIndex: 'username', key: 'username', width: 120 },
+        { title: '充值类型', dataIndex: 'recharge_type', key: 'recharge_type', width: 110, scopedSlots: { customRender: 'rechargeType' } },
         { title: '用户充值', key: 'userMoney', width: 160, scopedSlots: { customRender: 'userMoney' } },
         { title: '代理增加现金', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 140, scopedSlots: { customRender: 'commission' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
@@ -146,6 +183,20 @@ export default {
     },
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
+    },
+    formatCredits(value) {
+      const num = Number(value || 0)
+      return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+    },
+    rechargeTypeText(type) {
+      const map = { balance: '余额', image_credit: '图片积分' }
+      return map[type || 'balance'] || type || '-'
+    },
+    orderCreditText(record) {
+      if ((record && record.recharge_type) === 'image_credit') {
+        return `${this.formatCredits(record.credited_image_credits)} 积分`
+      }
+      return `$${this.formatUsd(record && record.credited_usd)}`
     },
     statusText(status) {
       const map = { pending: '待支付', paid: '已支付', closed: '已关闭', failed: '失败' }
@@ -175,7 +226,8 @@ export default {
         const res = await listAgentPaymentOrders({
           page: this.orderPagination.current,
           page_size: this.orderPagination.pageSize,
-          status: 'paid'
+          status: 'paid',
+          recharge_type: this.orderFilters.recharge_type || undefined
         })
         const data = res.data || {}
         this.orders = data.list || []
@@ -201,6 +253,10 @@ export default {
     handleOrderTableChange(pagination) {
       this.orderPagination.current = pagination.current
       this.orderPagination.pageSize = pagination.pageSize
+      this.fetchOrders()
+    },
+    handleOrderFilterChange() {
+      this.orderPagination.current = 1
       this.fetchOrders()
     },
     handleWithdrawalTableChange(pagination) {
@@ -249,6 +305,18 @@ export default {
 .metric-card strong { font-size: 30px; color: #0f172a; }
 .metric-card.warm strong { color: #b45309; }
 .metric-card.green strong { color: #15803d; }
+.split-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 22px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+.split-card strong { font-size: 24px; color: #1d4ed8; }
+.split-card.image strong { color: #0891b2; }
+.split-card small { color: #64748b; }
 .panel-card {
   border-radius: 18px;
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
@@ -262,6 +330,11 @@ export default {
 }
 .panel-head h3 { margin: 0; font-size: 22px; font-weight: 700; }
 .panel-head span { color: #64748b; }
+.panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .money-stack { display: flex; flex-direction: column; }
 .money-stack small { color: #0f766e; }
 .commission-text { color: #15803d; font-weight: 700; }

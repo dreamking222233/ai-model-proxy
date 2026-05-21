@@ -33,6 +33,7 @@ def create_recharge_order(
         user=user,
         amount_cny=data.amount_cny,
         payment_channel=data.payment_channel,
+        recharge_type=data.recharge_type,
         site_context=agent_context,
     )
     return ResponseModel(data=result, message="充值订单创建成功")

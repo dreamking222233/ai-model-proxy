@@ -30,6 +30,10 @@
           <a-select-option value="alipay">支付宝</a-select-option>
           <a-select-option value="wechat">微信</a-select-option>
         </a-select>
+        <a-select v-model="filters.recharge_type" allowClear placeholder="充值类型" style="width: 140px" @change="handleSearch">
+          <a-select-option value="balance">余额</a-select-option>
+          <a-select-option value="image_credit">图片积分</a-select-option>
+        </a-select>
         <a-select v-model="filters.status" allowClear placeholder="订单状态" style="width: 140px" @change="handleSearch">
           <a-select-option value="pending">待支付</a-select-option>
           <a-select-option value="paid">已支付</a-select-option>
@@ -60,7 +64,7 @@
         :pagination="pagination"
         row-key="order_no"
         @change="handleTableChange"
-        :scroll="{ x: 1650 }"
+        :scroll="{ x: 1780 }"
       >
         <template slot="paymentChannel" slot-scope="text, record">
           <a-tag :color="record.payment_channel === 'alipay' ? 'blue' : 'green'">
@@ -71,6 +75,9 @@
           <a-tag :color="record.customer_type === 'agent' ? 'orange' : 'purple'">
             {{ record.customer_type_text || text || '-' }}
           </a-tag>
+        </template>
+        <template slot="rechargeType" slot-scope="text">
+          <a-tag :color="text === 'image_credit' ? 'cyan' : 'blue'">{{ rechargeTypeText(text) }}</a-tag>
         </template>
         <template slot="userInfo" slot-scope="text, record">
           <div class="stack-text">
@@ -88,7 +95,7 @@
         <template slot="amount" slot-scope="text, record">
           <div class="stack-text">
             <strong>￥{{ formatMoney(record.amount_cny) }}</strong>
-            <small>到账 ${{ formatUsd(record.credited_usd) }}</small>
+            <small>到账 {{ orderCreditText(record) }}</small>
           </div>
         </template>
         <template slot="agentIncome" slot-scope="text, record">
@@ -122,6 +129,7 @@ export default {
         end_date: undefined,
         site_scope: undefined,
         payment_channel: undefined,
+        recharge_type: undefined,
         status: undefined,
         agent_keyword: '',
         source_host: ''
@@ -136,6 +144,7 @@ export default {
       columns: [
         { title: '订单号', dataIndex: 'order_no', key: 'order_no', width: 220 },
         { title: '支付平台', key: 'payment_channel', width: 120, scopedSlots: { customRender: 'paymentChannel' } },
+        { title: '充值类型', dataIndex: 'recharge_type', key: 'recharge_type', width: 120, scopedSlots: { customRender: 'rechargeType' } },
         { title: '客户类型', key: 'customer_type', width: 120, scopedSlots: { customRender: 'customerType' } },
         { title: '用户', key: 'username', width: 160, scopedSlots: { customRender: 'userInfo' } },
         { title: '归属', key: 'agent_name', width: 180, scopedSlots: { customRender: 'agentInfo' } },
@@ -162,6 +171,20 @@ export default {
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
     },
+    formatCredits(value) {
+      const num = Number(value || 0)
+      return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+    },
+    rechargeTypeText(type) {
+      const map = { balance: '余额', image_credit: '图片积分' }
+      return map[type || 'balance'] || type || '-'
+    },
+    orderCreditText(record) {
+      if ((record && record.recharge_type) === 'image_credit') {
+        return `${this.formatCredits(record.credited_image_credits)} 积分`
+      }
+      return `$${this.formatUsd(record && record.credited_usd)}`
+    },
     statusText(status) {
       const map = { pending: '待支付', paid: '已支付', closed: '已关闭', failed: '失败' }
       return map[status] || status || '-'
@@ -187,6 +210,7 @@ export default {
         end_date: undefined,
         site_scope: undefined,
         payment_channel: undefined,
+        recharge_type: undefined,
         status: undefined,
         agent_keyword: '',
         source_host: ''
@@ -210,6 +234,7 @@ export default {
           end_date: this.filters.end_date || undefined,
           site_scope: this.filters.site_scope || undefined,
           payment_channel: this.filters.payment_channel || undefined,
+          recharge_type: this.filters.recharge_type || undefined,
           status: this.filters.status || undefined,
           agent_keyword: this.filters.agent_keyword || undefined,
           source_host: this.filters.source_host || undefined

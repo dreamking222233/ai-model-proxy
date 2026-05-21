@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.database import Base
 from app.models.agent import Agent
-from app.models.log import UserBalance, ConsumptionRecord
+from app.models.log import ImageCreditRecord, UserBalance, UserImageBalance, ConsumptionRecord
 from app.models.payment import PaymentRechargeOrder, AgentCashBalance, AgentCashLedger, AgentCashWithdrawal
 from app.models.user import SysUser
 from app.core.exceptions import ServiceException
@@ -36,6 +36,8 @@ class PaymentRechargeTestCase(TestCase):
         settings.WECHAT_PAY_MCH_ID = "test-wechat-mch"
         settings.RECHARGE_USER_CNY_TO_USD_RATE = Decimal("5")
         settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE = Decimal("10")
+        settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE = Decimal("5")
+        settings.RECHARGE_IMAGE_CREDIT_AGENT_CNY_RATE = Decimal("10")
 
     def tearDown(self):
         event.remove(self.db, "before_flush", self._assign_sqlite_bigint_ids)
@@ -175,6 +177,48 @@ class PaymentRechargeTestCase(TestCase):
         self.assertIsNotNone(cash_balance)
         self.assertEqual(Decimal(str(cash_balance.balance)), Decimal("5.00"))
         self.assertEqual(self.db.query(AgentCashLedger).filter(AgentCashLedger.agent_id == 7).count(), 1)
+
+    def test_apply_paid_image_credit_order_credits_user_image_balance_and_agent_cash(self):
+        self.db.add(Agent(id=17, agent_code="agent-17", agent_name="Agent 17", status="active"))
+        self.db.commit()
+        self._create_user(17, agent_id=17)
+        order = PaymentRechargeOrder(
+            order_no="ALP202605210017",
+            payment_channel="alipay",
+            recharge_type="image_credit",
+            user_id=17,
+            agent_id=17,
+            site_scope="agent",
+            source_host="agent.example.com",
+            return_url_snapshot="https://agent.example.com/user/recharge?order_no=ALP202605210017",
+            amount_cny=Decimal("1.00"),
+            credited_usd=Decimal("0.000000"),
+            credited_image_credits=Decimal("5.000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.50"),
+            status="pending",
+            subject="AI 平台图片积分充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PaymentService._apply_paid_order(self.db, order.order_no, {
+            "app_id": settings.ALIPAY_APP_ID,
+            "trade_status": "TRADE_SUCCESS",
+            "total_amount": "1.00",
+            "alipay_trade_no": "TRADE-IMG-001",
+        }, source="notify")
+
+        user_balance = self.db.query(UserBalance).filter(UserBalance.user_id == 17).first()
+        image_balance = self.db.query(UserImageBalance).filter(UserImageBalance.user_id == 17).first()
+        cash_balance = self.db.query(AgentCashBalance).filter(AgentCashBalance.agent_id == 17).first()
+        ledger = self.db.query(AgentCashLedger).filter(AgentCashLedger.agent_id == 17).first()
+        self.assertEqual(Decimal(str(user_balance.balance)), Decimal("0.000000"))
+        self.assertEqual(Decimal(str(image_balance.balance)), Decimal("5.000"))
+        self.assertEqual(Decimal(str(cash_balance.balance)), Decimal("0.50"))
+        self.assertEqual(ledger.action_type, "image_credit_recharge_commission")
+        self.assertEqual(self.db.query(ImageCreditRecord).filter(ImageCreditRecord.user_id == 17).count(), 1)
 
     def test_apply_paid_order_allows_zero_agent_income(self):
         self.db.add(Agent(id=9, agent_code="agent-9", agent_name="Agent 9", status="active"))

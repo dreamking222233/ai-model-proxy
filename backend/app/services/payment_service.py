@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.exceptions import ServiceException
-from app.models.log import ConsumptionRecord, UserBalance
+from app.models.log import ConsumptionRecord, ImageCreditRecord, UserBalance, UserImageBalance
 from app.models.payment import (
     AgentCashBalance,
     AgentCashLedger,
@@ -47,12 +47,14 @@ class PaymentService:
     ORDER_EXPIRE_MINUTES = 30
     DEFAULT_CHANNEL = "alipay"
     PAYMENT_CHANNELS = {"alipay", "wechat"}
+    RECHARGE_TYPES = {"balance", "image_credit"}
     ALIPAY_ACCEPTED_TRADE_STATUSES = {"TRADE_SUCCESS", "TRADE_FINISHED"}
     WECHAT_PENDING_STATES = {"NOTPAY", "USERPAYING"}
     WECHAT_SUCCESS_STATES = {"SUCCESS"}
     WECHAT_CLOSED_STATES = {"CLOSED", "REVOKED"}
     WECHAT_FAILED_STATES = {"PAYERROR"}
     PAYMENT_CHANNEL_TEXT = {"alipay": "支付宝", "wechat": "微信"}
+    RECHARGE_TYPE_TEXT = {"balance": "余额", "image_credit": "图片积分"}
 
     @staticmethod
     def _serialize_dt(dt: datetime | None, *, assume_utc: bool) -> str | None:
@@ -85,6 +87,10 @@ class PaymentService:
         return PaymentService._quantize(value, PaymentService.USD_SCALE, code, allow_zero=allow_zero)
 
     @staticmethod
+    def _normalize_image_credits(value, code: str = "INVALID_IMAGE_CREDIT_AMOUNT", allow_zero: bool = False) -> Decimal:
+        return PaymentService._quantize(value, Decimal("0.001"), code, allow_zero=allow_zero)
+
+    @staticmethod
     def _try_normalize_cny(value) -> Decimal | None:
         if value is None:
             return None
@@ -112,9 +118,21 @@ class PaymentService:
         return channel
 
     @staticmethod
+    def _normalize_recharge_type(recharge_type: str | None) -> str:
+        normalized = str(recharge_type or "balance").strip().lower()
+        if normalized not in PaymentService.RECHARGE_TYPES:
+            raise ServiceException(400, "不支持的充值类型", "RECHARGE_TYPE_INVALID")
+        return normalized
+
+    @staticmethod
     def _payment_channel_text(payment_channel: str | None) -> str:
         channel = str(payment_channel or "").strip().lower()
         return PaymentService.PAYMENT_CHANNEL_TEXT.get(channel, channel or "-")
+
+    @staticmethod
+    def _recharge_type_text(recharge_type: str | None) -> str:
+        normalized = PaymentService._normalize_recharge_type(recharge_type)
+        return PaymentService.RECHARGE_TYPE_TEXT.get(normalized, normalized)
 
     @staticmethod
     def _is_local_host(host: str | None) -> bool:
@@ -311,11 +329,13 @@ class PaymentService:
         return prefix + datetime.utcnow().strftime("%Y%m%d%H%M%S") + secrets.token_hex(3).upper()
 
     @staticmethod
-    def _build_subject() -> str:
-        return "AI 平台在线充值"
+    def _build_subject(recharge_type: str = "balance") -> str:
+        return f"AI 平台{PaymentService._recharge_type_text(recharge_type)}充值"
 
     @staticmethod
-    def _build_body() -> str:
+    def _build_body(recharge_type: str = "balance") -> str:
+        if PaymentService._normalize_recharge_type(recharge_type) == "image_credit":
+            return "用户在线充值图片积分"
         return "用户在线充值美元余额"
 
     @staticmethod
@@ -335,24 +355,38 @@ class PaymentService:
         return PaymentService._append_query(base, {"order_no": order.order_no})
 
     @staticmethod
-    def _calculate_amounts(amount_cny: Decimal, agent_id: int | None) -> tuple[Decimal, Decimal, Decimal]:
-        user_rate = PaymentService._settings_decimal(
-            settings.RECHARGE_USER_CNY_TO_USD_RATE,
-            "RECHARGE_USER_RATE_INVALID",
-        )
-        agent_rate = PaymentService._settings_decimal(
-            settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE,
-            "RECHARGE_AGENT_RATE_INVALID",
-        )
+    def _calculate_amounts(amount_cny: Decimal, agent_id: int | None, recharge_type: str = "balance") -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+        if normalized_type == "image_credit":
+            user_rate = PaymentService._settings_decimal(
+                settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE,
+                "RECHARGE_IMAGE_CREDIT_USER_RATE_INVALID",
+            )
+            agent_rate = PaymentService._settings_decimal(
+                settings.RECHARGE_IMAGE_CREDIT_AGENT_CNY_RATE,
+                "RECHARGE_IMAGE_CREDIT_AGENT_RATE_INVALID",
+            )
+            credited_image_credits = (amount_cny * user_rate).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+            if not agent_id:
+                return Decimal("0.000000"), credited_image_credits, agent_rate, Decimal("0.00")
+
+            agent_cost_cny = (credited_image_credits / agent_rate).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
+            agent_income_cny = (amount_cny - agent_cost_cny).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
+            if agent_income_cny < Decimal("0"):
+                raise ServiceException(500, "代理图片积分结算比例配置错误，导致代理分润为负数", "RECHARGE_AGENT_INCOME_INVALID")
+            return Decimal("0.000000"), credited_image_credits, agent_rate, agent_income_cny
+
+        user_rate = PaymentService._settings_decimal(settings.RECHARGE_USER_CNY_TO_USD_RATE, "RECHARGE_USER_RATE_INVALID")
+        agent_rate = PaymentService._settings_decimal(settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE, "RECHARGE_AGENT_RATE_INVALID")
         credited_usd = (amount_cny * user_rate).quantize(PaymentService.USD_SCALE, rounding=ROUND_HALF_UP)
         if not agent_id:
-            return credited_usd, agent_rate, Decimal("0.00")
+            return credited_usd, Decimal("0.000"), agent_rate, Decimal("0.00")
 
         agent_cost_cny = (credited_usd / agent_rate).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
         agent_income_cny = (amount_cny - agent_cost_cny).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
         if agent_income_cny < Decimal("0"):
             raise ServiceException(500, "代理结算比例配置错误，导致代理分润为负数", "RECHARGE_AGENT_INCOME_INVALID")
-        return credited_usd, agent_rate, agent_income_cny
+        return credited_usd, Decimal("0.000"), agent_rate, agent_income_cny
 
     @staticmethod
     def create_recharge_order(
@@ -360,26 +394,30 @@ class PaymentService:
         user: SysUser,
         amount_cny,
         payment_channel: str = DEFAULT_CHANNEL,
+        recharge_type: str = "balance",
         site_context: AgentSiteContext | None = None,
     ) -> dict:
         channel = PaymentService._normalize_payment_channel(payment_channel)
+        normalized_type = PaymentService._normalize_recharge_type(recharge_type)
         PaymentService.assert_recharge_enabled_for_site(site_context, channel)
         amount_decimal = PaymentService._normalize_cny(amount_cny)
-        credited_usd, agent_rate, agent_income_cny = PaymentService._calculate_amounts(amount_decimal, user.agent_id)
+        credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(amount_decimal, user.agent_id, normalized_type)
         order = PaymentRechargeOrder(
             order_no=PaymentService._generate_order_no(channel),
             payment_channel=channel,
+            recharge_type=normalized_type,
             user_id=user.id,
             agent_id=user.agent_id,
             site_scope="agent" if user.agent_id else "platform",
             source_host=AgentService.normalize_host(getattr(site_context, "host", None) or getattr(site_context, "request_host", None)),
             amount_cny=amount_decimal,
             credited_usd=credited_usd,
+            credited_image_credits=credited_image_credits,
             agent_settlement_rate=agent_rate,
             agent_income_cny=agent_income_cny,
             status="pending",
-            subject=PaymentService._build_subject(),
-            body=PaymentService._build_body(),
+            subject=PaymentService._build_subject(normalized_type),
+            body=PaymentService._build_body(normalized_type),
             expired_at=datetime.utcnow() + timedelta(minutes=PaymentService.ORDER_EXPIRE_MINUTES),
         )
         order.return_url_snapshot = PaymentService.build_order_return_url(order, site_context)
@@ -838,6 +876,51 @@ class PaymentService:
         ))
 
     @staticmethod
+    def _credit_user_image_credits(db: Session, order: PaymentRechargeOrder) -> None:
+        balance = (
+            db.query(UserImageBalance)
+            .filter(UserImageBalance.user_id == order.user_id)
+            .with_for_update()
+            .first()
+        )
+        if not balance:
+            balance = UserImageBalance(user_id=order.user_id, balance=0, total_recharged=0, total_consumed=0)
+            db.add(balance)
+            db.flush()
+            balance = (
+                db.query(UserImageBalance)
+                .filter(UserImageBalance.user_id == order.user_id)
+                .with_for_update()
+                .first()
+            )
+
+        credited = PaymentService._normalize_image_credits(order.credited_image_credits)
+        balance_before = Decimal(str(balance.balance or 0))
+        balance.balance = balance_before + credited
+        balance.total_recharged = Decimal(str(balance.total_recharged or 0)) + credited
+
+        db.add(ImageCreditRecord(
+            user_id=order.user_id,
+            agent_id=order.agent_id,
+            request_id=order.order_no,
+            model_name=f"{PaymentService._payment_channel_text(order.payment_channel)}充值",
+            change_amount=credited,
+            balance_before=balance_before,
+            balance_after=balance.balance,
+            multiplier=Decimal("1"),
+            action_type="recharge",
+            operator_id=None,
+            remark="用户在线充值图片积分",
+        ))
+
+    @staticmethod
+    def _credit_user_order_asset(db: Session, order: PaymentRechargeOrder) -> None:
+        if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit":
+            PaymentService._credit_user_image_credits(db, order)
+            return
+        PaymentService._credit_user_balance(db, order)
+
+    @staticmethod
     def _validate_paid_payload(db: Session, locked: PaymentRechargeOrder, payload: dict, source: str) -> dict:
         channel = PaymentService._normalize_payment_channel(locked.payment_channel)
         local_amount = PaymentService._normalize_cny(locked.amount_cny)
@@ -921,12 +1004,16 @@ class PaymentService:
             agent_id=int(order.agent_id),
             order_id=order.id,
             withdrawal_id=None,
-            action_type="recharge_commission",
+            action_type=(
+                "image_credit_recharge_commission"
+                if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit"
+                else "balance_recharge_commission"
+            ),
             change_amount=income,
             balance_before=balance_before,
             balance_after=balance.balance,
             operator_user_id=None,
-            remark=f"用户在线充值分润，订单 {order.order_no}",
+            remark=f"用户在线{PaymentService._recharge_type_text(getattr(order, 'recharge_type', None))}充值分润，订单 {order.order_no}",
         ))
 
     @staticmethod
@@ -938,7 +1025,7 @@ class PaymentService:
             raise ServiceException(400, "订单状态不允许再次入账", "RECHARGE_ORDER_STATUS_INVALID")
         validated = PaymentService._validate_paid_payload(db, locked, payload, source)
 
-        PaymentService._credit_user_balance(db, locked)
+        PaymentService._credit_user_order_asset(db, locked)
         PaymentService._credit_agent_cash_balance(db, locked)
 
         locked.status = "paid"
@@ -1055,12 +1142,15 @@ class PaymentService:
             "id": order.id,
             "order_no": order.order_no,
             "payment_channel": order.payment_channel,
+            "recharge_type": PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)),
+            "recharge_type_text": PaymentService._recharge_type_text(getattr(order, "recharge_type", None)),
             "user_id": order.user_id,
             "agent_id": order.agent_id,
             "site_scope": order.site_scope,
             "source_host": order.source_host,
             "amount_cny": float(order.amount_cny or 0),
             "credited_usd": float(order.credited_usd or 0),
+            "credited_image_credits": float(order.credited_image_credits or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
             "status": order.status,
             "trade_status": order.trade_status,

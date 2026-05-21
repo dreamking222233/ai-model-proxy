@@ -15,6 +15,7 @@ BEGIN
             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             `order_no` VARCHAR(64) NOT NULL,
             `payment_channel` VARCHAR(32) NOT NULL DEFAULT 'alipay',
+            `recharge_type` VARCHAR(32) NOT NULL DEFAULT 'balance' COMMENT '充值类型: balance/image_credit',
             `user_id` BIGINT UNSIGNED NOT NULL,
             `agent_id` BIGINT UNSIGNED DEFAULT NULL,
             `site_scope` VARCHAR(16) NOT NULL DEFAULT 'platform',
@@ -22,6 +23,7 @@ BEGIN
             `return_url_snapshot` VARCHAR(512) DEFAULT NULL,
             `amount_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '用户支付人民币金额',
             `credited_usd` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '用户到账美元余额',
+            `credited_image_credits` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '到账图片积分',
             `agent_settlement_rate` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
             `agent_income_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '代理现金分润人民币',
             `status` VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/closed/failed',
@@ -44,6 +46,7 @@ BEGIN
             UNIQUE KEY `uk_payment_recharge_order_no` (`order_no`),
             UNIQUE KEY `uk_payment_recharge_alipay_trade_no` (`alipay_trade_no`),
             UNIQUE KEY `uk_payment_recharge_wechat_transaction_id` (`wechat_transaction_id`),
+            KEY `idx_payment_recharge_type` (`recharge_type`),
             KEY `idx_payment_recharge_user_status` (`user_id`, `status`),
             KEY `idx_payment_recharge_agent_status` (`agent_id`, `status`),
             KEY `idx_payment_recharge_created_at` (`created_at`)

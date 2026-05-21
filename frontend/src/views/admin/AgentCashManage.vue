@@ -24,6 +24,7 @@
         :loading="loadingSummary"
         :pagination="summaryPagination"
         row-key="agent_id"
+        :scroll="{ x: 1800 }"
         @change="handleSummaryTableChange"
       >
         <template slot="balance" slot-scope="text">
@@ -54,13 +55,17 @@
             :loading="loadingOrders"
             :pagination="orderPagination"
             row-key="order_no"
+            :scroll="{ x: 820 }"
             @change="handleOrderTableChange"
           >
             <template slot="amount" slot-scope="text, record">
               <div class="money-stack">
                 <strong>￥{{ formatMoney(record.amount_cny) }}</strong>
-                <small>到账 ${{ formatUsd(record.credited_usd) }}</small>
+                <small>到账 {{ orderCreditText(record) }}</small>
               </div>
+            </template>
+            <template slot="rechargeType" slot-scope="text">
+              <a-tag :color="text === 'image_credit' ? 'cyan' : 'blue'">{{ rechargeTypeText(text) }}</a-tag>
             </template>
             <template slot="commission" slot-scope="text">
               <span class="commission-text">+￥{{ formatMoney(text) }}</span>
@@ -196,13 +201,18 @@ export default {
         { title: '累计提现', dataIndex: 'total_withdrawn', key: 'total_withdrawn', width: 130, scopedSlots: { customRender: 'income' } },
         { title: '累计调账', dataIndex: 'total_adjusted', key: 'total_adjusted', width: 130, scopedSlots: { customRender: 'income' } },
         { title: '充值总额', dataIndex: 'total_amount_cny', key: 'total_amount_cny', width: 130, scopedSlots: { customRender: 'income' } },
+        { title: '余额充值额', dataIndex: 'balance_amount_cny', key: 'balance_amount_cny', width: 130, scopedSlots: { customRender: 'income' } },
+        { title: '图片充值额', dataIndex: 'image_credit_amount_cny', key: 'image_credit_amount_cny', width: 130, scopedSlots: { customRender: 'income' } },
         { title: '代理分润', dataIndex: 'total_agent_income_cny', key: 'total_agent_income_cny', width: 130, scopedSlots: { customRender: 'agentIncome' } },
+        { title: '余额分润', dataIndex: 'balance_agent_income_cny', key: 'balance_agent_income_cny', width: 130, scopedSlots: { customRender: 'agentIncome' } },
+        { title: '图片分润', dataIndex: 'image_credit_agent_income_cny', key: 'image_credit_agent_income_cny', width: 130, scopedSlots: { customRender: 'agentIncome' } },
         { title: '支付成功单数', dataIndex: 'paid_order_count', key: 'paid_order_count', width: 120 },
         { title: '操作', key: 'action', width: 200, scopedSlots: { customRender: 'action' } }
       ],
       orderColumns: [
         { title: '订单号', dataIndex: 'order_no', key: 'order_no', width: 190 },
         { title: '用户', dataIndex: 'username', key: 'username', width: 120 },
+        { title: '充值类型', dataIndex: 'recharge_type', key: 'recharge_type', width: 110, scopedSlots: { customRender: 'rechargeType' } },
         { title: '充值金额', key: 'amount', width: 160, scopedSlots: { customRender: 'amount' } },
         { title: '代理分润', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 120, scopedSlots: { customRender: 'commission' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
@@ -228,6 +238,20 @@ export default {
     },
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
+    },
+    formatCredits(value) {
+      const num = Number(value || 0)
+      return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+    },
+    rechargeTypeText(type) {
+      const map = { balance: '余额', image_credit: '图片积分' }
+      return map[type || 'balance'] || type || '-'
+    },
+    orderCreditText(record) {
+      if ((record && record.recharge_type) === 'image_credit') {
+        return `${this.formatCredits(record.credited_image_credits)} 积分`
+      }
+      return `$${this.formatUsd(record && record.credited_usd)}`
     },
     statusText(status) {
       const map = { pending: '待支付', paid: '已支付', closed: '已关闭', failed: '失败' }

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ServiceException
@@ -65,6 +65,14 @@ class AgentCashService:
         }
 
     @staticmethod
+    def _recharge_type(order: PaymentRechargeOrder) -> str:
+        return PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None))
+
+    @staticmethod
+    def _recharge_type_text(recharge_type: str | None) -> str:
+        return PaymentService._recharge_type_text(recharge_type)
+
+    @staticmethod
     def _serialize_order(order: PaymentRechargeOrder, user: SysUser | None = None, agent: Agent | None = None) -> dict:
         customer_type = "agent" if order.agent_id else "platform"
         return {
@@ -78,10 +86,13 @@ class AgentCashService:
             "source_host": order.source_host,
             "payment_channel": order.payment_channel,
             "payment_channel_text": {"alipay": "支付宝", "wechat": "微信"}.get(order.payment_channel, order.payment_channel or "-"),
+            "recharge_type": AgentCashService._recharge_type(order),
+            "recharge_type_text": AgentCashService._recharge_type_text(getattr(order, "recharge_type", None)),
             "customer_type": customer_type,
             "customer_type_text": "代理客户" if customer_type == "agent" else "直属用户",
             "amount_cny": float(order.amount_cny or 0),
             "credited_usd": float(order.credited_usd or 0),
+            "credited_image_credits": float(order.credited_image_credits or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
             "status": order.status,
             "trade_status": order.trade_status,
@@ -176,7 +187,14 @@ class AgentCashService:
                 PaymentRechargeOrder.agent_id,
                 func.coalesce(func.sum(PaymentRechargeOrder.amount_cny), 0).label("total_amount_cny"),
                 func.coalesce(func.sum(PaymentRechargeOrder.credited_usd), 0).label("total_credited_usd"),
+                func.coalesce(func.sum(PaymentRechargeOrder.credited_image_credits), 0).label("total_credited_image_credits"),
                 func.coalesce(func.sum(PaymentRechargeOrder.agent_income_cny), 0).label("total_agent_income_cny"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.amount_cny), else_=0)), 0).label("balance_amount_cny"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.credited_usd), else_=0)), 0).label("balance_credited_usd"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.agent_income_cny), else_=0)), 0).label("balance_agent_income_cny"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.amount_cny), else_=0)), 0).label("image_credit_amount_cny"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.credited_image_credits), else_=0)), 0).label("image_credit_credited_amount"),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.agent_income_cny), else_=0)), 0).label("image_credit_agent_income_cny"),
                 func.count(PaymentRechargeOrder.id).label("paid_order_count"),
             )
             .filter(
@@ -190,10 +208,30 @@ class AgentCashService:
             int(agent_id): {
                 "total_amount_cny": float(total_amount_cny or 0),
                 "total_credited_usd": float(total_credited_usd or 0),
+                "total_credited_image_credits": float(total_credited_image_credits or 0),
                 "total_agent_income_cny": float(total_agent_income_cny or 0),
+                "balance_amount_cny": float(balance_amount_cny or 0),
+                "balance_credited_usd": float(balance_credited_usd or 0),
+                "balance_agent_income_cny": float(balance_agent_income_cny or 0),
+                "image_credit_amount_cny": float(image_credit_amount_cny or 0),
+                "image_credit_credited_amount": float(image_credit_credited_amount or 0),
+                "image_credit_agent_income_cny": float(image_credit_agent_income_cny or 0),
                 "paid_order_count": int(paid_order_count or 0),
             }
-            for agent_id, total_amount_cny, total_credited_usd, total_agent_income_cny, paid_order_count in order_rows
+            for (
+                agent_id,
+                total_amount_cny,
+                total_credited_usd,
+                total_credited_image_credits,
+                total_agent_income_cny,
+                balance_amount_cny,
+                balance_credited_usd,
+                balance_agent_income_cny,
+                image_credit_amount_cny,
+                image_credit_credited_amount,
+                image_credit_agent_income_cny,
+                paid_order_count,
+            ) in order_rows
         }
 
         items = []
@@ -203,7 +241,14 @@ class AgentCashService:
             stats = order_map.get(agent_id, {
                 "total_amount_cny": 0.0,
                 "total_credited_usd": 0.0,
+                "total_credited_image_credits": 0.0,
                 "total_agent_income_cny": 0.0,
+                "balance_amount_cny": 0.0,
+                "balance_credited_usd": 0.0,
+                "balance_agent_income_cny": 0.0,
+                "image_credit_amount_cny": 0.0,
+                "image_credit_credited_amount": 0.0,
+                "image_credit_agent_income_cny": 0.0,
                 "paid_order_count": 0,
             })
             items.append({
@@ -226,6 +271,7 @@ class AgentCashService:
         user_id: int | None = None,
         status: str | None = None,
         payment_channel: str | None = None,
+        recharge_type: str | None = None,
         site_scope: str | None = None,
         keyword: str | None = None,
         start_date: str | None = None,
@@ -243,6 +289,9 @@ class AgentCashService:
             query = query.filter(PaymentRechargeOrder.status == status)
         if payment_channel:
             query = query.filter(PaymentRechargeOrder.payment_channel == payment_channel)
+        if recharge_type:
+            normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+            query = query.filter(PaymentRechargeOrder.recharge_type == normalized_type)
         if site_scope == "platform":
             query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
         elif site_scope == "agent":
@@ -457,7 +506,14 @@ class AgentCashService:
             db.query(
                 func.coalesce(func.sum(PaymentRechargeOrder.amount_cny), 0),
                 func.coalesce(func.sum(PaymentRechargeOrder.credited_usd), 0),
+                func.coalesce(func.sum(PaymentRechargeOrder.credited_image_credits), 0),
                 func.coalesce(func.sum(PaymentRechargeOrder.agent_income_cny), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.amount_cny), else_=0)), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.credited_usd), else_=0)), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "balance", PaymentRechargeOrder.agent_income_cny), else_=0)), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.amount_cny), else_=0)), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.credited_image_credits), else_=0)), 0),
+                func.coalesce(func.sum(case((PaymentRechargeOrder.recharge_type == "image_credit", PaymentRechargeOrder.agent_income_cny), else_=0)), 0),
                 func.count(PaymentRechargeOrder.id),
             )
             .filter(
@@ -466,12 +522,31 @@ class AgentCashService:
             )
             .first()
         )
-        total_amount_cny, total_credited_usd, total_agent_income_cny, paid_order_count = paid_rows or (0, 0, 0, 0)
+        (
+            total_amount_cny,
+            total_credited_usd,
+            total_credited_image_credits,
+            total_agent_income_cny,
+            balance_amount_cny,
+            balance_credited_usd,
+            balance_agent_income_cny,
+            image_credit_amount_cny,
+            image_credit_credited_amount,
+            image_credit_agent_income_cny,
+            paid_order_count,
+        ) = paid_rows or (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         return {
             "agent_id": agent_id,
             **AgentCashService._serialize_cash_balance(balance),
             "total_amount_cny": float(total_amount_cny or 0),
             "total_credited_usd": float(total_credited_usd or 0),
+            "total_credited_image_credits": float(total_credited_image_credits or 0),
             "total_agent_income_cny": float(total_agent_income_cny or 0),
+            "balance_amount_cny": float(balance_amount_cny or 0),
+            "balance_credited_usd": float(balance_credited_usd or 0),
+            "balance_agent_income_cny": float(balance_agent_income_cny or 0),
+            "image_credit_amount_cny": float(image_credit_amount_cny or 0),
+            "image_credit_credited_amount": float(image_credit_credited_amount or 0),
+            "image_credit_agent_income_cny": float(image_credit_agent_income_cny or 0),
             "paid_order_count": int(paid_order_count or 0),
         }

@@ -11,6 +11,7 @@ class UserRechargeOrderCreateRequest(BaseModel):
 
     amount_cny: Decimal = Field(..., ge=1)
     payment_channel: str = Field("alipay", pattern="^(alipay|wechat)$")
+    recharge_type: str = Field("balance", pattern="^(balance|image_credit)$")
 
 
 class AgentCashAdjustRequest(BaseModel):

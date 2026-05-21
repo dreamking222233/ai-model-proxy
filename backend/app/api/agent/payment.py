@@ -26,6 +26,7 @@ def list_agent_payment_orders(
     page_size: int = Query(20, ge=1, le=100),
     user_id: int = Query(None),
     status: str = Query(None),
+    recharge_type: str = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_agent_admin),
 ):
@@ -36,6 +37,7 @@ def list_agent_payment_orders(
         agent_id=int(current_user.agent_id),
         user_id=user_id,
         status=status,
+        recharge_type=recharge_type,
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 

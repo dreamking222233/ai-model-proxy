@@ -641,6 +641,7 @@ CREATE TABLE `payment_recharge_order` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `order_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `payment_channel` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'alipay',
+  `recharge_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance' COMMENT '充值类型: balance/image_credit',
   `user_id` bigint unsigned NOT NULL,
   `agent_id` bigint unsigned DEFAULT NULL,
   `site_scope` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'platform',
@@ -648,6 +649,7 @@ CREATE TABLE `payment_recharge_order` (
   `return_url_snapshot` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `amount_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '用户支付人民币金额',
   `credited_usd` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '用户到账美元余额',
+  `credited_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT '到账图片积分',
   `agent_settlement_rate` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
   `agent_income_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '代理现金分润人民币',
   `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/closed/failed',
@@ -670,6 +672,7 @@ CREATE TABLE `payment_recharge_order` (
   UNIQUE KEY `uk_payment_recharge_order_no` (`order_no`),
   UNIQUE KEY `uk_payment_recharge_alipay_trade_no` (`alipay_trade_no`),
   UNIQUE KEY `uk_payment_recharge_wechat_transaction_id` (`wechat_transaction_id`),
+  KEY `idx_payment_recharge_type` (`recharge_type`),
   KEY `idx_payment_recharge_user_status` (`user_id`,`status`),
   KEY `idx_payment_recharge_agent_status` (`agent_id`,`status`),
   KEY `idx_payment_recharge_created_at` (`created_at`)

@@ -102,16 +102,22 @@
 
           <div class="pay-actions">
             <div class="pay-methods">
-              <div class="method-item active">
+              <div class="method-item" :class="{ active: form.payment_channel === 'alipay' }" @click="selectPaymentChannel('alipay')">
                 <a-icon type="alipay-circle" class="alipay-icon" />
                 <span>支付宝支付</span>
+                <div class="check-mark"><a-icon type="check" /></div>
+              </div>
+              <div class="method-item" :class="{ active: form.payment_channel === 'wechat' }" @click="selectPaymentChannel('wechat')">
+                <a-icon type="wechat" class="wechat-icon" />
+                <span>微信支付</span>
                 <div class="check-mark"><a-icon type="check" /></div>
               </div>
             </div>
             
             <div class="button-group">
               <a-button type="primary" size="large" class="submit-btn" :loading="creating" @click="submitRecharge">
-                <a-icon type="rocket" /> 立即支付
+                <a-icon :type="form.payment_channel === 'wechat' ? 'qrcode' : 'rocket'" />
+                立即支付
               </a-button>
               <a-button
                 v-if="currentOrder.order_no && currentOrder.status !== 'paid'"
@@ -134,6 +140,7 @@
                 <div class="alert-content">
                   <div class="alert-title">当前订单：{{ currentOrder.order_no }}</div>
                   <div class="alert-desc">
+                    渠道：<span class="status-text">{{ paymentChannelText(currentOrder.payment_channel) }}</span> |
                     状态：<span class="status-text">{{ statusText(currentOrder.status) }}</span> | 
                     金额：<span class="amount-text">￥{{ formatMoney(currentOrder.amount_cny) }}</span>
                   </div>
@@ -208,6 +215,9 @@
             {{ statusText(text) }}
           </div>
         </template>
+        <template slot="channel" slot-scope="text">
+          <span>{{ paymentChannelText(text) }}</span>
+        </template>
         <template slot="time" slot-scope="text">
           <span class="time-text">{{ formatTime(text) }}</span>
         </template>
@@ -227,6 +237,34 @@
         </template>
       </a-table>
     </a-card>
+
+    <a-modal
+      :visible="wechatModalVisible"
+      title="微信扫码支付"
+      :footer="null"
+      :maskClosable="false"
+      @cancel="closeWechatModal"
+    >
+      <div class="wechat-pay-modal">
+        <div class="wechat-order-meta">
+          <div>订单号：{{ currentOrder.order_no || '-' }}</div>
+          <div>支付金额：￥{{ formatMoney(currentOrder.amount_cny) }}</div>
+          <div>到账金额：${{ formatUsd(currentOrder.credited_usd) }}</div>
+        </div>
+        <div v-if="wechatQrImageUrl" class="wechat-qr-box">
+          <img :src="wechatQrImageUrl" alt="微信支付二维码" class="wechat-qr-image" />
+        </div>
+        <div v-else class="wechat-qr-placeholder">
+          <a-spin />
+        </div>
+        <p class="wechat-pay-tip">请使用微信扫一扫完成支付，支付结果会自动同步。</p>
+        <p v-if="currentOrder.status !== 'paid'" class="wechat-pay-tip subtle">系统正在自动确认支付结果，无需手动刷新。</p>
+        <div class="wechat-pay-actions">
+          <a-button @click="closeWechatModal">稍后支付</a-button>
+          <a-button type="primary" :loading="syncing" @click="syncCurrentOrder">立即检查状态</a-button>
+        </div>
+      </div>
+    </a-modal>
     </template>
   </div>
 </template>
@@ -257,17 +295,19 @@ export default {
       ],
       quickAmounts: [10, 20, 50, 100, 200, 500],
       form: {
-        amount_cny: 10
+        amount_cny: 10,
+        payment_channel: 'alipay'
       },
 
       currentOrder: {},
+      wechatModalVisible: false,
       orders: [],
       siteConfig: {},
       guideSteps: [
-        '创建订单后会在新窗口打开支付宝支付页面。',
-        '若支付后页面未自动更新，可手动刷新。',
+        '支付宝会跳转到新窗口完成支付，微信会展示扫码二维码。',
+        '支付结果以后端通知为准，页面会自动轮询同步。',
         '订单成功后，美元余额会自动增加。',
-        '如果拦截了新窗口，请允许弹出。'
+        '若页面未及时更新，可手动刷新当前订单状态。'
       ],
       pagination: {
         current: 1,
@@ -278,6 +318,7 @@ export default {
       },
       columns: [
         { title: '订单号', dataIndex: 'order_no', key: 'order_no', width: 220 },
+        { title: '支付平台', dataIndex: 'payment_channel', key: 'payment_channel', width: 120, scopedSlots: { customRender: 'channel' } },
         { title: '充值金额', key: 'amount', width: 180, scopedSlots: { customRender: 'amount' } },
         { title: '站点归属', dataIndex: 'site_scope', key: 'site_scope', width: 120 },
         { title: '订单状态', dataIndex: 'status', key: 'status', width: 120, scopedSlots: { customRender: 'status' } },
@@ -289,6 +330,13 @@ export default {
   computed: {
     estimatedUsd() {
       return this.formatUsd((Number(this.form.amount_cny || 0) || 0) * 5)
+    },
+    wechatQrImageUrl() {
+      const codeUrl = this.currentOrder.wechat_code_url || this.currentOrder.code_url
+      if (!codeUrl) {
+        return ''
+      }
+      return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(codeUrl)}`
     },
     siteName() {
       return this.siteConfig.site_name || '当前站点'
@@ -325,6 +373,13 @@ export default {
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
     },
+    paymentChannelText(channel) {
+      const map = {
+        alipay: '支付宝',
+        wechat: '微信支付'
+      }
+      return map[channel] || channel || '-'
+    },
     statusText(status) {
       const map = {
         pending: '待支付',
@@ -345,6 +400,9 @@ export default {
     },
     selectAmount(amount) {
       this.form.amount_cny = amount
+    },
+    selectPaymentChannel(channel) {
+      this.form.payment_channel = channel
     },
     async fetchBalance() {
       try {
@@ -387,6 +445,14 @@ export default {
       }
       const res = await getUserRechargeOrder(this.currentOrder.order_no)
       this.currentOrder = res.data || this.currentOrder
+      if (['paid', 'closed', 'failed'].includes(this.currentOrder.status)) {
+        this.stopAutoSyncPolling()
+        this.wechatModalVisible = false
+        if (this.currentOrder.status === 'paid') {
+          this.fetchBalance()
+          this.fetchOrders()
+        }
+      }
       return this.currentOrder
     },
     async submitRecharge() {
@@ -401,14 +467,25 @@ export default {
       }
       this.creating = true
       try {
-        const res = await createUserRechargeOrder({ amount_cny: amount })
+        const res = await createUserRechargeOrder({ amount_cny: amount, payment_channel: this.form.payment_channel })
         const payload = res.data || {}
         this.currentOrder = payload.order || {}
         await this.fetchOrders()
         if (payload.pay_url) {
           window.open(payload.pay_url, '_blank')
+          this.wechatModalVisible = false
+          this.$message.success('支付订单已创建，请在新窗口完成支付')
+          this.startAutoSyncPolling()
+          return
         }
-        this.$message.success('支付订单已创建，请在新窗口完成支付')
+        if (payload.wechat_code_url || this.currentOrder.wechat_code_url) {
+          this.currentOrder = { ...this.currentOrder, wechat_code_url: payload.wechat_code_url || this.currentOrder.wechat_code_url }
+          this.wechatModalVisible = true
+          this.$message.success('微信支付二维码已生成，请扫码完成支付')
+          this.startAutoSyncPolling()
+          return
+        }
+        this.$message.success('支付订单已创建')
       } finally {
         this.creating = false
       }
@@ -422,36 +499,33 @@ export default {
     },
     startAutoSyncPolling() {
       this.stopAutoSyncPolling()
-      if (!this.currentOrder.order_no || this.currentOrder.status === 'paid') {
+      if (!this.currentOrder.order_no || ['paid', 'closed', 'failed'].includes(this.currentOrder.status)) {
         return
       }
-      this.autoSyncRemaining = 6
+      this.autoSyncRemaining = 120
       this.scheduleNextAutoSync()
     },
     scheduleNextAutoSync() {
-      if (this.autoSyncRemaining <= 0 || !this.currentOrder.order_no || this.currentOrder.status === 'paid') {
+      if (this.autoSyncRemaining <= 0 || !this.currentOrder.order_no || ['paid', 'closed', 'failed'].includes(this.currentOrder.status)) {
         this.stopAutoSyncPolling()
         return
       }
       this.autoSyncTimer = setTimeout(async () => {
         this.autoSyncRemaining -= 1
         try {
-          await this.fetchCurrentOrder()
-          if (this.currentOrder.status === 'paid') {
-            this.stopAutoSyncPolling()
-            this.fetchBalance()
-            await this.fetchOrders()
+          await this.syncCurrentOrder({ silent: true, preferLocalOnFailure: true })
+          if (['paid', 'closed', 'failed'].includes(this.currentOrder.status)) {
             return
           }
         } catch (e) {
           console.error('Auto refresh current order failed', e)
         }
-        if (this.currentOrder.status !== 'paid') {
+        if (!['paid', 'closed', 'failed'].includes(this.currentOrder.status)) {
           this.scheduleNextAutoSync()
         } else {
           this.stopAutoSyncPolling()
         }
-      }, 2500)
+      }, 3000)
     },
     async syncCurrentOrder(options = {}) {
       const { silent = false, preferLocalOnFailure = false } = options
@@ -470,6 +544,7 @@ export default {
             this.$message.success('充值成功，余额已到账')
           }
           this.stopAutoSyncPolling()
+          this.wechatModalVisible = false
           this.fetchBalance()
         } else if (!silent) {
           this.$message.info(`当前订单状态：${this.statusText(this.currentOrder.status)}`)
@@ -483,6 +558,7 @@ export default {
             await this.fetchCurrentOrder()
             if (this.currentOrder.status === 'paid') {
               this.stopAutoSyncPolling()
+              this.wechatModalVisible = false
               this.fetchBalance()
               await this.fetchOrders()
               return
@@ -504,11 +580,20 @@ export default {
     },
     async syncOrder(record) {
       this.currentOrder = record
+      if (record.payment_channel === 'wechat' && record.status !== 'paid') {
+        this.wechatModalVisible = true
+      }
       await this.syncCurrentOrder({ preferLocalOnFailure: true })
     },
     setCurrentOrder(record) {
       this.currentOrder = record
+      if (record.payment_channel === 'wechat' && record.status !== 'paid' && record.wechat_code_url) {
+        this.wechatModalVisible = true
+      }
       this.$message.info(`已切换到订单 ${record.order_no}`)
+    },
+    closeWechatModal() {
+      this.wechatModalVisible = false
     }
   }
 }
@@ -618,9 +703,69 @@ export default {
 
 .hero-text p {
   font-size: 13px;
+
   color: rgba(255, 255, 255, 0.7);
   max-width: 440px;
   margin-bottom: 8px;
+}
+
+.wechat-icon {
+  color: #07c160;
+}
+
+.wechat-pay-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+
+.wechat-order-meta {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #f6ffed;
+  color: rgba(0, 0, 0, 0.75);
+  line-height: 1.8;
+}
+
+.wechat-qr-box {
+  padding: 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.wechat-qr-image {
+  width: 240px;
+  height: 240px;
+  display: block;
+}
+
+.wechat-qr-placeholder {
+  width: 240px;
+  height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: #fafafa;
+}
+
+.wechat-pay-tip {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.wechat-pay-tip.subtle {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.wechat-pay-actions {
+  display: flex;
+  gap: 12px;
 }
 
 

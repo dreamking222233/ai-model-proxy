@@ -28,6 +28,8 @@ class PaymentRechargeOrder(Base):
     subject = Column(String(128), nullable=False)
     body = Column(Text, nullable=True)
     alipay_trade_no = Column(String(64), nullable=True, unique=True, index=True)
+    wechat_transaction_id = Column(String(64), nullable=True, unique=True, index=True)
+    wechat_code_url = Column(Text, nullable=True)
     trade_status = Column(String(32), nullable=True, index=True)
     buyer_logon_id = Column(String(128), nullable=True)
     buyer_user_id = Column(String(64), nullable=True)

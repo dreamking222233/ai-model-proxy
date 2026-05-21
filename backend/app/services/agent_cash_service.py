@@ -87,6 +87,8 @@ class AgentCashService:
             "trade_status": order.trade_status,
             "subject": order.subject,
             "alipay_trade_no": order.alipay_trade_no,
+            "wechat_transaction_id": order.wechat_transaction_id,
+            "channel_trade_no": order.alipay_trade_no if order.payment_channel == "alipay" else order.wechat_transaction_id,
             "paid_at": PaymentService._serialize_dt(order.paid_at, assume_utc=True),
             "created_at": PaymentService._serialize_dt(order.created_at, assume_utc=False),
         }
@@ -301,6 +303,7 @@ class AgentCashService:
             filters = [
                 PaymentRechargeOrder.order_no.like(like),
                 PaymentRechargeOrder.alipay_trade_no.like(like),
+                PaymentRechargeOrder.wechat_transaction_id.like(like),
                 PaymentRechargeOrder.source_host.like(like),
             ]
             if matched_user_ids:

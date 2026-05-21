@@ -87,6 +87,18 @@ class Settings(BaseSettings):
     ALIPAY_NOTIFY_URL: str = ""
     ALIPAY_RETURN_PATH: str = "/user/recharge"
     PAYMENT_PUBLIC_BASE_URL: str = "https://api.xiaoleai.team"
+    WECHAT_PAY_ENABLED: bool = False
+    WECHAT_PAY_SERVER_URL: str = "https://api.mch.weixin.qq.com"
+    WECHAT_PAY_APP_ID: str = ""
+    WECHAT_PAY_MCH_ID: str = ""
+    WECHAT_PAY_SERIAL_NO: str = ""
+    WECHAT_PAY_PRIVATE_KEY: str = ""
+    WECHAT_PAY_API_V3_KEY: str = ""
+    WECHAT_PAY_PLATFORM_CERT: str = ""
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: str = ""
+    WECHAT_PAY_PLATFORM_SERIAL: str = ""
+    WECHAT_PAY_PUBLIC_KEY_ID: str = ""
+    WECHAT_PAY_NOTIFY_URL: str = ""
     RECHARGE_USER_CNY_TO_USD_RATE: Decimal = Decimal("5")
     RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE: Decimal = Decimal("10")
 

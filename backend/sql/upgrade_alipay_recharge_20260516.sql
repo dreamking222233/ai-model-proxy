@@ -28,6 +28,8 @@ BEGIN
             `subject` VARCHAR(128) NOT NULL,
             `body` TEXT DEFAULT NULL,
             `alipay_trade_no` VARCHAR(64) DEFAULT NULL,
+            `wechat_transaction_id` VARCHAR(64) DEFAULT NULL,
+            `wechat_code_url` TEXT DEFAULT NULL,
             `trade_status` VARCHAR(32) DEFAULT NULL,
             `buyer_logon_id` VARCHAR(128) DEFAULT NULL,
             `buyer_user_id` VARCHAR(64) DEFAULT NULL,
@@ -41,6 +43,7 @@ BEGIN
             PRIMARY KEY (`id`),
             UNIQUE KEY `uk_payment_recharge_order_no` (`order_no`),
             UNIQUE KEY `uk_payment_recharge_alipay_trade_no` (`alipay_trade_no`),
+            UNIQUE KEY `uk_payment_recharge_wechat_transaction_id` (`wechat_transaction_id`),
             KEY `idx_payment_recharge_user_status` (`user_id`, `status`),
             KEY `idx_payment_recharge_agent_status` (`agent_id`, `status`),
             KEY `idx_payment_recharge_created_at` (`created_at`)

@@ -12,7 +12,7 @@
       <div class="toolbar">
         <a-input-search
           v-model="filters.keyword"
-          placeholder="搜索订单号、支付宝流水号、用户名、代理名、域名"
+          placeholder="搜索订单号、支付流水号、用户名、代理名、域名"
           allowClear
           style="width: 340px"
           @search="handleSearch"
@@ -143,7 +143,7 @@ export default {
         { title: '支付金额', key: 'amount_cny', width: 150, scopedSlots: { customRender: 'amount' } },
         { title: '代理分润', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 120, scopedSlots: { customRender: 'agentIncome' } },
         { title: '订单状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
-        { title: '支付宝流水号', dataIndex: 'alipay_trade_no', key: 'alipay_trade_no', width: 210 },
+        { title: '支付流水号', dataIndex: 'channel_trade_no', key: 'channel_trade_no', width: 210 },
         { title: '支付成功时间', dataIndex: 'paid_at', key: 'paid_at', width: 180, scopedSlots: { customRender: 'time' } },
         { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, scopedSlots: { customRender: 'time' } }
       ]

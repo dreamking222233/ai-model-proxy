@@ -10,6 +10,7 @@ class UserRechargeOrderCreateRequest(BaseModel):
     """Create online recharge order request."""
 
     amount_cny: Decimal = Field(..., ge=1)
+    payment_channel: str = Field("alipay", pattern="^(alipay|wechat)$")
 
 
 class AgentCashAdjustRequest(BaseModel):

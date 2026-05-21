@@ -32,6 +32,7 @@ def create_recharge_order(
         db,
         user=user,
         amount_cny=data.amount_cny,
+        payment_channel=data.payment_channel,
         site_context=agent_context,
     )
     return ResponseModel(data=result, message="充值订单创建成功")
@@ -66,4 +67,4 @@ def sync_recharge_order(
     current_user: SysUser = Depends(get_current_user),
 ):
     user = _require_end_user(current_user)
-    return ResponseModel(data=PaymentService.sync_order_status_from_alipay(db, user.id, order_no))
+    return ResponseModel(data=PaymentService.sync_order_status(db, user.id, order_no))

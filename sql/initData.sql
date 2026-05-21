@@ -654,6 +654,8 @@ CREATE TABLE `payment_recharge_order` (
   `subject` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,
   `body` text COLLATE utf8mb4_unicode_ci,
   `alipay_trade_no` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `wechat_transaction_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `wechat_code_url` text COLLATE utf8mb4_unicode_ci,
   `trade_status` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `buyer_logon_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `buyer_user_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -667,6 +669,7 @@ CREATE TABLE `payment_recharge_order` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_payment_recharge_order_no` (`order_no`),
   UNIQUE KEY `uk_payment_recharge_alipay_trade_no` (`alipay_trade_no`),
+  UNIQUE KEY `uk_payment_recharge_wechat_transaction_id` (`wechat_transaction_id`),
   KEY `idx_payment_recharge_user_status` (`user_id`,`status`),
   KEY `idx_payment_recharge_agent_status` (`agent_id`,`status`),
   KEY `idx_payment_recharge_created_at` (`created_at`)

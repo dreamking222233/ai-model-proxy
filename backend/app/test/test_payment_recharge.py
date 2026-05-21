@@ -30,6 +30,10 @@ class PaymentRechargeTestCase(TestCase):
         self._id_counters = defaultdict(int)
         event.listen(self.db, "before_flush", self._assign_sqlite_bigint_ids)
         settings.ALIPAY_ENABLED = True
+        settings.WECHAT_PAY_ENABLED = True
+        settings.ALIPAY_APP_ID = "test-alipay-app"
+        settings.WECHAT_PAY_APP_ID = "test-wechat-app"
+        settings.WECHAT_PAY_MCH_ID = "test-wechat-mch"
         settings.RECHARGE_USER_CNY_TO_USD_RATE = Decimal("5")
         settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE = Decimal("10")
 
@@ -80,6 +84,28 @@ class PaymentRechargeTestCase(TestCase):
         self.assertEqual(order["credited_usd"], 50.0)
         self.assertEqual(order["agent_income_cny"], 5.0)
         self.assertEqual(order["status"], "pending")
+
+    def test_create_wechat_recharge_order_returns_code_url(self):
+        user = self._create_user(11)
+        with patch.object(PaymentService, "_validate_wechat_config"), patch.object(
+            PaymentService,
+            "build_order_return_url",
+            return_value="https://www.example.com/user/recharge?order_no=WXPTEST",
+        ), patch.object(
+            PaymentService,
+            "create_wechat_native_order",
+            return_value={"display_mode": "qrcode", "wechat_code_url": "weixin://wxpay/mock", "code_url": "weixin://wxpay/mock"},
+        ):
+            result = PaymentService.create_recharge_order(
+                self.db,
+                user,
+                Decimal("10.00"),
+                payment_channel="wechat",
+                site_context=None,
+            )
+
+        self.assertEqual(result["order"]["payment_channel"], "wechat")
+        self.assertEqual(result["wechat_code_url"], "weixin://wxpay/mock")
 
     def test_apply_paid_order_is_idempotent(self):
         self._create_user(2)
@@ -183,6 +209,44 @@ class PaymentRechargeTestCase(TestCase):
         balance = self.db.query(UserBalance).filter(UserBalance.user_id == 4).first()
         self.assertEqual(Decimal(str(balance.balance)), Decimal("0.050000"))
         self.assertEqual(self.db.query(AgentCashLedger).filter(AgentCashLedger.agent_id == 9).count(), 0)
+
+    def test_apply_paid_order_supports_wechat(self):
+        self.db.add(Agent(id=13, agent_code="agent-13", agent_name="Agent 13", status="active"))
+        self.db.commit()
+        self._create_user(12, agent_id=13)
+        order = PaymentRechargeOrder(
+            order_no="WXP202605200001",
+            payment_channel="wechat",
+            user_id=12,
+            agent_id=13,
+            site_scope="agent",
+            source_host="agent.example.com",
+            return_url_snapshot="https://agent.example.com/user/recharge?order_no=WXP202605200001",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("5.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PaymentService._apply_paid_order(self.db, order.order_no, {
+            "appid": settings.WECHAT_PAY_APP_ID,
+            "mchid": settings.WECHAT_PAY_MCH_ID,
+            "trade_state": "SUCCESS",
+            "transaction_id": "WX-TRADE-001",
+            "amount": {"total": 1000, "payer_total": 1000},
+        }, source="notify")
+
+        paid_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 12).first()
+        cash_balance = self.db.query(AgentCashBalance).filter(AgentCashBalance.agent_id == 13).first()
+        self.assertEqual(paid_order.wechat_transaction_id, "WX-TRADE-001")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
+        self.assertEqual(Decimal(str(cash_balance.balance)), Decimal("5.00"))
 
     def test_assert_recharge_enabled_for_disabled_agent_site(self):
         context = AgentSiteContext(

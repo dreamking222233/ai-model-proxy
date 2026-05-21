@@ -43,3 +43,32 @@ async def alipay_notify(
         db.rollback()
         logger.exception("Alipay notify failed: payload=%s", form_payload)
         return PlainTextResponse("failure", status_code=500)
+
+
+@router.post("/wechat/notify")
+async def wechat_notify(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    body_text = ""
+    headers_payload: dict[str, str] = {}
+    try:
+        body_bytes = await request.body()
+        body_text = body_bytes.decode("utf-8") if body_bytes else ""
+        headers_payload = {str(key): str(value) for key, value in request.headers.items()}
+        PaymentService.handle_wechat_notify(
+            db,
+            headers_payload,
+            body_text,
+        )
+        return PlainTextResponse('{"code":"SUCCESS","message":"成功"}', media_type="application/json")
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Wechat notify failed: serial=%s timestamp=%s signature_type=%s body=%s",
+            headers_payload.get("wechatpay-serial") or headers_payload.get("Wechatpay-Serial") or "",
+            headers_payload.get("wechatpay-timestamp") or headers_payload.get("Wechatpay-Timestamp") or "",
+            headers_payload.get("wechatpay-signature-type") or headers_payload.get("Wechatpay-Signature-Type") or "",
+            body_text,
+        )
+        return PlainTextResponse('{"code":"FAIL","message":"失败"}', status_code=500, media_type="application/json")

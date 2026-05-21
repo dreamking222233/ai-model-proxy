@@ -36,6 +36,7 @@ class SubscriptionService:
     LEGACY_UNLIMITED_MONTHLY_DAILY_COST_LIMIT = Decimal("120")
     ENJOY_DAILY_COST_LIMIT = Decimal("50")
     LEGACY_ENJOY_DAILY_COST_LIMIT = Decimal("60")
+    MIN_TEXT_REQUEST_USD_THRESHOLD = Decimal("0.1")
     UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
     RETRYABLE_DB_ERROR_CODES = {1205, 1213}
     ENJOY_PLAN_CODES = frozenset({"daily-10m-token", "weekly-10m-token", "monthly-10m-token"})
@@ -1019,10 +1020,7 @@ class SubscriptionService:
     ) -> bool:
         result = db.execute(
             update(SubscriptionUsageCycle)
-            .where(
-                SubscriptionUsageCycle.id == cycle_id,
-                SubscriptionUsageCycle.used_amount + consumed_amount <= quota_limit,
-            )
+            .where(SubscriptionUsageCycle.id == cycle_id)
             .values(
                 quota_metric=quota_metric,
                 quota_limit=quota_limit,
@@ -1135,32 +1133,16 @@ class SubscriptionService:
             return {"subscription": active_subscription, "cycle": None}
 
         quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
-        estimated_consumed_amount = None
-        if quota_precheck:
-            metric_key = (
-                "estimated_quota_cost"
-                if quota_metric == SubscriptionService.QUOTA_METRIC_COST
-                and SubscriptionService._uses_official_cost_for_quota(active_subscription)
-                else "estimated_total_cost"
-                if quota_metric == SubscriptionService.QUOTA_METRIC_COST
-                else "estimated_total_tokens"
-            )
-            raw_estimate = quota_precheck.get(metric_key)
-            if raw_estimate is None and metric_key == "estimated_quota_cost":
-                raw_estimate = quota_precheck.get("estimated_total_cost")
-            if raw_estimate is not None:
-                estimated_consumed_amount = SubscriptionService._normalize_decimal(raw_estimate)
-
         cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now)
         quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
-        if used_amount >= quota_limit:
+        remaining_amount = quota_limit - used_amount
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            if remaining_amount <= SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD:
+                raise SubscriptionService._build_quota_exceeded_error(active_subscription)
+        elif used_amount >= quota_limit:
             raise SubscriptionService._build_quota_exceeded_error(active_subscription)
 
-        if estimated_consumed_amount is not None:
-            remaining_amount = quota_limit - used_amount
-            if estimated_consumed_amount > remaining_amount:
-                raise SubscriptionService._build_quota_exceeded_error(active_subscription, estimated=True)
         return {"subscription": active_subscription, "cycle": cycle}
 
     @staticmethod
@@ -1209,14 +1191,6 @@ class SubscriptionService:
                     "quota_used_after": SubscriptionService._normalize_decimal(refreshed_cycle.used_amount),
                     "quota_cycle_date": refreshed_cycle.cycle_date,
                 }
-
-            refreshed_cycle = SubscriptionService._load_cycle_by_id(db, cycle.id)
-            if not refreshed_cycle:
-                continue
-
-            refreshed_used_amount = SubscriptionService._normalize_decimal(refreshed_cycle.used_amount)
-            if refreshed_used_amount + consumed_amount > quota_limit:
-                raise SubscriptionService._build_quota_exceeded_error(subscription)
 
         raise ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED")
 

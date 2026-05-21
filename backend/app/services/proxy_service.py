@@ -155,14 +155,13 @@ class ProxyService:
                     raise ProxyService._build_quota_balance_insufficient_error()
             return
 
-        balance = db.query(UserBalance).filter(UserBalance.user_id == user.id).first()
-        if balance and balance.balance > 0:
+        if ProxyService._can_balance_cover_text_precheck(db, user.id, quota_precheck):
             return
 
         if had_subscription_cache:
             raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
 
-        raise ServiceException(402, "余额不足，请充值", "INSUFFICIENT_BALANCE")
+        raise ProxyService._build_balance_precheck_insufficient_error()
 
     @staticmethod
     def _get_balance_record(
@@ -183,27 +182,37 @@ class ProxyService:
         return Decimal(str(balance.balance or 0))
 
     @staticmethod
+    def _can_balance_cover_text_precheck(
+        db: Session,
+        user_id: int,
+        quota_precheck: Optional[dict[str, Decimal]] = None,
+    ) -> bool:
+        available_balance = ProxyService._balance_decimal(
+            ProxyService._get_balance_record(db, user_id)
+        )
+        return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
+
+    @staticmethod
     def _can_fallback_to_balance_for_quota_precheck(
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
     ) -> bool:
-        balance = ProxyService._get_balance_record(db, user_id)
-        available_balance = ProxyService._balance_decimal(balance)
-        if available_balance <= 0:
-            return False
-        if not quota_precheck:
-            return True
-        estimated_total_cost = quota_precheck.get("estimated_total_cost")
-        if estimated_total_cost is None:
-            return available_balance > 0
-        return available_balance >= Decimal(str(estimated_total_cost))
+        return ProxyService._can_balance_cover_text_precheck(db, user_id, quota_precheck)
 
     @staticmethod
     def _build_quota_balance_insufficient_error() -> ServiceException:
         return ServiceException(
             402,
             "当日套餐额度不足，且余额不足以承担本次请求，请充值或缩短上下文后重试",
+            "INSUFFICIENT_BALANCE",
+        )
+
+    @staticmethod
+    def _build_balance_precheck_insufficient_error() -> ServiceException:
+        return ServiceException(
+            402,
+            "余额不足以承担本次请求，请充值或缩短上下文后重试",
             "INSUFFICIENT_BALANCE",
         )
 
@@ -8081,7 +8090,7 @@ class ProxyService:
                     usage_now,
                 )
                 if not active_subscription:
-                    if ProxyService._balance_decimal(balance) >= Decimal(str(total_cost)):
+                    if ProxyService._balance_decimal(balance) > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD:
                         billing_mode = "balance"
                         balance_before, balance_after = apply_balance_charge()
                     else:
@@ -8097,42 +8106,23 @@ class ProxyService:
                         SubscriptionService.PLAN_KIND_DAILY_QUOTA,
                         SubscriptionService.PLAN_KIND_UNLIMITED,
                     }:
-                        try:
-                            quota_usage = SubscriptionService.consume_quota_after_request(
-                                write_db,
-                                active_subscription,
-                                request_id=request_id,
-                                raw_total_tokens=raw_total_tokens,
-                                total_cost=total_cost,
-                                quota_cost=quota_cost,
-                                now=usage_now,
-                            )
-                            subscription_cycle_id = quota_usage["subscription_cycle_id"]
-                            quota_metric = quota_usage["quota_metric"]
-                            quota_consumed_amount = quota_usage["quota_consumed_amount"]
-                            quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
-                            quota_used_after = quota_usage["quota_used_after"]
-                            quota_cycle_date = quota_usage["quota_cycle_date"]
-                            balance_before = float(balance.balance) if balance else 0.0
-                            balance_after = float(balance.balance) if balance else 0.0
-                        except ServiceException as exc:
-                            if exc.error_code not in {
-                                SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
-                                "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
-                            }:
-                                raise
-                            if ProxyService._balance_decimal(balance) >= Decimal(str(total_cost)):
-                                billing_mode = "balance"
-                                subscription_id = None
-                                subscription_cycle_id = None
-                                quota_metric = None
-                                quota_consumed_amount = Decimal("0")
-                                quota_limit_snapshot = Decimal("0")
-                                quota_used_after = Decimal("0")
-                                quota_cycle_date = None
-                                balance_before, balance_after = apply_balance_charge()
-                            else:
-                                raise ProxyService._build_quota_balance_insufficient_error()
+                        quota_usage = SubscriptionService.consume_quota_after_request(
+                            write_db,
+                            active_subscription,
+                            request_id=request_id,
+                            raw_total_tokens=raw_total_tokens,
+                            total_cost=total_cost,
+                            quota_cost=quota_cost,
+                            now=usage_now,
+                        )
+                        subscription_cycle_id = quota_usage["subscription_cycle_id"]
+                        quota_metric = quota_usage["quota_metric"]
+                        quota_consumed_amount = quota_usage["quota_consumed_amount"]
+                        quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
+                        quota_used_after = quota_usage["quota_used_after"]
+                        quota_cycle_date = quota_usage["quota_cycle_date"]
+                        balance_before = float(balance.balance) if balance else 0.0
+                        balance_after = float(balance.balance) if balance else 0.0
                     else:
                         balance_before = float(balance.balance) if balance else 0.0
                         balance_after = float(balance.balance) if balance else 0.0

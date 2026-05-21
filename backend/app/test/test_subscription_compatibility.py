@@ -128,7 +128,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
 
     @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state")
-    def test_active_quota_subscription_precheck_still_blocks_when_balance_is_insufficient(
+    def test_active_quota_subscription_precheck_falls_back_when_balance_exceeds_threshold(
         self,
         mock_refresh,
         mock_check_quota,
@@ -146,12 +146,34 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
             "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
         )
 
+        ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+        )
+
+    @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state")
+    def test_active_quota_subscription_precheck_blocks_when_balance_is_at_threshold(
+        self,
+        mock_refresh,
+        mock_check_quota,
+    ):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.1"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
+        mock_refresh.return_value = SimpleNamespace(plan_kind_snapshot="daily_quota")
+        mock_check_quota.side_effect = ServiceException(
+            403,
+            "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
+            "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
+        )
+
         with self.assertRaises(ServiceException) as ctx:
-            ProxyService._assert_text_request_allowed(
-                db,
-                user,
-                quota_precheck={"estimated_total_cost": Decimal("1.5")},
-            )
+            ProxyService._assert_text_request_allowed(db, user)
 
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
 
@@ -197,6 +219,49 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_EXPIRED")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_expired_subscription_with_balance_above_threshold_is_allowed(
+        self,
+        _mock_refresh,
+    ):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.5"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(
+            id=1,
+            subscription_type="unlimited",
+            subscription_expires_at=datetime.utcnow() - timedelta(days=1),
+        )
+
+        ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+        )
+
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_expired_subscription_with_balance_at_threshold_raises_subscription_expired(
+        self,
+        _mock_refresh,
+    ):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.1"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(
+            id=1,
+            subscription_type="unlimited",
+            subscription_expires_at=datetime.utcnow() - timedelta(days=1),
+        )
+
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._assert_text_request_allowed(db, user)
+
+        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_EXPIRED")
+
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
     def test_balance_user_without_balance_raises_insufficient_balance(self, _mock_refresh):
         db = MagicMock()
         db.query.return_value.filter.return_value.first.return_value = None
@@ -206,6 +271,56 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
             ProxyService._assert_text_request_allowed(db, user)
 
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
+
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_balance_user_with_balance_above_threshold_is_allowed_even_when_estimate_is_higher(
+        self,
+        _mock_refresh,
+    ):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.5"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
+
+        ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+        )
+
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_balance_user_with_balance_at_threshold_raises_before_request(
+        self,
+        _mock_refresh,
+    ):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.1"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
+
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._assert_text_request_allowed(db, user)
+
+        self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
+
+    @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
+    def test_balance_user_with_sufficient_balance_for_estimate_is_allowed(self, _mock_refresh):
+        balance_query = MagicMock()
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("2.0"))
+
+        db = MagicMock()
+        db.query.return_value = balance_query
+        user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
+
+        ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+        )
 
 
 class SubscriptionStatusCompatibilityTest(unittest.TestCase):
@@ -355,7 +470,7 @@ class ResponsesFastBillingTest(unittest.TestCase):
 class SubscriptionQuotaGuardTest(unittest.TestCase):
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_request_that_would_exceed_remaining_daily_quota(
+    def test_precheck_allows_token_quota_request_when_cycle_is_not_exhausted(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -370,20 +485,18 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
-        with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.check_quota_before_request(
-                MagicMock(),
-                user,
-                quota_precheck={"estimated_total_tokens": Decimal("30")},
-            )
+        SubscriptionService.check_quota_before_request(
+            MagicMock(),
+            user,
+            quota_precheck={"estimated_total_tokens": Decimal("30")},
+        )
 
-        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
         mock_get_or_create_cycle.assert_called_once()
         self.assertEqual(len(mock_get_or_create_cycle.call_args.args), 3)
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_unlimited_request_that_would_exceed_daily_token_limit(
+    def test_precheck_allows_unlimited_token_request_when_cycle_is_not_exhausted(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -398,20 +511,18 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
-        with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.check_quota_before_request(
-                MagicMock(),
-                user,
-                quota_precheck={"estimated_total_tokens": Decimal("2")},
-            )
+        SubscriptionService.check_quota_before_request(
+            MagicMock(),
+            user,
+            quota_precheck={"estimated_total_tokens": Decimal("2")},
+        )
 
-        self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
         mock_get_or_create_cycle.assert_called_once()
         self.assertEqual(len(mock_get_or_create_cycle.call_args.args), 3)
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_legacy_monthly_unlimited_by_official_usd_quota_cost(
+    def test_precheck_allows_cost_quota_when_remaining_is_above_threshold(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -428,15 +539,36 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
+        SubscriptionService.check_quota_before_request(
+            MagicMock(),
+            user,
+            quota_precheck={
+                "estimated_total_cost": Decimal("999"),
+                "estimated_quota_cost": Decimal("2"),
+            },
+        )
+
+    @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
+    @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
+    def test_precheck_blocks_cost_quota_when_remaining_is_at_threshold(
+        self,
+        mock_get_or_create_cycle,
+        mock_resolve_active_subscription,
+    ):
+        user = SimpleNamespace(id=1)
+        subscription = SimpleNamespace(
+            plan_kind_snapshot="unlimited",
+            plan_code_snapshot="monthly-unlimited",
+            plan_name="月度无限包",
+            plan_type="month",
+            created_at=datetime(2026, 5, 9, 23, 0, 0),
+        )
+        cycle = SimpleNamespace(used_amount=Decimal("119.9"))
+        mock_resolve_active_subscription.return_value = subscription
+        mock_get_or_create_cycle.return_value = cycle
+
         with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.check_quota_before_request(
-                MagicMock(),
-                user,
-                quota_precheck={
-                    "estimated_total_cost": Decimal("999"),
-                    "estimated_quota_cost": Decimal("2"),
-                },
-            )
+            SubscriptionService.check_quota_before_request(MagicMock(), user)
 
         self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
 
@@ -533,7 +665,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
     @patch("app.services.subscription_service.SubscriptionService._load_cycle_by_id")
     @patch("app.services.subscription_service.SubscriptionService._apply_cycle_consumption_update")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_consume_quota_rejects_post_request_overflow(
+    def test_consume_quota_records_post_request_overflow(
         self,
         mock_get_or_create_cycle,
         mock_apply_cycle_update,
@@ -553,23 +685,23 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             cycle_date=datetime.utcnow().date(),
         )
         mock_get_or_create_cycle.return_value = cycle
-        mock_apply_cycle_update.return_value = False
+        mock_apply_cycle_update.return_value = True
         mock_load_cycle_by_id.return_value = SimpleNamespace(
             id=7,
-            used_amount=Decimal("95"),
+            used_amount=Decimal("105"),
             cycle_date=cycle.cycle_date,
         )
 
-        with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.consume_quota_after_request(
-                MagicMock(),
-                subscription,
-                request_id="new",
-                raw_total_tokens=10,
-                total_cost=0.0,
-            )
+        result = SubscriptionService.consume_quota_after_request(
+            MagicMock(),
+            subscription,
+            request_id="new",
+            raw_total_tokens=10,
+            total_cost=0.0,
+        )
 
-        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
+        self.assertEqual(result["quota_metric"], "total_tokens")
+        self.assertEqual(result["quota_used_after"], Decimal("105"))
         mock_apply_cycle_update.assert_called_once()
 
     @patch("app.services.proxy_service.get_system_config")
@@ -601,7 +733,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
     @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
-    def test_post_request_quota_overflow_falls_back_to_balance_billing(
+    def test_post_request_quota_remains_subscription_billing_even_if_usage_increases_past_limit(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
@@ -630,11 +762,14 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             id=99,
             plan_kind_snapshot="daily_quota",
         )
-        mock_consume_quota_after_request.side_effect = ServiceException(
-            403,
-            "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
-            "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
-        )
+        mock_consume_quota_after_request.return_value = {
+            "subscription_cycle_id": 7,
+            "quota_metric": "cost_usd",
+            "quota_consumed_amount": Decimal("1.5"),
+            "quota_limit_snapshot": Decimal("100"),
+            "quota_used_after": Decimal("101.5"),
+            "quota_cycle_date": datetime.utcnow().date(),
+        }
 
         ProxyService._deduct_balance_and_log(
             db=MagicMock(),
@@ -653,16 +788,16 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             request_type="chat",
         )
 
-        self.assertLess(balance.balance, Decimal("10"))
         consumption_record = write_db.add.call_args_list[0].args[0]
-        self.assertEqual(consumption_record.billing_mode, "balance")
-        self.assertIsNone(consumption_record.subscription_id)
+        self.assertEqual(consumption_record.billing_mode, "subscription")
+        self.assertEqual(consumption_record.subscription_id, 99)
+        self.assertEqual(consumption_record.quota_used_after, Decimal("101.5"))
 
     @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
     @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
-    def test_post_request_unlimited_quota_overflow_falls_back_to_balance_billing(
+    def test_post_request_unlimited_quota_remains_subscription_billing_even_if_usage_increases_past_limit(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
@@ -689,11 +824,14 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             id=99,
             plan_kind_snapshot="unlimited",
         )
-        mock_consume_quota_after_request.side_effect = ServiceException(
-            403,
-            "已超出实际使用额度，每日最多可使用 300,000,000 Token，请明天再试",
-            SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE,
-        )
+        mock_consume_quota_after_request.return_value = {
+            "subscription_cycle_id": 8,
+            "quota_metric": "total_tokens",
+            "quota_consumed_amount": Decimal("10"),
+            "quota_limit_snapshot": Decimal("300000000"),
+            "quota_used_after": Decimal("300000010"),
+            "quota_cycle_date": datetime.utcnow().date(),
+        }
 
         ProxyService._deduct_balance_and_log(
             db=MagicMock(),
@@ -712,10 +850,10 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             request_type="chat",
         )
 
-        self.assertLess(balance.balance, Decimal("10"))
         consumption_record = write_db.add.call_args_list[0].args[0]
-        self.assertEqual(consumption_record.billing_mode, "balance")
-        self.assertIsNone(consumption_record.subscription_id)
+        self.assertEqual(consumption_record.billing_mode, "subscription")
+        self.assertEqual(consumption_record.subscription_id, 99)
+        self.assertEqual(consumption_record.quota_used_after, Decimal("300000010"))
 
 
 class VerifyApiKeySubscriptionRefreshTest(unittest.TestCase):

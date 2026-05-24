@@ -418,10 +418,12 @@ class ResponsesFastBillingTest(unittest.TestCase):
 
     @patch("app.services.proxy_service.ModelService.get_available_channels")
     @patch("app.services.proxy_service.ProxyService._assert_text_request_allowed")
+    @patch("app.services.proxy_service.get_system_config", return_value=1.0)
     @patch("app.services.proxy_service.ModelService.resolve_model")
-    def test_responses_context_rejects_image_generation_tool_before_text_billing(
+    def test_responses_context_strips_image_generation_tool_without_blocking_text(
         self,
         mock_resolve_model,
+        mock_get_system_config,
         mock_assert_text_request_allowed,
         mock_get_available_channels,
     ):
@@ -430,24 +432,50 @@ class ResponsesFastBillingTest(unittest.TestCase):
             model_name="gpt-5",
             model_type="chat",
             billing_type="token",
+            input_price_per_million=Decimal("1"),
+            output_price_per_million=Decimal("1"),
+        )
+        channel = SimpleNamespace(
+            id=20,
+            name="openai-text-channel",
+            protocol_type="openai",
+            provider_variant="default",
+            priority=1,
+        )
+        mock_get_available_channels.return_value = [(channel, "gpt-5.5")]
+        request_data = {
+            "model": "gpt-5",
+            "input": "draw a cat",
+            "tools": [
+                {"type": "image_generation"},
+                {"type": "function", "name": "read_file"},
+            ],
+        }
+
+        unified_model, channels = ProxyService._prepare_responses_request_context(
+            MagicMock(),
+            SimpleNamespace(id=1),
+            "gpt-5",
+            request_data,
         )
 
-        with self.assertRaises(ServiceException) as ctx:
-            ProxyService._prepare_responses_request_context(
-                MagicMock(),
-                SimpleNamespace(id=1),
-                "gpt-5",
-                {
-                    "model": "gpt-5",
-                    "input": "draw a cat",
-                    "tools": [{"type": "image_generation"}],
-                },
-            )
+        self.assertEqual(unified_model, mock_resolve_model.return_value)
+        self.assertEqual(channels, [(channel, "gpt-5.5")])
+        self.assertEqual(request_data["tools"], [{"type": "function", "name": "read_file"}])
+        mock_assert_text_request_allowed.assert_called_once()
+        mock_get_available_channels.assert_called_once()
 
-        self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.error_code, "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES")
-        mock_assert_text_request_allowed.assert_not_called()
-        mock_get_available_channels.assert_not_called()
+    def test_remove_responses_image_generation_tool_clears_forced_tool_choice(self):
+        request_data = {
+            "tools": [{"type": "image_generation"}],
+            "tool_choice": {"type": "image_generation"},
+        }
+
+        removed = ProxyService._remove_responses_image_generation_tool(request_data)
+
+        self.assertTrue(removed)
+        self.assertNotIn("tools", request_data)
+        self.assertNotIn("tool_choice", request_data)
 
     @patch("app.services.proxy_service.ProxyService._assert_text_request_allowed")
     @patch("app.services.proxy_service.ModelService.get_available_channels")

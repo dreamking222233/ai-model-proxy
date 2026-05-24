@@ -10,11 +10,11 @@
 
 - 在 Responses 请求公共上下文解析函数 `_prepare_responses_request_context` 中拦截图片模型。
 - 判定条件使用模型元数据：`model_type == "image"` 或 `billing_type == "image_credit"`。
-- 判定 Responses `tools` 中是否包含 `type == "image_generation"`，命中时拒绝请求。
+- 判定 Responses `tools` 中是否包含 `type == "image_generation"`，命中时从请求中剔除该工具，避免普通文本对话被误拒绝。
 - 对已解析出的 Responses 渠道候选做兜底过滤，拒绝图片专用渠道、映射到已登记图片模型的候选，以及模型名表现为图片模型的候选。
-- 命中后抛出 `ServiceException`，阻止进入文本额度预检查、渠道选择和上游转发。
+- 图片模型或图片渠道映射命中后抛出 `ServiceException`，阻止进入文本额度预检查、渠道选择和上游转发；图片工具命中后净化请求并继续文本链路。
 - 保持图片生成/编辑专用接口现有逻辑不变，由它们继续执行图片积分余额校验和扣费。
-- 补充单元测试，覆盖 `gpt-image-2` 这类图片积分模型、`image_generation` 工具、文本模型映射图片上游模型、图片专用渠道变体、混合渠道过滤行为。
+- 补充单元测试，覆盖 `gpt-image-2` 这类图片积分模型、`image_generation` 工具净化、文本模型映射图片上游模型、图片专用渠道变体、混合渠道过滤行为。
 
 ## 涉及文件清单
 
@@ -24,7 +24,7 @@
 ## 实施步骤概要
 
 1. 在 Responses 公共上下文解析处增加图片模型拒绝逻辑。
-2. 增加 Responses `image_generation` 工具拒绝逻辑。
+2. 增加 Responses `image_generation` 工具净化逻辑。
 3. 增加 Responses 渠道候选图片上游过滤逻辑。
 4. 补充单测覆盖图片模型、图片工具、已登记图片上游映射、未登记图片命名上游映射、图片专用渠道变体、混合渠道过滤行为。
 5. 运行相关单测验证。

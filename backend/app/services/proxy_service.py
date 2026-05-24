@@ -3547,12 +3547,8 @@ class ProxyService:
                 "图片模型不支持通过 /v1/responses 调用，请使用 /v1/images/generations 或 /v1/images/edits",
                 "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
             )
-        if request_data and ProxyService._has_responses_image_generation_tool(request_data):
-            raise ServiceException(
-                400,
-                "Responses image_generation 工具不支持调用，请使用 /v1/images/generations 或 /v1/images/edits",
-                "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
-            )
+        if request_data:
+            ProxyService._remove_responses_image_generation_tool(request_data)
 
         quota_precheck = None
         if request_data:
@@ -3740,19 +3736,42 @@ class ProxyService:
         return tool_names
 
     @staticmethod
-    def _has_responses_image_generation_tool(request_data: dict) -> bool:
-        """Detect the native Responses image generation tool."""
+    def _remove_responses_image_generation_tool(request_data: dict) -> bool:
+        """Strip the native Responses image generation tool before upstream forwarding."""
         raw_tools = request_data.get("tools")
         if not isinstance(raw_tools, list):
             return False
 
+        filtered_tools: list[Any] = []
+        removed = False
         for tool in raw_tools:
             if not isinstance(tool, dict):
+                filtered_tools.append(tool)
                 continue
             tool_type = str(tool.get("type", "") or "").strip().lower()
             if tool_type == "image_generation":
-                return True
-        return False
+                removed = True
+                continue
+            filtered_tools.append(tool)
+
+        if not removed:
+            return False
+
+        if filtered_tools:
+            request_data["tools"] = filtered_tools
+        else:
+            request_data.pop("tools", None)
+
+        tool_choice = request_data.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            choice_type = str(tool_choice.get("type", "") or "").strip().lower()
+            if choice_type == "image_generation":
+                request_data.pop("tool_choice", None)
+        elif not filtered_tools:
+            request_data.pop("tool_choice", None)
+
+        logger.warning("Responses image_generation tool stripped from request")
+        return True
 
     @staticmethod
     def _detect_responses_high_risk_tools(request_data: dict) -> list[str]:

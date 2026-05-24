@@ -802,6 +802,15 @@ class SubscriptionService:
             "input_price_per_million_snapshot": float(record.input_price_per_million_snapshot or 0),
             "output_price_per_million_snapshot": float(record.output_price_per_million_snapshot or 0),
             "price_multiplier_snapshot": float(record.price_multiplier_snapshot or 1),
+            "fast_price_multiplier_snapshot": float(record.fast_price_multiplier_snapshot or 1),
+            "context_tokens_snapshot": int(record.context_tokens_snapshot or 0),
+            "context_token_threshold_snapshot": int(record.context_token_threshold_snapshot or 262144),
+            "context_price_multiplier_snapshot": float(record.context_price_multiplier_snapshot or 1),
+            "effective_price_multiplier_snapshot": float(
+                (record.price_multiplier_snapshot or 1)
+                * (record.fast_price_multiplier_snapshot or 1)
+                * (record.context_price_multiplier_snapshot or 1)
+            ),
             "token_multiplier_snapshot": float(record.token_multiplier_snapshot or 1),
             "balance_before": float(record.balance_before),
             "balance_after": float(record.balance_after),
@@ -1138,9 +1147,29 @@ class SubscriptionService:
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         remaining_amount = quota_limit - used_amount
         if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
-            if remaining_amount <= SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD:
+            estimated_quota_cost = (quota_precheck or {}).get("estimated_quota_cost")
+            if estimated_quota_cost is not None:
+                estimated_amount = SubscriptionService._normalize_decimal(estimated_quota_cost)
+                if estimated_amount > 0 and remaining_amount < estimated_amount:
+                    raise SubscriptionService._build_quota_exceeded_error(
+                        active_subscription,
+                        estimated=True,
+                    )
+            elif remaining_amount <= SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD:
                 raise SubscriptionService._build_quota_exceeded_error(active_subscription)
-        elif used_amount >= quota_limit:
+        else:
+            estimated_total_tokens = (quota_precheck or {}).get("estimated_total_tokens")
+            if estimated_total_tokens is not None:
+                estimated_amount = SubscriptionService._normalize_decimal(estimated_total_tokens)
+                if estimated_amount > 0 and remaining_amount < estimated_amount:
+                    raise SubscriptionService._build_quota_exceeded_error(
+                        active_subscription,
+                        estimated=True,
+                    )
+            elif used_amount >= quota_limit:
+                raise SubscriptionService._build_quota_exceeded_error(active_subscription)
+
+        if quota_metric != SubscriptionService.QUOTA_METRIC_COST and used_amount >= quota_limit:
             raise SubscriptionService._build_quota_exceeded_error(active_subscription)
 
         return {"subscription": active_subscription, "cycle": cycle}

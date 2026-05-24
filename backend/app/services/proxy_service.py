@@ -21,7 +21,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 from contextlib import suppress
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -65,7 +65,8 @@ _IMAGE_UPSTREAM_TIMEOUT = 300.0
 _UPSTREAM_CONNECT_TIMEOUT = 15.0
 # Some upstream gateways block generic client defaults like ``python-httpx``.
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
-_UPSTREAM_RETRY_ATTEMPTS = 3
+_UPSTREAM_RETRY_MAX_RETRIES = 3
+_UPSTREAM_RETRY_ATTEMPTS = _UPSTREAM_RETRY_MAX_RETRIES + 1
 _UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
@@ -107,6 +108,9 @@ class ProxyService:
     _RESPONSES_FAST_SERVICE_TIER = "priority"
     _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
+    _LONG_CONTEXT_TOKEN_THRESHOLD = 262144
+    _LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
+    _LONG_CONTEXT_PRICE_MULTIPLIER = Decimal("2")
 
     # ----- Model identity system prompt mapping -----
     _MODEL_VENDOR_MAP = [
@@ -190,6 +194,13 @@ class ProxyService:
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
+        estimated_total_cost = None
+        if quota_precheck:
+            estimated_total_cost = quota_precheck.get("estimated_total_cost")
+        if estimated_total_cost is not None:
+            required_balance = SubscriptionService._normalize_decimal(estimated_total_cost)
+            if required_balance > 0:
+                return available_balance >= required_balance
         return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
 
     @staticmethod
@@ -408,6 +419,39 @@ class ProxyService:
         if multiplier <= 0:
             return ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
         return multiplier
+
+    @staticmethod
+    def _calculate_context_tokens(
+        raw_input_tokens: int = 0,
+        raw_output_tokens: int = 0,
+        raw_cache_read_input_tokens: int = 0,
+    ) -> int:
+        return (
+            max(int(raw_input_tokens or 0), 0)
+            + max(int(raw_output_tokens or 0), 0)
+            + max(int(raw_cache_read_input_tokens or 0), 0)
+        )
+
+    @staticmethod
+    def _get_context_price_multiplier_decimal(context_tokens: int = 0) -> Decimal:
+        if int(context_tokens or 0) > ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD:
+            return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER
+        return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT
+
+    @staticmethod
+    def _build_effective_price_multiplier(
+        price_multiplier: Decimal,
+        fast_price_multiplier: Decimal,
+        context_price_multiplier: Decimal,
+    ) -> Decimal:
+        return price_multiplier * fast_price_multiplier * context_price_multiplier
+
+    @staticmethod
+    def _build_official_quota_multiplier(
+        fast_price_multiplier: Decimal,
+        context_price_multiplier: Decimal,
+    ) -> Decimal:
+        return fast_price_multiplier * context_price_multiplier
 
     @staticmethod
     def _log_responses_request_json(
@@ -1233,32 +1277,53 @@ class ProxyService:
             estimated_input_tokens = ProxyService.estimate_openai_input_tokens(request_data)
 
         estimated_output_tokens = ProxyService._extract_estimated_output_tokens(protocol, request_data)
+        estimated_context_tokens = ProxyService._calculate_context_tokens(
+            estimated_input_tokens,
+            estimated_output_tokens or 0,
+            0,
+        )
+        context_price_multiplier = ProxyService._get_context_price_multiplier_decimal(
+            estimated_context_tokens
+        )
         quota_precheck: dict[str, Decimal] = {
             "estimated_total_tokens": Decimal(str(max(estimated_input_tokens, 0))),
+            "context_tokens_snapshot": Decimal(str(estimated_context_tokens)),
+            "context_token_threshold_snapshot": Decimal(str(ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD)),
+            "context_price_multiplier_snapshot": context_price_multiplier,
         }
         if estimated_output_tokens is not None:
             quota_precheck["estimated_total_tokens"] += Decimal(str(max(estimated_output_tokens, 0)))
 
-        if unified_model is not None and estimated_output_tokens is not None:
+        if unified_model is not None:
             price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
             billing_context = ProxyService._build_text_billing_context(protocol, request_data)
             fast_price_multiplier = ProxyService._get_fast_price_multiplier_decimal(billing_context)
-            effective_price_multiplier = price_multiplier * fast_price_multiplier
+            effective_price_multiplier = ProxyService._build_effective_price_multiplier(
+                price_multiplier,
+                fast_price_multiplier,
+                context_price_multiplier,
+            )
+            official_quota_multiplier = ProxyService._build_official_quota_multiplier(
+                fast_price_multiplier,
+                context_price_multiplier,
+            )
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
             estimated_input_cost = (
                 Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
             ) * input_price * effective_price_multiplier
+            estimated_output_token_count = max(estimated_output_tokens or 0, 0)
             estimated_output_cost = (
-                Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")
+                Decimal(str(estimated_output_token_count)) / Decimal("1000000")
             ) * output_price * effective_price_multiplier
             quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
             quota_precheck["estimated_quota_cost"] = (
-                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price * fast_price_multiplier
-                + (Decimal(str(max(estimated_output_tokens, 0))) / Decimal("1000000")) * output_price * fast_price_multiplier
+                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price * official_quota_multiplier
+                + (Decimal(str(estimated_output_token_count)) / Decimal("1000000")) * output_price * official_quota_multiplier
             )
             quota_precheck["service_tier"] = billing_context.get("service_tier")
             quota_precheck["fast_price_multiplier_snapshot"] = fast_price_multiplier
+            quota_precheck["effective_price_multiplier_snapshot"] = effective_price_multiplier
 
         return quota_precheck
 
@@ -1670,6 +1735,161 @@ class ProxyService:
                     retry_delay = 0.6 * attempt
                     logger.warning(
                         "%s retrying upstream transport request_id=%s channel=%s channel_id=%s "
+                        "attempt=%s/%s error=%s delay=%.1fs",
+                        log_label,
+                        request_id,
+                        channel.name,
+                        channel.id,
+                        attempt,
+                        max_attempts,
+                        exc,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                raise
+
+        if last_exception:
+            raise last_exception
+        raise RuntimeError(f"{log_label} upstream retry loop exited unexpectedly")
+
+    @staticmethod
+    async def _post_files_with_retries(
+        url: str,
+        files: list[tuple[str, tuple]],
+        headers: dict[str, str],
+        *,
+        request_id: str,
+        channel: Channel,
+        timeout: httpx.Timeout,
+        log_label: str,
+        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+    ) -> httpx.Response:
+        """POST multipart data and retry transient upstream failures."""
+        attempt = 0
+        last_exception: Optional[Exception] = None
+
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, files=files, headers=headers)
+                if response.status_code == 200:
+                    return response
+
+                if (
+                    attempt < max_attempts
+                    and ProxyService._should_retry_upstream_status(response.status_code)
+                ):
+                    retry_delay = 0.6 * attempt
+                    logger.warning(
+                        "%s retrying upstream request_id=%s channel=%s channel_id=%s "
+                        "attempt=%s/%s status=%s delay=%.1fs",
+                        log_label,
+                        request_id,
+                        channel.name,
+                        channel.id,
+                        attempt,
+                        max_attempts,
+                        response.status_code,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                return response
+            except Exception as exc:
+                last_exception = exc
+                if (
+                    attempt < max_attempts
+                    and ProxyService._should_retry_upstream_exception(exc)
+                ):
+                    retry_delay = 0.6 * attempt
+                    logger.warning(
+                        "%s retrying upstream transport request_id=%s channel=%s channel_id=%s "
+                        "attempt=%s/%s error=%s delay=%.1fs",
+                        log_label,
+                        request_id,
+                        channel.name,
+                        channel.id,
+                        attempt,
+                        max_attempts,
+                        exc,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                raise
+
+        if last_exception:
+            raise last_exception
+        raise RuntimeError(f"{log_label} upstream retry loop exited unexpectedly")
+
+    @staticmethod
+    async def _stream_lines_with_retries(
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        request_id: str,
+        channel: Channel,
+        timeout: httpx.Timeout,
+        log_label: str,
+        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+        retry_boundary: Optional[Callable[[str], bool]] = None,
+    ):
+        """Yield upstream stream lines, retrying only before the first client-visible line."""
+        attempt = 0
+        last_exception: Optional[Exception] = None
+
+        while attempt < max_attempts:
+            attempt += 1
+            reached_retry_boundary = False
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, json=payload, headers=headers) as response:
+                        if response.status_code != 200:
+                            body = await response.aread()
+                            if (
+                                attempt < max_attempts
+                                and ProxyService._should_retry_upstream_status(response.status_code)
+                            ):
+                                retry_delay = 0.6 * attempt
+                                logger.warning(
+                                    "%s retrying upstream stream request_id=%s channel=%s channel_id=%s "
+                                    "attempt=%s/%s status=%s delay=%.1fs",
+                                    log_label,
+                                    request_id,
+                                    channel.name,
+                                    channel.id,
+                                    attempt,
+                                    max_attempts,
+                                    response.status_code,
+                                    retry_delay,
+                                )
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            raise Exception(
+                                f"Upstream returned HTTP {response.status_code}: "
+                                f"{body.decode('utf-8', errors='replace')[:500]}"
+                            )
+
+                        async for line in response.aiter_lines():
+                            if retry_boundary:
+                                reached_retry_boundary = reached_retry_boundary or retry_boundary(line)
+                            else:
+                                reached_retry_boundary = reached_retry_boundary or bool(line)
+                            yield line
+                        return
+            except Exception as exc:
+                last_exception = exc
+                if (
+                    not reached_retry_boundary
+                    and attempt < max_attempts
+                    and ProxyService._should_retry_upstream_exception(exc)
+                ):
+                    retry_delay = 0.6 * attempt
+                    logger.warning(
+                        "%s retrying upstream stream transport request_id=%s channel=%s channel_id=%s "
                         "attempt=%s/%s error=%s delay=%.1fs",
                         log_label,
                         request_id,
@@ -3318,6 +3538,21 @@ class ProxyService:
         unified_model = ModelService.resolve_model(db, requested_model)
         if not unified_model:
             raise ServiceException(404, f"模型 '{requested_model}' 不存在", "MODEL_NOT_FOUND")
+        if (
+            str(getattr(unified_model, "model_type", "") or "") == "image"
+            or str(getattr(unified_model, "billing_type", "") or "") == "image_credit"
+        ):
+            raise ServiceException(
+                400,
+                "图片模型不支持通过 /v1/responses 调用，请使用 /v1/images/generations 或 /v1/images/edits",
+                "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
+            )
+        if request_data and ProxyService._has_responses_image_generation_tool(request_data):
+            raise ServiceException(
+                400,
+                "Responses image_generation 工具不支持调用，请使用 /v1/images/generations 或 /v1/images/edits",
+                "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
+            )
 
         quota_precheck = None
         if request_data:
@@ -3335,7 +3570,100 @@ class ProxyService:
         )
         if not channels:
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
+        channels = ProxyService._filter_responses_text_channels(db, channels)
+        if not channels:
+            raise ServiceException(
+                400,
+                "Responses 渠道映射指向图片模型，请使用 /v1/images/generations 或 /v1/images/edits",
+                "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
+            )
         return unified_model, channels
+
+    @staticmethod
+    def _is_image_unified_model(unified_model: Any) -> bool:
+        return (
+            str(getattr(unified_model, "model_type", "") or "") == "image"
+            or str(getattr(unified_model, "billing_type", "") or "") == "image_credit"
+        )
+
+    @staticmethod
+    def _is_known_image_model_name(model_name: str) -> bool:
+        raw_name = str(model_name or "").strip()
+        if not raw_name:
+            return False
+
+        candidates = [item.strip() for item in raw_name.split("|") if item and item.strip()]
+        for candidate in candidates or [raw_name]:
+            prefix, separator, remainder = candidate.partition(":")
+            normalized_name = remainder.strip() if separator and prefix == "responses" else candidate
+            normalized_lower = normalized_name.lower()
+            if (
+                ModelService.get_image_resolution_capabilities(normalized_name)
+                or ModelService.supports_image_edit(normalized_name)
+                or normalized_lower.startswith("imagen-")
+                or "image" in normalized_lower
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _is_responses_image_upstream_candidate(
+        db: Session,
+        channel: Channel,
+        actual_model_name: str,
+    ) -> bool:
+        protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
+        provider_variant = ChannelService._normalize_provider_variant(
+            getattr(channel, "protocol_type", None),
+            getattr(channel, "provider_variant", None),
+        )
+        if protocol_type == "openai" and provider_variant in {
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
+        }:
+            return True
+        if protocol_type == "google" and provider_variant == ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE:
+            return True
+
+        upstream_model_name, _ = ProxyService._resolve_mapped_upstream_target(
+            channel,
+            actual_model_name,
+            default_openai_api="responses",
+        )
+        if ProxyService._is_known_image_model_name(upstream_model_name):
+            return True
+
+        try:
+            upstream_model = (
+                db.query(UnifiedModel)
+                .filter(
+                    UnifiedModel.model_name == upstream_model_name,
+                    UnifiedModel.enabled == 1,
+                )
+                .first()
+            )
+        except Exception:
+            upstream_model = None
+        return bool(upstream_model and ProxyService._is_image_unified_model(upstream_model))
+
+    @staticmethod
+    def _filter_responses_text_channels(
+        db: Session,
+        channels: list[tuple[Channel, str]],
+    ) -> list[tuple[Channel, str]]:
+        filtered: list[tuple[Channel, str]] = []
+        for channel, actual_model_name in channels:
+            if ProxyService._is_responses_image_upstream_candidate(db, channel, actual_model_name):
+                logger.warning(
+                    "Responses skipped image upstream mapping channel=%s channel_id=%s actual_model=%s",
+                    getattr(channel, "name", None),
+                    getattr(channel, "id", None),
+                    actual_model_name,
+                )
+                continue
+            filtered.append((channel, actual_model_name))
+        return filtered
 
     @staticmethod
     def _normalize_responses_input(input_data) -> list:
@@ -3410,6 +3738,21 @@ class ProxyService:
             if tool_name:
                 tool_names.append(tool_name)
         return tool_names
+
+    @staticmethod
+    def _has_responses_image_generation_tool(request_data: dict) -> bool:
+        """Detect the native Responses image generation tool."""
+        raw_tools = request_data.get("tools")
+        if not isinstance(raw_tools, list):
+            return False
+
+        for tool in raw_tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_type = str(tool.get("type", "") or "").strip().lower()
+            if tool_type == "image_generation":
+                return True
+        return False
 
     @staticmethod
     def _detect_responses_high_risk_tools(request_data: dict) -> list[str]:
@@ -3926,32 +4269,20 @@ class ProxyService:
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=request_data, headers=headers) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    raise Exception(
-                        f"Upstream returned HTTP {response.status_code}: "
-                        f"{body.decode('utf-8', errors='replace')[:500]}"
-                    )
-
-                content_type = response.headers.get("content-type", "")
-                if "text/event-stream" not in content_type:
-                    body = await response.aread()
-                    body_text = body.decode("utf-8", errors="replace").strip()
-                    if not body_text:
-                        return
-                    payload = ProxyService._parse_non_stream_responses_payload(body_text)
-                    if payload is None:
-                        raise Exception(f"Invalid upstream /responses body: {body_text[:500]}")
-                    yield ProxyService._rewrite_response_model(payload, requested_model)
-                    return
-
-                async for line in response.aiter_lines():
-                    payload = ProxyService._parse_responses_payload_line(line)
-                    if payload is None:
-                        continue
-                    yield ProxyService._rewrite_response_model(payload, requested_model)
+        async for line in ProxyService._stream_lines_with_retries(
+            url,
+            request_data,
+            headers,
+            request_id=str(request_data.get("_request_id") or "responses"),
+            channel=channel,
+            timeout=timeout,
+            log_label="Responses stream",
+            retry_boundary=ProxyService._is_responses_stream_retry_boundary,
+        ):
+            payload = ProxyService._parse_responses_payload_line(line)
+            if payload is None:
+                continue
+            yield ProxyService._rewrite_response_model(payload, requested_model)
 
     @staticmethod
     def _parse_non_stream_responses_payload(raw_text: str) -> dict | None:
@@ -3985,6 +4316,10 @@ class ProxyService:
         if isinstance(payload, dict):
             return payload
         return None
+
+    @staticmethod
+    def _is_responses_stream_retry_boundary(line: str) -> bool:
+        return ProxyService._parse_responses_payload_line(line) is not None
 
     @staticmethod
     def _rewrite_response_model(payload: dict, requested_model: str) -> dict:
@@ -4854,102 +5189,87 @@ class ProxyService:
             cache_creation_input_tokens = 0
 
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=request_data, headers=headers,
-                ) as response:
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        logger.warning(
-                            "Anthropic upstream error request_id=%s channel=%s channel_id=%s status=%s body=%s request_snapshot=%s",
-                            request_id,
-                            channel.name,
-                            channel.id,
-                            response.status_code,
-                            body.decode("utf-8", errors="replace")[:500],
-                            json.dumps(
-                                ProxyService._build_anthropic_request_debug_snapshot(request_data),
-                                ensure_ascii=False,
-                            ),
-                        )
-                        raise Exception(
-                            f"Upstream returned HTTP {response.status_code}: "
-                            f"{body.decode('utf-8', errors='replace')[:500]}"
-                        )
+            async for line in ProxyService._stream_lines_with_retries(
+                url,
+                request_data,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="OpenAI stream",
+            ):
+                if not line:
+                    continue
 
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
+                if line.startswith("data: "):
+                    data_str = line[6:]
 
-                        if line.startswith("data: "):
-                            data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        yield "data: [DONE]\n\n"
+                        completion_event = json.dumps({
+                            "type": "response.completed",
+                            "usage": {
+                                "input_tokens": logical_input_tokens or input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": (logical_input_tokens or input_tokens) + output_tokens,
+                                "billable_input_tokens": input_tokens,
+                                "cache_read_input_tokens": cache_read_input_tokens,
+                                "cache_creation_input_tokens": cache_creation_input_tokens,
+                            },
+                        })
+                        yield f"data: {completion_event}\n\n"
+                        break
 
-                            if data_str.strip() == "[DONE]":
-                                yield "data: [DONE]\n\n"
-                                completion_event = json.dumps({
-                                    "type": "response.completed",
-                                    "usage": {
-                                        "input_tokens": logical_input_tokens or input_tokens,
-                                        "output_tokens": output_tokens,
-                                        "total_tokens": (logical_input_tokens or input_tokens) + output_tokens,
-                                        "billable_input_tokens": input_tokens,
-                                        "cache_read_input_tokens": cache_read_input_tokens,
-                                        "cache_creation_input_tokens": cache_creation_input_tokens,
-                                    },
-                                })
-                                yield f"data: {completion_event}\n\n"
-                                break
+                    try:
+                        chunk = json.loads(data_str)
+                        usage = chunk.get("usage")
+                        if usage:
+                            usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
+                            input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
+                            output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
+                            logical_input_tokens = int(
+                                usage_summary.get("logical_input_tokens", input_tokens) or 0
+                            )
+                            cache_read_input_tokens = int(
+                                usage_summary.get("cache_read_input_tokens", 0) or 0
+                            )
+                            cache_creation_input_tokens = int(
+                                usage_summary.get("cache_creation_input_tokens", 0) or 0
+                            )
+                            collected_usage["prompt_tokens"] = input_tokens
+                            collected_usage["completion_tokens"] = output_tokens
+                            collected_usage["logical_input_tokens"] = logical_input_tokens
+                            collected_usage["cache_read_input_tokens"] = cache_read_input_tokens
+                            collected_usage["cache_creation_input_tokens"] = cache_creation_input_tokens
+                            collected_usage["prompt_cache_status"] = usage_summary.get(
+                                "prompt_cache_status", "BYPASS"
+                            )
+                            collected_usage["_upstream_cache_usage"] = usage_summary
 
-                            try:
-                                chunk = json.loads(data_str)
-                                usage = chunk.get("usage")
-                                if usage:
-                                    usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
-                                    input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
-                                    output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
-                                    logical_input_tokens = int(
-                                        usage_summary.get("logical_input_tokens", input_tokens) or 0
-                                    )
-                                    cache_read_input_tokens = int(
-                                        usage_summary.get("cache_read_input_tokens", 0) or 0
-                                    )
-                                    cache_creation_input_tokens = int(
-                                        usage_summary.get("cache_creation_input_tokens", 0) or 0
-                                    )
-                                    collected_usage["prompt_tokens"] = input_tokens
-                                    collected_usage["completion_tokens"] = output_tokens
-                                    collected_usage["logical_input_tokens"] = logical_input_tokens
-                                    collected_usage["cache_read_input_tokens"] = cache_read_input_tokens
-                                    collected_usage["cache_creation_input_tokens"] = cache_creation_input_tokens
-                                    collected_usage["prompt_cache_status"] = usage_summary.get(
-                                        "prompt_cache_status", "BYPASS"
-                                    )
-                                    collected_usage["_upstream_cache_usage"] = usage_summary
+                        # 收集文本内容（包括 reasoning_content 和 content）
+                        choices = chunk.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content", "")
+                            reasoning_content = delta.get("reasoning_content", "")
+                            finish_reason = choices[0].get("finish_reason")
+                            if content or reasoning_content or finish_reason:
+                                # 优先收集 reasoning_content，然后是 content
+                                if reasoning_content:
+                                    collector.add_chunk(reasoning_content)
+                                if content:
+                                    collector.add_chunk(content)
+                                    if collected_usage.get("_first_stream_output_time") is None:
+                                        collected_usage["_first_stream_output_time"] = time.time()
+                                if finish_reason:
+                                    collector.add_chunk("", finish_reason)
+                    except (json.JSONDecodeError, TypeError):
+                        yield f"data: {data_str}\n\n"
+                        continue
 
-                                # 收集文本内容（包括 reasoning_content 和 content）
-                                choices = chunk.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    reasoning_content = delta.get("reasoning_content", "")
-                                    finish_reason = choices[0].get("finish_reason")
-                                    if content or reasoning_content or finish_reason:
-                                        # 优先收集 reasoning_content，然后是 content
-                                        if reasoning_content:
-                                            collector.add_chunk(reasoning_content)
-                                        if content:
-                                            collector.add_chunk(content)
-                                            if collected_usage.get("_first_stream_output_time") is None:
-                                                collected_usage["_first_stream_output_time"] = time.time()
-                                        if finish_reason:
-                                            collector.add_chunk("", finish_reason)
-                            except (json.JSONDecodeError, TypeError):
-                                yield f"data: {data_str}\n\n"
-                                continue
-
-                            yield f"data: {json.dumps(ProxyService._rewrite_openai_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
-                        else:
-                            yield f"{line}\n"
+                    yield f"data: {json.dumps(ProxyService._rewrite_openai_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
+                else:
+                    yield f"{line}\n"
 
             # 更新计费 tokens
             billing_input_tokens_local = input_tokens
@@ -5274,189 +5594,187 @@ class ProxyService:
             content_block_meta: dict[int, dict] = {}
 
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=anthropic_request, headers=headers,
-                ) as response:
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        raise Exception(
-                            f"Upstream returned HTTP {response.status_code}: "
-                            f"{body.decode('utf-8', errors='replace')[:500]}"
+            async for line in ProxyService._stream_lines_with_retries(
+                url,
+                anthropic_request,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="OpenAI via Anthropic stream",
+                retry_boundary=ProxyService._is_responses_stream_retry_boundary,
+            ):
+                if not line:
+                    continue
+
+                if not line.startswith("data: "):
+                    continue
+
+                data_str = line[6:]
+                try:
+                    chunk = json.loads(data_str)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                chunk_type = str(chunk.get("type", "") or "")
+
+                if chunk_type == "message_start":
+                    message = chunk.get("message") or {}
+                    message_id = str(message.get("id") or chunk_id)
+                    upstream_model = str(message.get("model") or upstream_model)
+                    usage = message.get("usage") or {}
+                    input_tokens = int(usage.get("input_tokens", 0) or 0)
+                    collected_usage["prompt_tokens"] = input_tokens
+
+                    if not role_sent:
+                        role_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"role": "assistant"},
                         )
+                        yield f"data: {role_chunk}\n\n"
+                        role_sent = True
+                    continue
 
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
-
-                        if not line.startswith("data: "):
-                            continue
-
-                        data_str = line[6:]
-                        try:
-                            chunk = json.loads(data_str)
-                        except (json.JSONDecodeError, TypeError):
-                            continue
-
-                        chunk_type = str(chunk.get("type", "") or "")
-
-                        if chunk_type == "message_start":
-                            message = chunk.get("message") or {}
-                            message_id = str(message.get("id") or chunk_id)
-                            upstream_model = str(message.get("model") or upstream_model)
-                            usage = message.get("usage") or {}
-                            input_tokens = int(usage.get("input_tokens", 0) or 0)
-                            collected_usage["prompt_tokens"] = input_tokens
-
-                            if not role_sent:
-                                role_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={"role": "assistant"},
-                                )
-                                yield f"data: {role_chunk}\n\n"
-                                role_sent = True
-                            continue
-
-                        if chunk_type == "content_block_start":
-                            block_index = int(chunk.get("index", 0) or 0)
-                            content_block = chunk.get("content_block") or {}
-                            block_type = str(content_block.get("type", "") or "")
-                            content_block_meta[block_index] = {
-                                "type": block_type,
-                                "id": str(content_block.get("id") or f"call_{block_index}"),
-                                "name": str(content_block.get("name", "") or "tool"),
-                            }
-                            if not role_sent:
-                                role_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={"role": "assistant"},
-                                )
-                                yield f"data: {role_chunk}\n\n"
-                                role_sent = True
-                            if block_type == "tool_use":
-                                tool_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={
-                                        "tool_calls": [{
-                                            "index": block_index,
-                                            "id": content_block_meta[block_index]["id"],
-                                            "type": "function",
-                                            "function": {
-                                                "name": content_block_meta[block_index]["name"],
-                                                "arguments": "",
-                                            },
-                                        }],
+                if chunk_type == "content_block_start":
+                    block_index = int(chunk.get("index", 0) or 0)
+                    content_block = chunk.get("content_block") or {}
+                    block_type = str(content_block.get("type", "") or "")
+                    content_block_meta[block_index] = {
+                        "type": block_type,
+                        "id": str(content_block.get("id") or f"call_{block_index}"),
+                        "name": str(content_block.get("name", "") or "tool"),
+                    }
+                    if not role_sent:
+                        role_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"role": "assistant"},
+                        )
+                        yield f"data: {role_chunk}\n\n"
+                        role_sent = True
+                    if block_type == "tool_use":
+                        tool_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={
+                                "tool_calls": [{
+                                    "index": block_index,
+                                    "id": content_block_meta[block_index]["id"],
+                                    "type": "function",
+                                    "function": {
+                                        "name": content_block_meta[block_index]["name"],
+                                        "arguments": "",
                                     },
-                                )
-                                yield f"data: {tool_chunk}\n\n"
-                            continue
+                                }],
+                            },
+                        )
+                        yield f"data: {tool_chunk}\n\n"
+                    continue
 
-                        if chunk_type == "content_block_delta":
-                            block_index = int(chunk.get("index", 0) or 0)
-                            delta = chunk.get("delta") or {}
-                            meta = content_block_meta.get(block_index, {})
+                if chunk_type == "content_block_delta":
+                    block_index = int(chunk.get("index", 0) or 0)
+                    delta = chunk.get("delta") or {}
+                    meta = content_block_meta.get(block_index, {})
 
-                            text_value = delta.get("text")
-                            thinking_value = delta.get("thinking")
-                            partial_json = delta.get("partial_json")
+                    text_value = delta.get("text")
+                    thinking_value = delta.get("thinking")
+                    partial_json = delta.get("partial_json")
 
-                            if not role_sent:
-                                role_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={"role": "assistant"},
-                                )
-                                yield f"data: {role_chunk}\n\n"
-                                role_sent = True
+                    if not role_sent:
+                        role_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"role": "assistant"},
+                        )
+                        yield f"data: {role_chunk}\n\n"
+                        role_sent = True
 
-                            if text_value:
-                                collector.add_chunk(str(text_value))
-                                if collected_usage.get("_first_stream_output_time") is None:
-                                    collected_usage["_first_stream_output_time"] = time.time()
-                                text_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={"content": str(text_value)},
-                                )
-                                yield f"data: {text_chunk}\n\n"
-                                continue
+                    if text_value:
+                        collector.add_chunk(str(text_value))
+                        if collected_usage.get("_first_stream_output_time") is None:
+                            collected_usage["_first_stream_output_time"] = time.time()
+                        text_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"content": str(text_value)},
+                        )
+                        yield f"data: {text_chunk}\n\n"
+                        continue
 
-                            if thinking_value:
-                                collector.add_chunk(str(thinking_value))
-                                thinking_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={"reasoning_content": str(thinking_value)},
-                                )
-                                yield f"data: {thinking_chunk}\n\n"
-                                continue
+                    if thinking_value:
+                        collector.add_chunk(str(thinking_value))
+                        thinking_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"reasoning_content": str(thinking_value)},
+                        )
+                        yield f"data: {thinking_chunk}\n\n"
+                        continue
 
-                            if partial_json is not None and meta.get("type") == "tool_use":
-                                tool_delta_chunk = ProxyService._build_openai_stream_chunk(
-                                    chunk_id=message_id,
-                                    model_name=client_model_name,
-                                    created_at=created_at,
-                                    delta={
-                                        "tool_calls": [{
-                                            "index": block_index,
-                                            "function": {
-                                                "arguments": str(partial_json),
-                                            },
-                                        }],
+                    if partial_json is not None and meta.get("type") == "tool_use":
+                        tool_delta_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={
+                                "tool_calls": [{
+                                    "index": block_index,
+                                    "function": {
+                                        "arguments": str(partial_json),
                                     },
-                                )
-                                yield f"data: {tool_delta_chunk}\n\n"
-                            continue
+                                }],
+                            },
+                        )
+                        yield f"data: {tool_delta_chunk}\n\n"
+                    continue
 
-                        if chunk_type == "message_delta":
-                            delta = chunk.get("delta") or {}
-                            usage = chunk.get("usage") or {}
-                            stop_reason = delta.get("stop_reason", stop_reason)
-                            if usage.get("output_tokens") is not None:
-                                output_tokens = int(usage.get("output_tokens") or 0)
-                            if usage.get("input_tokens") is not None:
-                                input_tokens = int(usage.get("input_tokens") or 0)
-                            collected_usage["prompt_tokens"] = input_tokens
-                            collected_usage["completion_tokens"] = output_tokens
-                            continue
+                if chunk_type == "message_delta":
+                    delta = chunk.get("delta") or {}
+                    usage = chunk.get("usage") or {}
+                    stop_reason = delta.get("stop_reason", stop_reason)
+                    if usage.get("output_tokens") is not None:
+                        output_tokens = int(usage.get("output_tokens") or 0)
+                    if usage.get("input_tokens") is not None:
+                        input_tokens = int(usage.get("input_tokens") or 0)
+                    collected_usage["prompt_tokens"] = input_tokens
+                    collected_usage["completion_tokens"] = output_tokens
+                    continue
 
-                        if chunk_type == "message_stop":
-                            final_chunk = ProxyService._build_openai_stream_chunk(
-                                chunk_id=message_id,
-                                model_name=client_model_name,
-                                created_at=created_at,
-                                delta={},
-                                finish_reason=ProxyService._convert_anthropic_stop_reason_to_openai(
-                                    stop_reason,
-                                    has_tool_calls=any(
-                                        meta.get("type") == "tool_use"
-                                        for meta in content_block_meta.values()
-                                    ),
-                                ),
-                            )
-                            yield f"data: {final_chunk}\n\n"
-                            usage_chunk = ProxyService._build_openai_stream_chunk(
-                                chunk_id=message_id,
-                                model_name=client_model_name,
-                                created_at=created_at,
-                                usage={
-                                    "prompt_tokens": input_tokens,
-                                    "completion_tokens": output_tokens,
-                                    "total_tokens": input_tokens + output_tokens,
-                                },
-                            )
-                            yield f"data: {usage_chunk}\n\n"
-                            yield "data: [DONE]\n\n"
-                            break
+                if chunk_type == "message_stop":
+                    final_chunk = ProxyService._build_openai_stream_chunk(
+                        chunk_id=message_id,
+                        model_name=client_model_name,
+                        created_at=created_at,
+                        delta={},
+                        finish_reason=ProxyService._convert_anthropic_stop_reason_to_openai(
+                            stop_reason,
+                            has_tool_calls=any(
+                                meta.get("type") == "tool_use"
+                                for meta in content_block_meta.values()
+                            ),
+                        ),
+                    )
+                    yield f"data: {final_chunk}\n\n"
+                    usage_chunk = ProxyService._build_openai_stream_chunk(
+                        chunk_id=message_id,
+                        model_name=client_model_name,
+                        created_at=created_at,
+                        usage={
+                            "prompt_tokens": input_tokens,
+                            "completion_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        },
+                    )
+                    yield f"data: {usage_chunk}\n\n"
+                    yield "data: [DONE]\n\n"
+                    break
 
             billing_callback(input_tokens, output_tokens, False)
 
@@ -5598,8 +5916,15 @@ class ProxyService:
                 _UPSTREAM_TIMEOUT,
                 connect=_UPSTREAM_CONNECT_TIMEOUT,
             )
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=anthropic_request, headers=headers)
+            resp = await ProxyService._post_with_retries(
+                url,
+                anthropic_request,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="OpenAI via Anthropic non-stream",
+            )
 
             if resp.status_code != 200:
                 raise Exception(
@@ -6040,7 +6365,7 @@ class ProxyService:
                             build_client_event(
                                 "content_block_delta",
                                 {
-                                    "type": "content_block_delta",
+                        "type": "content_block_delta",
                                     "index": state["index"],
                                     "delta": {
                                         "type": "input_json_delta",
@@ -6070,7 +6395,7 @@ class ProxyService:
                             build_client_event(
                                 "content_block_delta",
                                 {
-                                    "type": "content_block_delta",
+                        "type": "content_block_delta",
                                     "index": state["index"],
                                     "delta": {
                                         "type": "input_json_delta",
@@ -6195,7 +6520,7 @@ class ProxyService:
                             yield build_client_event(
                                 "content_block_delta",
                                 {
-                                    "type": "content_block_delta",
+                        "type": "content_block_delta",
                                     "index": text_block_index,
                                     "delta": {
                                         "type": "text_delta",
@@ -6992,7 +7317,7 @@ class ProxyService:
                             billing_callback(
                                 ProxyService._resolve_prompt_cache_billing_input_tokens(
                                     db,
-                                    usage_summary,
+                        usage_summary,
                                 ),
                                 int(usage_summary.get("output_tokens", 0) or 0),
                                 False,
@@ -8016,6 +8341,15 @@ class ProxyService:
                 cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
             )
             raw_total_tokens = raw_input_tokens + raw_output_tokens + raw_cache_read_input_tokens
+            context_tokens_snapshot = ProxyService._calculate_context_tokens(
+                raw_input_tokens,
+                raw_output_tokens,
+                raw_cache_read_input_tokens,
+            )
+            context_token_threshold_snapshot = ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+            context_price_multiplier_decimal = ProxyService._get_context_price_multiplier_decimal(
+                context_tokens_snapshot
+            )
 
             token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
             token_multiplier_decimal = Decimal(str(token_multiplier))
@@ -8031,12 +8365,18 @@ class ProxyService:
             fast_price_multiplier_decimal = ProxyService._get_fast_price_multiplier_decimal(
                 billing_context
             )
-            effective_price_multiplier_decimal = (
-                Decimal(str(price_multiplier)) * fast_price_multiplier_decimal
+            price_multiplier_decimal = Decimal(str(price_multiplier))
+            effective_price_multiplier_decimal = ProxyService._build_effective_price_multiplier(
+                price_multiplier_decimal,
+                fast_price_multiplier_decimal,
+                context_price_multiplier_decimal,
+            )
+            official_quota_multiplier_decimal = ProxyService._build_official_quota_multiplier(
+                fast_price_multiplier_decimal,
+                context_price_multiplier_decimal,
             )
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
-            price_multiplier_decimal = Decimal(str(price_multiplier))
             input_cost_decimal = (
                 Decimal(str(input_tokens)) / Decimal("1000000")
             ) * input_price * effective_price_multiplier_decimal
@@ -8052,9 +8392,9 @@ class ProxyService:
             output_cost = float(output_cost_decimal)
             total_cost = float(total_cost_decimal)
             quota_cost_decimal = (
-                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * fast_price_multiplier_decimal
-                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * fast_price_multiplier_decimal
-                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * fast_price_multiplier_decimal
+                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * official_quota_multiplier_decimal
+                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * official_quota_multiplier_decimal
+                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * official_quota_multiplier_decimal
             )
             quota_cost = float(quota_cost_decimal)
 
@@ -8159,6 +8499,9 @@ class ProxyService:
                     output_price_per_million_snapshot=output_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
+                    context_tokens_snapshot=context_tokens_snapshot,
+                    context_token_threshold_snapshot=context_token_threshold_snapshot,
+                    context_price_multiplier_snapshot=context_price_multiplier_decimal,
                     token_multiplier_snapshot=token_multiplier_decimal,
                     service_tier=service_tier,
                     balance_before=Decimal(str(balance_before)),
@@ -8242,6 +8585,9 @@ class ProxyService:
                     output_price_per_million_snapshot=output_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
+                    context_tokens_snapshot=context_tokens_snapshot,
+                    context_token_threshold_snapshot=context_token_threshold_snapshot,
+                    context_price_multiplier_snapshot=context_price_multiplier_decimal,
                     token_multiplier_snapshot=token_multiplier_decimal,
                     service_tier=service_tier,
                 )
@@ -9276,16 +9622,23 @@ class ProxyService:
         payload = ProxyService._build_google_image_payload(request_data, image_size=image_size)
 
         timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            if response.status_code != 200:
-                body_text = response.text[:1000]
-                raise ServiceException(
-                    400 if 400 <= response.status_code < 500 else 503,
-                    f"Google 图片生成失败（HTTP {response.status_code}）：{body_text}",
-                    "GOOGLE_IMAGE_GENERATION_FAILED",
-                )
-            response_body = response.json()
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="Google image non-stream",
+        )
+        if response.status_code != 200:
+            body_text = response.text[:1000]
+            raise ServiceException(
+                400 if 400 <= response.status_code < 500 else 503,
+                f"Google 图片生成失败（HTTP {response.status_code}）：{body_text}",
+                "GOOGLE_IMAGE_GENERATION_FAILED",
+            )
+        response_body = response.json()
 
         images, extra_text = ProxyService._parse_google_image_response(response_body)
         if not images:
@@ -9558,8 +9911,15 @@ class ProxyService:
         )
 
         timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, files=files, headers=headers)
+        response = await ProxyService._post_files_with_retries(
+            url,
+            files,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="OpenAI image edit non-stream",
+        )
         if response.status_code != 200:
             body_text = ProxyService._localize_openai_image_error_body(response.text[:1000])
             raise ServiceException(
@@ -9913,6 +10273,16 @@ class ProxyService:
             "INVALID_IMAGE_CREDIT_AMOUNT",
             "IMAGE_BILLING_FAILED",
         }
+        upstream_request_error_codes = {
+            "UPSTREAM_INVALID_REQUEST",
+            "CONTENT_TOO_LONG",
+            "IMAGE_COUNT_NOT_SUPPORTED",
+            "GOOGLE_IMAGE_GENERATION_FAILED",
+            "OPENAI_IMAGE_GENERATION_FAILED",
+            "VERTEX_IMAGE_GENERATION_FAILED",
+            "VERTEX_IMAGE_MODEL_NOT_CONFIGURED",
+            "VERTEX_IMAGE_DEPENDENCY_MISSING",
+        }
         for channel, actual_model_name in channels:
             try:
                 upstream_model_name = actual_model_name or requested_model
@@ -9934,16 +10304,7 @@ class ProxyService:
                     request_headers=request_headers,
                 )
             except ServiceException as exc:
-                if exc.error_code in {
-                    "UPSTREAM_INVALID_REQUEST",
-                    "CONTENT_TOO_LONG",
-                    "IMAGE_COUNT_NOT_SUPPORTED",
-                    "GOOGLE_IMAGE_GENERATION_FAILED",
-                    "OPENAI_IMAGE_GENERATION_FAILED",
-                    "VERTEX_IMAGE_GENERATION_FAILED",
-                    "VERTEX_IMAGE_MODEL_NOT_CONFIGURED",
-                    "VERTEX_IMAGE_DEPENDENCY_MISSING",
-                }:
+                if exc.error_code in upstream_request_error_codes and exc.status_code < 500:
                     request_error = exc
                     logger.info(
                         "Image channel %s (%d) rejected request without counting channel failure: %s",
@@ -9961,6 +10322,17 @@ class ProxyService:
                         exc.detail,
                     )
                     break
+                if exc.error_code in upstream_request_error_codes and exc.status_code >= 500:
+                    last_error = exc
+                    logger.warning(
+                        "Image channel %s (%d) failed for model %s after retries: %s",
+                        channel.name,
+                        channel.id,
+                        actual_model_name,
+                        exc.detail,
+                    )
+                    ProxyService._record_channel_failure(db, channel, exc)
+                    continue
                 raise
             except Exception as exc:
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
@@ -10074,6 +10446,12 @@ class ProxyService:
             "INVALID_IMAGE_CREDIT_AMOUNT",
             "IMAGE_BILLING_FAILED",
         }
+        upstream_request_error_codes = {
+            "UPSTREAM_INVALID_REQUEST",
+            "CONTENT_TOO_LONG",
+            "OPENAI_IMAGE_EDIT_FAILED",
+            "IMAGE_EDIT_NOT_SUPPORTED",
+        }
         for channel, actual_model_name in channels:
             try:
                 upstream_model_name = actual_model_name or requested_model
@@ -10093,12 +10471,7 @@ class ProxyService:
                     request_headers=request_headers,
                 )
             except ServiceException as exc:
-                if exc.error_code in {
-                    "UPSTREAM_INVALID_REQUEST",
-                    "CONTENT_TOO_LONG",
-                    "OPENAI_IMAGE_EDIT_FAILED",
-                    "IMAGE_EDIT_NOT_SUPPORTED",
-                }:
+                if exc.error_code in upstream_request_error_codes and exc.status_code < 500:
                     request_error = exc
                     logger.info(
                         "Image edit channel %s (%d) rejected request without counting channel failure: %s",
@@ -10116,6 +10489,17 @@ class ProxyService:
                         exc.detail,
                     )
                     break
+                if exc.error_code in upstream_request_error_codes and exc.status_code >= 500:
+                    last_error = exc
+                    logger.warning(
+                        "Image edit channel %s (%d) failed for model %s after retries: %s",
+                        channel.name,
+                        channel.id,
+                        actual_model_name,
+                        exc.detail,
+                    )
+                    ProxyService._record_channel_failure(db, channel, exc)
+                    continue
                 raise
             except Exception as exc:
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)

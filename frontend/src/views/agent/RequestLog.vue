@@ -193,6 +193,7 @@
               <span class="compact-expand-meta">基础价格倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
               <span class="compact-expand-meta">综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
               <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
+              <a-tag v-if="isLongContext(record)" color="red" class="fast-detail-tag">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</a-tag>
             </div>
             <div class="compact-expand-line">
               <span class="compact-expand-label">计费过程</span>
@@ -236,6 +237,8 @@
                   <div class="tooltip-line">输出: 原始 {{ formatNumber(getRawOutputTokens(record)) }} = {{ formatNumber(record.output_tokens || 0) }}，${{ formatCurrency(record.output_cost || 0) }}</div>
                   <div v-if="getBillableCacheReadTokens(record) > 0" class="tooltip-line cache">缓存: 原始 {{ formatNumber(getRawCacheReadTokens(record)) }} = {{ formatNumber(getBillableCacheReadTokens(record)) }}，${{ formatCurrency(record.cache_read_cost || 0) }}</div>
                   <div v-if="isFastMode(record)" class="tooltip-line fast">Fast 模式: x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</div>
+                  <div v-if="isLongContext(record)" class="tooltip-line fast">计费上下文: 输入 + 输出 + 缓存读取 = {{ formatNumber(getContextTokens(record)) }} tok &gt; {{ formatNumber(getContextThreshold(record)) }} tok，x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</div>
+                  <div class="tooltip-line">综合倍率: x{{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</div>
                 </div>
               </template>
               <div class="price-container">
@@ -291,6 +294,7 @@
               <span v-if="getBillableCacheReadTokens(record) > 0" class="cache-chip cache-chip--hit">缓存读取 {{ formatNumber(getBillableCacheReadTokens(record)) }}</span>
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="cache-chip cache-chip--miss">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
               <span v-if="isFastMode(record)" class="cache-chip cache-chip--token">Fast x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</span>
+              <span v-if="isLongContext(record)" class="cache-chip cache-chip--token">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</span>
             </div>
           </div>
         </template>
@@ -444,6 +448,7 @@
             <a-tag v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" color="cyan">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok</a-tag>
             <a-tag color="purple">计费输入 {{ formatNumber(getBillableInputTokens(selectedRecord)) }} tok</a-tag>
             <a-tag v-if="isFastMode(selectedRecord)" color="volcano">Fast x{{ formatMultiplier(getFastPriceMultiplier(selectedRecord)) }}</a-tag>
+            <a-tag v-if="isLongContext(selectedRecord)" color="red">计费上下文 {{ formatNumber(getContextTokens(selectedRecord)) }} tok x{{ formatMultiplier(getContextPriceMultiplier(selectedRecord)) }}</a-tag>
           </div>
         </div>
 
@@ -470,7 +475,11 @@
             <div class="billing-formula-list">
               <div v-if="isFastMode(selectedRecord)" class="billing-formula-row billing-formula-row--muted">
                 <span class="billing-formula-tag billing-formula-tag--muted">Fast</span>
-                <span class="billing-formula-text">service_tier={{ selectedRecord.service_tier || 'priority' }}，输入/输出/缓存读取价格按模型单价 x{{ formatMultiplier(getFastPriceMultiplier(selectedRecord)) }}</span>
+                <span class="billing-formula-text">service_tier={{ selectedRecord.service_tier || 'priority' }}，价格 x{{ formatMultiplier(getFastPriceMultiplier(selectedRecord)) }}</span>
+              </div>
+              <div v-if="isLongContext(selectedRecord)" class="billing-formula-row billing-formula-row--muted">
+                <span class="billing-formula-tag billing-formula-tag--muted">长上下文</span>
+                <span class="billing-formula-text">计费上下文（输入+输出+缓存读取）{{ formatNumber(getContextTokens(selectedRecord)) }} tok &gt; {{ formatNumber(getContextThreshold(selectedRecord)) }} tok，价格 x{{ formatMultiplier(getContextPriceMultiplier(selectedRecord)) }}</span>
               </div>
               <div class="billing-formula-row">
                 <span class="billing-formula-tag">输入</span>
@@ -710,8 +719,25 @@ export default {
       if (!Number.isFinite(num) || num <= 0) return 1
       return num
     },
+    getContextTokens(record) {
+      const fallback = Number(record && record.raw_total_tokens || 0)
+      const num = Number(record && record.context_tokens_snapshot != null ? record.context_tokens_snapshot : fallback)
+      return Number.isFinite(num) && num > 0 ? num : 0
+    },
+    getContextThreshold(record) {
+      const num = Number(record && record.context_token_threshold_snapshot != null ? record.context_token_threshold_snapshot : 262144)
+      return Number.isFinite(num) && num > 0 ? num : 262144
+    },
+    getContextPriceMultiplier(record) {
+      const num = Number(record && record.context_price_multiplier_snapshot != null ? record.context_price_multiplier_snapshot : 1)
+      if (!Number.isFinite(num) || num <= 0) return 1
+      return num
+    },
+    isLongContext(record) {
+      return this.getContextPriceMultiplier(record) > 1 || this.getContextTokens(record) > this.getContextThreshold(record)
+    },
     getEffectivePriceMultiplier(record) {
-      return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record)
+      return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record) * this.getContextPriceMultiplier(record)
     },
     isFastMode(record) {
       return this.getFastPriceMultiplier(record) > 1 || String(record && record.service_tier || '') === 'priority'

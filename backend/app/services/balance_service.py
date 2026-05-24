@@ -230,6 +230,14 @@ class BalanceService:
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),
+                "context_tokens_snapshot": int(r.context_tokens_snapshot or 0),
+                "context_token_threshold_snapshot": int(r.context_token_threshold_snapshot or 262144),
+                "context_price_multiplier_snapshot": float(r.context_price_multiplier_snapshot or 1),
+                "effective_price_multiplier_snapshot": float(
+                    (r.price_multiplier_snapshot or 1)
+                    * (r.fast_price_multiplier_snapshot or 1)
+                    * (r.context_price_multiplier_snapshot or 1)
+                ),
                 "service_tier": r.service_tier,
                 "token_multiplier_snapshot": float(r.token_multiplier_snapshot or 1),
                 "balance_before": float(r.balance_before),

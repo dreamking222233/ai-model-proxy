@@ -11,6 +11,8 @@ from app.services.channel_service import ChannelService
 logger = logging.getLogger(__name__)
 
 _VERTEX_DEFAULT_BASE_URL = "https://aiplatform.googleapis.com"
+_VERTEX_IMAGE_RETRY_MAX_RETRIES = 3
+_VERTEX_IMAGE_RETRY_ATTEMPTS = _VERTEX_IMAGE_RETRY_MAX_RETRIES + 1
 
 
 class GoogleVertexImageService:
@@ -164,6 +166,59 @@ class GoogleVertexImageService:
         return images, "\n".join(text_output).strip() or None
 
     @staticmethod
+    def _should_retry_vertex_exception(exc: Exception) -> bool:
+        if isinstance(exc, ServiceException):
+            return exc.status_code >= 500
+        return True
+
+    @staticmethod
+    def _sleep_before_retry_sync(attempt: int, candidate_model: str, exc: Exception) -> None:
+        delay = 0.6 * attempt
+        logger.warning(
+            "Vertex image retrying candidate=%s attempt=%s/%s error=%s delay=%.1fs",
+            candidate_model,
+            attempt,
+            _VERTEX_IMAGE_RETRY_ATTEMPTS,
+            exc,
+            delay,
+        )
+        import time
+
+        time.sleep(delay)
+
+    @staticmethod
+    def _generate_one_candidate(
+        client,
+        types_module,
+        candidate_model: str,
+        prompt: str,
+        aspect_ratio: Optional[str],
+        image_size: Optional[str],
+    ) -> tuple[list[dict], Optional[str]]:
+        if GoogleVertexImageService.is_imagen_model(candidate_model):
+            response = client.models.generate_images(
+                model=candidate_model,
+                prompt=prompt,
+                config=GoogleVertexImageService._build_imagen_config(
+                    types_module,
+                    aspect_ratio,
+                    image_size,
+                ),
+            )
+            return GoogleVertexImageService._parse_imagen_response(response)
+
+        response = client.models.generate_content(
+            model=candidate_model,
+            contents=prompt,
+            config=GoogleVertexImageService._build_gemini_config(
+                types_module,
+                aspect_ratio,
+                image_size,
+            ),
+        )
+        return GoogleVertexImageService._parse_gemini_response(response)
+
+    @staticmethod
     def _generate_images_sync(
         api_key: str,
         candidate_models: list[str],
@@ -176,46 +231,46 @@ class GoogleVertexImageService:
         last_error: Exception | None = None
 
         for candidate_model in candidate_models:
-            try:
-                if GoogleVertexImageService.is_imagen_model(candidate_model):
-                    response = client.models.generate_images(
-                        model=candidate_model,
-                        prompt=prompt,
-                        config=GoogleVertexImageService._build_imagen_config(
-                            types_module,
-                            aspect_ratio,
-                            image_size,
-                        ),
+            for attempt in range(1, _VERTEX_IMAGE_RETRY_ATTEMPTS + 1):
+                try:
+                    images, extra_text = GoogleVertexImageService._generate_one_candidate(
+                        client,
+                        types_module,
+                        candidate_model,
+                        prompt,
+                        aspect_ratio,
+                        image_size,
                     )
-                    images, extra_text = GoogleVertexImageService._parse_imagen_response(response)
-                else:
-                    response = client.models.generate_content(
-                        model=candidate_model,
-                        contents=prompt,
-                        config=GoogleVertexImageService._build_gemini_config(
-                            types_module,
-                            aspect_ratio,
-                            image_size,
-                        ),
-                    )
-                    images, extra_text = GoogleVertexImageService._parse_gemini_response(response)
 
-                if images:
-                    return images, extra_text, candidate_model
-                last_error = ServiceException(
-                    503,
-                    f"Vertex 模型 '{candidate_model}' 未返回图片数据",
-                    "VERTEX_IMAGE_GENERATION_FAILED",
-                )
-            except ServiceException as exc:
-                last_error = exc
-            except Exception as exc:
-                logger.warning("Vertex image candidate %s failed: %s", candidate_model, exc)
-                last_error = ServiceException(
-                    400,
-                    f"Vertex 模型 '{candidate_model}' 图片生成失败：{exc}",
-                    "VERTEX_IMAGE_GENERATION_FAILED",
-                )
+                    if images:
+                        return images, extra_text, candidate_model
+                    last_error = ServiceException(
+                        503,
+                        f"Vertex 模型 '{candidate_model}' 未返回图片数据",
+                        "VERTEX_IMAGE_GENERATION_FAILED",
+                    )
+                except ServiceException as exc:
+                    last_error = exc
+                except Exception as exc:
+                    logger.warning("Vertex image candidate %s failed: %s", candidate_model, exc)
+                    last_error = ServiceException(
+                        503,
+                        f"Vertex 模型 '{candidate_model}' 图片生成失败：{exc}",
+                        "VERTEX_IMAGE_GENERATION_FAILED",
+                    )
+
+                if (
+                    attempt < _VERTEX_IMAGE_RETRY_ATTEMPTS
+                    and last_error is not None
+                    and GoogleVertexImageService._should_retry_vertex_exception(last_error)
+                ):
+                    GoogleVertexImageService._sleep_before_retry_sync(
+                        attempt,
+                        candidate_model,
+                        last_error,
+                    )
+                    continue
+                break
 
         if isinstance(last_error, ServiceException):
             raise last_error

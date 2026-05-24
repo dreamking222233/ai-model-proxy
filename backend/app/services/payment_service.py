@@ -845,6 +845,19 @@ class PaymentService:
 
     @staticmethod
     def _credit_user_balance(db: Session, order: PaymentRechargeOrder) -> None:
+        existing_record = (
+            db.query(ConsumptionRecord.id)
+            .filter(
+                ConsumptionRecord.user_id == order.user_id,
+                ConsumptionRecord.request_id == order.order_no,
+                ConsumptionRecord.total_cost < Decimal("0"),
+            )
+            .first()
+        )
+        if existing_record:
+            logger.warning("Skip duplicate balance recharge credit for order %s", order.order_no)
+            return
+
         balance = (
             db.query(UserBalance)
             .filter(UserBalance.user_id == order.user_id)
@@ -877,6 +890,20 @@ class PaymentService:
 
     @staticmethod
     def _credit_user_image_credits(db: Session, order: PaymentRechargeOrder) -> None:
+        existing_record = (
+            db.query(ImageCreditRecord.id)
+            .filter(
+                ImageCreditRecord.user_id == order.user_id,
+                ImageCreditRecord.request_id == order.order_no,
+                ImageCreditRecord.action_type == "recharge",
+                ImageCreditRecord.change_amount > Decimal("0"),
+            )
+            .first()
+        )
+        if existing_record:
+            logger.warning("Skip duplicate image credit recharge credit for order %s", order.order_no)
+            return
+
         balance = (
             db.query(UserImageBalance)
             .filter(UserImageBalance.user_id == order.user_id)
@@ -996,6 +1023,23 @@ class PaymentService:
             raise ServiceException(500, "代理现金分润金额格式无效", "AGENT_CASH_INCOME_INVALID")
         if income <= Decimal("0"):
             return
+        action_type = (
+            "image_credit_recharge_commission"
+            if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit"
+            else "balance_recharge_commission"
+        )
+        existing_ledger = (
+            db.query(AgentCashLedger.id)
+            .filter(
+                AgentCashLedger.order_id == order.id,
+                AgentCashLedger.action_type == action_type,
+            )
+            .first()
+        )
+        if existing_ledger:
+            logger.warning("Skip duplicate agent cash recharge commission for order %s", order.order_no)
+            return
+
         balance = PaymentService._get_or_create_agent_cash_balance_for_update(db, int(order.agent_id))
         balance_before = Decimal(str(balance.balance or 0))
         balance.balance = balance_before + income
@@ -1004,11 +1048,7 @@ class PaymentService:
             agent_id=int(order.agent_id),
             order_id=order.id,
             withdrawal_id=None,
-            action_type=(
-                "image_credit_recharge_commission"
-                if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit"
-                else "balance_recharge_commission"
-            ),
+            action_type=action_type,
             change_amount=income,
             balance_before=balance_before,
             balance_after=balance.balance,

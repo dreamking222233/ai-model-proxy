@@ -256,6 +256,9 @@ class LogService:
                     ConsumptionRecord.output_cost,
                     ConsumptionRecord.cache_read_cost,
                     ConsumptionRecord.total_cost,
+                    ConsumptionRecord.context_tokens_snapshot,
+                    ConsumptionRecord.context_token_threshold_snapshot,
+                    ConsumptionRecord.context_price_multiplier_snapshot,
                     ConsumptionRecord.created_at,
                     ConsumptionRecord.id,
                 )
@@ -283,6 +286,20 @@ class LogService:
             output_cost = getattr(consumption, "output_cost", 0)
             record_cache_read_cost = getattr(consumption, "cache_read_cost", 0)
             total_cost = getattr(consumption, "total_cost", 0)
+            context_tokens_snapshot = log.context_tokens_snapshot
+            if context_tokens_snapshot is None and consumption is not None:
+                context_tokens_snapshot = getattr(consumption, "context_tokens_snapshot", 0)
+            context_token_threshold_snapshot = log.context_token_threshold_snapshot
+            if context_token_threshold_snapshot is None and consumption is not None:
+                context_token_threshold_snapshot = getattr(consumption, "context_token_threshold_snapshot", None)
+            context_price_multiplier_snapshot = log.context_price_multiplier_snapshot
+            if context_price_multiplier_snapshot is None and consumption is not None:
+                context_price_multiplier_snapshot = getattr(consumption, "context_price_multiplier_snapshot", None)
+            effective_price_multiplier = (
+                (log.price_multiplier_snapshot or 1)
+                * (log.fast_price_multiplier_snapshot or 1)
+                * (context_price_multiplier_snapshot or 1)
+            )
             cache_details = cache_summary_map.get(log.request_id)
             item = {
                 "id": log.id,
@@ -357,6 +374,12 @@ class LogService:
                 "output_price_per_million_snapshot": float(log.output_price_per_million_snapshot or 0),
                 "price_multiplier_snapshot": float(log.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(log.fast_price_multiplier_snapshot or 1),
+                "context_tokens_snapshot": int(context_tokens_snapshot or 0),
+                "context_token_threshold_snapshot": int(
+                    context_token_threshold_snapshot or 262144
+                ),
+                "context_price_multiplier_snapshot": float(context_price_multiplier_snapshot or 1),
+                "effective_price_multiplier_snapshot": float(effective_price_multiplier or 1),
                 "service_tier": log.service_tier,
                 "token_multiplier_snapshot": float(log.token_multiplier_snapshot or 1),
                 "input_cost": float(input_cost or 0),
@@ -919,6 +942,14 @@ class LogService:
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),
+                "context_tokens_snapshot": int(r.context_tokens_snapshot or 0),
+                "context_token_threshold_snapshot": int(r.context_token_threshold_snapshot or 262144),
+                "context_price_multiplier_snapshot": float(r.context_price_multiplier_snapshot or 1),
+                "effective_price_multiplier_snapshot": float(
+                    (r.price_multiplier_snapshot or 1)
+                    * (r.fast_price_multiplier_snapshot or 1)
+                    * (r.context_price_multiplier_snapshot or 1)
+                ),
                 "service_tier": r.service_tier,
                 "token_multiplier_snapshot": float(r.token_multiplier_snapshot or 1),
                 "balance_before": float(r.balance_before), "balance_after": float(r.balance_after),

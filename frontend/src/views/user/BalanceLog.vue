@@ -173,6 +173,7 @@
                 <span class="compact-expand-meta">基础价格倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
                 <span class="compact-expand-meta">综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
                 <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
+                <a-tag v-if="isLongContext(record)" color="red" class="fast-detail-tag">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</a-tag>
               </div>
               <div class="compact-expand-line">
                 <span class="compact-expand-label">计费过程</span>
@@ -230,6 +231,9 @@
                 <a-tooltip v-if="isFastMode(record)" :title="`Fast 模式（service_tier=${record.service_tier || 'priority'}），价格 x${formatMultiplier(getFastPriceMultiplier(record))}`">
                   <span class="t-badge purple">Fast x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</span>
                 </a-tooltip>
+                <a-tooltip v-if="isLongContext(record)" :title="`计费上下文（输入+输出+缓存读取）${formatNumber(getContextTokens(record))} tok 超过 ${formatNumber(getContextThreshold(record))} tok，价格 x${formatMultiplier(getContextPriceMultiplier(record))}`">
+                  <span class="t-badge purple">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</span>
+                </a-tooltip>
               </div>
             </div>
           </template>
@@ -247,6 +251,8 @@
                     <div v-if="getBillableCacheReadTokens(record) > 0" class="tooltip-line cache">缓存: {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M = ${{ formatCurrency(record.cache_read_cost || 0) }}</div>
                     <div v-if="record.upstream_cache_creation_input_tokens > 0" class="tooltip-line cache">缓存创建: {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} (FREE)</div>
                     <div v-if="isFastMode(record)" class="tooltip-line fast">Fast 模式: x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</div>
+                    <div v-if="isLongContext(record)" class="tooltip-line fast">计费上下文: 输入 + 输出 + 缓存读取 = {{ formatNumber(getContextTokens(record)) }} tok &gt; {{ formatNumber(getContextThreshold(record)) }} tok，x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</div>
+                    <div class="tooltip-line">综合倍率: x{{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</div>
                   </div>
                 </template>
                 <div class="price-container">
@@ -538,8 +544,25 @@ export default {
       if (!Number.isFinite(num) || num <= 0) return 1
       return num
     },
+    getContextTokens(record) {
+      const fallback = Number(record && record.raw_total_tokens || 0)
+      const num = Number(record && record.context_tokens_snapshot != null ? record.context_tokens_snapshot : fallback)
+      return Number.isFinite(num) && num > 0 ? num : 0
+    },
+    getContextThreshold(record) {
+      const num = Number(record && record.context_token_threshold_snapshot != null ? record.context_token_threshold_snapshot : 262144)
+      return Number.isFinite(num) && num > 0 ? num : 262144
+    },
+    getContextPriceMultiplier(record) {
+      const num = Number(record && record.context_price_multiplier_snapshot != null ? record.context_price_multiplier_snapshot : 1)
+      if (!Number.isFinite(num) || num <= 0) return 1
+      return num
+    },
+    isLongContext(record) {
+      return this.getContextPriceMultiplier(record) > 1 || this.getContextTokens(record) > this.getContextThreshold(record)
+    },
     getEffectivePriceMultiplier(record) {
-      return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record)
+      return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record) * this.getContextPriceMultiplier(record)
     },
     isFastMode(record) {
       return this.getFastPriceMultiplier(record) > 1 || String(record && record.service_tier || '') === 'priority'

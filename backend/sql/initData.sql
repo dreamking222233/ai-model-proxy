@@ -41,6 +41,7 @@ CREATE TABLE `sys_user` (
     `created_by_user_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '创建者用户ID',
     `source_domain` VARCHAR(255) DEFAULT NULL COMMENT '注册来源域名',
     `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1=正常, 0=禁用',
+    `token_version` BIGINT NOT NULL DEFAULT 0 COMMENT '登录令牌版本，递增后旧JWT失效',
     `cache_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT '是否启用缓存（1=启用，0=禁用）',
     `cache_hit_count` BIGINT NOT NULL DEFAULT 0 COMMENT '缓存命中次数',
     `cache_saved_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '累计节省 Tokens',

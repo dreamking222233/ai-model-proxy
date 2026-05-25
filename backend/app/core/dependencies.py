@@ -15,6 +15,7 @@ from app.models.user import SysUser, UserApiKey
 from app.core.security import verify_token
 from app.core.exceptions import ServiceException
 from app.services.agent_service import AgentService, AgentSiteContext
+from app.services.auth_token_revocation_service import AuthTokenRevocationService
 
 
 def get_request_site_kwargs(request: Request) -> dict:
@@ -54,10 +55,17 @@ def get_current_user(
     user_id = payload.get("sub")
     if user_id is None:
         raise ServiceException(status_code=401, detail="登录凭证内容无效", error_code="UNAUTHORIZED")
+    if not payload.get("iat") or not payload.get("jti"):
+        raise ServiceException(status_code=401, detail="登录凭证已失效，请重新登录", error_code="TOKEN_REVOKED")
+    if AuthTokenRevocationService.is_revoked(payload.get("jti")):
+        raise ServiceException(status_code=401, detail="登录凭证已失效，请重新登录", error_code="TOKEN_REVOKED")
 
     user = db.query(SysUser).filter(SysUser.id == int(user_id)).first()
     if user is None:
         raise ServiceException(status_code=401, detail="用户不存在", error_code="UNAUTHORIZED")
+    token_version = payload.get("tv")
+    if token_version is None or int(token_version) != int(user.token_version or 0):
+        raise ServiceException(status_code=401, detail="登录凭证已失效，请重新登录", error_code="TOKEN_REVOKED")
 
     if user.status != 1:
         raise ServiceException(status_code=403, detail="账号已被禁用", error_code="FORBIDDEN")

@@ -1,10 +1,13 @@
 import unittest
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.core.exceptions import ServiceException
 from app.core.security import hash_password, verify_password
+from app.api.auth import _client_ip
 from app.services.auth_service import AuthService
+from app.services.auth_token_revocation_service import AuthTokenRevocationService
 
 
 class AuthServiceForgotPasswordTest(unittest.TestCase):
@@ -91,6 +94,32 @@ class AuthServiceForgotPasswordTest(unittest.TestCase):
         scope_filter = str(query.filter.call_args_list[1][0][0])
         self.assertIn("sys_user.agent_id", scope_filter)
         db.commit.assert_not_called()
+
+
+class AuthSecurityHardeningTest(unittest.TestCase):
+    def test_client_ip_uses_real_ip_from_trusted_proxy_and_ignores_forwarded_for(self):
+        request = SimpleNamespace(
+            headers={"X-Forwarded-For": "8.8.8.8", "X-Real-IP": "203.0.113.9"},
+            client=SimpleNamespace(host="127.0.0.1"),
+        )
+
+        self.assertEqual(_client_ip(request), "203.0.113.9")
+
+    def test_client_ip_uses_peer_for_direct_public_request(self):
+        request = SimpleNamespace(
+            headers={"X-Forwarded-For": "1.1.1.1", "X-Real-IP": "203.0.113.9"},
+            client=SimpleNamespace(host="8.8.8.8"),
+        )
+
+        self.assertEqual(_client_ip(request), "8.8.8.8")
+
+    def test_jti_revocation_falls_back_to_memory(self):
+        AuthTokenRevocationService._memory_revoked.clear()
+        with patch("app.services.auth_token_revocation_service.redis_client.set", return_value=False), \
+                patch("app.services.auth_token_revocation_service.redis_client.exists", return_value=False):
+            AuthTokenRevocationService.revoke("jti-demo", time.time() + 60)
+
+            self.assertTrue(AuthTokenRevocationService.is_revoked("jti-demo"))
 
 
 if __name__ == "__main__":

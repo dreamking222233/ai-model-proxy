@@ -1,6 +1,6 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
-import { login as loginApi, register as registerApi } from '@/api/auth'
+import { login as loginApi, register as registerApi, logout as logoutApi } from '@/api/auth'
 import { getToken, setToken, getUser, setUser, clearSiteClientCache } from '@/utils/auth'
 
 Vue.use(Vuex)
@@ -50,12 +50,17 @@ export default new Vuex.Store({
       return res
     },
 
-    async register(_, { username, email, password }) {
-      const res = await registerApi(username, email, password)
+    async register(_, { username, email, password, email_code }) {
+      const res = await registerApi(username, email, password, email_code)
       return res
     },
 
-    logout({ commit }) {
+    async logout({ commit }) {
+      try {
+        await logoutApi()
+      } catch (e) {
+        // 本地退出必须继续执行，服务端撤销失败时依赖 token 过期或账号级版本失效。
+      }
       commit('LOGOUT')
     }
   },

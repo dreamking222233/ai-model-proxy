@@ -21,6 +21,7 @@ class SysUser(Base):
     created_by_user_id = Column(BigInteger, nullable=True, index=True, comment="创建者用户ID")
     source_domain = Column(String(255), nullable=True, comment="注册来源域名")
     status = Column(SmallInteger, nullable=False, default=1, comment="1=normal, 0=disabled")
+    token_version = Column(BigInteger, nullable=False, default=0, comment="登录令牌版本，递增后旧JWT失效")
     cache_enabled = Column(SmallInteger, nullable=False, default=1, comment="1=enabled, 0=disabled")
     cache_hit_count = Column(BigInteger, nullable=False, default=0, comment="Cache hit count")
     cache_saved_tokens = Column(BigInteger, nullable=False, default=0, comment="Total saved tokens")

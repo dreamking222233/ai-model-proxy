@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24 hours
 
+    # Auth hardening
+    AUTH_LOGIN_RATE_LIMIT_PER_MINUTE: int = 10
+    AUTH_REGISTER_RATE_LIMIT_PER_HOUR: int = 5
+    AUTH_PASSWORD_RESET_RATE_LIMIT_PER_HOUR: int = 5
+    AUTH_EMAIL_CODE_RATE_LIMIT_PER_HOUR: int = 5
+    EMAIL_VERIFICATION_REQUIRED: bool = True
+    EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 10
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True
+
     # Server
     SERVER_PORT: int = 8085
     STREAM_HEARTBEAT_INTERVAL_SECONDS: int = 20

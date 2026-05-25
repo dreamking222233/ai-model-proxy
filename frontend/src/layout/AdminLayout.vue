@@ -156,6 +156,7 @@
 
 <script>
 import { getUser, clearSiteClientCache } from '@/utils/auth'
+import { logout as logoutApi } from '@/api/auth'
 
 export default {
   name: 'AdminLayout',
@@ -190,9 +191,11 @@ export default {
       }
     },
     logout() {
-      clearSiteClientCache()
-      this.$router.push('/login')
-      this.$message.success('已退出登录')
+      logoutApi().finally(() => {
+        clearSiteClientCache()
+        this.$router.push('/login')
+        this.$message.success('已退出登录')
+      })
     }
   }
 }

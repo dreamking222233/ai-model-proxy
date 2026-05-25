@@ -16,6 +16,7 @@ from app.core.security import hash_password, verify_password, create_access_toke
 from app.core.exceptions import ServiceException
 from sqlalchemy import func, or_
 from app.services.agent_service import AgentService
+from app.services.email_verification_service import EmailVerificationService
 
 
 class AuthService:
@@ -43,6 +44,7 @@ class AuthService:
         username: str,
         email: str,
         password: str,
+        email_code: Optional[str] = None,
         request_host: Optional[str] = None,
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
@@ -82,6 +84,8 @@ class AuthService:
         if db.query(SysUser).filter(SysUser.email == email).first():
             raise ServiceException(400, "邮箱已被注册", "DUPLICATE_EMAIL")
 
+        EmailVerificationService.verify_code(email, email_code or "", purpose="register")
+
         # Create user
         user = SysUser(
             username=username,
@@ -108,7 +112,7 @@ class AuthService:
         db.refresh(user)
 
         # Generate JWT
-        token = create_access_token({"sub": str(user.id)})
+        token = create_access_token({"sub": str(user.id), "tv": int(getattr(user, "token_version", 0) or 0)})
 
         return {
             "token": token,
@@ -167,7 +171,7 @@ class AuthService:
             user.last_login_ip = client_ip
         db.commit()
 
-        token = create_access_token({"sub": str(user.id)})
+        token = create_access_token({"sub": str(user.id), "tv": int(getattr(user, "token_version", 0) or 0)})
 
         return {
             "token": token,
@@ -322,6 +326,8 @@ class AuthService:
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         for field in ("email", "avatar", "status", "role"):
             if field in d and d[field] is not None:
+                if field == "status" and int(getattr(user, "status", 1) or 0) != int(d[field]):
+                    user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
                 setattr(user, field, d[field])
         db.commit()
         db.refresh(user)
@@ -333,6 +339,7 @@ class AuthService:
         if not user:
             raise ServiceException(404, "用户不存在")
         user.status = 0 if user.status == 1 else 1
+        user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
         db.commit()
         db.refresh(user)
         return user
@@ -370,6 +377,7 @@ class AuthService:
         if not verify_password(old_password, user.password_hash):
             raise ServiceException(400, "旧密码错误")
         user.password_hash = hash_password(new_password)
+        user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
         db.commit()
 
     @staticmethod
@@ -433,6 +441,7 @@ class AuthService:
         username: str,
         email: str,
         new_password: str,
+        email_code: Optional[str] = None,
         request_host: Optional[str] = None,
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
@@ -447,5 +456,7 @@ class AuthService:
             origin=origin,
             referer=referer,
         )
+        EmailVerificationService.verify_code(email, email_code or "", purpose="password_reset")
         user.password_hash = hash_password(new_password)
+        user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
         db.commit()

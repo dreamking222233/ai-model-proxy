@@ -4,9 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
 from app.core.cors import DynamicCORSMiddleware
 from app.database import get_pool_status_snapshot
 from app.core.exceptions import register_exception_handlers
@@ -100,15 +98,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware: dynamic allowlist only. Avoid wildcard origin reflection with credentials.
 app.add_middleware(DynamicCORSMiddleware)
 
 # Custom middleware

@@ -44,6 +44,15 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
+    email_code: Optional[str] = Field(None, min_length=4, max_length=12)
+
+
+class EmailCodeRequest(BaseModel):
+    """Send email verification code payload."""
+
+    email: EmailStr
+    purpose: str = Field("register", pattern=r"^(register|password_reset)$")
+    username: Optional[str] = Field(None, min_length=1, max_length=64)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -51,6 +60,7 @@ class ForgotPasswordRequest(BaseModel):
 
     username: str = Field(..., min_length=1, max_length=64)
     email: EmailStr
+    email_code: Optional[str] = Field(None, min_length=4, max_length=12)
     new_password: str = Field(..., min_length=6, max_length=128)
 
 

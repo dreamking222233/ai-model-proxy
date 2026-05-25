@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -16,10 +17,21 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 def create_access_token(data: dict) -> str:
     """Create a JWT access token with expiration."""
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
+    to_encode.update({
+        "exp": expire,
+        "iat": int(now.timestamp()),
+        "jti": secrets.token_urlsafe(24),
+    })
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return encoded_jwt
+
+
+def hash_secret(value: str, *, salt: Optional[str] = None) -> str:
+    """Hash short-lived secrets without storing plaintext."""
+    material = f"{salt or settings.JWT_SECRET_KEY}:{value}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def verify_token(token: str) -> dict:

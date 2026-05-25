@@ -38,6 +38,7 @@ CREATE TABLE `sys_user` (
     `password_hash` VARCHAR(256) NOT NULL,
     `role` ENUM('admin', 'user') NOT NULL DEFAULT 'user',
     `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1=正常, 0=禁用',
+    `token_version` BIGINT NOT NULL DEFAULT 0 COMMENT '登录令牌版本，递增后旧JWT失效',
     `avatar` VARCHAR(512) DEFAULT NULL,
     `last_login_at` DATETIME DEFAULT NULL,
     `last_login_ip` VARCHAR(45) DEFAULT NULL,

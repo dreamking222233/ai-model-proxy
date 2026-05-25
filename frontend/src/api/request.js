@@ -4,10 +4,7 @@ import { getToken, clearSiteClientCache } from '@/utils/auth'
 import router from '@/router'
 
 function resolveApiBaseURL() {
-  if (process.env.NODE_ENV !== 'production' || typeof window === 'undefined') {
-    return ''
-  }
-  return 'https://api.xiaoleai.team'
+  return process.env.VUE_APP_BASE_API || ''
 }
 
 const service = axios.create({

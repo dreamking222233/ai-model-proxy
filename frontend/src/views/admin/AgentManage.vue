@@ -103,7 +103,7 @@ export default {
       editing: null,
       keyword: '',
       list: [],
-      sharedApiBaseUrl: 'https://api.xiaoleai.team',
+      sharedApiBaseUrl: window.location.origin,
       pagination: { current: 1, pageSize: 10, total: 0 },
       form: {
         agent_code: '',

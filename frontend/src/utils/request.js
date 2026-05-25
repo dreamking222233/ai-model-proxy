@@ -3,7 +3,7 @@ import { getToken } from './auth'
 
 // 创建 axios 实例
 const service = axios.create({
-  baseURL: process.env.VUE_APP_BASE_API || 'http://localhost:8085',
+  baseURL: process.env.VUE_APP_BASE_API || '',
   timeout: 30000
 })
 

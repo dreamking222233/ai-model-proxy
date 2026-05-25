@@ -8,11 +8,34 @@ export function login(username, password) {
   })
 }
 
-export function register(username, email, password) {
+export function register(username, email, password, emailCode) {
   return request({
     url: '/api/auth/register',
     method: 'post',
-    data: { username, email, password }
+    data: { username, email, password, email_code: emailCode }
+  })
+}
+
+export function sendEmailCode(email, purpose = 'register') {
+  return request({
+    url: '/api/auth/email-code',
+    method: 'post',
+    data: { email, purpose }
+  })
+}
+
+export function sendPasswordResetEmailCode(username, email) {
+  return request({
+    url: '/api/auth/email-code',
+    method: 'post',
+    data: { username, email, purpose: 'password_reset' }
+  })
+}
+
+export function logout() {
+  return request({
+    url: '/api/auth/logout',
+    method: 'post'
   })
 }
 

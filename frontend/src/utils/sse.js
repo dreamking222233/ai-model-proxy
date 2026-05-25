@@ -26,7 +26,7 @@ export function streamChat(options) {
   var onError = options.onError
   var controller = options.controller || new AbortController()
 
-  var baseURL = process.env.NODE_ENV === 'production' ? 'https://api.xiaoleai.team' : ''
+  var baseURL = process.env.VUE_APP_BASE_API || ''
 
   if (apiType === 'anthropic') {
     _streamAnthropic(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller)

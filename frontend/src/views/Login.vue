@@ -182,6 +182,31 @@
                 </a-form-item>
               </div>
 
+              <div v-if="emailVerificationRequired" class="input-group code-group" :class="{ focused: focusedField === 'r-emailCode', filled: registerValues.emailCode }">
+                <label>邮箱验证码</label>
+                <a-form-item>
+                  <a-input
+                    v-decorator="['email_code', { rules: emailCodeRules }]"
+                    @focus="focusedField = 'r-emailCode'"
+                    @blur="handleBlur('r-emailCode', 'register', 'emailCode')"
+                    @change="e => registerValues.emailCode = e.target.value"
+                    size="large"
+                  >
+                    <a-icon slot="prefix" type="safety-certificate" class="input-icon" />
+                    <a-button
+                      slot="suffix"
+                      type="link"
+                      class="code-btn"
+                      :disabled="emailCodeCountdown > 0 || sendingEmailCode"
+                      :loading="sendingEmailCode"
+                      @click.stop.prevent="sendRegisterEmailCode"
+                    >
+                      {{ emailCodeCountdown > 0 ? emailCodeCountdown + 's' : '发送' }}
+                    </a-button>
+                  </a-input>
+                </a-form-item>
+              </div>
+
               <div class="input-group" :class="{ focused: focusedField === 'r-password', filled: registerValues.password }">
                 <label>密码</label>
                 <a-form-item>
@@ -266,7 +291,7 @@
       <a-form :form="forgotForm" layout="vertical" class="forgot-form">
         <div class="forgot-step-tip">
           <span v-if="forgotStep === 'identity'">先校验账号和邮箱，校验通过后再设置新密码</span>
-          <span v-else>身份已通过校验，现在请输入新的登录密码</span>
+          <span v-else>身份已通过校验，请完成邮箱验证码确认后重置密码</span>
           <a v-if="forgotStep === 'reset'" @click.prevent="resetForgotIdentityStep">重新验证</a>
         </div>
         <a-form-item label="账号">
@@ -287,6 +312,25 @@
             :disabled="forgotStep === 'reset'"
           >
             <a-icon slot="prefix" type="mail" />
+          </a-input>
+        </a-form-item>
+        <a-form-item v-if="forgotStep === 'reset' && emailVerificationRequired" label="邮箱验证码">
+          <a-input
+            v-decorator="['email_code', { rules: emailCodeRules }]"
+            placeholder="请输入邮箱验证码"
+            size="large"
+          >
+            <a-icon slot="prefix" type="safety-certificate" />
+            <a-button
+              slot="suffix"
+              type="link"
+              class="forgot-code-btn"
+              :disabled="forgotEmailCodeCountdown > 0 || sendingForgotEmailCode"
+              :loading="sendingForgotEmailCode"
+              @click.stop.prevent="sendForgotEmailCode"
+            >
+              {{ forgotEmailCodeCountdown > 0 ? forgotEmailCodeCountdown + 's' : '发送' }}
+            </a-button>
           </a-input>
         </a-form-item>
         <a-form-item v-if="forgotStep === 'reset'" label="新密码">
@@ -316,7 +360,7 @@
 
 <script>
 import { getPublicSiteConfig } from '@/api/public'
-import { forgotPassword, verifyForgotPasswordIdentity } from '@/api/auth'
+import { forgotPassword, sendEmailCode, sendPasswordResetEmailCode, verifyForgotPasswordIdentity } from '@/api/auth'
 
 export default {
   name: 'Login',
@@ -331,8 +375,14 @@ export default {
       confirmDirty: false,
       forgotConfirmDirty: false,
       loginValues: { username: '', password: '' },
-      registerValues: { username: '', email: '', password: '', confirmPassword: '' },
+      registerValues: { username: '', email: '', emailCode: '', password: '', confirmPassword: '' },
       forgotValues: { username: '', email: '', newPassword: '', confirmPassword: '' },
+      sendingEmailCode: false,
+      emailCodeCountdown: 0,
+      emailCodeTimer: null,
+      sendingForgotEmailCode: false,
+      forgotEmailCodeCountdown: 0,
+      forgotEmailCodeTimer: null,
       // 品牌区特性列表
       features: [
         { icon: 'api', title: '多模型支持', desc: '接入 GPT、Claude、Gemini 等主流模型' },
@@ -370,6 +420,16 @@ export default {
     welcomeSubtitle() {
       if (this.isAgentLogin) return '登录代理账号以管理用户、套餐和站点配置'
       return this.mode === 'login' ? '登录您的账户以继续使用服务' : '注册新账户，开始您的 AI 之旅'
+    },
+    emailVerificationRequired() {
+      return this.siteConfig.email_verification_required !== false
+    },
+    emailCodeRules() {
+      if (!this.emailVerificationRequired) return []
+      return [
+        { required: true, message: '请输入邮箱验证码' },
+        { min: 4, max: 12, message: '验证码格式不正确' }
+      ]
     }
   },
   beforeCreate() {
@@ -390,6 +450,12 @@ export default {
   beforeDestroy() {
     if (this.animationId) {
       cancelAnimationFrame(this.animationId)
+    }
+    if (this.emailCodeTimer) {
+      clearInterval(this.emailCodeTimer)
+    }
+    if (this.forgotEmailCodeTimer) {
+      clearInterval(this.forgotEmailCodeTimer)
     }
   },
   methods: {
@@ -424,6 +490,35 @@ export default {
     },
     handlePasswordChange(e) {
       this.registerValues.password = e.target.value
+    },
+    sendRegisterEmailCode() {
+      this.registerForm.validateFields(['email'], (err, values) => {
+        if (err) return
+        this.sendingEmailCode = true
+        sendEmailCode(values.email)
+          .then(() => {
+            this.$message.success('验证码已发送')
+            this.emailCodeCountdown = 60
+            if (this.emailCodeTimer) clearInterval(this.emailCodeTimer)
+            this.emailCodeTimer = setInterval(() => {
+              this.emailCodeCountdown -= 1
+              if (this.emailCodeCountdown <= 0) {
+                clearInterval(this.emailCodeTimer)
+                this.emailCodeTimer = null
+              }
+            }, 1000)
+          })
+          .catch((error) => {
+            const msg =
+              (error.response && error.response.data && error.response.data.message) ||
+              error.message ||
+              '验证码发送失败'
+            this.$message.error(msg)
+          })
+          .finally(() => {
+            this.sendingEmailCode = false
+          })
+      })
     },
     validateToNextPassword(rule, value, callback) {
       if (value && this.confirmDirty) {
@@ -472,8 +567,14 @@ export default {
       this.forgotConfirmDirty = false
       this.forgotValues.newPassword = ''
       this.forgotValues.confirmPassword = ''
+      this.forgotEmailCodeCountdown = 0
+      if (this.forgotEmailCodeTimer) {
+        clearInterval(this.forgotEmailCodeTimer)
+        this.forgotEmailCodeTimer = null
+      }
       this.$nextTick(() => {
         this.forgotForm.setFieldsValue({
+          email_code: undefined,
           new_password: undefined,
           confirm_password: undefined
         })
@@ -484,8 +585,49 @@ export default {
       this.forgotVisible = false
       this.forgotStep = 'identity'
       this.forgotConfirmDirty = false
+      this.forgotEmailCodeCountdown = 0
+      if (this.forgotEmailCodeTimer) {
+        clearInterval(this.forgotEmailCodeTimer)
+        this.forgotEmailCodeTimer = null
+      }
       this.forgotValues = { username: '', email: '', newPassword: '', confirmPassword: '' }
       this.forgotForm.resetFields()
+    },
+    sendForgotEmailCode() {
+      const email = this.forgotForm.getFieldValue('email') || this.forgotValues.email
+      const username = this.forgotForm.getFieldValue('username') || this.forgotValues.username
+      if (!username) {
+        this.$message.error('请先填写账号')
+        return
+      }
+      if (!email) {
+        this.$message.error('请先填写邮箱')
+        return
+      }
+      this.sendingForgotEmailCode = true
+      sendPasswordResetEmailCode(username, email)
+        .then(() => {
+          this.$message.success('验证码已发送')
+          this.forgotEmailCodeCountdown = 60
+          if (this.forgotEmailCodeTimer) clearInterval(this.forgotEmailCodeTimer)
+          this.forgotEmailCodeTimer = setInterval(() => {
+            this.forgotEmailCodeCountdown -= 1
+            if (this.forgotEmailCodeCountdown <= 0) {
+              clearInterval(this.forgotEmailCodeTimer)
+              this.forgotEmailCodeTimer = null
+            }
+          }, 1000)
+        })
+        .catch((error) => {
+          const msg =
+            (error.response && error.response.data && error.response.data.message) ||
+            error.message ||
+            '验证码发送失败'
+          this.$message.error(msg)
+        })
+        .finally(() => {
+          this.sendingForgotEmailCode = false
+        })
     },
     handleForgotPassword() {
       this.forgotForm.validateFields((err, values) => {
@@ -499,6 +641,7 @@ export default {
           : forgotPassword({
             username: values.username,
             email: values.email,
+            email_code: values.email_code,
             new_password: values.new_password
           })
         action
@@ -520,6 +663,11 @@ export default {
             this.forgotVisible = false
             this.forgotStep = 'identity'
             this.forgotConfirmDirty = false
+            this.forgotEmailCodeCountdown = 0
+            if (this.forgotEmailCodeTimer) {
+              clearInterval(this.forgotEmailCodeTimer)
+              this.forgotEmailCodeTimer = null
+            }
             this.forgotValues = { username: '', email: '', newPassword: '', confirmPassword: '' }
             this.forgotForm.resetFields()
             this.switchMode('login')
@@ -585,6 +733,9 @@ export default {
           username: values.username,
           email: values.email,
           password: values.password
+        }
+        if (this.emailVerificationRequired) {
+          payload.email_code = values.email_code
         }
         this.$store
           .dispatch('register', payload)
@@ -941,6 +1092,8 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .form-wrapper {
@@ -1103,6 +1256,17 @@ export default {
     .anticon {
       color: rgba(255, 255, 255, 0.3);
     }
+  }
+
+  &.code-group /deep/ .ant-input {
+    padding-right: 72px;
+  }
+
+  .code-btn {
+    height: 28px;
+    padding: 0 2px;
+    color: #a8b8ff;
+    font-size: 12px;
   }
 
   /deep/ .ant-form-explain {
@@ -1321,6 +1485,13 @@ export default {
 
   .ant-form-explain {
     color: #ff7875;
+  }
+
+  .forgot-code-btn {
+    height: 28px;
+    padding: 0 2px;
+    color: #a8b8ff;
+    font-size: 12px;
   }
 }
 

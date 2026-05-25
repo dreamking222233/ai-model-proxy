@@ -46,6 +46,30 @@
           </a-form-item>
         </div>
 
+        <div v-if="emailVerificationRequired" class="field code-field" :class="{ focused: focusedField === 'emailCode', filled: fieldValues.emailCode }">
+          <label class="float-label">邮箱验证码</label>
+          <a-form-item>
+            <a-input
+              v-decorator="['email_code', { rules: emailCodeRules }]"
+              @focus="focusedField = 'emailCode'"
+              @blur="focusedField = null"
+              @change="e => fieldValues.emailCode = e.target.value"
+              :size="'large'"
+            >
+              <a-button
+                slot="suffix"
+                type="link"
+                class="code-btn"
+                :disabled="emailCodeCountdown > 0 || sendingEmailCode"
+                :loading="sendingEmailCode"
+                @click.stop.prevent="sendRegisterEmailCode"
+              >
+                {{ emailCodeCountdown > 0 ? emailCodeCountdown + 's' : '发送' }}
+              </a-button>
+            </a-input>
+          </a-form-item>
+        </div>
+
         <div class="field" :class="{ focused: focusedField === 'password', filled: fieldValues.password }">
           <label class="float-label">密码</label>
           <a-form-item>
@@ -95,24 +119,52 @@
 </template>
 
 <script>
+import { sendEmailCode } from '@/api/auth'
+import { getPublicSiteConfig } from '@/api/public'
+
 export default {
   name: 'Register',
   data() {
     return {
       loading: false,
+      sendingEmailCode: false,
+      emailCodeCountdown: 0,
+      emailCodeTimer: null,
       confirmDirty: false,
       focusedField: null,
       shakeCard: false,
       fieldValues: {
         username: '',
         email: '',
+        emailCode: '',
         password: '',
         confirmPassword: ''
-      }
+      },
+      siteConfig: {}
+    }
+  },
+  computed: {
+    emailVerificationRequired() {
+      return this.siteConfig.email_verification_required !== false
+    },
+    emailCodeRules() {
+      if (!this.emailVerificationRequired) return []
+      return [
+        { required: true, message: '请输入邮箱验证码' },
+        { min: 4, max: 12, message: '验证码格式不正确' }
+      ]
     }
   },
   beforeCreate() {
     this.form = this.$form.createForm(this, { name: 'register' })
+  },
+  mounted() {
+    this.fetchSiteConfig()
+  },
+  beforeDestroy() {
+    if (this.emailCodeTimer) {
+      clearInterval(this.emailCodeTimer)
+    }
   },
   methods: {
     handleBlur(field) {
@@ -143,6 +195,35 @@ export default {
         callback()
       }
     },
+    sendRegisterEmailCode() {
+      this.form.validateFields(['email'], (err, values) => {
+        if (err) return
+        this.sendingEmailCode = true
+        sendEmailCode(values.email)
+          .then(() => {
+            this.$message.success('验证码已发送')
+            this.emailCodeCountdown = 60
+            if (this.emailCodeTimer) clearInterval(this.emailCodeTimer)
+            this.emailCodeTimer = setInterval(() => {
+              this.emailCodeCountdown -= 1
+              if (this.emailCodeCountdown <= 0) {
+                clearInterval(this.emailCodeTimer)
+                this.emailCodeTimer = null
+              }
+            }, 1000)
+          })
+          .catch((error) => {
+            const msg =
+              (error.response && error.response.data && error.response.data.message) ||
+              error.message ||
+              '验证码发送失败'
+            this.$message.error(msg)
+          })
+          .finally(() => {
+            this.sendingEmailCode = false
+          })
+      })
+    },
     handleSubmit(e) {
       e.preventDefault()
       this.form.validateFields((err, values) => {
@@ -155,6 +236,9 @@ export default {
           username: values.username,
           email: values.email,
           password: values.password
+        }
+        if (this.emailVerificationRequired) {
+          payload.email_code = values.email_code
         }
         this.$store
           .dispatch('register', payload)
@@ -178,6 +262,14 @@ export default {
     triggerShake() {
       this.shakeCard = true
       setTimeout(() => { this.shakeCard = false }, 500)
+    },
+    async fetchSiteConfig() {
+      try {
+        const res = await getPublicSiteConfig()
+        this.siteConfig = res.data || {}
+      } catch (e) {
+        this.siteConfig = {}
+      }
     }
   }
 }
@@ -254,6 +346,8 @@ export default {
   position: relative;
   z-index: 1;
   width: 400px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   padding: 44px 40px 32px;
   background: rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(24px);
@@ -353,6 +447,17 @@ export default {
       border-color: #667eea;
       box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
     }
+  }
+
+  &.code-field /deep/ .ant-input {
+    padding-right: 70px;
+  }
+
+  .code-btn {
+    height: 28px;
+    padding: 0 2px;
+    color: #a8b8ff;
+    font-size: 12px;
   }
 
   /deep/ .ant-input-suffix {

@@ -48,7 +48,7 @@ class AgentService:
         "platform_support_wechat": settings.PLATFORM_SUPPORT_WECHAT,
         "platform_support_qq": settings.PLATFORM_SUPPORT_QQ,
         "platform_allow_register": "true" if settings.PLATFORM_ALLOW_REGISTER else "false",
-        "api_base_url": "https://api.xiaoleai.team",
+        "api_base_url": "",
     }
 
     SITE_HINT_SOURCES = ("x_site_host", "origin", "referer")
@@ -73,7 +73,7 @@ class AgentService:
 
     @staticmethod
     def get_shared_api_base_url() -> str:
-        return str(AgentService.PLATFORM_CONFIG_DEFAULTS.get("api_base_url") or "https://api.xiaoleai.team").rstrip("/")
+        return str(AgentService.PLATFORM_CONFIG_DEFAULTS.get("api_base_url") or "").rstrip("/")
 
     @staticmethod
     def is_platform_frontend_host(host: str) -> bool:
@@ -309,6 +309,7 @@ class AgentService:
                 "support_qq": agent.support_qq or "",
                 "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
                 "allow_register": bool(agent.allow_self_register),
+                "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
                 "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
                 "theme_config": agent.theme_config_json,
                 "frontend_domain": agent.frontend_domain,
@@ -328,6 +329,7 @@ class AgentService:
             "support_qq": config_map["platform_support_qq"],
             "quickstart_api_base_url": config_map["api_base_url"],
             "allow_register": str(config_map["platform_allow_register"]).lower() in {"1", "true", "yes"},
+            "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
             "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
             "theme_config": None,
             "frontend_domain": None,

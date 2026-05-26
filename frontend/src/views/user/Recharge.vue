@@ -193,19 +193,30 @@
               <div class="step-text">{{ step }}</div>
             </div>
           </div>
+          <div class="arrival-reminder">
+            <div class="reminder-head">
+              <a-icon type="exclamation-circle" />
+              <span>支付后未到账</span>
+            </div>
+            <p>请先点击同步结果；仍未到账时，请联系当前站点客服处理。</p>
+            <div class="reminder-contact">
+              <span><a-icon type="wechat" /> {{ supportWechat }}</span>
+              <span><a-icon type="qq" /> {{ supportQq }}</span>
+            </div>
+          </div>
           <div class="support-section">
             <div class="support-item">
               <div class="s-icon wechat"><a-icon type="wechat" /></div>
               <div class="s-info">
                 <div class="s-label">微信充值</div>
-                <div class="s-val">{{ siteConfig.support_wechat || '-' }}</div>
+                <div class="s-val">{{ supportWechat }}</div>
               </div>
             </div>
             <div class="support-item">
               <div class="s-icon qq"><a-icon type="qq" /></div>
               <div class="s-info">
                 <div class="s-label">QQ 咨询</div>
-                <div class="s-val">{{ siteConfig.support_qq || '-' }}</div>
+                <div class="s-val">{{ supportQq }}</div>
               </div>
             </div>
           </div>
@@ -430,6 +441,12 @@ export default {
     },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
+    },
+    supportWechat() {
+      return this.siteConfig.support_wechat || '未配置'
+    },
+    supportQq() {
+      return this.siteConfig.support_qq || '未配置'
     }
   },
   async mounted() {
@@ -1656,6 +1673,56 @@ export default {
   font-size: 12px;
   color: #475569;
   line-height: 1.4;
+}
+
+.arrival-reminder {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 16px;
+  background: #fffbeb;
+}
+
+.reminder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #92400e;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.arrival-reminder p {
+  margin: 0 0 8px;
+  color: #78350f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.reminder-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reminder-contact span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.reminder-contact .anticon-wechat {
+  color: #07c160;
+}
+
+.reminder-contact .anticon-qq {
+  color: #12b7f5;
 }
 
 /* --- Support Section --- */

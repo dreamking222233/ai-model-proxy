@@ -991,12 +991,21 @@ class PaymentService:
         trade_state = str(payload.get("trade_state") or payload.get("trade_state_desc") or "SUCCESS").strip().upper()
         if trade_state not in PaymentService.WECHAT_SUCCESS_STATES:
             raise ServiceException(400, "微信支付交易状态不支持入账", "WECHAT_PAY_TRADE_STATE_INVALID")
-        amount_data = payload.get("amount") or {}
-        total_amount = amount_data.get("payer_total") or amount_data.get("total")
-        if total_amount is not None:
+        amount_data = payload.get("amount")
+        if not isinstance(amount_data, dict) or not amount_data:
+            raise ServiceException(400, "微信支付回调金额格式无效", "WECHAT_PAY_AMOUNT_MISMATCH")
+        # WeChat discounts reduce payer_total, while total remains the merchant order amount.
+        total_amount = amount_data.get("total")
+        if total_amount is None:
+            total_amount = amount_data.get("payer_total")
+        if total_amount is None:
+            raise ServiceException(400, "微信支付回调金额格式无效", "WECHAT_PAY_AMOUNT_MISMATCH")
+        try:
             remote_amount = (Decimal(str(total_amount)) / Decimal("100")).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
-            if remote_amount != local_amount:
-                raise ServiceException(400, "微信支付回调金额与本地订单不一致", "WECHAT_PAY_AMOUNT_MISMATCH")
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ServiceException(400, "微信支付回调金额格式无效", "WECHAT_PAY_AMOUNT_MISMATCH") from exc
+        if remote_amount != local_amount:
+            raise ServiceException(400, "微信支付回调金额与本地订单不一致", "WECHAT_PAY_AMOUNT_MISMATCH")
         transaction_id = str(payload.get("transaction_id") or "").strip() or None
         if transaction_id:
             exists = (

@@ -343,6 +343,196 @@ class PaymentRechargeTestCase(TestCase):
         self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
         self.assertEqual(Decimal(str(cash_balance.balance)), Decimal("5.00"))
 
+    def test_apply_paid_order_supports_wechat_discount_payer_total(self):
+        self.db.add(Agent(id=14, agent_code="agent-14", agent_name="Agent 14", status="active"))
+        self.db.commit()
+        self._create_user(14, agent_id=14)
+        order = PaymentRechargeOrder(
+            order_no="WXP20260526082307F879FA",
+            payment_channel="wechat",
+            user_id=14,
+            agent_id=14,
+            site_scope="agent",
+            source_host="agent.example.com",
+            return_url_snapshot="https://agent.example.com/user/recharge?order_no=WXP20260526082307F879FA",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("5.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PaymentService._apply_paid_order(self.db, order.order_no, {
+            "appid": settings.WECHAT_PAY_APP_ID,
+            "mchid": settings.WECHAT_PAY_MCH_ID,
+            "trade_state": "SUCCESS",
+            "transaction_id": "WX-TRADE-DISCOUNT-001",
+            "amount": {"total": 1000, "payer_total": 604},
+        }, source="notify")
+
+        paid_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 14).first()
+        cash_balance = self.db.query(AgentCashBalance).filter(AgentCashBalance.agent_id == 14).first()
+        self.assertEqual(paid_order.status, "paid")
+        self.assertEqual(paid_order.wechat_transaction_id, "WX-TRADE-DISCOUNT-001")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
+        self.assertEqual(Decimal(str(cash_balance.balance)), Decimal("5.00"))
+
+    def test_apply_paid_order_supports_wechat_payer_total_fallback(self):
+        self._create_user(18)
+        order = PaymentRechargeOrder(
+            order_no="WXP20260526090000FALLBACK",
+            payment_channel="wechat",
+            user_id=18,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP20260526090000FALLBACK",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PaymentService._apply_paid_order(self.db, order.order_no, {
+            "appid": settings.WECHAT_PAY_APP_ID,
+            "mchid": settings.WECHAT_PAY_MCH_ID,
+            "trade_state": "SUCCESS",
+            "transaction_id": "WX-TRADE-FALLBACK-AMOUNT",
+            "amount": {"payer_total": 1000},
+        }, source="notify")
+
+        paid_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 18).first()
+        self.assertEqual(paid_order.status, "paid")
+        self.assertEqual(paid_order.wechat_transaction_id, "WX-TRADE-FALLBACK-AMOUNT")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
+
+    def test_apply_paid_order_rejects_wechat_total_mismatch_even_if_payer_total_matches(self):
+        self._create_user(15)
+        order = PaymentRechargeOrder(
+            order_no="WXP20260526090000BADAMT",
+            payment_channel="wechat",
+            user_id=15,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP20260526090000BADAMT",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        with self.assertRaises(ServiceException) as cm:
+            PaymentService._apply_paid_order(self.db, order.order_no, {
+                "appid": settings.WECHAT_PAY_APP_ID,
+                "mchid": settings.WECHAT_PAY_MCH_ID,
+                "trade_state": "SUCCESS",
+                "transaction_id": "WX-TRADE-BAD-AMOUNT",
+                "amount": {"total": 900, "payer_total": 1000},
+            }, source="notify")
+
+        self.assertEqual(cm.exception.error_code, "WECHAT_PAY_AMOUNT_MISMATCH")
+        pending_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 15).first()
+        self.assertEqual(pending_order.status, "pending")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("0.000000"))
+
+    def test_apply_paid_order_rejects_wechat_malformed_amount_payload(self):
+        self._create_user(16)
+        order = PaymentRechargeOrder(
+            order_no="WXP20260526090000BADFMT",
+            payment_channel="wechat",
+            user_id=16,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP20260526090000BADFMT",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        with self.assertRaises(ServiceException) as cm:
+            PaymentService._apply_paid_order(self.db, order.order_no, {
+                "appid": settings.WECHAT_PAY_APP_ID,
+                "mchid": settings.WECHAT_PAY_MCH_ID,
+                "trade_state": "SUCCESS",
+                "transaction_id": "WX-TRADE-BAD-FORMAT",
+                "amount": "1000",
+            }, source="notify")
+
+        self.assertEqual(cm.exception.error_code, "WECHAT_PAY_AMOUNT_MISMATCH")
+        pending_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 16).first()
+        self.assertEqual(pending_order.status, "pending")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("0.000000"))
+
+    def test_apply_paid_order_rejects_wechat_missing_amount_fields(self):
+        cases = [
+            (17, "WXP20260526090000NOAMT", {}),
+            (18, "WXP20260526090000EMPTYAMT", {"amount": {}}),
+        ]
+        for user_id, order_no, payload_extra in cases:
+            with self.subTest(order_no=order_no):
+                self._create_user(user_id)
+                order = PaymentRechargeOrder(
+                    order_no=order_no,
+                    payment_channel="wechat",
+                    user_id=user_id,
+                    agent_id=None,
+                    site_scope="platform",
+                    source_host="www.example.com",
+                    return_url_snapshot=f"https://www.example.com/user/recharge?order_no={order_no}",
+                    amount_cny=Decimal("10.00"),
+                    credited_usd=Decimal("50.000000"),
+                    agent_settlement_rate=Decimal("10.000000"),
+                    agent_income_cny=Decimal("0.00"),
+                    status="pending",
+                    subject="AI 平台在线充值",
+                    body="test",
+                )
+                self.db.add(order)
+                self.db.commit()
+
+                payload = {
+                    "appid": settings.WECHAT_PAY_APP_ID,
+                    "mchid": settings.WECHAT_PAY_MCH_ID,
+                    "trade_state": "SUCCESS",
+                    "transaction_id": f"WX-TRADE-{order_no}",
+                }
+                payload.update(payload_extra)
+
+                with self.assertRaises(ServiceException) as cm:
+                    PaymentService._apply_paid_order(self.db, order.order_no, payload, source="notify")
+
+                self.assertEqual(cm.exception.error_code, "WECHAT_PAY_AMOUNT_MISMATCH")
+                pending_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+                balance = self.db.query(UserBalance).filter(UserBalance.user_id == user_id).first()
+                self.assertEqual(pending_order.status, "pending")
+                self.assertEqual(Decimal(str(balance.balance)), Decimal("0.000000"))
+
     def test_assert_recharge_enabled_for_disabled_agent_site(self):
         context = AgentSiteContext(
             host="agent.example.com",

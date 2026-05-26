@@ -625,7 +625,7 @@ class SubscriptionService:
             return None
         limit_value = SubscriptionService._normalize_decimal(quota_limit if quota_limit is not None else cycle.quota_limit)
         used_value = SubscriptionService._normalize_decimal(cycle.used_amount)
-        remaining_value = max(Decimal("0"), limit_value - used_value)
+        remaining_value = limit_value - used_value
         return {
             "id": cycle.id,
             "cycle_date": cycle.cycle_date.isoformat() if cycle.cycle_date else None,
@@ -1141,35 +1141,11 @@ class SubscriptionService:
         if not SubscriptionService._requires_daily_cycle(active_subscription):
             return {"subscription": active_subscription, "cycle": None}
 
-        quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
         cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now)
         quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         remaining_amount = quota_limit - used_amount
-        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
-            estimated_quota_cost = (quota_precheck or {}).get("estimated_quota_cost")
-            if estimated_quota_cost is not None:
-                estimated_amount = SubscriptionService._normalize_decimal(estimated_quota_cost)
-                if estimated_amount > 0 and remaining_amount < estimated_amount:
-                    raise SubscriptionService._build_quota_exceeded_error(
-                        active_subscription,
-                        estimated=True,
-                    )
-            elif remaining_amount <= SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD:
-                raise SubscriptionService._build_quota_exceeded_error(active_subscription)
-        else:
-            estimated_total_tokens = (quota_precheck or {}).get("estimated_total_tokens")
-            if estimated_total_tokens is not None:
-                estimated_amount = SubscriptionService._normalize_decimal(estimated_total_tokens)
-                if estimated_amount > 0 and remaining_amount < estimated_amount:
-                    raise SubscriptionService._build_quota_exceeded_error(
-                        active_subscription,
-                        estimated=True,
-                    )
-            elif used_amount >= quota_limit:
-                raise SubscriptionService._build_quota_exceeded_error(active_subscription)
-
-        if quota_metric != SubscriptionService.QUOTA_METRIC_COST and used_amount >= quota_limit:
+        if remaining_amount <= 0:
             raise SubscriptionService._build_quota_exceeded_error(active_subscription)
 
         return {"subscription": active_subscription, "cycle": cycle}

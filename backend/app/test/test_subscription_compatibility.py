@@ -837,7 +837,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_token_quota_when_estimate_exceeds_remaining(
+    def test_precheck_allows_token_quota_when_estimate_exceeds_remaining_but_remaining_positive(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -852,14 +852,13 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
-        with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.check_quota_before_request(
-                MagicMock(),
-                user,
-                quota_precheck={"estimated_total_tokens": Decimal("30")},
-            )
+        SubscriptionService.check_quota_before_request(
+            MagicMock(),
+            user,
+            quota_precheck={"estimated_total_tokens": Decimal("30")},
+        )
 
-        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED")
+        mock_get_or_create_cycle.assert_called_once()
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
@@ -917,7 +916,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_cost_quota_when_estimate_exceeds_remaining(
+    def test_precheck_allows_cost_quota_when_estimate_exceeds_remaining_but_remaining_positive(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -934,21 +933,20 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
-        with self.assertRaises(ServiceException) as ctx:
-            SubscriptionService.check_quota_before_request(
-                MagicMock(),
-                user,
-                quota_precheck={
-                    "estimated_total_cost": Decimal("999"),
-                    "estimated_quota_cost": Decimal("2"),
-                },
-            )
+        SubscriptionService.check_quota_before_request(
+            MagicMock(),
+            user,
+            quota_precheck={
+                "estimated_total_cost": Decimal("999"),
+                "estimated_quota_cost": Decimal("2"),
+            },
+        )
 
-        self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
+        mock_get_or_create_cycle.assert_called_once()
 
     @patch("app.services.subscription_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.subscription_service.SubscriptionService._get_or_create_cycle")
-    def test_precheck_blocks_cost_quota_when_remaining_is_at_threshold(
+    def test_precheck_blocks_cost_quota_when_remaining_is_zero(
         self,
         mock_get_or_create_cycle,
         mock_resolve_active_subscription,
@@ -961,7 +959,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             plan_type="month",
             created_at=datetime(2026, 5, 9, 23, 0, 0),
         )
-        cycle = SimpleNamespace(used_amount=Decimal("119.9"))
+        cycle = SimpleNamespace(used_amount=Decimal("120"))
         mock_resolve_active_subscription.return_value = subscription
         mock_get_or_create_cycle.return_value = cycle
 
@@ -969,6 +967,23 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             SubscriptionService.check_quota_before_request(MagicMock(), user)
 
         self.assertEqual(ctx.exception.error_code, SubscriptionService.UNLIMITED_DAILY_LIMIT_ERROR_CODE)
+
+    def test_serialize_cycle_keeps_negative_remaining_amount(self):
+        cycle = SimpleNamespace(
+            id=7,
+            cycle_date=None,
+            cycle_start_at=None,
+            cycle_end_at=None,
+            quota_metric="cost_usd",
+            quota_limit=Decimal("120"),
+            used_amount=Decimal("125.5"),
+            request_count=2,
+            last_request_id="req-negative",
+        )
+
+        result = SubscriptionService._serialize_cycle(cycle, Decimal("120"))
+
+        self.assertEqual(result["remaining_amount"], -5.5)
 
     @patch("app.services.subscription_service.SubscriptionService._load_cycle_by_id")
     @patch("app.services.subscription_service.SubscriptionService._apply_cycle_consumption_update")

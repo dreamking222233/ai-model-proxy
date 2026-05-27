@@ -194,13 +194,6 @@ class ProxyService:
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
-        estimated_total_cost = None
-        if quota_precheck:
-            estimated_total_cost = quota_precheck.get("estimated_total_cost")
-        if estimated_total_cost is not None:
-            required_balance = SubscriptionService._normalize_decimal(estimated_total_cost)
-            if required_balance > 0:
-                return available_balance >= required_balance
         return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
 
     @staticmethod

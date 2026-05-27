@@ -109,7 +109,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         mock_check_quota,
     ):
         balance_query = MagicMock()
-        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("5"))
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.5"))
 
         db = MagicMock()
         db.query.return_value = balance_query
@@ -124,7 +124,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         ProxyService._assert_text_request_allowed(
             db,
             user,
-            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+            quota_precheck={"estimated_total_cost": Decimal("999")},
         )
 
     @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
@@ -150,7 +150,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         ProxyService._assert_text_request_allowed(
             db,
             user,
-            quota_precheck={"estimated_total_cost": Decimal("0.3")},
+            quota_precheck={"estimated_total_cost": Decimal("999")},
         )
 
     @patch("app.services.proxy_service.SubscriptionService.check_quota_before_request")
@@ -186,7 +186,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         mock_check_quota,
     ):
         balance_query = MagicMock()
-        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("8"))
+        balance_query.filter.return_value.first.return_value = SimpleNamespace(balance=Decimal("0.5"))
 
         db = MagicMock()
         db.query.return_value = balance_query
@@ -201,7 +201,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         ProxyService._assert_text_request_allowed(
             db,
             user,
-            quota_precheck={"estimated_total_cost": Decimal("2.5")},
+            quota_precheck={"estimated_total_cost": Decimal("999")},
         )
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
@@ -238,7 +238,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         ProxyService._assert_text_request_allowed(
             db,
             user,
-            quota_precheck={"estimated_total_cost": Decimal("0.3")},
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
         )
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
@@ -274,7 +274,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
-    def test_balance_user_with_balance_above_threshold_blocks_when_estimate_is_higher(
+    def test_balance_user_with_balance_above_threshold_allows_when_estimate_is_higher(
         self,
         _mock_refresh,
     ):
@@ -285,14 +285,11 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         db.query.return_value = balance_query
         user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
 
-        with self.assertRaises(ServiceException) as ctx:
-            ProxyService._assert_text_request_allowed(
-                db,
-                user,
-                quota_precheck={"estimated_total_cost": Decimal("1.5")},
-            )
-
-        self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
+        ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck={"estimated_total_cost": Decimal("1.5")},
+        )
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
     def test_balance_user_with_balance_at_threshold_raises_before_request(

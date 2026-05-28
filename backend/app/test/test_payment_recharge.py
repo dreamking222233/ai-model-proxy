@@ -5,14 +5,15 @@ from decimal import Decimal
 
 from sqlalchemy import create_engine
 from sqlalchemy import event
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Query, sessionmaker
 from unittest import TestCase
 from unittest.mock import patch
 
 from app.database import Base
 from app.models.agent import Agent
 from app.models.log import ImageCreditRecord, UserBalance, UserImageBalance, ConsumptionRecord
-from app.models.payment import PaymentRechargeOrder, AgentCashBalance, AgentCashLedger, AgentCashWithdrawal
+from app.models.payment import PaymentRechargeOrder, PaymentRechargeSettlement, AgentCashBalance, AgentCashLedger, AgentCashWithdrawal
 from app.models.user import SysUser
 from app.core.exceptions import ServiceException
 from app.services.agent_service import AgentSiteContext
@@ -193,6 +194,130 @@ class PaymentRechargeTestCase(TestCase):
         self.assertEqual(paid_order.status, "paid")
         self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
         self.assertEqual(self.db.query(ConsumptionRecord).filter(ConsumptionRecord.user_id == 22).count(), 1)
+
+    def test_apply_paid_order_skips_credit_when_settlement_guard_exists(self):
+        self._create_user(23)
+        order = PaymentRechargeOrder(
+            order_no="WXP202605280001",
+            payment_channel="wechat",
+            user_id=23,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP202605280001",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.flush()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 23).first()
+        balance.balance = Decimal("50.000000")
+        balance.total_recharged = Decimal("50.000000")
+        self.db.add(PaymentRechargeSettlement(
+            order_id=order.id,
+            order_no=order.order_no,
+            asset_type="balance",
+            user_id=23,
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            credited_image_credits=Decimal("0.000"),
+            status="applied",
+        ))
+        self.db.commit()
+
+        PaymentService._apply_paid_order(self.db, order.order_no, {
+            "appid": settings.WECHAT_PAY_APP_ID,
+            "mchid": settings.WECHAT_PAY_MCH_ID,
+            "trade_state": "SUCCESS",
+            "transaction_id": "WX-TRADE-GUARD-001",
+            "amount": {"total": 1000, "payer_total": 1000},
+        }, source="notify")
+
+        paid_order = self.db.query(PaymentRechargeOrder).filter(PaymentRechargeOrder.order_no == order.order_no).first()
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 23).first()
+        self.assertEqual(paid_order.status, "paid")
+        self.assertEqual(Decimal(str(balance.balance)), Decimal("50.000000"))
+        self.assertEqual(self.db.query(ConsumptionRecord).filter(ConsumptionRecord.user_id == 23).count(), 0)
+
+    def test_claim_recharge_settlement_handles_unique_conflict_only(self):
+        self._create_user(24)
+        order = PaymentRechargeOrder(
+            order_no="WXP202605280024",
+            payment_channel="wechat",
+            user_id=24,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP202605280024",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        self.db.add(PaymentRechargeSettlement(
+            order_id=order.id,
+            order_no=order.order_no,
+            asset_type="balance",
+            user_id=24,
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            credited_image_credits=Decimal("0.000"),
+            status="applied",
+        ))
+        self.db.commit()
+
+        original_first = Query.first
+
+        def force_missed_settlement(query):
+            descriptions = getattr(query, "column_descriptions", []) or []
+            if descriptions and descriptions[0].get("entity") is PaymentRechargeSettlement:
+                return None
+            return original_first(query)
+
+        with patch.object(Query, "first", force_missed_settlement):
+            settlement = PaymentService._claim_recharge_settlement(self.db, order)
+        self.assertIsNone(settlement)
+        self.assertEqual(self.db.query(PaymentRechargeSettlement).count(), 1)
+
+        self._create_user(25)
+        other_order = PaymentRechargeOrder(
+            order_no="WXP202605280025",
+            payment_channel="wechat",
+            user_id=25,
+            agent_id=None,
+            site_scope="platform",
+            source_host="www.example.com",
+            return_url_snapshot="https://www.example.com/user/recharge?order_no=WXP202605280025",
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            agent_settlement_rate=Decimal("10.000000"),
+            agent_income_cny=Decimal("0.00"),
+            status="pending",
+            subject="AI 平台在线充值",
+            body="test",
+        )
+        self.db.add(other_order)
+        self.db.commit()
+
+        other_error = IntegrityError(
+            "INSERT INTO payment_recharge_settlement",
+            {},
+            Exception("Column 'order_id' cannot be null"),
+        )
+        with patch.object(self.db, "flush", side_effect=other_error):
+            with self.assertRaises(IntegrityError):
+                PaymentService._claim_recharge_settlement(self.db, other_order)
 
     def test_apply_paid_order_credits_agent_cash(self):
         self.db.add(Agent(id=7, agent_code="agent-7", agent_name="Agent 7", status="active"))

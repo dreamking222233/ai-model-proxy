@@ -37,6 +37,7 @@ from app.models.log import (
 from app.models.redemption import RedemptionCode
 from app.models.payment import (
     PaymentRechargeOrder,
+    PaymentRechargeSettlement,
     AgentCashBalance,
     AgentCashLedger,
     AgentCashWithdrawal,
@@ -79,6 +80,7 @@ __all__ = [
     "SubscriptionUsageCycle",
     "RedemptionCode",
     "PaymentRechargeOrder",
+    "PaymentRechargeSettlement",
     "AgentCashBalance",
     "AgentCashLedger",
     "AgentCashWithdrawal",

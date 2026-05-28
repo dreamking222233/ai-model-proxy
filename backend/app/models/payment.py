@@ -1,7 +1,7 @@
 """ORM models for online recharge orders and agent cash ledger."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, DateTime, DECIMAL, Text, func,
+    Column, BigInteger, String, DateTime, DECIMAL, Text, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -40,6 +40,29 @@ class PaymentRechargeOrder(Base):
     paid_at = Column(DateTime, nullable=True)
     notify_raw = Column(Text, nullable=True)
     return_raw = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class PaymentRechargeSettlement(Base):
+    """Idempotency guard for applying paid recharge orders to user assets."""
+
+    __tablename__ = "payment_recharge_settlement"
+    __table_args__ = (
+        UniqueConstraint("order_no", "asset_type", name="uk_payment_recharge_settlement_order_asset"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    order_id = Column(BigInteger, nullable=False, index=True)
+    order_no = Column(String(64), nullable=False, index=True)
+    asset_type = Column(String(32), nullable=False, default="balance", index=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    agent_id = Column(BigInteger, nullable=True, index=True)
+    amount_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    credited_usd = Column(DECIMAL(12, 6), nullable=False, default=0)
+    credited_image_credits = Column(DECIMAL(12, 3), nullable=False, default=0)
+    status = Column(String(16), nullable=False, default="settling", index=True)
+    applied_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

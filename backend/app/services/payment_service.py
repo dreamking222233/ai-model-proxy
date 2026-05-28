@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.core.exceptions import ServiceException
@@ -32,6 +33,7 @@ from app.models.payment import (
     AgentCashBalance,
     AgentCashLedger,
     PaymentRechargeOrder,
+    PaymentRechargeSettlement,
 )
 from app.models.user import SysUser
 from app.services.agent_service import AgentService, AgentSiteContext
@@ -948,6 +950,73 @@ class PaymentService:
         PaymentService._credit_user_balance(db, order)
 
     @staticmethod
+    def _settlement_asset_type(order: PaymentRechargeOrder) -> str:
+        if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit":
+            return "image_credit"
+        return "balance"
+
+    @staticmethod
+    def _is_duplicate_settlement_integrity_error(exc: IntegrityError) -> bool:
+        orig = getattr(exc, "orig", None)
+        parts = []
+        if orig is not None:
+            parts.extend(str(item) for item in getattr(orig, "args", ()) or ())
+        parts.append(str(exc))
+        message = " ".join(parts).lower()
+        duplicate_markers = (
+            "duplicate entry",
+            "duplicate key",
+            "unique constraint failed",
+            "unique violation",
+            "violates unique constraint",
+        )
+        settlement_markers = (
+            "uk_payment_recharge_settlement_order_asset",
+            "payment_recharge_settlement.order_no",
+            "payment_recharge_settlement.asset_type",
+        )
+        return any(marker in message for marker in duplicate_markers) and any(
+            marker in message for marker in settlement_markers
+        )
+
+    @staticmethod
+    def _claim_recharge_settlement(db: Session, order: PaymentRechargeOrder) -> PaymentRechargeSettlement | None:
+        asset_type = PaymentService._settlement_asset_type(order)
+        existing = (
+            db.query(PaymentRechargeSettlement)
+            .filter(
+                PaymentRechargeSettlement.order_no == order.order_no,
+                PaymentRechargeSettlement.asset_type == asset_type,
+            )
+            .first()
+        )
+        if existing:
+            logger.warning("Skip duplicate recharge settlement for order %s asset %s", order.order_no, asset_type)
+            return None
+
+        settlement = PaymentRechargeSettlement(
+            order_id=order.id,
+            order_no=order.order_no,
+            asset_type=asset_type,
+            user_id=order.user_id,
+            agent_id=order.agent_id,
+            amount_cny=order.amount_cny,
+            credited_usd=order.credited_usd,
+            credited_image_credits=order.credited_image_credits,
+            status="settling",
+        )
+        try:
+            with db.begin_nested():
+                db.add(settlement)
+                db.flush()
+        except IntegrityError as exc:
+            if not PaymentService._is_duplicate_settlement_integrity_error(exc):
+                raise
+            logger.warning("Skip duplicate recharge settlement after unique-key conflict for order %s asset %s", order.order_no, asset_type)
+            return None
+        return settlement
+
+    @staticmethod
     def _validate_paid_payload(db: Session, locked: PaymentRechargeOrder, payload: dict, source: str) -> dict:
         channel = PaymentService._normalize_payment_channel(locked.payment_channel)
         local_amount = PaymentService._normalize_cny(locked.amount_cny)
@@ -1073,22 +1142,33 @@ class PaymentService:
         if locked.status != "pending":
             raise ServiceException(400, "订单状态不允许再次入账", "RECHARGE_ORDER_STATUS_INVALID")
         validated = PaymentService._validate_paid_payload(db, locked, payload, source)
+        settlement = PaymentService._claim_recharge_settlement(db, locked)
+        is_new_settlement = settlement is not None
 
-        PaymentService._credit_user_order_asset(db, locked)
-        PaymentService._credit_agent_cash_balance(db, locked)
+        if is_new_settlement:
+            PaymentService._credit_user_order_asset(db, locked)
+            PaymentService._credit_agent_cash_balance(db, locked)
+            settlement.status = "applied"
+            settlement.applied_at = datetime.utcnow()
 
         locked.status = "paid"
-        locked.trade_status = str(validated.get("trade_status") or "")
+        if is_new_settlement or not locked.trade_status:
+            locked.trade_status = str(validated.get("trade_status") or "")
         if locked.payment_channel == "alipay":
-            locked.alipay_trade_no = validated.get("alipay_trade_no")
-            locked.buyer_logon_id = str(validated.get("buyer_logon_id") or locked.buyer_logon_id or "")
-            locked.buyer_user_id = str(validated.get("buyer_user_id") or locked.buyer_user_id or "")
+            if is_new_settlement or not locked.alipay_trade_no:
+                locked.alipay_trade_no = validated.get("alipay_trade_no")
+            if is_new_settlement or not locked.buyer_logon_id:
+                locked.buyer_logon_id = str(validated.get("buyer_logon_id") or locked.buyer_logon_id or "")
+            if is_new_settlement or not locked.buyer_user_id:
+                locked.buyer_user_id = str(validated.get("buyer_user_id") or locked.buyer_user_id or "")
         elif locked.payment_channel == "wechat":
-            locked.wechat_transaction_id = validated.get("wechat_transaction_id")
-        locked.paid_at = datetime.utcnow()
-        if source == "notify":
+            if is_new_settlement or not locked.wechat_transaction_id:
+                locked.wechat_transaction_id = validated.get("wechat_transaction_id")
+        if is_new_settlement or not locked.paid_at:
+            locked.paid_at = datetime.utcnow()
+        if source == "notify" and (is_new_settlement or not locked.notify_raw):
             locked.notify_raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        else:
+        elif source != "notify" and (is_new_settlement or not locked.return_raw):
             locked.return_raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
         db.commit()

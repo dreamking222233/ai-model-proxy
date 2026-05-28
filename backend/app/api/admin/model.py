@@ -163,7 +163,7 @@ def get_channels_models(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    """Return all enabled channels with their mapped chat/image models.
+    """Return all enabled channels with their mapped chat/image/video models.
     Used by admin chat page for channel+model two-level selection.
     """
     channels = (
@@ -182,7 +182,7 @@ def get_channels_models(
                 ModelChannelMapping.channel_id == ch.id,
                 ModelChannelMapping.enabled == 1,
                 UnifiedModel.enabled == 1,
-                UnifiedModel.model_type.in_(("chat", "image")),
+                UnifiedModel.model_type.in_(("chat", "image", "video")),
             )
             .all()
         )
@@ -222,6 +222,11 @@ def get_channels_models(
                         ModelService.supports_image_edit(um.model_name)
                         if um.model_type == "image"
                         else False
+                    ),
+                    "video_size_capabilities": (
+                        list(ModelService.get_video_size_capabilities(um.model_name))
+                        if um.model_type == "video"
+                        else []
                     ),
                 })
 

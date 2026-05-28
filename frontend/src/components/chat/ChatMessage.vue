@@ -38,7 +38,7 @@
     <!-- Content -->
     <div class="message-body">
       <!-- Image Generating State -->
-      <div v-if="message.kind === 'image_generating'" class="image-generating">
+      <div v-if="message.kind === 'image_generating' || message.kind === 'video_generating'" class="image-generating">
         <div class="image-generating-card" :style="generatingCardStyle">
           <!-- Frosted Glass Border / Frame -->
           <div class="glass-frame"></div>
@@ -55,7 +55,7 @@
           
           <div class="generating-content">
             <div class="generating-icon-wrapper">
-              <a-icon type="picture" class="pulsing-icon" />
+              <a-icon :type="message.kind === 'video_generating' ? 'video-camera' : 'picture'" class="pulsing-icon" />
               <div class="icon-ring"></div>
             </div>
             <div class="generating-status">
@@ -177,6 +177,57 @@
           </div>
         </div>
 
+        <div v-else-if="message.kind === 'video_result'" class="image-result video-result">
+          <div v-if="resolvedSourceImageSrc || sourceImageMissing" class="image-result-source">
+            <div class="image-result-source-title">参考图</div>
+            <div class="image-result-card">
+              <img
+                v-if="resolvedSourceImageSrc"
+                :src="resolvedSourceImageSrc"
+                class="image-result-preview image-result-preview--clickable"
+                :alt="message.meta && message.meta.sourceImageName ? message.meta.sourceImageName : 'video reference'"
+                @click="$emit('preview-image', { cacheKey: message.meta && message.meta.sourceImageCacheKey, name: message.meta && message.meta.sourceImageName ? message.meta.sourceImageName : 'video-reference' })"
+              >
+              <div v-else class="image-result-missing">
+                参考图预览仅在当前页面保留，刷新后请重新上传
+              </div>
+            </div>
+          </div>
+          <div class="video-result-card" v-for="(item, index) in resolvedVideos" :key="item.url || index">
+            <video
+              v-if="item.url"
+              :src="item.url"
+              class="video-result-player"
+              controls
+              playsinline
+              preload="metadata"
+            ></video>
+            <div v-else class="image-result-missing">
+              视频地址为空，请稍后通过任务接口查询
+            </div>
+            <div class="image-result-actions-row" v-if="item.url">
+              <a :href="item.url" target="_blank" rel="noopener noreferrer" class="image-result-link">打开视频</a>
+              <a :href="item.url" download class="image-result-link">下载视频</a>
+            </div>
+          </div>
+          <div class="image-result-meta">
+            <div v-if="message.content" class="image-result-summary">{{ message.content }}</div>
+            <div v-if="message.meta && message.meta.prompt" class="image-result-prompt">
+              {{ message.meta.prompt }}
+            </div>
+            <div class="image-result-tags">
+              <span v-if="message.meta && message.meta.model" class="image-result-tag">{{ message.meta.model }}</span>
+              <span v-if="message.meta && message.meta.seconds" class="image-result-tag">{{ message.meta.seconds }} 秒</span>
+              <span v-if="message.meta && message.meta.size" class="image-result-tag">{{ message.meta.size }}</span>
+              <span v-if="message.meta && message.meta.resolution" class="image-result-tag">{{ message.meta.resolution }}</span>
+              <span v-if="message.meta && message.meta.preset" class="image-result-tag">{{ message.meta.preset }}</span>
+              <span v-if="message.meta && message.meta.imageCreditsCharged !== undefined" class="image-result-tag gold">
+                {{ message.meta.imageCreditsCharged }} 积分
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Assistant message: Markdown rendered -->
         <div
           v-else
@@ -230,6 +281,10 @@ export default {
       type: Object,
       default: function () { return {} }
     },
+    videoMap: {
+      type: Object,
+      default: function () { return {} }
+    },
     streaming: {
       type: Boolean,
       default: false
@@ -272,6 +327,19 @@ export default {
       var cacheKey = this.message && this.message.localImageCacheKey
       return cacheKey ? this.imageMap[cacheKey] : ''
     },
+    resolvedVideos: function () {
+      var videos = Array.isArray(this.message.videos) ? this.message.videos : []
+      var videoMap = this.videoMap || {}
+      return videos.map(function (item) {
+        var cacheKey = item && (item.videoCacheKey || item.contentUrl)
+        return {
+          url: (cacheKey && videoMap[cacheKey]) || (item && item.url ? item.url : ''),
+          contentUrl: item && item.contentUrl ? item.contentUrl : '',
+          videoCacheKey: cacheKey || '',
+          videoId: item && item.videoId ? item.videoId : ''
+        }
+      })
+    },
     resolvedSourceImageSrc: function () {
       var cacheKey = this.message && this.message.meta && this.message.meta.sourceImageCacheKey
       return cacheKey ? this.imageMap[cacheKey] : ''
@@ -284,7 +352,7 @@ export default {
       return images.length > 0 && images[0] && images[0].cacheKey ? images[0].cacheKey : ''
     },
     dynamicStatusText: function () {
-      if (this.message.kind === 'image_generating') {
+      if (this.message.kind === 'image_generating' || this.message.kind === 'video_generating') {
         return this.statusMessages[this.statusIndex]
       }
       return this.message.content
@@ -300,7 +368,7 @@ export default {
     }
   },
   mounted: function () {
-    if (this.message.kind === 'image_generating') {
+    if (this.message.kind === 'image_generating' || this.message.kind === 'video_generating') {
       this.startStatusTimer()
     }
   },
@@ -309,7 +377,7 @@ export default {
   },
   watch: {
     'message.kind': function (newVal) {
-      if (newVal === 'image_generating') {
+      if (newVal === 'image_generating' || newVal === 'video_generating') {
         this.startStatusTimer()
       } else {
         this.stopStatusTimer()
@@ -499,6 +567,26 @@ export default {
   width: 100%;
   max-width: 420px;
   background: #f5f7fb;
+}
+
+.video-result {
+  width: 520px;
+  max-width: 72vw;
+}
+
+.video-result-card {
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(102, 126, 234, 0.14);
+}
+
+.video-result-player {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  max-height: 560px;
+  background: #10131a;
 }
 
 .image-result-missing {

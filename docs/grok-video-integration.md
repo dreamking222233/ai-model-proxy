@@ -4,6 +4,7 @@
 
 - `POST /v1/videos`
 - `POST /v1/created/video`
+- `POST /v1/chat/completions`
 - `GET /v1/videos/{video_id}`
 - `GET /v1/videos/{video_id}/content`
 
@@ -28,6 +29,33 @@ source backend/sql/upgrade_grok_video_model_20260528.sql;
 
 ## 创建视频
 
+### 文生视频：Chat Completions
+
+`POST /v1/chat/completions` 适合文生视频，可使用 `stream=true` 流式返回上游生成的视频 URL。
+
+```bash
+curl -N -X POST "https://你的域名/v1/chat/completions" \
+  -H "Authorization: Bearer sk-你的密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "grok-imagine-video",
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "霓虹雨夜街头，电影感慢镜头追拍"}
+    ],
+    "video_config": {
+      "seconds": 10,
+      "size": "1792x1024",
+      "resolution_name": "720p",
+      "preset": "normal"
+    }
+  }'
+```
+
+### 图生视频：任务接口
+
+`POST /v1/created/video` 是同步等待接口：系统会先向上游创建视频任务，再自动轮询任务状态，直到生成完成后返回任务信息和本地下载地址。
+
 ```bash
 curl -X POST "https://你的域名/v1/created/video" \
   -H "Authorization: Bearer sk-你的密钥" \
@@ -40,7 +68,17 @@ curl -X POST "https://你的域名/v1/created/video" \
   -F "input_reference[]=@reference.png"
 ```
 
-返回中的 `id` 即视频任务 ID。
+返回中的 `id` 即视频任务 ID；`content_url` 为当前系统代理的视频下载地址，例如 `/v1/videos/video_xxx/content`。
+
+`POST /v1/videos` 保持异步创建语义：创建成功即返回任务 ID，调用方可自行查询状态。
+
+支持参数：
+
+- `seconds`: `6`、`10`、`12`、`16`、`20`
+- `size`: `720x1280`、`1280x720`、`1024x1024`、`1024x1792`、`1792x1024`
+- `resolution_name`: `480p`、`720p`
+- `preset`: `fun`、`normal`、`spicy`、`custom`
+- `input_reference[]`: 图生视频参考图，最多 7 张
 
 ## 查询与下载
 
@@ -58,7 +96,8 @@ curl -L "https://你的域名/v1/videos/video_xxx/content" \
 视频生成复用现有图片积分账户作为媒体积分账户：
 
 - `unified_model.billing_type=image_credit` 时，创建任务成功后扣减积分。
-- 扣减数量来自 `unified_model.image_credit_multiplier`。
+- 视频模型的 `unified_model.image_credit_multiplier` 表示每秒媒体积分单价。
+- 扣减数量为 `image_credit_multiplier * seconds`。
 - 请求日志使用 `request_type=video_generation` 区分视频请求。
 
-默认升级脚本将 `grok-imagine-video` 的单次积分设置为 `5.000`，可在管理端按实际成本调整。
+默认升级脚本将 `grok-imagine-video` 设置为 `0.500` 积分/秒，可在管理端按实际成本调整。

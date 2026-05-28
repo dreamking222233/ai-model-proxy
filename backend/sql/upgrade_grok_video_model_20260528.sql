@@ -9,7 +9,7 @@ INSERT INTO `unified_model` (
     `image_credit_multiplier`, `enabled`, `description`
 ) VALUES (
     'grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL,
-    0, 0, 'image_credit', 5.000, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，需映射到 grok2api 渠道）'
+    0, 0, 'image_credit', 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）'
 ) ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),

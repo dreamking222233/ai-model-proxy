@@ -361,6 +361,10 @@
                     <div class="api-doc-title">视频生成接口</div>
                     <div class="endpoint-line">
                       <span class="e-method green">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/chat/completions</code>
+                    </div>
+                    <div class="endpoint-line">
+                      <span class="e-method green">POST</span>
                       <code class="e-url">{{ relayOpenaiBase }}/videos</code>
                     </div>
                     <div class="endpoint-line endpoint-line-secondary">
@@ -368,8 +372,8 @@
                       <code class="e-url">{{ relayOpenaiBase }}/created/video</code>
                     </div>
                     <p class="api-doc-intro">
-                      用于文生视频或图生视频，采用 <code>multipart/form-data</code> 创建异步任务。
-                      当前视频模型为 <code>grok-imagine-video</code>，创建成功后通过任务 ID 查询状态或下载成片。
+                      <code>/chat/completions</code> 适合文生视频并支持流式返回视频 URL；
+                      <code>/created/video</code> 适合图生视频，会等待任务完成后返回下载地址；<code>/videos</code> 保持异步任务模式。
                     </p>
 
                     <div class="code-editor-block">
@@ -398,7 +402,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="图像接口不支持 stream；生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存。图片生成里，gpt-image-2 当前支持 1-4 张并通过 data 数组返回；编辑接口上传多图时，请重复传递 image 字段，但当前 n 仍固定为 1。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="图像接口不支持 stream；视频文生接口可通过 Chat Completions 流式返回视频 URL。图片生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存；图生视频使用 multipart/form-data 上传 input_reference[]。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -649,16 +653,36 @@ finally:
   -F "n=1"`
     },
     videoCreateCurlCode() {
-      return `curl -X POST "${this.relayOpenaiBase}/created/video" \\
+      return `# 文生视频：Chat Completions 流式返回视频 URL
+curl -N -X POST "${this.relayOpenaiBase}/chat/completions" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "grok-imagine-video",
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "霓虹雨夜街头，电影感慢镜头追拍"}
+    ],
+    "video_config": {
+      "seconds": 10,
+      "size": "1792x1024",
+      "resolution_name": "720p",
+      "preset": "normal"
+    }
+  }'
+
+# 图生视频：同步等待任务完成并返回 content_url
+curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -F "model=grok-imagine-video" \\
-  -F "prompt=霓虹雨夜街头，电影感慢镜头追拍" \\
+  -F "prompt=让参考图中的主体自然运动，电影感镜头推进" \\
   -F "seconds=10" \\
   -F "size=1792x1024" \\
   -F "resolution_name=720p" \\
   -F "preset=normal" \\
   -F "input_reference[]=@reference.png"
 
+# 异步查询与下载
 curl "${this.relayOpenaiBase}/videos/video_xxx" \\
   -H "Authorization: Bearer sk-你的密钥"
 
@@ -693,12 +717,14 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     videoCreateRequestFields() {
       return [
         { name: 'model', required: '是', description: '视频模型名称，例如 grok-imagine-video。' },
-        { name: 'prompt', required: '是', description: '视频生成提示词。' },
+        { name: 'prompt / messages', required: '是', description: '图生视频使用 prompt；Chat Completions 文生视频使用 messages。' },
+        { name: 'stream', required: '否', description: '文生视频建议 true，通过流式响应返回视频 URL。' },
+        { name: 'video_config', required: '否', description: 'Chat Completions 视频配置对象，字段同 seconds、size、resolution_name、preset。' },
         { name: 'seconds', required: '否', description: '视频长度，支持 6、10、12、16、20。' },
         { name: 'size', required: '否', description: '画面尺寸，支持 720x1280、1280x720、1024x1024、1024x1792、1792x1024。' },
         { name: 'resolution_name', required: '否', description: '清晰度档位，支持 480p 或 720p。' },
         { name: 'preset', required: '否', description: '生成预设，支持 fun、normal、spicy、custom。' },
-        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多使用前 7 张。' }
+        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多 7 张，超过返回 400。' }
       ]
     },
     imageGenerationResponseFields() {

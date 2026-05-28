@@ -13,6 +13,7 @@
  * @param {Function} options.onMessage - Callback for each delta chunk: (deltaText) => void
  * @param {Function} options.onDone - Callback when stream ends: (fullText) => void
  * @param {Function} options.onError - Callback on error: (error) => void
+ * @param {Object} [options.extraPayload] - Extra request body fields
  * @param {AbortController} [options.controller] - Optional AbortController
  * @returns {AbortController}
  */
@@ -24,6 +25,7 @@ export function streamChat(options) {
   var onMessage = options.onMessage
   var onDone = options.onDone
   var onError = options.onError
+  var extraPayload = options.extraPayload || {}
   var controller = options.controller || new AbortController()
 
   var baseURL = process.env.VUE_APP_BASE_API || ''
@@ -31,7 +33,7 @@ export function streamChat(options) {
   if (apiType === 'anthropic') {
     _streamAnthropic(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller)
   } else {
-    _streamOpenAI(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller)
+    _streamOpenAI(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller, extraPayload)
   }
 
   return controller
@@ -41,10 +43,16 @@ export function streamChat(options) {
  * OpenAI protocol: POST /v1/chat/completions
  * SSE format: data: {"choices":[{"delta":{"content":"..."}}]}
  */
-function _streamOpenAI(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller) {
+function _streamOpenAI(baseURL, apiKey, model, messages, onMessage, onDone, onError, controller, extraPayload) {
   var url = baseURL + '/v1/chat/completions'
   var fullText = ''
   var done = false
+
+  var payload = Object.assign({
+    model: model,
+    messages: messages,
+    stream: true
+  }, extraPayload || {})
 
   fetch(url, {
     method: 'POST',
@@ -52,11 +60,7 @@ function _streamOpenAI(baseURL, apiKey, model, messages, onMessage, onDone, onEr
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + apiKey
     },
-    body: JSON.stringify({
-      model: model,
-      messages: messages,
-      stream: true
-    }),
+    body: JSON.stringify(payload),
     signal: controller.signal
   })
     .then(function (response) {

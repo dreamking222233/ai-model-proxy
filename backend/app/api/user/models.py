@@ -74,12 +74,12 @@ def list_chat_models(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """Return enabled chat/image models for the AI chat page."""
+    """Return enabled chat/image/video models for the AI chat page."""
     models = (
         db.query(UnifiedModel)
         .filter(
             UnifiedModel.enabled == 1,
-            UnifiedModel.model_type.in_(("chat", "image")),
+            UnifiedModel.model_type.in_(("chat", "image", "video")),
         )
         .order_by(UnifiedModel.model_type, UnifiedModel.model_name)
         .all()

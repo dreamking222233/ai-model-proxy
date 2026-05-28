@@ -64,12 +64,12 @@ async def video_created_v1(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Compatibility video creation endpoint."""
+    """Compatibility video creation endpoint that waits for completion."""
     user, api_key_record = await verify_api_key(request, db)
     body = await _parse_video_form(request)
     client_ip = request.client.host if request.client else None
 
-    return await ProxyService.handle_video_request(
+    return await ProxyService.handle_video_request_and_wait(
         db, user, api_key_record, body, client_ip,
         request_headers=dict(request.headers.items()),
     )

@@ -121,7 +121,7 @@
                   v-if="model.billing_type === 'image_credit'"
                   class="option-tag option-tag--gold"
                 >
-                  图片
+                  {{ model.model_type === 'video' ? '视频' : '媒体' }}
                 </span>
               </div>
             </button>

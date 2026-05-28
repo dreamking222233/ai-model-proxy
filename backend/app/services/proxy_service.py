@@ -100,6 +100,10 @@ class ProxyService:
     _STREAM_DEBUG_EVENT_LIMIT = 80
     _video_task_routes: dict[str, dict[str, Any]] = {}
     _VIDEO_TASK_ROUTE_TTL_SECONDS = 24 * 60 * 60
+    _VIDEO_WAIT_POLL_INTERVAL_SECONDS = 5.0
+    _VIDEO_WAIT_TIMEOUT_SECONDS = 20 * 60
+    _VIDEO_COMPLETED_STATUSES = {"completed", "succeeded", "success"}
+    _VIDEO_FAILED_STATUSES = {"failed", "error", "cancelled"}
     _recent_anthropic_request_fingerprints: dict[str, dict[str, Any]] = {}
     _RESPONSES_HIGH_RISK_TOOL_NAMES = {
         "Agent",
@@ -4728,33 +4732,36 @@ class ProxyService:
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
 
-        # Inject model identity system prompt
-        ProxyService._inject_model_identity(request_data, requested_model, "openai")
-
+        video_unified_model: UnifiedModel | None = None
+        channels = []
         try:
             # 2. Resolve model (apply override rules)
             unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
+            if str(unified_model.model_type or "") == "video":
+                video_unified_model = unified_model
+            else:
+                # Inject model identity only for text chat. Video prompts must remain clean.
+                ProxyService._inject_model_identity(request_data, requested_model, "openai")
+                quota_precheck = ProxyService._build_text_quota_precheck(
+                    db,
+                    "openai",
+                    request_data,
+                    unified_model,
+                )
 
-            quota_precheck = ProxyService._build_text_quota_precheck(
-                db,
-                "openai",
-                request_data,
-                unified_model,
-            )
+                # 1. Check user entitlement before request
+                ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
-            # 1. Check user entitlement before request
-            ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+                # 2. Validate request content length
+                ProxyService._validate_request_length(db, request_data)
 
-            # 2. Validate request content length
-            ProxyService._validate_request_length(db, request_data)
-
-            # 3. Get available channels sorted by priority
-            channels = ProxyService._prioritize_channels_for_request(
-                ModelService.get_available_channels(db, unified_model.id),
-                "openai",
-            )
-            if not channels:
-                raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
+                # 3. Get available channels sorted by priority
+                channels = ProxyService._prioritize_channels_for_request(
+                    ModelService.get_available_channels(db, unified_model.id),
+                    "openai",
+                )
+                if not channels:
+                    raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
             ProxyService._log_pre_request_failure(
                 db,
@@ -4769,6 +4776,19 @@ class ProxyService:
                 actual_model=request_data.get("model"),
             )
             raise
+
+        if video_unified_model is not None:
+            return await ProxyService.handle_video_chat_completions_request(
+                db,
+                user,
+                api_key_record,
+                video_unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                client_ip,
+                request_headers=request_headers,
+            )
 
         # 4. Try each channel (failover)
         last_error: Exception | None = None
@@ -9065,6 +9085,13 @@ class ProxyService:
         return f"{ProxyService._resolve_openai_video_retrieve_url(base_url, video_id)}/content"
 
     @staticmethod
+    def _resolve_openai_chat_completions_url(base_url: str) -> str:
+        normalized = str(base_url or "").rstrip("/")
+        if normalized.endswith("/v1"):
+            return f"{normalized}/chat/completions"
+        return f"{normalized}/v1/chat/completions"
+
+    @staticmethod
     def _normalize_video_seconds(value: Any) -> int:
         if value in (None, ""):
             return 6
@@ -9120,8 +9147,79 @@ class ProxyService:
         return []
 
     @staticmethod
-    def _resolve_video_credit_cost(unified_model: UnifiedModel) -> Decimal:
-        return Decimal(str(unified_model.image_credit_multiplier or 1)).quantize(Decimal("0.001"))
+    def _extract_video_prompt_from_chat_messages(request_data: dict) -> str:
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            return ""
+        text_parts: list[str] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role") or "") not in {"user", "system"}:
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                if content.strip():
+                    text_parts.append(content.strip())
+            elif isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text = str(part.get("text") or "").strip()
+                        if text:
+                            text_parts.append(text)
+        return "\n".join(text_parts).strip()
+
+    @staticmethod
+    def _video_config_from_chat_request(request_data: dict) -> dict[str, Any]:
+        video_config = request_data.get("video_config")
+        if not isinstance(video_config, dict):
+            video_config = {}
+        return {
+            "seconds": video_config.get("seconds", request_data.get("seconds")),
+            "size": video_config.get("size", request_data.get("size")),
+            "resolution_name": video_config.get("resolution_name", request_data.get("resolution_name")),
+            "preset": video_config.get("preset", request_data.get("preset")),
+        }
+
+    @staticmethod
+    def _extract_video_url_from_text(text: str) -> Optional[str]:
+        if not text:
+            return None
+        match = re.search(r"https?://[^\s)>\"]+\.(?:mp4|mov|webm)(?:\?[^\s)>\"]*)?", text, re.IGNORECASE)
+        if match:
+            return match.group(0)
+        match = re.search(r"https?://[^\s)>\"]+", text)
+        return match.group(0) if match else None
+
+    @staticmethod
+    def _extract_video_text_from_chat_completion(body: dict[str, Any]) -> str:
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return ""
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item.get("text"))
+            return "\n".join(parts)
+        return ""
+
+    @staticmethod
+    def _resolve_video_credit_cost(unified_model: UnifiedModel, seconds: int) -> tuple[Decimal, Decimal]:
+        rate = Decimal(str(
+            unified_model.image_credit_multiplier
+            if unified_model.image_credit_multiplier is not None
+            else Decimal("0.500")
+        )).quantize(Decimal("0.001"))
+        total = (rate * Decimal(int(seconds))).quantize(Decimal("0.001"))
+        return rate, total
 
     @staticmethod
     def _log_video_success(
@@ -9139,6 +9237,7 @@ class ProxyService:
         charged_credits: Decimal,
         model_multiplier: Decimal,
         video_size: str,
+        video_seconds: int,
     ) -> None:
         user_id = ProxyService._safe_object_id(user)
         api_key_id = ProxyService._safe_object_id(api_key_record)
@@ -9157,7 +9256,7 @@ class ProxyService:
                     amount=charged_credits,
                     multiplier=model_multiplier,
                     image_size=video_size,
-                    remark="Video generation: 1 video task",
+                    remark=f"Video generation: {video_seconds}s at {model_multiplier} credits/s",
                 )
             write_db.add(
                 RequestLog(
@@ -9267,7 +9366,7 @@ class ProxyService:
             timeout=timeout,
             log_label="OpenAI video create",
         )
-        if response.status_code != 200:
+        if not 200 <= response.status_code < 300:
             body_text = response.text[:1000]
             raise ServiceException(
                 400 if 400 <= response.status_code < 500 else 503,
@@ -9302,6 +9401,7 @@ class ProxyService:
                 charged_credits=charged_credits,
                 model_multiplier=model_multiplier,
                 video_size=size,
+                video_seconds=int(seconds),
             )
         except ServiceException:
             raise
@@ -9325,6 +9425,7 @@ class ProxyService:
             "billing_type": billing_type,
             "image_credits_charged": float(charged_credits),
             "model_multiplier": float(model_multiplier),
+            "video_credit_rate_per_second": float(model_multiplier),
             "request_type": "video_generation",
             "video_count": 1,
             "size": size,
@@ -9365,12 +9466,15 @@ class ProxyService:
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
 
-        model_multiplier = ProxyService._resolve_video_credit_cost(unified_model)
-        video_credit_cost = model_multiplier if billing_type == "image_credit" else Decimal("0.000")
         normalized_seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"))
         normalized_size = ProxyService._normalize_video_size(request_data.get("size"))
         normalized_resolution_name = ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
         normalized_preset = ProxyService._normalize_video_preset(request_data.get("preset"))
+        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_video_credit_cost(
+            unified_model,
+            normalized_seconds,
+        )
+        video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
         request_data = {
             **request_data,
             "_normalized_video_seconds": normalized_seconds,
@@ -9474,6 +9578,533 @@ class ProxyService:
         raise ServiceException(503, f"所有可用视频渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
 
     @staticmethod
+    async def handle_video_chat_completions_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ):
+        prompt = ProxyService._extract_video_prompt_from_chat_messages(request_data)
+        if not prompt:
+            raise ServiceException(400, "缺少视频生成提示词", "INVALID_VIDEO_PROMPT")
+
+        video_config = ProxyService._video_config_from_chat_request(request_data)
+        normalized_seconds = ProxyService._normalize_video_seconds(video_config.get("seconds"))
+        normalized_size = ProxyService._normalize_video_size(video_config.get("size"))
+        normalized_resolution_name = ProxyService._normalize_video_resolution_name(video_config.get("resolution_name"))
+        normalized_preset = ProxyService._normalize_video_preset(video_config.get("preset"))
+
+        billing_type = str(unified_model.billing_type or "image_credit")
+        if billing_type not in {"image_credit", "free"}:
+            raise ServiceException(
+                400,
+                "当前视频模型仅支持图片积分或免费计费",
+                "VIDEO_MODEL_NOT_SUPPORTED",
+            )
+        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_video_credit_cost(
+            unified_model,
+            normalized_seconds,
+        )
+        video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
+        ImageCreditService.check_balance(db, user.id, video_credit_cost)
+
+        channels = ModelService.get_available_channels(db, unified_model.id)
+        if not channels:
+            raise ServiceException(503, "当前视频模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
+
+        request_data_copy = dict(request_data)
+        request_data_copy["video_config"] = {
+            "seconds": normalized_seconds,
+            "size": normalized_size,
+            "resolution_name": normalized_resolution_name,
+            "preset": normalized_preset,
+        }
+
+        last_error: Exception | None = None
+        for channel, actual_model_name in channels:
+            try:
+                if str(getattr(channel, "protocol_type", "") or "").lower() != "openai":
+                    continue
+                upstream_model_name = actual_model_name or requested_model
+                payload = dict(request_data_copy)
+                payload["model"] = upstream_model_name
+                if request_data.get("stream", False):
+                    return await ProxyService._stream_openai_video_chat_request(
+                        db,
+                        user,
+                        api_key_record,
+                        channel,
+                        unified_model,
+                        payload,
+                        request_id,
+                        requested_model,
+                        upstream_model_name,
+                        client_ip,
+                        video_credit_cost,
+                        model_multiplier,
+                        normalized_size,
+                        normalized_seconds,
+                        billing_type,
+                        request_headers=request_headers,
+                    )
+                return await ProxyService._non_stream_openai_video_chat_request(
+                    db,
+                    user,
+                    api_key_record,
+                    channel,
+                    unified_model,
+                    payload,
+                    request_id,
+                    requested_model,
+                    upstream_model_name,
+                    client_ip,
+                    video_credit_cost,
+                    model_multiplier,
+                    normalized_size,
+                    normalized_seconds,
+                    billing_type,
+                    request_headers=request_headers,
+                )
+            except ServiceException as exc:
+                if exc.error_code in {
+                    "INVALID_VIDEO_SECONDS",
+                    "INVALID_VIDEO_SIZE",
+                    "INVALID_VIDEO_RESOLUTION",
+                    "INVALID_VIDEO_PRESET",
+                    "VIDEO_MODEL_NOT_SUPPORTED",
+                    "INSUFFICIENT_IMAGE_CREDITS",
+                    "IMAGE_CREDIT_BALANCE_NOT_FOUND",
+                }:
+                    raise
+                last_error = exc
+                ProxyService._record_channel_failure(db, channel, exc)
+                continue
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Video chat channel %s (%d) failed: %s", channel.name, channel.id, exc)
+                ProxyService._record_channel_failure(db, channel, exc)
+                continue
+
+        error_detail = str(last_error) if last_error else "Unknown error"
+        ProxyService._log_failed_request(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            requested_model,
+            client_ip,
+            bool(request_data.get("stream", False)),
+            error_detail,
+            request_type="video_generation",
+            billing_type=billing_type,
+            image_credits_charged=0,
+            image_count=0,
+            image_size=normalized_size,
+        )
+        raise ServiceException(503, f"所有可用视频渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+
+    @staticmethod
+    async def _non_stream_openai_video_chat_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        model_multiplier: Decimal,
+        video_size: str,
+        video_seconds: int,
+        billing_type: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        url = ProxyService._resolve_openai_chat_completions_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        payload = dict(request_data)
+        payload["stream"] = False
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="OpenAI video chat",
+        )
+        if not 200 <= response.status_code < 300:
+            raise ServiceException(
+                400 if 400 <= response.status_code < 500 else 503,
+                f"Grok 视频文生任务失败（HTTP {response.status_code}）：{response.text[:1000]}",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+        response_body = response.json()
+        if not isinstance(response_body, dict):
+            raise ServiceException(503, "Grok 视频文生响应格式无效", "OPENAI_VIDEO_GENERATION_FAILED")
+
+        content_text = ProxyService._extract_video_text_from_chat_completion(response_body)
+        video_id = (
+            str(response_body.get("id") or "").strip()
+            or ProxyService._extract_video_url_from_text(content_text)
+            or request_id
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+        ProxyService._log_video_success(
+            user,
+            api_key_record,
+            request_id,
+            video_id,
+            requested_model,
+            upstream_model_name,
+            channel,
+            client_ip,
+            response_time_ms,
+            billing_type=billing_type,
+            charged_credits=charged_credits,
+            model_multiplier=model_multiplier,
+            video_size=video_size,
+            video_seconds=video_seconds,
+        )
+        response_body.setdefault("request_id", request_id)
+        response_body["usage"] = {
+            **(response_body.get("usage") if isinstance(response_body.get("usage"), dict) else {}),
+            "billing_type": billing_type,
+            "image_credits_charged": float(charged_credits),
+            "model_multiplier": float(model_multiplier),
+            "video_credit_rate_per_second": float(model_multiplier),
+            "request_type": "video_generation",
+            "video_count": 1,
+            "size": video_size,
+            "seconds": video_seconds,
+        }
+        video_url = ProxyService._extract_video_url_from_text(content_text)
+        if video_url:
+            response_body["video_url"] = video_url
+        return JSONResponse(content=response_body, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _stream_openai_video_chat_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        model_multiplier: Decimal,
+        video_size: str,
+        video_seconds: int,
+        billing_type: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> StreamingResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        url = ProxyService._resolve_openai_chat_completions_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        payload = dict(request_data)
+        payload["stream"] = True
+        collected_text_parts: list[str] = []
+
+        async def event_generator():
+            timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            stream_error: BaseException | None = None
+            completed = False
+            try:
+                async for line in ProxyService._stream_lines_with_retries(
+                    url,
+                    payload,
+                    headers,
+                    request_id=request_id,
+                    channel=channel,
+                    timeout=timeout,
+                    log_label="OpenAI video chat stream",
+                ):
+                    if not line:
+                        yield "\n"
+                        continue
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            completed = True
+                            yield "data: [DONE]\n\n"
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            choices = chunk.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    collected_text_parts.append(str(content))
+                            yield f"data: {json.dumps(ProxyService._rewrite_openai_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
+                        except (json.JSONDecodeError, TypeError):
+                            yield f"data: {data_str}\n\n"
+                    else:
+                        yield f"{line}\n"
+            except asyncio.CancelledError as exc:
+                stream_error = exc
+                raise
+            except Exception as exc:
+                stream_error = exc
+                ProxyService._record_channel_failure(db, channel, exc)
+                error_message = ProxyService._sanitize_visible_model_text(
+                    f"视频生成流式请求失败：{exc}",
+                    requested_model,
+                    upstream_model_name,
+                )
+                error_payload = json.dumps({
+                    "error": {
+                        "message": error_message,
+                        "type": "proxy_error",
+                        "code": "video_stream_error",
+                    }
+                }, ensure_ascii=False)
+                yield f"data: {error_payload}\n\n"
+                yield "data: [DONE]\n\n"
+            finally:
+                response_time_ms = int((time.time() - start_time) * 1000)
+                try:
+                    if stream_error is not None or not completed:
+                        error_detail = (
+                            "客户端中断视频流式请求"
+                            if isinstance(stream_error, asyncio.CancelledError)
+                            else str(stream_error or "视频流式请求未完整结束")
+                        )
+                        ProxyService._log_failed_request(
+                            db,
+                            user,
+                            api_key_record,
+                            request_id,
+                            requested_model,
+                            client_ip,
+                            True,
+                            error_detail,
+                            channel=channel,
+                            response_time_ms=response_time_ms,
+                            request_type="video_generation",
+                            billing_type=billing_type,
+                            actual_model=upstream_model_name,
+                            image_credits_charged=0,
+                            image_count=0,
+                            image_size=video_size,
+                        )
+                    else:
+                        content_text = "".join(collected_text_parts)
+                        video_id = ProxyService._extract_video_url_from_text(content_text) or request_id
+                        ProxyService._record_success(db, channel)
+                        ProxyService._log_video_success(
+                            user,
+                            api_key_record,
+                            request_id,
+                            video_id,
+                            requested_model,
+                            upstream_model_name,
+                            channel,
+                            client_ip,
+                            response_time_ms,
+                            billing_type=billing_type,
+                            charged_credits=charged_credits,
+                            model_multiplier=model_multiplier,
+                            video_size=video_size,
+                            video_seconds=video_seconds,
+                        )
+                except Exception as accounting_err:
+                    logger.error("Post-video-stream accounting error: %s", accounting_err)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Request-ID": request_id,
+            },
+        )
+
+    @staticmethod
+    def _video_response_body(response: JSONResponse) -> dict[str, Any]:
+        try:
+            parsed_body = json.loads(response.body.decode("utf-8"))
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "视频任务创建响应解析失败",
+                "VIDEO_CREATE_RESPONSE_INVALID",
+            ) from exc
+        if not isinstance(parsed_body, dict):
+            raise ServiceException(
+                503,
+                "视频任务创建响应格式无效",
+                "VIDEO_CREATE_RESPONSE_INVALID",
+            )
+        return parsed_body
+
+    @staticmethod
+    def _video_status_value(status_data: dict[str, Any]) -> str:
+        return str(
+            status_data.get("status")
+            or status_data.get("state")
+            or "unknown"
+        ).strip().lower()
+
+    @staticmethod
+    def _is_video_completed_status(status: Any) -> bool:
+        return str(status or "").strip().lower() in ProxyService._VIDEO_COMPLETED_STATUSES
+
+    @staticmethod
+    def _is_video_failed_status(status: Any) -> bool:
+        return str(status or "").strip().lower() in ProxyService._VIDEO_FAILED_STATUSES
+
+    @staticmethod
+    async def _wait_for_video_completion(
+        db: Session,
+        user: SysUser,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+        poll_interval_seconds: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> tuple[dict[str, Any], float]:
+        route = ProxyService._resolve_stored_video_route(db, user, video_id)
+        if not route:
+            raise ServiceException(404, "视频任务不存在或当前用户无权访问", "VIDEO_TASK_NOT_FOUND")
+
+        channel, _requested_model, _actual_model = route
+        poll_interval = (
+            float(poll_interval_seconds)
+            if poll_interval_seconds is not None
+            else ProxyService._VIDEO_WAIT_POLL_INTERVAL_SECONDS
+        )
+        timeout = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else ProxyService._VIDEO_WAIT_TIMEOUT_SECONDS
+        )
+        poll_interval = max(0.1, poll_interval)
+        timeout = max(poll_interval, timeout)
+        start_time = time.time()
+        last_status_data: dict[str, Any] = {}
+
+        while True:
+            response = await ProxyService._request_video_route(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+            if response.status_code != 200:
+                raise ServiceException(
+                    400 if 400 <= response.status_code < 500 else 503,
+                    f"Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}",
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                )
+
+            try:
+                status_data = response.json()
+            except Exception as exc:
+                raise ServiceException(
+                    503,
+                    "Grok 视频任务查询响应解析失败",
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ) from exc
+            if not isinstance(status_data, dict):
+                raise ServiceException(
+                    503,
+                    "Grok 视频任务查询响应格式无效",
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                )
+            last_status_data = status_data
+            status = ProxyService._video_status_value(status_data)
+
+            if ProxyService._is_video_completed_status(status):
+                return status_data, time.time() - start_time
+            if ProxyService._is_video_failed_status(status):
+                error_message = (
+                    status_data.get("error")
+                    or status_data.get("message")
+                    or status_data
+                )
+                raise ServiceException(
+                    502,
+                    f"Grok 视频生成失败：{error_message}",
+                    "VIDEO_GENERATION_FAILED",
+                )
+            if time.time() - start_time >= timeout:
+                raise ServiceException(
+                    504,
+                    (
+                        f"视频生成等待超时，任务仍在处理中。video_id={video_id}，"
+                        f"最后状态={ProxyService._video_status_value(last_status_data)}"
+                    ),
+                    "VIDEO_WAIT_TIMEOUT",
+                )
+
+            await asyncio.sleep(poll_interval)
+
+    @staticmethod
+    async def handle_video_request_and_wait(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_data: dict,
+        client_ip: str,
+        request_headers: Optional[dict[str, str]] = None,
+    ):
+        create_response = await ProxyService.handle_video_request(
+            db,
+            user,
+            api_key_record,
+            request_data,
+            client_ip,
+            request_headers=request_headers,
+        )
+        response_body = ProxyService._video_response_body(create_response)
+        video_id = str(response_body.get("id") or "").strip()
+        if not video_id:
+            raise ServiceException(
+                503,
+                "视频任务创建成功，但未返回 video_id",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+
+        final_status, elapsed_seconds = await ProxyService._wait_for_video_completion(
+            db,
+            user,
+            video_id,
+            request_headers=request_headers,
+        )
+        status = ProxyService._video_status_value(final_status)
+        response_body["status"] = status
+        response_body["final_status"] = final_status
+        response_body["content_url"] = f"/v1/videos/{video_id}/content"
+        response_body["retrieve_url"] = f"/v1/videos/{video_id}"
+        response_body["wait"] = {
+            "completed": True,
+            "elapsed_seconds": round(elapsed_seconds, 3),
+            "poll_interval_seconds": ProxyService._VIDEO_WAIT_POLL_INTERVAL_SECONDS,
+            "timeout_seconds": ProxyService._VIDEO_WAIT_TIMEOUT_SECONDS,
+        }
+        return JSONResponse(
+            content=response_body,
+            headers={"X-Request-ID": str(response_body.get("request_id") or "")},
+        )
+
+    @staticmethod
     def _resolve_stored_video_route(
         db: Session,
         user: SysUser,
@@ -9482,38 +10113,11 @@ class ProxyService:
         ProxyService._prune_video_task_routes()
         route = ProxyService._video_task_routes.get(str(video_id))
         if not route:
-            user_id = ProxyService._safe_object_id(user)
-            if not user_id:
-                return None
-            request_log = (
-                db.query(RequestLog)
-                .filter(
-                    RequestLog.user_id == user_id,
-                    RequestLog.upstream_session_id == str(video_id),
-                    RequestLog.request_type == "video_generation",
-                    RequestLog.status == "success",
-                )
-                .order_by(RequestLog.id.desc())
-                .first()
-            )
-            if not request_log:
-                return None
-            channel = (
-                db.query(Channel)
-                .filter(Channel.id == request_log.channel_id, Channel.enabled == 1)
-                .first()
-            )
-            if not channel:
-                return None
-            ProxyService._store_video_task_route(
-                str(video_id),
-                user_id=user_id,
-                channel_id=channel.id,
-                requested_model=request_log.requested_model or "",
-                actual_model=request_log.actual_model or "",
-            )
-            return channel, request_log.requested_model or "", request_log.actual_model or ""
+            return ProxyService._resolve_video_route_from_request_log(db, user, video_id)
         if int(route.get("user_id") or 0) != int(getattr(user, "id", 0) or 0):
+            log_route = ProxyService._resolve_video_route_from_request_log(db, user, video_id)
+            if log_route:
+                return log_route
             raise ServiceException(403, "无权访问该视频任务", "VIDEO_TASK_FORBIDDEN")
         channel = (
             db.query(Channel)
@@ -9523,6 +10127,44 @@ class ProxyService:
         if not channel:
             return None
         return channel, str(route.get("requested_model") or ""), str(route.get("actual_model") or "")
+
+    @staticmethod
+    def _resolve_video_route_from_request_log(
+        db: Session,
+        user: SysUser,
+        video_id: str,
+    ) -> Optional[tuple[Channel, str, str]]:
+        user_id = ProxyService._safe_object_id(user)
+        if not user_id:
+            return None
+        request_log = (
+            db.query(RequestLog)
+            .filter(
+                RequestLog.user_id == user_id,
+                RequestLog.upstream_session_id == str(video_id),
+                RequestLog.request_type == "video_generation",
+                RequestLog.status == "success",
+            )
+            .order_by(RequestLog.id.desc())
+            .first()
+        )
+        if not request_log:
+            return None
+        channel = (
+            db.query(Channel)
+            .filter(Channel.id == request_log.channel_id, Channel.enabled == 1)
+            .first()
+        )
+        if not channel:
+            return None
+        ProxyService._store_video_task_route(
+            str(video_id),
+            user_id=user_id,
+            channel_id=channel.id,
+            requested_model=request_log.requested_model or "",
+            actual_model=request_log.actual_model or "",
+        )
+        return channel, request_log.requested_model or "", request_log.actual_model or ""
 
     @staticmethod
     async def _request_video_route(

@@ -32,7 +32,9 @@
           </template>
 
           <template slot="billingType" slot-scope="text, record">
-            <a-tag v-if="text === 'image_credit'" color="gold">媒体积分 x{{ record.image_credit_multiplier || 1 }}</a-tag>
+            <a-tag v-if="text === 'image_credit'" color="gold">
+              {{ record.model_type === 'video' ? `媒体积分 ${record.image_credit_multiplier || 0.5}/秒` : `媒体积分 x${record.image_credit_multiplier || 1}` }}
+            </a-tag>
             <a-tag v-else-if="text === 'free'" color="green">免费</a-tag>
             <a-tag v-else color="blue">Token</a-tag>
           </template>
@@ -253,7 +255,7 @@
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="默认媒体积分倍率">
+        <a-form-item v-if="modelForm.billing_type === 'image_credit'" :label="modelForm.model_type === 'video' ? '每秒媒体积分' : '默认媒体积分倍率'">
           <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
         </a-form-item>
         <a-form-item v-if="showImageResolutionConfig" label="生图模型分辨率计费">
@@ -593,12 +595,14 @@ export default {
       this.syncImageResolutionRules()
     },
     'modelForm.model_type'() {
+      this.syncVideoCreditRateDefault()
       this.syncImageResolutionRules()
     },
     'modelForm.protocol_type'() {
       this.syncImageResolutionRules()
     },
     'modelForm.billing_type'() {
+      this.syncVideoCreditRateDefault()
       this.syncImageResolutionRules()
     }
   },
@@ -607,6 +611,15 @@ export default {
     this.fetchChannelOptions()
   },
   methods: {
+    syncVideoCreditRateDefault() {
+      if (
+        this.modelForm.model_type === 'video' &&
+        this.modelForm.billing_type === 'image_credit' &&
+        Number(this.modelForm.image_credit_multiplier || 0) === 1
+      ) {
+        this.modelForm.image_credit_multiplier = 0.5
+      }
+    },
     syncImageResolutionRules() {
       if (!this.showImageResolutionConfig) {
         this.modelForm.image_resolution_rules = []

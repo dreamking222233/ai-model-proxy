@@ -361,10 +361,6 @@
                     <div class="api-doc-title">视频生成接口</div>
                     <div class="endpoint-line">
                       <span class="e-method green">POST</span>
-                      <code class="e-url">{{ relayOpenaiBase }}/chat/completions</code>
-                    </div>
-                    <div class="endpoint-line">
-                      <span class="e-method green">POST</span>
                       <code class="e-url">{{ relayOpenaiBase }}/videos</code>
                     </div>
                     <div class="endpoint-line endpoint-line-secondary">
@@ -372,8 +368,9 @@
                       <code class="e-url">{{ relayOpenaiBase }}/created/video</code>
                     </div>
                     <p class="api-doc-intro">
-                      <code>/chat/completions</code> 适合文生视频并支持流式返回视频 URL；
-                      <code>/created/video</code> 适合图生视频，会等待任务完成后返回下载地址；<code>/videos</code> 保持异步任务模式。
+                      当前对外视频模型为 <code>grok-video</code>。推荐使用 <code>/created/video</code>，系统会创建上游视频任务、轮询至完成后返回
+                      <code>content_url</code>；<code>/videos</code> 保持异步任务模式，创建任务后通过查询与下载接口获取结果。
+                      文生视频不上传参考图，图生视频通过 <code>input_reference[]</code> 上传参考图。
                     </p>
 
                     <div class="code-editor-block">
@@ -402,7 +399,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="图像接口不支持 stream；视频文生接口可通过 Chat Completions 流式返回视频 URL。图片生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存；图生视频使用 multipart/form-data 上传 input_reference[]。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="图像接口不支持 stream；视频接口使用 multipart/form-data，文生视频只传 prompt，图生视频额外上传 input_reference[]。视频按媒体积分计费，当前 grok-video 为 0.5 积分/秒。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -653,28 +650,20 @@ finally:
   -F "n=1"`
     },
     videoCreateCurlCode() {
-      return `# 文生视频：Chat Completions 流式返回视频 URL
-curl -N -X POST "${this.relayOpenaiBase}/chat/completions" \\
+      return `# 文生视频：同步等待任务完成并返回 content_url
+curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -H "Authorization: Bearer sk-你的密钥" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "grok-imagine-video",
-    "stream": true,
-    "messages": [
-      {"role": "user", "content": "霓虹雨夜街头，电影感慢镜头追拍"}
-    ],
-    "video_config": {
-      "seconds": 10,
-      "size": "1792x1024",
-      "resolution_name": "720p",
-      "preset": "normal"
-    }
-  }'
+  -F "model=grok-video" \\
+  -F "prompt=霓虹雨夜街头，电影感慢镜头追拍" \\
+  -F "seconds=10" \\
+  -F "size=1792x1024" \\
+  -F "resolution_name=720p" \\
+  -F "preset=normal"
 
 # 图生视频：同步等待任务完成并返回 content_url
 curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -H "Authorization: Bearer sk-你的密钥" \\
-  -F "model=grok-imagine-video" \\
+  -F "model=grok-video" \\
   -F "prompt=让参考图中的主体自然运动，电影感镜头推进" \\
   -F "seconds=10" \\
   -F "size=1792x1024" \\
@@ -682,7 +671,16 @@ curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -F "preset=normal" \\
   -F "input_reference[]=@reference.png"
 
-# 异步查询与下载
+# 异步模式：先创建任务，再查询与下载
+curl -X POST "${this.relayOpenaiBase}/videos" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -F "model=grok-video" \\
+  -F "prompt=未来城市上空飞车穿梭，电影感航拍镜头" \\
+  -F "seconds=10" \\
+  -F "size=1792x1024" \\
+  -F "resolution_name=720p" \\
+  -F "preset=normal"
+
 curl "${this.relayOpenaiBase}/videos/video_xxx" \\
   -H "Authorization: Bearer sk-你的密钥"
 
@@ -716,15 +714,13 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     },
     videoCreateRequestFields() {
       return [
-        { name: 'model', required: '是', description: '视频模型名称，例如 grok-imagine-video。' },
-        { name: 'prompt / messages', required: '是', description: '图生视频使用 prompt；Chat Completions 文生视频使用 messages。' },
-        { name: 'stream', required: '否', description: '文生视频建议 true，通过流式响应返回视频 URL。' },
-        { name: 'video_config', required: '否', description: 'Chat Completions 视频配置对象，字段同 seconds、size、resolution_name、preset。' },
+        { name: 'model', required: '是', description: '视频模型名称，当前请传 grok-video；系统会映射到上游 Grok 视频模型。' },
+        { name: 'prompt', required: '是', description: '视频生成提示词，文生视频和图生视频都使用该字段。' },
         { name: 'seconds', required: '否', description: '视频长度，支持 6、10、12、16、20。' },
         { name: 'size', required: '否', description: '画面尺寸，支持 720x1280、1280x720、1024x1024、1024x1792、1792x1024。' },
         { name: 'resolution_name', required: '否', description: '清晰度档位，支持 480p 或 720p。' },
         { name: 'preset', required: '否', description: '生成预设，支持 fun、normal、spicy、custom。' },
-        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多 7 张，超过返回 400。' }
+        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多 7 张；不传该字段即为文生视频。' }
       ]
     },
     imageGenerationResponseFields() {

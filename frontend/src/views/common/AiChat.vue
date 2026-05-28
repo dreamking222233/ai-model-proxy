@@ -150,9 +150,9 @@
           </div>
           <div class="image-toolbar-item">
             <div class="image-toolbar-label">画面</div>
-            <a-select v-model="selectedVideoSize" size="small" style="width: 132px">
+            <a-select v-model="selectedVideoSize" size="small" style="width: 178px">
               <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size">
-                {{ size }}
+                {{ getVideoSizeLabel(size) }}
               </a-select-option>
             </a-select>
           </div>
@@ -2157,33 +2157,21 @@ console.log(response.choices[0].message.content);`
       this.inputText = ''
       this.errorMsg = ''
       this.videoGenerating = true
-      var currentText = ''
-      this.abortController = streamChat({
-        apiKey: this.apiKey,
-        model: this.currentModel,
-        apiType: 'openai',
-        messages: [{ role: 'user', content: prompt }],
-        extraPayload: {
-          video_config: this.buildVideoConfig(),
-          stream: true
-        },
-        onMessage: function (delta) {
-          currentText += delta
-          var lastMsg = currentSession.messages[currentSession.messages.length - 1]
-          if (lastMsg && lastMsg.kind === 'video_generating') {
-            lastMsg.content = currentText || '正在生成视频...'
-          }
-        },
-        onDone: function (fullText) {
+      this.sendTextToVideoRequest(prompt).then(function (result) {
+        var videoUrl = result.content_url ? self.runtimeRelayBase + result.content_url : ''
+        return self.resolveVideoDisplayUrl(videoUrl).then(function (displayUrl) {
           self.finishVideoResult(currentSession, {
             prompt: prompt,
-            text: fullText || currentText,
-            url: self.extractVideoUrl(fullText || currentText)
+            text: '视频已生成完成',
+            url: displayUrl || videoUrl,
+            contentUrl: videoUrl,
+            videoCacheKey: videoUrl,
+            usage: result.usage || {},
+            videoId: result.id || ''
           })
-        },
-        onError: function (err) {
-          self.failVideoResult(currentSession, err && err.message ? err.message : '视频生成失败，请稍后重试')
-        }
+        })
+      }).catch(function (err) {
+        self.failVideoResult(currentSession, err && err.message ? err.message : '视频生成失败，请稍后重试')
       })
     },
     handleGenerateImageToVideo: function () {
@@ -2239,7 +2227,7 @@ console.log(response.choices[0].message.content);`
         lastMsg.kind = 'video_result'
         lastMsg.content = payload.text || '视频已生成完成'
         this.$set(lastMsg, 'videos', [{
-          url: payload.contentUrl ? '' : (payload.url || ''),
+          url: payload.url || '',
           contentUrl: payload.contentUrl || '',
           videoCacheKey: payload.videoCacheKey || payload.contentUrl || '',
           videoId: payload.videoId || '',
@@ -2298,6 +2286,56 @@ console.log(response.choices[0].message.content);`
       formData.append('resolution_name', this.selectedVideoResolution)
       formData.append('preset', this.selectedVideoPreset)
       formData.append('input_reference[]', imageFile, imageName || imageFile.name || 'reference.png')
+
+      return fetch(this.runtimeRelayBase + '/v1/created/video', {
+        method: 'POST',
+        headers: headers,
+        body: formData,
+        signal: controller ? controller.signal : undefined
+      }).then(function (response) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!response.ok) {
+          return response.text().then(function (text) {
+            var errMsg = '视频生成请求失败 (' + response.status + ')'
+            try {
+              var parsed = JSON.parse(text)
+              errMsg = (parsed.error && parsed.error.message) || parsed.message || parsed.detail || errMsg
+            } catch (e) {
+              // Ignore non-JSON error bodies and surface the fallback message.
+            }
+            throw new Error(errMsg)
+          })
+        }
+        return response.json()
+      }).catch(function (err) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (err && err.name === 'AbortError') {
+          throw new Error('视频生成超时，请稍后在任务接口查询')
+        }
+        throw err
+      })
+    },
+    sendTextToVideoRequest: function (prompt) {
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      var timeoutId = null
+      if (controller) {
+        timeoutId = setTimeout(function () {
+          controller.abort()
+        }, VIDEO_REQUEST_TIMEOUT_MS)
+      }
+      var headers = {
+        'Authorization': 'Bearer ' + this.apiKey
+      }
+      if (this.currentChannelId) {
+        headers['X-Channel-Id'] = String(this.currentChannelId)
+      }
+      var formData = new FormData()
+      formData.append('model', this.currentModel)
+      formData.append('prompt', prompt)
+      formData.append('seconds', String(this.selectedVideoSeconds))
+      formData.append('size', this.selectedVideoSize)
+      formData.append('resolution_name', this.selectedVideoResolution)
+      formData.append('preset', this.selectedVideoPreset)
 
       return fetch(this.runtimeRelayBase + '/v1/created/video', {
         method: 'POST',
@@ -2470,6 +2508,17 @@ console.log(response.choices[0].message.content);`
     },
     getAspectRatioLabel: function (ratio) {
       return DEFAULT_ASPECT_RATIO_LABELS[ratio] || ratio
+    },
+    getVideoSizeLabel: function (size) {
+      var normalized = String(size || '')
+      var labelMap = {
+        '720x1280': '竖屏 9:16 · 720x1280',
+        '1024x1792': '竖屏 9:16 · 1024x1792',
+        '1280x720': '横屏 16:9 · 1280x720',
+        '1792x1024': '横屏 16:9 · 1792x1024',
+        '1024x1024': '方形 1:1 · 1024x1024'
+      }
+      return labelMap[normalized] || normalized
     },
     buildImageFileFromDataUrl: function (dataUrl, name) {
       var blob = this.dataUrlToBlob(dataUrl)

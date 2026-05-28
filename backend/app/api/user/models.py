@@ -57,6 +57,11 @@ def list_available_models(
                 )
                 else []
             ),
+            "video_size_capabilities": (
+                list(ModelService.get_video_size_capabilities(m.model_name))
+                if m.model_type == "video"
+                else []
+            ),
             "channel_count": channel_count,
             "description": m.description,
         })
@@ -127,6 +132,11 @@ def list_chat_models(
             "image_size_capabilities": (
                 list(ModelService.get_image_resolution_capabilities(m.model_name))
                 if m.model_type == "image"
+                else []
+            ),
+            "video_size_capabilities": (
+                list(ModelService.get_video_size_capabilities(m.model_name))
+                if m.model_type == "video"
                 else []
             ),
             "supports_image_edit": (

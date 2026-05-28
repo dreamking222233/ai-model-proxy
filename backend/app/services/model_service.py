@@ -37,6 +37,9 @@ class ModelService:
     IMAGE_EDIT_CAPABILITIES: set[str] = {
         "gpt-image-2",
     }
+    VIDEO_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
+        "grok-imagine-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
+    }
 
     @staticmethod
     def _decimal_to_float(value, default: float = 0.0) -> float:
@@ -88,6 +91,10 @@ class ModelService:
     @staticmethod
     def supports_image_edit(model_name: str) -> bool:
         return str(model_name or "") in ModelService.IMAGE_EDIT_CAPABILITIES
+
+    @staticmethod
+    def get_video_size_capabilities(model_name: str) -> tuple[str, ...]:
+        return ModelService.VIDEO_SIZE_CAPABILITIES.get(str(model_name or ""), ())
 
     @staticmethod
     def _normalize_credit_decimal(value: object, field_name: str = "credit_cost") -> Decimal:
@@ -246,6 +253,7 @@ class ModelService:
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
+            "video_size_capabilities": list(ModelService.get_video_size_capabilities(model.model_name)),
             "enabled": model.enabled,
             "description": model.description,
             "created_at": model.created_at.isoformat() if model.created_at else None,
@@ -666,6 +674,21 @@ class ModelService:
     # -----------------------------------------------------------------------
     # Model resolution & available channels
     # -----------------------------------------------------------------------
+
+    @staticmethod
+    def get_enabled_model_by_name(db: Session, model_name: str) -> UnifiedModel | None:
+        """Return an enabled model by exact user-facing model name."""
+        normalized_name = str(model_name or "").strip()
+        if not normalized_name:
+            return None
+        return (
+            db.query(UnifiedModel)
+            .filter(
+                UnifiedModel.model_name == normalized_name,
+                UnifiedModel.enabled == 1,
+            )
+            .first()
+        )
 
     @staticmethod
     def resolve_model(db: Session, requested_model_name: str) -> UnifiedModel | None:

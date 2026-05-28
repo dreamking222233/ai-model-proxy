@@ -32,7 +32,7 @@
           </template>
 
           <template slot="billingType" slot-scope="text, record">
-            <a-tag v-if="text === 'image_credit'" color="gold">图片积分 x{{ record.image_credit_multiplier || 1 }}</a-tag>
+            <a-tag v-if="text === 'image_credit'" color="gold">媒体积分 x{{ record.image_credit_multiplier || 1 }}</a-tag>
             <a-tag v-else-if="text === 'free'" color="green">免费</a-tag>
             <a-tag v-else color="blue">Token</a-tag>
           </template>
@@ -53,6 +53,16 @@
                 {{ size }}
               </a-tag>
               <span v-if="!(record.image_size_capabilities || []).length" class="muted-text">-</span>
+            </div>
+            <div v-else-if="record.model_type === 'video'" class="capability-tags">
+              <a-tag
+                v-for="size in record.video_size_capabilities || []"
+                :key="`${record.id}-video-size-${size}`"
+                color="purple"
+              >
+                {{ size }}
+              </a-tag>
+              <span v-if="!(record.video_size_capabilities || []).length" class="muted-text">-</span>
             </div>
             <span v-else class="muted-text">-</span>
           </template>
@@ -226,6 +236,7 @@
             <a-select-option value="completion">补全</a-select-option>
             <a-select-option value="embedding">向量</a-select-option>
             <a-select-option value="image">图像</a-select-option>
+            <a-select-option value="video">视频</a-select-option>
           </a-select>
         </a-form-item>
         <a-form-item label="协议">
@@ -238,11 +249,11 @@
         <a-form-item label="计费类型">
           <a-select v-model="modelForm.billing_type" placeholder="Select billing type">
             <a-select-option value="token">按 Token 计费</a-select-option>
-            <a-select-option value="image_credit">按图片积分计费</a-select-option>
+            <a-select-option value="image_credit">按媒体积分计费</a-select-option>
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="默认图片积分倍率">
+        <a-form-item v-if="modelForm.billing_type === 'image_credit'" label="默认媒体积分倍率">
           <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
         </a-form-item>
         <a-form-item v-if="showImageResolutionConfig" label="生图模型分辨率计费">

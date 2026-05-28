@@ -474,6 +474,41 @@ class ResponsesFastBillingTest(unittest.TestCase):
         self.assertNotIn("tools", request_data)
         self.assertNotIn("tool_choice", request_data)
 
+    def test_remove_responses_image_generation_tool_clears_tool_choice_without_tools(self):
+        request_data = {
+            "input": "draw a cat",
+            "tool_choice": {"type": "image_generation"},
+        }
+
+        removed = ProxyService._remove_responses_image_generation_tool(request_data)
+
+        self.assertTrue(removed)
+        self.assertNotIn("tool_choice", request_data)
+
+    def test_remove_responses_image_generation_tool_filters_allowed_tool_choice(self):
+        request_data = {
+            "tools": [
+                {"type": "IMAGE_GENERATION"},
+                {"type": "function", "name": "read_file"},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "tools": [
+                    {"type": "image_generation"},
+                    {"type": "function", "name": "read_file"},
+                ],
+            },
+        }
+
+        removed = ProxyService._remove_responses_image_generation_tool(request_data)
+
+        self.assertTrue(removed)
+        self.assertEqual(request_data["tools"], [{"type": "function", "name": "read_file"}])
+        self.assertEqual(
+            request_data["tool_choice"]["tools"],
+            [{"type": "function", "name": "read_file"}],
+        )
+
     @patch("app.services.proxy_service.ProxyService._assert_text_request_allowed")
     @patch("app.services.proxy_service.ModelService.get_available_channels")
     @patch("app.services.proxy_service.ModelService.resolve_model")

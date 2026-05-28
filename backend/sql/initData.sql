@@ -387,11 +387,13 @@ CREATE TABLE `unified_model` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `model_name` VARCHAR(128) NOT NULL COMMENT '统一模型名称,用户请求时使用',
     `display_name` VARCHAR(128) DEFAULT NULL,
-    `model_type` ENUM('chat', 'embedding', 'image') NOT NULL DEFAULT 'chat',
+    `model_type` ENUM('chat', 'embedding', 'image', 'video') NOT NULL DEFAULT 'chat',
     `protocol_type` ENUM('openai', 'anthropic') NOT NULL DEFAULT 'openai',
     `max_tokens` INT DEFAULT NULL,
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
     `output_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输出Token单价(美元)',
+    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'token' COMMENT 'token/image_credit/free',
+    `image_credit_multiplier` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '图片/媒体请求默认扣减倍率',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `description` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -928,6 +930,21 @@ VALUES (1, 100.000000, 100.000000, 0.000000);
 -- 管理员图片积分余额
 INSERT INTO `user_image_balance` (`user_id`, `balance`, `total_recharged`, `total_consumed`)
 VALUES (1, 0.000, 0.000, 0.000);
+
+-- 预置 Grok 视频模型
+INSERT INTO `unified_model` (
+    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+) VALUES
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL, 0, 0, 'image_credit', 5, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，需映射到 grok2api 渠道）')
+ON DUPLICATE KEY UPDATE
+    `display_name` = VALUES(`display_name`),
+    `model_type` = VALUES(`model_type`),
+    `protocol_type` = VALUES(`protocol_type`),
+    `billing_type` = VALUES(`billing_type`),
+    `image_credit_multiplier` = VALUES(`image_credit_multiplier`),
+    `enabled` = VALUES(`enabled`),
+    `description` = VALUES(`description`);
 
 -- 系统配置
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES

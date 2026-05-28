@@ -357,6 +357,47 @@
                     </div>
                   </div>
 
+                  <div class="api-doc-card">
+                    <div class="api-doc-title">视频生成接口</div>
+                    <div class="endpoint-line">
+                      <span class="e-method green">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/videos</code>
+                    </div>
+                    <div class="endpoint-line endpoint-line-secondary">
+                      <span class="e-method green">POST</span>
+                      <code class="e-url">{{ relayOpenaiBase }}/created/video</code>
+                    </div>
+                    <p class="api-doc-intro">
+                      用于文生视频或图生视频，采用 <code>multipart/form-data</code> 创建异步任务。
+                      当前视频模型为 <code>grok-imagine-video</code>，创建成功后通过任务 ID 查询状态或下载成片。
+                    </p>
+
+                    <div class="code-editor-block">
+                      <a-tabs size="small" type="card" class="editor-tabs">
+                        <a-tab-pane key="video-curl" tab="cURL">
+                          <div class="editor-content">
+                            <a-icon :type="copyStates['video-curl'] ? 'check' : 'copy'" class="editor-copy" @click="handleCopy(videoCreateCurlCode, 'video-curl')" />
+                            <pre><code>{{ videoCreateCurlCode }}</code></pre>
+                          </div>
+                        </a-tab-pane>
+                      </a-tabs>
+                    </div>
+
+                    <div class="api-doc-title">请求参数</div>
+                    <div class="api-doc-table">
+                      <div class="api-doc-row api-doc-head api-doc-row-req">
+                        <span>参数</span>
+                        <span>必填</span>
+                        <span>说明</span>
+                      </div>
+                      <div v-for="item in videoCreateRequestFields" :key="`video-${item.name}`" class="api-doc-row api-doc-row-req">
+                        <span><code>{{ item.name }}</code></span>
+                        <span>{{ item.required }}</span>
+                        <span>{{ item.description }}</span>
+                      </div>
+                    </div>
+                  </div>
+
                   <a-alert message="注意" description="图像接口不支持 stream；生成和编辑都会以 b64_json 返回，需要业务侧自行进行 base64 解码保存。图片生成里，gpt-image-2 当前支持 1-4 张并通过 data 数组返回；编辑接口上传多图时，请重复传递 image 字段，但当前 n 仍固定为 1。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
@@ -607,6 +648,24 @@ finally:
   -F "aspect_ratio=1:1" \\
   -F "n=1"`
     },
+    videoCreateCurlCode() {
+      return `curl -X POST "${this.relayOpenaiBase}/created/video" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -F "model=grok-imagine-video" \\
+  -F "prompt=霓虹雨夜街头，电影感慢镜头追拍" \\
+  -F "seconds=10" \\
+  -F "size=1792x1024" \\
+  -F "resolution_name=720p" \\
+  -F "preset=normal" \\
+  -F "input_reference[]=@reference.png"
+
+curl "${this.relayOpenaiBase}/videos/video_xxx" \\
+  -H "Authorization: Bearer sk-你的密钥"
+
+curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -o result.mp4`
+    },
     imageGenerationRequestFields() {
       return [
         { name: 'model', required: '是', description: '要调用的图片模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 或 gpt-image-2。' },
@@ -629,6 +688,17 @@ finally:
         { name: 'image_size', required: '否', description: '图片细节档位提示，支持 512、1K、2K、4K。gpt-image-2 会通过提示词适配。' },
         { name: 'aspect_ratio', required: '否', description: '目标构图比例，例如 1:1、16:9、9:16。gpt-image-2 会通过提示词适配。' },
         { name: 'n', required: '否', description: '当前统一固定为 1。' }
+      ]
+    },
+    videoCreateRequestFields() {
+      return [
+        { name: 'model', required: '是', description: '视频模型名称，例如 grok-imagine-video。' },
+        { name: 'prompt', required: '是', description: '视频生成提示词。' },
+        { name: 'seconds', required: '否', description: '视频长度，支持 6、10、12、16、20。' },
+        { name: 'size', required: '否', description: '画面尺寸，支持 720x1280、1280x720、1024x1024、1024x1792、1792x1024。' },
+        { name: 'resolution_name', required: '否', description: '清晰度档位，支持 480p 或 720p。' },
+        { name: 'preset', required: '否', description: '生成预设，支持 fun、normal、spicy、custom。' },
+        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多使用前 7 张。' }
       ]
     },
     imageGenerationResponseFields() {

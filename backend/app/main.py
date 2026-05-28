@@ -44,6 +44,7 @@ from app.api.agent.redemption import router as agent_redemption_router
 from app.api.proxy.openai_proxy import router as openai_proxy_router
 from app.api.proxy.anthropic_proxy import router as anthropic_proxy_router
 from app.api.proxy.image_proxy import router as image_proxy_router
+from app.api.proxy.video_proxy import router as video_proxy_router
 
 # Configure logging
 logging.basicConfig(
@@ -146,6 +147,7 @@ app.include_router(agent_redemption_router)
 app.include_router(openai_proxy_router)
 app.include_router(anthropic_proxy_router)
 app.include_router(image_proxy_router)
+app.include_router(video_proxy_router)
 
 
 @app.get("/health")

@@ -84,7 +84,7 @@
                 class="billing-chip"
                 :class="{ active: selectedBilling === 'image_credit' }"
                 @click="selectedBilling = 'image_credit'"
-              >按图片</div>
+              >按媒体积分</div>
               <div
                 class="billing-chip"
                 :class="{ active: selectedBilling === 'free' }"
@@ -167,7 +167,7 @@
                   <div class="pricing-display">
                     <template v-if="model.billing_type === 'image_credit'">
                       <div class="price-item image-price">
-                        <span class="label">图片消耗</span>
+                        <span class="label">{{ model.model_type === 'video' ? '视频消耗' : '图片消耗' }}</span>
                         <span class="value">{{ getImageCreditText(model) }}</span>
                       </div>
                     </template>
@@ -189,11 +189,12 @@
 
                 <div class="card-bottom">
                   <div class="tag-group">
-                    <span v-if="model.billing_type === 'image_credit'" class="glass-tag gold">按图片计费</span>
+                    <span v-if="model.billing_type === 'image_credit'" class="glass-tag gold">按媒体积分计费</span>
                     <span v-else-if="model.billing_type === 'token' || model.input_price > 0 || model.output_price > 0" class="glass-tag blue">按 Token 计费</span>
                     <span v-else class="glass-tag green">免费使用</span>
 
                     <span v-if="model.model_type === 'image'" class="glass-tag purple">图像生成</span>
+                    <span v-else-if="model.model_type === 'video'" class="glass-tag purple">视频生成</span>
                     <span v-else-if="model.max_tokens" class="glass-tag grey">{{ formatTokens(model.max_tokens) }} Context</span>
                   </div>
                 </div>
@@ -277,7 +278,8 @@ export default {
       const types = [
         { value: 'chat', label: '对话', icon: 'message' },
         { value: 'embedding', label: '向量', icon: 'cluster' },
-        { value: 'image', label: '图像', icon: 'picture' }
+        { value: 'image', label: '图像', icon: 'picture' },
+        { value: 'video', label: '视频', icon: 'video-camera' }
       ]
       return types.map(t => ({
         ...t,

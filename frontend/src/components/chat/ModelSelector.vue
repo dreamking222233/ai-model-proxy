@@ -174,6 +174,7 @@ var DEFAULT_PROVIDER = { label: '其他', color: '#8c8c8c' }
 var TYPE_LABELS = {
   chat: '对话',
   image: '图像',
+  video: '视频',
   embedding: '向量'
 }
 
@@ -246,6 +247,7 @@ export default {
       var typeDefs = [
         { value: 'chat', label: '对话' },
         { value: 'image', label: '图像' },
+        { value: 'video', label: '视频' },
         { value: 'embedding', label: '向量' }
       ]
       return typeDefs.map(function (item) {

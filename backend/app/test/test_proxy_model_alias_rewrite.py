@@ -1,6 +1,8 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+from app.core.exceptions import ServiceException
 from app.services.log_service import LogService
 from app.services.proxy_service import ProxyService
 
@@ -137,6 +139,42 @@ class ProxyModelAliasRewriteTest(unittest.TestCase):
 
         self.assertEqual(prioritized_for_anthropic[0][0].name, "anthropic")
         self.assertEqual(prioritized_for_openai[0][0].name, "openai")
+
+    @patch("app.services.proxy_service.ModelService.resolve_model")
+    @patch("app.services.proxy_service.ModelService.get_enabled_model_by_name")
+    def test_resolve_requested_model_rejects_unknown_before_override(
+        self,
+        mock_get_enabled_model_by_name,
+        mock_resolve_model,
+    ):
+        mock_get_enabled_model_by_name.return_value = None
+        mock_resolve_model.return_value = SimpleNamespace(model_name="gpt-5.5")
+
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._resolve_requested_model_or_raise(MagicMock(), "gpt-5.2")
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.error_code, "MODEL_NOT_FOUND")
+        self.assertIn("请求模型 'gpt-5.2' 不存在", ctx.exception.detail)
+        self.assertIn("模型列表页", ctx.exception.detail)
+        mock_resolve_model.assert_not_called()
+
+    @patch("app.services.proxy_service.ModelService.resolve_model")
+    @patch("app.services.proxy_service.ModelService.get_enabled_model_by_name")
+    def test_resolve_requested_model_allows_configured_model_override(
+        self,
+        mock_get_enabled_model_by_name,
+        mock_resolve_model,
+    ):
+        configured_model = SimpleNamespace(model_name="gpt-5.4")
+        override_target = SimpleNamespace(model_name="gpt-5.5")
+        mock_get_enabled_model_by_name.return_value = configured_model
+        mock_resolve_model.return_value = override_target
+
+        resolved = ProxyService._resolve_requested_model_or_raise(MagicMock(), "gpt-5.4")
+
+        self.assertEqual(resolved, override_target)
+        mock_resolve_model.assert_called_once()
 
 
 if __name__ == "__main__":

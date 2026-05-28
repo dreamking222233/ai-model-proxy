@@ -61,6 +61,7 @@ class UnifiedModelInfo(BaseModel):
     enabled: int
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInfo"]] = None
+    video_size_capabilities: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

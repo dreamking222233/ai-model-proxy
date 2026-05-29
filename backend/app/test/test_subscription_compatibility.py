@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from app.core.exceptions import ServiceException
 from app.core.dependencies import verify_api_key_from_headers
+from app.services.auth_service import AuthService
 from app.services.channel_service import ChannelService
 from app.services.proxy_service import ProxyService
 from app.services.subscription_service import SubscriptionService
@@ -223,7 +224,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_EXPIRED")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
-    def test_expired_subscription_with_balance_above_threshold_is_allowed(
+    def test_expired_subscription_requires_balance_to_cover_estimate(
         self,
         _mock_refresh,
     ):
@@ -238,11 +239,14 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
             subscription_expires_at=datetime.utcnow() - timedelta(days=1),
         )
 
-        ProxyService._assert_text_request_allowed(
-            db,
-            user,
-            quota_precheck={"estimated_total_cost": Decimal("1.5")},
-        )
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._assert_text_request_allowed(
+                db,
+                user,
+                quota_precheck={"estimated_total_cost": Decimal("1.5")},
+            )
+
+        self.assertEqual(ctx.exception.error_code, "SUBSCRIPTION_EXPIRED")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
     def test_expired_subscription_with_balance_at_threshold_raises_subscription_expired(
@@ -277,7 +281,7 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
-    def test_balance_user_with_balance_above_threshold_allows_when_estimate_is_higher(
+    def test_balance_user_blocks_when_estimate_is_higher_than_balance(
         self,
         _mock_refresh,
     ):
@@ -288,11 +292,14 @@ class ProxySubscriptionCompatibilityTest(unittest.TestCase):
         db.query.return_value = balance_query
         user = SimpleNamespace(id=1, subscription_type="balance", subscription_expires_at=None)
 
-        ProxyService._assert_text_request_allowed(
-            db,
-            user,
-            quota_precheck={"estimated_total_cost": Decimal("1.5")},
-        )
+        with self.assertRaises(ServiceException) as ctx:
+            ProxyService._assert_text_request_allowed(
+                db,
+                user,
+                quota_precheck={"estimated_total_cost": Decimal("1.5")},
+            )
+
+        self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
 
     @patch("app.services.proxy_service.SubscriptionService.refresh_user_subscription_state", return_value=None)
     def test_balance_user_with_balance_at_threshold_raises_before_request(
@@ -1153,6 +1160,47 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         self.assertEqual(mock_apply_cycle_update.call_count, 2)
         mock_load_cycle_by_id.assert_not_called()
 
+    def test_rebuild_cycle_usage_snapshot_uses_quota_consumed_amount_for_mixed_records(self):
+        aggregate = SimpleNamespace(
+            request_count=1,
+            total_cost=Decimal("2"),
+            raw_total_tokens=Decimal("2000"),
+            total_tokens=Decimal("2000"),
+            quota_cost_used_amount=Decimal("0.2"),
+            quota_token_used_amount=Decimal("200"),
+        )
+        latest_record = SimpleNamespace(request_id="req-mixed-1")
+
+        aggregate_query = MagicMock()
+        aggregate_query.filter.return_value.first.return_value = aggregate
+        latest_query = MagicMock()
+        latest_query.filter.return_value.order_by.return_value.first.return_value = latest_record
+        db = MagicMock()
+        db.query.side_effect = [aggregate_query, latest_query]
+
+        subscription = SimpleNamespace(id=99, user_id=1, start_time=datetime.utcnow(), end_time=datetime.utcnow())
+
+        cost_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+            db,
+            subscription,
+            datetime.utcnow() - timedelta(hours=1),
+            datetime.utcnow() + timedelta(hours=1),
+            SubscriptionService.QUOTA_METRIC_COST,
+        )
+
+        self.assertEqual(cost_snapshot["used_amount"], Decimal("0.2"))
+
+        db.query.side_effect = [aggregate_query, latest_query]
+        token_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+            db,
+            subscription,
+            datetime.utcnow() - timedelta(hours=1),
+            datetime.utcnow() + timedelta(hours=1),
+            SubscriptionService.QUOTA_METRIC_TOKENS,
+        )
+
+        self.assertEqual(token_snapshot["used_amount"], Decimal("200"))
+
     @patch("app.services.proxy_service.get_system_config")
     def test_text_quota_precheck_includes_official_quota_cost_without_price_multiplier(
         self,
@@ -1181,14 +1229,14 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
     @patch("app.services.proxy_service.RequestCacheSummaryService.persist_request_cache_summary")
     @patch("app.services.proxy_service.RequestCacheSummaryService.build_request_log_fields", return_value=_build_cache_log_fields())
     @patch("app.services.proxy_service.SubscriptionService._get_or_create_cycle")
-    @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_amount_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
     def test_post_request_quota_falls_back_to_balance_when_daily_limit_is_insufficient(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
-        mock_consume_quota_after_request,
+        mock_consume_quota_amount_after_request,
         mock_get_or_create_cycle,
         _mock_build_request_log_fields,
         _mock_persist_request_cache_summary,
@@ -1217,6 +1265,14 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             quota_value=Decimal("100"),
         )
         mock_get_or_create_cycle.return_value = SimpleNamespace(used_amount=Decimal("99"))
+        mock_consume_quota_amount_after_request.return_value = {
+            "subscription_cycle_id": 7,
+            "quota_metric": "total_tokens",
+            "quota_consumed_amount": Decimal("1"),
+            "quota_limit_snapshot": Decimal("100"),
+            "quota_used_after": Decimal("100"),
+            "quota_cycle_date": datetime.utcnow().date(),
+        }
 
         ProxyService._deduct_balance_and_log(
             db=MagicMock(),
@@ -1236,24 +1292,103 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         )
 
         consumption_record = write_db.add.call_args_list[0].args[0]
-        self.assertEqual(consumption_record.billing_mode, "balance")
-        self.assertIsNone(consumption_record.subscription_id)
-        self.assertEqual(consumption_record.quota_consumed_amount, Decimal("0"))
-        self.assertEqual(balance.balance, Decimal("9.998"))
-        mock_consume_quota_after_request.assert_not_called()
+        self.assertEqual(consumption_record.billing_mode, "mixed")
+        self.assertEqual(consumption_record.subscription_id, 99)
+        self.assertEqual(consumption_record.quota_consumed_amount, Decimal("1"))
+        self.assertEqual(balance.balance, Decimal("9.9980010"))
+        mock_consume_quota_amount_after_request.assert_called_once()
+
+    @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
+    @patch("app.services.proxy_service.RequestCacheSummaryService.persist_request_cache_summary")
+    @patch("app.services.proxy_service.RequestCacheSummaryService.build_request_log_fields", return_value=_build_cache_log_fields())
+    @patch("app.services.proxy_service.SubscriptionService._load_cycle_by_id")
+    @patch("app.services.proxy_service.SubscriptionService._get_or_create_cycle")
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_amount_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
+    @patch("app.services.proxy_service.session_scope")
+    def test_post_request_quota_reloads_cycle_after_concurrent_update(
+        self,
+        mock_session_scope,
+        mock_resolve_active_subscription,
+        mock_consume_quota_amount_after_request,
+        mock_get_or_create_cycle,
+        mock_load_cycle_by_id,
+        _mock_build_request_log_fields,
+        _mock_persist_request_cache_summary,
+        _mock_get_system_config,
+    ):
+        fresh_user = SimpleNamespace(id=1, agent_id=None, subscription_type="unlimited")
+        balance = SimpleNamespace(balance=Decimal("10"), total_consumed=Decimal("0"))
+
+        sys_user_query = MagicMock()
+        sys_user_query.filter.return_value = sys_user_query
+        sys_user_query.first.return_value = fresh_user
+        balance_query = MagicMock()
+        balance_query.filter.return_value = balance_query
+        balance_query.with_for_update.return_value = balance_query
+        balance_query.first.return_value = balance
+
+        query_iter = iter([sys_user_query, balance_query])
+        write_db = MagicMock()
+        write_db.query.side_effect = lambda *_args, **_kwargs: next(query_iter)
+        mock_session_scope.return_value = nullcontext(write_db)
+
+        mock_resolve_active_subscription.return_value = SimpleNamespace(
+            id=99,
+            plan_kind_snapshot="daily_quota",
+            quota_metric="total_tokens",
+            quota_value=Decimal("100"),
+        )
+        mock_get_or_create_cycle.return_value = SimpleNamespace(id=7, used_amount=Decimal("99"))
+        mock_load_cycle_by_id.return_value = SimpleNamespace(id=7, used_amount=Decimal("99.5"))
+        mock_consume_quota_amount_after_request.side_effect = [
+            ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED"),
+            {
+                "subscription_cycle_id": 7,
+                "quota_metric": "total_tokens",
+                "quota_consumed_amount": Decimal("0.5"),
+                "quota_limit_snapshot": Decimal("100"),
+                "quota_used_after": Decimal("100"),
+                "quota_cycle_date": datetime.utcnow().date(),
+            },
+        ]
+
+        ProxyService._deduct_balance_and_log(
+            db=MagicMock(),
+            user=SimpleNamespace(id=1),
+            api_key_record=None,
+            unified_model=SimpleNamespace(model_name="gpt-4o", input_price_per_million=1, output_price_per_million=1),
+            request_id="req-quota-concurrent-1",
+            requested_model="gpt-4o",
+            input_tokens=1000,
+            output_tokens=1000,
+            channel=SimpleNamespace(id=1, name="channel-a", protocol_type="openai"),
+            client_ip="127.0.0.1",
+            response_time_ms=100,
+            is_stream=False,
+            actual_model="gpt-4o",
+            request_type="chat",
+        )
+
+        consumption_record = write_db.add.call_args_list[0].args[0]
+        self.assertEqual(consumption_record.billing_mode, "mixed")
+        self.assertEqual(consumption_record.quota_consumed_amount, Decimal("0.5"))
+        self.assertEqual(balance.balance, Decimal("9.998000500"))
+        mock_load_cycle_by_id.assert_called_once_with(write_db, 7)
+        self.assertEqual(mock_consume_quota_amount_after_request.call_count, 2)
 
     @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
     @patch("app.services.proxy_service.RequestCacheSummaryService.persist_request_cache_summary")
     @patch("app.services.proxy_service.RequestCacheSummaryService.build_request_log_fields", return_value=_build_cache_log_fields())
     @patch("app.services.proxy_service.SubscriptionService._get_or_create_cycle")
-    @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_amount_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
     def test_post_request_quota_blocks_when_daily_limit_and_balance_are_insufficient(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
-        mock_consume_quota_after_request,
+        mock_consume_quota_amount_after_request,
         mock_get_or_create_cycle,
         _mock_build_request_log_fields,
         _mock_persist_request_cache_summary,
@@ -1304,20 +1439,20 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_BALANCE")
         self.assertIn("当日套餐额度不足", ctx.exception.detail)
         self.assertEqual(balance.balance, Decimal("0.001"))
-        mock_consume_quota_after_request.assert_not_called()
+        mock_consume_quota_amount_after_request.assert_not_called()
 
     @patch("app.services.proxy_service.get_system_config")
     @patch("app.services.proxy_service.RequestCacheSummaryService.persist_request_cache_summary")
     @patch("app.services.proxy_service.RequestCacheSummaryService.build_request_log_fields")
     @patch("app.services.proxy_service.SubscriptionService._get_or_create_cycle")
-    @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_amount_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
     def test_post_request_billing_applies_fast_and_long_context_multiplier(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
-        mock_consume_quota_after_request,
+        mock_consume_quota_amount_after_request,
         mock_get_or_create_cycle,
         mock_build_request_log_fields,
         _mock_persist_request_cache_summary,
@@ -1355,7 +1490,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             quota_value=Decimal("100"),
         )
         mock_get_or_create_cycle.return_value = SimpleNamespace(used_amount=Decimal("0"))
-        mock_consume_quota_after_request.return_value = {
+        mock_consume_quota_amount_after_request.return_value = {
             "subscription_cycle_id": 7,
             "quota_metric": "cost_usd",
             "quota_consumed_amount": Decimal("12.24858"),
@@ -1397,22 +1532,22 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
         self.assertEqual(request_log.context_price_multiplier_snapshot, Decimal("2"))
         self.assertEqual(request_log.fast_price_multiplier_snapshot, Decimal("2"))
         self.assertEqual(request_log.price_multiplier_snapshot, Decimal("3"))
-        mock_consume_quota_after_request.assert_called_once()
+        mock_consume_quota_amount_after_request.assert_called_once()
         self.assertEqual(
-            mock_consume_quota_after_request.call_args.kwargs["quota_cost"],
-            12.24858,
+            mock_consume_quota_amount_after_request.call_args.kwargs["consumed_amount"],
+            Decimal("36.74574"),
         )
 
     @patch("app.services.proxy_service.get_system_config", side_effect=lambda _db, _key, default=None: default)
     @patch("app.services.proxy_service.SubscriptionService._get_or_create_cycle")
-    @patch("app.services.proxy_service.SubscriptionService.consume_quota_after_request")
+    @patch("app.services.proxy_service.SubscriptionService.consume_quota_amount_after_request")
     @patch("app.services.proxy_service.SubscriptionService.resolve_active_subscription")
     @patch("app.services.proxy_service.session_scope")
     def test_post_request_unlimited_quota_remains_subscription_billing_when_limit_can_cover_usage(
         self,
         mock_session_scope,
         mock_resolve_active_subscription,
-        mock_consume_quota_after_request,
+        mock_consume_quota_amount_after_request,
         mock_get_or_create_cycle,
         _mock_get_system_config,
     ):
@@ -1437,7 +1572,7 @@ class SubscriptionQuotaGuardTest(unittest.TestCase):
             plan_kind_snapshot="unlimited",
         )
         mock_get_or_create_cycle.return_value = SimpleNamespace(used_amount=Decimal("0"))
-        mock_consume_quota_after_request.return_value = {
+        mock_consume_quota_amount_after_request.return_value = {
             "subscription_cycle_id": 8,
             "quota_metric": "total_tokens",
             "quota_consumed_amount": Decimal("10"),
@@ -1502,6 +1637,86 @@ class VerifyApiKeySubscriptionRefreshTest(unittest.TestCase):
         mock_refresh.assert_called_once()
         db.commit.assert_called_once()
         db.refresh.assert_called_once_with(user)
+
+
+class AdminUserSubscriptionDisplayTest(unittest.TestCase):
+    def _build_user_list_db(self, user, balance=Decimal("0")):
+        main_query = MagicMock()
+        main_query.outerjoin.return_value = main_query
+        main_query.order_by.return_value = main_query
+        main_query.count.return_value = 1
+        main_query.offset.return_value = main_query
+        main_query.limit.return_value = main_query
+        main_query.all.return_value = [(user, balance)]
+
+        image_query = MagicMock()
+        image_query.filter.return_value.first.return_value = None
+
+        db = MagicMock()
+        db.query.side_effect = [main_query, image_query]
+        return db
+
+    @patch("app.services.subscription_service.SubscriptionService.get_current_subscription_summary")
+    @patch("app.services.subscription_service.SubscriptionService.refresh_user_subscription_state")
+    def test_list_users_displays_balance_when_cancelled_subscription_cache_is_stale(
+        self,
+        mock_refresh,
+        mock_summary,
+    ):
+        user = SimpleNamespace(
+            id=157,
+            username="liujixin",
+            email="liujixin@wearehackerone.com",
+            role="user",
+            status=1,
+            avatar=None,
+            agent_id=None,
+            source_domain=None,
+            last_login_at=None,
+            created_at=None,
+            subscription_type="unlimited",
+            subscription_expires_at=datetime.utcnow() + timedelta(days=2),
+        )
+        db = self._build_user_list_db(user, Decimal("100"))
+        mock_refresh.return_value = None
+        mock_summary.return_value = {"subscription_type": "balance"}
+
+        items, total = AuthService.list_users(db)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["subscription_type"], "balance")
+        self.assertIsNone(items[0]["subscription_expires_at"])
+
+    @patch("app.services.subscription_service.SubscriptionService.get_current_subscription_summary")
+    @patch("app.services.subscription_service.SubscriptionService.refresh_user_subscription_state")
+    def test_list_users_displays_quota_from_current_subscription_summary(
+        self,
+        mock_refresh,
+        mock_summary,
+    ):
+        expires_at = datetime.utcnow() + timedelta(days=5)
+        user = SimpleNamespace(
+            id=1,
+            username="quota-user",
+            email="quota@example.com",
+            role="user",
+            status=1,
+            avatar=None,
+            agent_id=None,
+            source_domain=None,
+            last_login_at=None,
+            created_at=None,
+            subscription_type="unlimited",
+            subscription_expires_at=expires_at,
+        )
+        db = self._build_user_list_db(user, Decimal("2"))
+        mock_refresh.return_value = SimpleNamespace(end_time=expires_at)
+        mock_summary.return_value = {"subscription_type": "quota"}
+
+        items, _total = AuthService.list_users(db)
+
+        self.assertEqual(items[0]["subscription_type"], "quota")
+        self.assertEqual(items[0]["subscription_expires_at"], expires_at.isoformat())
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, update
+from sqlalchemy import and_, case, func, or_, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -742,6 +742,7 @@ class SubscriptionService:
                 ConsumptionRecord.subscription_id == subscription.id,
                 or_(
                     ConsumptionRecord.billing_mode == "subscription",
+                    ConsumptionRecord.billing_mode == "mixed",
                     ConsumptionRecord.billing_mode.is_(None),
                 ),
             ),
@@ -787,6 +788,7 @@ class SubscriptionService:
                 ConsumptionRecord.subscription_id.in_(subscription_ids),
                 or_(
                     ConsumptionRecord.billing_mode == "subscription",
+                    ConsumptionRecord.billing_mode == "mixed",
                     ConsumptionRecord.billing_mode.is_(None),
                 ),
                 ConsumptionRecord.model_name.isnot(None),
@@ -1023,6 +1025,30 @@ class SubscriptionService:
                 func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).label("total_cost"),
                 func.coalesce(func.sum(ConsumptionRecord.raw_total_tokens), 0).label("raw_total_tokens"),
                 func.coalesce(func.sum(ConsumptionRecord.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(
+                    case(
+                        (
+                            func.coalesce(ConsumptionRecord.quota_consumed_amount, 0) > 0,
+                            ConsumptionRecord.quota_consumed_amount,
+                        ),
+                        else_=ConsumptionRecord.total_cost,
+                    )
+                ), 0).label("quota_cost_used_amount"),
+                func.coalesce(func.sum(
+                    case(
+                        (
+                            func.coalesce(ConsumptionRecord.quota_consumed_amount, 0) > 0,
+                            ConsumptionRecord.quota_consumed_amount,
+                        ),
+                        else_=case(
+                            (
+                                func.coalesce(ConsumptionRecord.raw_total_tokens, 0) > 0,
+                                ConsumptionRecord.raw_total_tokens,
+                            ),
+                            else_=ConsumptionRecord.total_tokens,
+                        ),
+                    )
+                ), 0).label("quota_token_used_amount"),
             )
             .filter(
                 SubscriptionService._subscription_usage_filter(subscription),
@@ -1046,13 +1072,13 @@ class SubscriptionService:
         )
 
         if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
-            used_amount = SubscriptionService._normalize_decimal(getattr(aggregate, "total_cost", 0))
-        else:
-            raw_total_tokens = SubscriptionService._normalize_decimal(
-                getattr(aggregate, "raw_total_tokens", 0)
+            used_amount = SubscriptionService._normalize_decimal(
+                getattr(aggregate, "quota_cost_used_amount", 0)
             )
-            total_tokens = SubscriptionService._normalize_decimal(getattr(aggregate, "total_tokens", 0))
-            used_amount = raw_total_tokens if raw_total_tokens > 0 else total_tokens
+        else:
+            used_amount = SubscriptionService._normalize_decimal(
+                getattr(aggregate, "quota_token_used_amount", 0)
+            )
 
         return {
             "used_amount": used_amount,
@@ -1068,6 +1094,7 @@ class SubscriptionService:
         return (
             db.query(SubscriptionUsageCycle)
             .filter(SubscriptionUsageCycle.id == cycle_id)
+            .populate_existing()
             .first()
         )
 
@@ -1229,8 +1256,29 @@ class SubscriptionService:
             total_cost=total_cost,
             quota_cost=quota_cost,
         )
+        return SubscriptionService.consume_quota_amount_after_request(
+            db,
+            subscription,
+            request_id,
+            consumed_amount,
+            now=usage_now,
+        )
 
+    @staticmethod
+    def consume_quota_amount_after_request(
+        db: Session,
+        subscription: UserSubscription,
+        request_id: str,
+        consumed_amount: Decimal,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        usage_now = now or SubscriptionService.get_current_time()
         quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
+        consumed_amount = SubscriptionService._normalize_decimal(consumed_amount)
+        if consumed_amount <= 0:
+            raise ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED")
+
         cycle: Optional[SubscriptionUsageCycle] = None
         for _attempt in range(2):
             cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now)
@@ -1255,6 +1303,8 @@ class SubscriptionService:
                     "quota_used_after": SubscriptionService._normalize_decimal(refreshed_cycle.used_amount),
                     "quota_cycle_date": refreshed_cycle.cycle_date,
                 }
+
+            db.expire(cycle, ["used_amount", "quota_limit"])
 
         raise ServiceException(500, "套餐额度记账失败，请稍后重试", "SUBSCRIPTION_QUOTA_UPDATE_FAILED")
 
@@ -1428,6 +1478,8 @@ class SubscriptionService:
         for sub in active_subs:
             sub.status = "cancelled"
 
+        user.subscription_type = "balance"
+        user.subscription_expires_at = None
         SubscriptionService.refresh_user_subscription_state(db, user_id, now)
         db.commit()
 

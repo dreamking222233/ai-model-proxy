@@ -287,10 +287,21 @@ class AuthService:
             [int(u.agent_id) for u, _balance in users if getattr(u, "agent_id", None)],
         )
         result = []
+        subscription_cache_changed = False
         for u, balance in users:
             image_bal = db.query(UserImageBalance).filter(UserImageBalance.user_id == u.id).first()
             from app.services.subscription_service import SubscriptionService
+            previous_subscription_cache = (u.subscription_type, u.subscription_expires_at)
+            active_subscription = SubscriptionService.refresh_user_subscription_state(db, u.id)
             subscription_summary = SubscriptionService.get_current_subscription_summary(db, u.id)
+            if (u.subscription_type, u.subscription_expires_at) != previous_subscription_cache:
+                subscription_cache_changed = True
+            display_subscription_type = subscription_summary.get("subscription_type") or "balance"
+            display_subscription_expires_at = (
+                active_subscription.end_time.isoformat()
+                if active_subscription and active_subscription.end_time
+                else None
+            )
             agent_meta = agent_meta_map.get(int(u.agent_id), {}) if u.agent_id else {}
             result.append({
                 "id": u.id, "username": u.username, "email": u.email,
@@ -305,10 +316,12 @@ class AuthService:
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "balance": float(balance) if balance is not None else 0,
                 "image_credit_balance": float(image_bal.balance) if image_bal else 0,
-                "subscription_type": u.subscription_type,
-                "subscription_expires_at": u.subscription_expires_at.isoformat() if u.subscription_expires_at else None,
+                "subscription_type": display_subscription_type,
+                "subscription_expires_at": display_subscription_expires_at,
                 "subscription_summary": subscription_summary,
             })
+        if subscription_cache_changed:
+            db.commit()
         return result, total
 
     @staticmethod

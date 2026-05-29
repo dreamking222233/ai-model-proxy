@@ -360,6 +360,50 @@ class SubscriptionService:
         return bool(SubscriptionService._resolve_subscription_quota_strategy(subscription)["use_official_cost"])
 
     @staticmethod
+    def _get_quota_consumed_amount(
+        subscription: UserSubscription,
+        *,
+        raw_total_tokens: int,
+        total_cost: float,
+        quota_cost: Optional[float] = None,
+    ) -> Decimal:
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            return SubscriptionService._normalize_decimal(
+                quota_cost
+                if SubscriptionService._uses_official_cost_for_quota(subscription) and quota_cost is not None
+                else total_cost
+            )
+        return SubscriptionService._normalize_decimal(raw_total_tokens)
+
+    @staticmethod
+    def _get_estimated_quota_consumption(
+        subscription: UserSubscription,
+        quota_precheck: Optional[dict],
+    ) -> Decimal:
+        if not quota_precheck:
+            return Decimal("0")
+
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
+        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
+            keys = (
+                ("estimated_quota_cost", "estimated_total_cost")
+                if SubscriptionService._uses_official_cost_for_quota(subscription)
+                else ("estimated_total_cost", "estimated_quota_cost")
+            )
+        else:
+            keys = ("estimated_total_tokens",)
+
+        for key in keys:
+            estimated_value = quota_precheck.get(key)
+            if estimated_value is None:
+                continue
+            estimated_amount = SubscriptionService._normalize_decimal(estimated_value)
+            return estimated_amount if estimated_amount > 0 else Decimal("0")
+
+        return Decimal("0")
+
+    @staticmethod
     def is_retryable_concurrency_error(exc: Exception) -> bool:
         """Return whether one DB exception is safe to retry in a fresh transaction."""
         if not isinstance(exc, OperationalError):
@@ -694,7 +738,13 @@ class SubscriptionService:
     @staticmethod
     def _subscription_usage_filter(subscription: UserSubscription):
         return or_(
-            ConsumptionRecord.subscription_id == subscription.id,
+            and_(
+                ConsumptionRecord.subscription_id == subscription.id,
+                or_(
+                    ConsumptionRecord.billing_mode == "subscription",
+                    ConsumptionRecord.billing_mode.is_(None),
+                ),
+            ),
             and_(
                 ConsumptionRecord.subscription_id.is_(None),
                 ConsumptionRecord.billing_mode.is_(None),
@@ -735,6 +785,10 @@ class SubscriptionService:
             )
             .filter(
                 ConsumptionRecord.subscription_id.in_(subscription_ids),
+                or_(
+                    ConsumptionRecord.billing_mode == "subscription",
+                    ConsumptionRecord.billing_mode.is_(None),
+                ),
                 ConsumptionRecord.model_name.isnot(None),
             )
             .group_by(ConsumptionRecord.subscription_id)
@@ -1030,10 +1084,11 @@ class SubscriptionService:
         result = db.execute(
             update(SubscriptionUsageCycle)
             .where(SubscriptionUsageCycle.id == cycle_id)
+            .where((func.coalesce(SubscriptionUsageCycle.used_amount, 0) + consumed_amount) <= quota_limit)
             .values(
                 quota_metric=quota_metric,
                 quota_limit=quota_limit,
-                used_amount=SubscriptionUsageCycle.used_amount + consumed_amount,
+                used_amount=func.coalesce(SubscriptionUsageCycle.used_amount, 0) + consumed_amount,
                 request_count=func.coalesce(SubscriptionUsageCycle.request_count, 0) + 1,
                 last_request_id=request_id,
             )
@@ -1147,6 +1202,12 @@ class SubscriptionService:
         remaining_amount = quota_limit - used_amount
         if remaining_amount <= 0:
             raise SubscriptionService._build_quota_exceeded_error(active_subscription)
+        estimated_amount = SubscriptionService._get_estimated_quota_consumption(
+            active_subscription,
+            quota_precheck,
+        )
+        if estimated_amount > 0 and remaining_amount < estimated_amount:
+            raise SubscriptionService._build_quota_exceeded_error(active_subscription, estimated=True)
 
         return {"subscription": active_subscription, "cycle": cycle}
 
@@ -1162,14 +1223,12 @@ class SubscriptionService:
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
-        if quota_metric == SubscriptionService.QUOTA_METRIC_COST:
-            consumed_amount = SubscriptionService._normalize_decimal(
-                quota_cost
-                if SubscriptionService._uses_official_cost_for_quota(subscription) and quota_cost is not None
-                else total_cost
-            )
-        else:
-            consumed_amount = SubscriptionService._normalize_decimal(raw_total_tokens)
+        consumed_amount = SubscriptionService._get_quota_consumed_amount(
+            subscription,
+            raw_total_tokens=raw_total_tokens,
+            total_cost=total_cost,
+            quota_cost=quota_cost,
+        )
 
         quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         cycle: Optional[SubscriptionUsageCycle] = None

@@ -235,12 +235,28 @@ class ProxyService:
         return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
 
     @staticmethod
+    def _can_balance_cover_amount(
+        available_balance: Decimal,
+        amount: Optional[Decimal],
+    ) -> bool:
+        requested_amount = SubscriptionService._normalize_decimal(amount)
+        if requested_amount <= 0:
+            return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
+        return available_balance >= requested_amount
+
+    @staticmethod
     def _can_fallback_to_balance_for_quota_precheck(
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
     ) -> bool:
-        return ProxyService._can_balance_cover_text_precheck(db, user_id, quota_precheck)
+        available_balance = ProxyService._balance_decimal(
+            ProxyService._get_balance_record(db, user_id)
+        )
+        estimated_cost = None
+        if quota_precheck:
+            estimated_cost = quota_precheck.get("estimated_total_cost")
+        return ProxyService._can_balance_cover_amount(available_balance, estimated_cost)
 
     @staticmethod
     def _build_quota_balance_insufficient_error() -> ServiceException:
@@ -8400,7 +8416,7 @@ class ProxyService:
                 .first()
             )
             if not fresh_user:
-                raise ServiceException(404, "User not found", "USER_NOT_FOUND")
+                raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
 
             fresh_api_key_record = None
             if api_key_id:
@@ -8497,6 +8513,12 @@ class ProxyService:
                 balance.total_consumed += Decimal(str(total_cost))
                 return balance_before_local, float(balance.balance)
 
+            def balance_can_cover_actual_charge() -> bool:
+                return ProxyService._can_balance_cover_amount(
+                    ProxyService._balance_decimal(balance),
+                    total_cost_decimal,
+                )
+
             if fresh_user.subscription_type == "balance":
                 balance_before, balance_after = apply_balance_charge()
             else:
@@ -8523,23 +8545,61 @@ class ProxyService:
                         SubscriptionService.PLAN_KIND_DAILY_QUOTA,
                         SubscriptionService.PLAN_KIND_UNLIMITED,
                     }:
-                        quota_usage = SubscriptionService.consume_quota_after_request(
-                            write_db,
+                        quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
+                        quota_limit_snapshot = SubscriptionService._get_effective_quota_limit(active_subscription)
+                        quota_consumed_amount = SubscriptionService._get_quota_consumed_amount(
                             active_subscription,
-                            request_id=request_id,
                             raw_total_tokens=raw_total_tokens,
                             total_cost=total_cost,
                             quota_cost=quota_cost,
-                            now=usage_now,
                         )
-                        subscription_cycle_id = quota_usage["subscription_cycle_id"]
-                        quota_metric = quota_usage["quota_metric"]
-                        quota_consumed_amount = quota_usage["quota_consumed_amount"]
-                        quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
-                        quota_used_after = quota_usage["quota_used_after"]
-                        quota_cycle_date = quota_usage["quota_cycle_date"]
-                        balance_before = float(balance.balance) if balance else 0.0
-                        balance_after = float(balance.balance) if balance else 0.0
+                        cycle = SubscriptionService._get_or_create_cycle(write_db, active_subscription, usage_now)
+                        quota_remaining_amount = (
+                            quota_limit_snapshot
+                            - SubscriptionService._normalize_decimal(cycle.used_amount)
+                        )
+                        if quota_consumed_amount > 0 and quota_remaining_amount < quota_consumed_amount:
+                            if not balance_can_cover_actual_charge():
+                                raise ProxyService._build_quota_balance_insufficient_error()
+                            billing_mode = "balance"
+                            subscription_id = None
+                            quota_metric = None
+                            quota_consumed_amount = Decimal("0")
+                            quota_limit_snapshot = Decimal("0")
+                            balance_before, balance_after = apply_balance_charge()
+                        else:
+                            try:
+                                quota_usage = SubscriptionService.consume_quota_after_request(
+                                    write_db,
+                                    active_subscription,
+                                    request_id=request_id,
+                                    raw_total_tokens=raw_total_tokens,
+                                    total_cost=total_cost,
+                                    quota_cost=quota_cost,
+                                    now=usage_now,
+                                )
+                            except ServiceException as exc:
+                                if (
+                                    exc.error_code == "SUBSCRIPTION_QUOTA_UPDATE_FAILED"
+                                    and balance_can_cover_actual_charge()
+                                ):
+                                    billing_mode = "balance"
+                                    subscription_id = None
+                                    quota_metric = None
+                                    quota_consumed_amount = Decimal("0")
+                                    quota_limit_snapshot = Decimal("0")
+                                    balance_before, balance_after = apply_balance_charge()
+                                else:
+                                    raise
+                            else:
+                                subscription_cycle_id = quota_usage["subscription_cycle_id"]
+                                quota_metric = quota_usage["quota_metric"]
+                                quota_consumed_amount = quota_usage["quota_consumed_amount"]
+                                quota_limit_snapshot = quota_usage["quota_limit_snapshot"]
+                                quota_used_after = quota_usage["quota_used_after"]
+                                quota_cycle_date = quota_usage["quota_cycle_date"]
+                                balance_before = float(balance.balance) if balance else 0.0
+                                balance_after = float(balance.balance) if balance else 0.0
                     else:
                         balance_before = float(balance.balance) if balance else 0.0
                         balance_after = float(balance.balance) if balance else 0.0

@@ -1525,11 +1525,19 @@ class SubscriptionService:
     def list_all_subscriptions(
         db: Session,
         status: Optional[str] = None,
+        keyword: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:
         query = db.query(UserSubscription, SysUser).join(SysUser, UserSubscription.user_id == SysUser.id)
         now = SubscriptionService.get_current_time()
+        keyword_text = str(keyword or "").strip()
+        if keyword_text:
+            like = f"%{keyword_text}%"
+            conditions = [SysUser.username.like(like), SysUser.email.like(like)]
+            if keyword_text.isdigit():
+                conditions.append(SysUser.id == int(keyword_text))
+            query = query.filter(or_(*conditions))
         if status:
             if status == "active":
                 query = query.filter(
@@ -1568,6 +1576,85 @@ class SubscriptionService:
                     current_cycle=current_cycle,
                 )
             )
+        return result, total
+
+    @staticmethod
+    def list_active_subscription_users(
+        db: Session,
+        keyword: Optional[str] = None,
+        sort_order: str = "asc",
+        expires_within_days: Optional[int] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict], int]:
+        usage_now = SubscriptionService.get_current_time()
+        active_ranked_subscriptions = (
+            db.query(
+                UserSubscription.id.label("subscription_id"),
+                func.row_number()
+                .over(
+                    partition_by=UserSubscription.user_id,
+                    order_by=[UserSubscription.end_time.desc(), UserSubscription.id.desc()],
+                )
+                .label("row_number"),
+            )
+            .filter(
+                SubscriptionService._active_status_filter(),
+                UserSubscription.start_time <= usage_now,
+                UserSubscription.end_time >= usage_now,
+            )
+            .subquery()
+        )
+        query = (
+            db.query(UserSubscription, SysUser)
+            .join(active_ranked_subscriptions, UserSubscription.id == active_ranked_subscriptions.c.subscription_id)
+            .join(SysUser, UserSubscription.user_id == SysUser.id)
+            .filter(active_ranked_subscriptions.c.row_number == 1)
+        )
+        keyword_text = str(keyword or "").strip()
+        if keyword_text:
+            like = f"%{keyword_text}%"
+            conditions = [SysUser.username.like(like), SysUser.email.like(like)]
+            if keyword_text.isdigit():
+                conditions.append(SysUser.id == int(keyword_text))
+            query = query.filter(or_(*conditions))
+
+        if expires_within_days is not None:
+            try:
+                days_limit = int(expires_within_days)
+            except (TypeError, ValueError):
+                days_limit = 0
+            if days_limit > 0:
+                query = query.filter(UserSubscription.end_time <= usage_now + timedelta(days=days_limit))
+
+        total = query.count()
+        order_column = UserSubscription.end_time.desc() if str(sort_order).lower() == "desc" else UserSubscription.end_time.asc()
+        rows = (
+            query.order_by(order_column, UserSubscription.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        subscriptions = [sub for sub, _ in rows]
+        usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
+        result = []
+        for subscription, user in rows:
+            current_cycle = None
+            if SubscriptionService._requires_daily_cycle(subscription):
+                current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
+            item = SubscriptionService._serialize_subscription(
+                subscription,
+                user=user,
+                usage_summary=usage_summary_map.get(subscription.id),
+                current_cycle=current_cycle,
+            )
+            remaining_seconds = max(
+                0,
+                int((subscription.end_time - usage_now).total_seconds()) if subscription.end_time else 0,
+            )
+            item["remaining_seconds"] = remaining_seconds
+            item["remaining_days"] = int((remaining_seconds + 86399) // 86400) if remaining_seconds > 0 else 0
+            result.append(item)
         return result, total
 
     @staticmethod

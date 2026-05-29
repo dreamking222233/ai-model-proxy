@@ -65,6 +65,14 @@ export function listAllSubscriptions(params) {
   })
 }
 
+export function listActiveSubscriptionUsers(params) {
+  return request({
+    url: '/api/admin/subscription/active-users',
+    method: 'get',
+    params
+  })
+}
+
 export function getSubscriptionUsageDetail(subscriptionId, params) {
   return request({
     url: `/api/admin/subscription/${subscriptionId}/usage`,

@@ -142,8 +142,114 @@
           </div>
         </a-tab-pane>
 
+        <a-tab-pane key="active-users" tab="套餐用户">
+          <div class="toolbar">
+            <a-input-search
+              v-model="activeUserFilters.keyword"
+              placeholder="输入用户ID、用户名或邮箱"
+              enter-button="查询"
+              allowClear
+              style="width: 280px"
+              @search="handleActiveUserSearch"
+              @change="handleActiveUserKeywordChange"
+            />
+            <a-select
+              v-model="activeUserFilters.sort_order"
+              style="width: 160px"
+              @change="handleActiveUserFilterChange"
+            >
+              <a-select-option value="asc">快到期优先</a-select-option>
+              <a-select-option value="desc">剩余最多优先</a-select-option>
+            </a-select>
+            <a-select
+              v-model="activeUserFilters.expires_within_days"
+              placeholder="到期筛选"
+              style="width: 150px"
+              allowClear
+              @change="handleActiveUserFilterChange"
+            >
+              <a-select-option :value="3">3 天内到期</a-select-option>
+              <a-select-option :value="7">7 天内到期</a-select-option>
+              <a-select-option :value="15">15 天内到期</a-select-option>
+            </a-select>
+            <a-button @click="fetchActiveUsers">
+              <a-icon type="reload" />
+              刷新
+            </a-button>
+            <a-button @click="handleResetActiveUserFilters">
+              重置
+            </a-button>
+          </div>
+
+          <a-table
+            :columns="activeUserColumns"
+            :data-source="activeUserList"
+            :loading="activeUserLoading"
+            :pagination="activeUserPagination"
+            @change="handleActiveUserTableChange"
+            row-key="id"
+          >
+            <template slot="active_user_info" slot-scope="text, record">
+              <div>
+                <div><strong>{{ record.username }}</strong></div>
+                <div class="sub-text">ID: {{ record.user_id }}</div>
+                <div class="sub-text">{{ record.email }}</div>
+              </div>
+            </template>
+
+            <template slot="active_plan_info" slot-scope="text, record">
+              <div>
+                <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
+                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
+                </a-tag>
+                <div class="sub-title">{{ record.plan_name }}</div>
+                <div class="sub-text">{{ formatPlanQuota(record) }}</div>
+              </div>
+            </template>
+
+            <template slot="active_remaining" slot-scope="text, record">
+              <div>
+                <a-tag :color="getRemainingTagColor(record.remaining_days)">
+                  {{ formatRemainingTime(record) }}
+                </a-tag>
+                <div class="sub-text">结束：{{ formatDate(record.end_time) }}</div>
+              </div>
+            </template>
+
+            <template slot="active_time_range" slot-scope="text, record">
+              <div class="sub-text">
+                <div>开始：{{ formatDate(record.start_time) }}</div>
+                <div>结束：{{ formatDate(record.end_time) }}</div>
+              </div>
+            </template>
+
+            <template slot="active_cycle" slot-scope="text, record">
+              <div v-if="record.current_cycle" class="sub-text">
+                <div>已用 {{ formatCycle(record.current_cycle.used_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
+                <div>剩余 {{ formatCycle(record.current_cycle.remaining_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
+              </div>
+              <span v-else>-</span>
+            </template>
+
+            <template slot="active_actions" slot-scope="text, record">
+              <a-button type="link" size="small" @click="openUsageModal(record)">
+                查看使用情况
+              </a-button>
+            </template>
+          </a-table>
+        </a-tab-pane>
+
         <a-tab-pane key="records" tab="套餐记录">
           <div class="toolbar">
+            <a-input-search
+              v-model="filters.keyword"
+              placeholder="输入用户ID、用户名或邮箱"
+              enter-button="查询"
+              allowClear
+              style="width: 280px"
+              @search="handleSearch"
+              @change="handleKeywordChange"
+            />
             <a-select
               v-model="filters.status"
               placeholder="状态筛选"
@@ -158,6 +264,9 @@
             <a-button @click="fetchList">
               <a-icon type="reload" />
               刷新
+            </a-button>
+            <a-button @click="handleResetFilters">
+              重置
             </a-button>
           </div>
 
@@ -390,6 +499,7 @@ import {
   cancelSubscription,
   createSubscriptionPlan,
   getSubscriptionUsageDetail,
+  listActiveSubscriptionUsers,
   listAllSubscriptions,
   listSubscriptionPlans,
   updateSubscriptionPlan
@@ -443,10 +553,18 @@ export default {
         duration_days: 30
       },
       filters: {
-        status: undefined
+        status: undefined,
+        keyword: ''
+      },
+      activeUserFilters: {
+        keyword: '',
+        sort_order: 'asc',
+        expires_within_days: undefined
       },
       list: [],
       loading: false,
+      activeUserList: [],
+      activeUserLoading: false,
       usageModalVisible: false,
       usageLoading: false,
       selectedSubscription: null,
@@ -459,6 +577,14 @@ export default {
         showSizeChanger: true,
         showQuickJumper: true,
         showTotal: total => `共 ${total} 条记录`
+      },
+      activeUserPagination: {
+        current: 1,
+        pageSize: 20,
+        total: 0,
+        showSizeChanger: true,
+        showQuickJumper: true,
+        showTotal: total => `共 ${total} 个套餐用户`
       },
       usagePagination: {
         current: 1,
@@ -486,6 +612,14 @@ export default {
         { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, customRender: text => formatDate(text) },
         { title: '操作', key: 'actions', width: 120, scopedSlots: { customRender: 'actions' } }
       ],
+      activeUserColumns: [
+        { title: '用户', key: 'active_user_info', width: 190, scopedSlots: { customRender: 'active_user_info' } },
+        { title: '套餐', key: 'active_plan_info', width: 190, scopedSlots: { customRender: 'active_plan_info' } },
+        { title: '剩余时长', key: 'active_remaining', width: 180, scopedSlots: { customRender: 'active_remaining' } },
+        { title: '有效期', key: 'active_time_range', width: 220, scopedSlots: { customRender: 'active_time_range' } },
+        { title: '当前周期', key: 'active_cycle', width: 190, scopedSlots: { customRender: 'active_cycle' } },
+        { title: '操作', key: 'active_actions', width: 130, scopedSlots: { customRender: 'active_actions' } }
+      ],
       usageColumns: [
         { title: '模型', dataIndex: 'model_name', key: 'model_name', width: 180, scopedSlots: { customRender: 'usage_model_name' } },
         { title: 'Token', key: 'token_usage', width: 220, scopedSlots: { customRender: 'usage_token' } },
@@ -510,6 +644,7 @@ export default {
       }
     }
     this.fetchPlans()
+    this.fetchActiveUsers()
     this.fetchList()
   },
   methods: {
@@ -555,6 +690,21 @@ export default {
     getStatusText(status) {
       const map = { active: '生效中', expired: '已过期', cancelled: '已取消' }
       return map[status] || status
+    },
+    formatRemainingTime(record) {
+      const seconds = Number(record && record.remaining_seconds || 0)
+      const days = Number(record && record.remaining_days || 0)
+      if (seconds <= 0) return '已到期'
+      if (days >= 1) return `剩余 ${days} 天`
+      const hours = Math.max(1, Math.ceil(seconds / 3600))
+      return `剩余 ${hours} 小时`
+    },
+    getRemainingTagColor(days) {
+      const value = Number(days || 0)
+      if (value <= 3) return 'red'
+      if (value <= 7) return 'orange'
+      if (value <= 15) return 'gold'
+      return 'green'
     },
     handleLegacyTypeChange(value) {
       const durationMap = { daily: 1, weekly: 7, monthly: 30, custom: 30 }
@@ -664,6 +814,7 @@ export default {
         await activatePlanSubscription(this.grantForm)
         this.$message.success('套餐发放成功')
         this.fetchList()
+        this.fetchActiveUsers()
       } finally {
         this.grantLoading = false
       }
@@ -689,6 +840,7 @@ export default {
         })
         this.$message.success('旧版无限套餐开通成功')
         this.fetchList()
+        this.fetchActiveUsers()
       } finally {
         this.legacyLoading = false
       }
@@ -697,11 +849,64 @@ export default {
       this.pagination.current = 1
       this.fetchList()
     },
+    handleSearch() {
+      this.pagination.current = 1
+      this.fetchList()
+    },
+    handleKeywordChange(event) {
+      if (event && event.target && !event.target.value) {
+        this.handleSearch()
+      }
+    },
+    handleResetFilters() {
+      this.filters.status = undefined
+      this.filters.keyword = ''
+      this.pagination.current = 1
+      this.fetchList()
+    },
+    handleActiveUserSearch() {
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    handleActiveUserKeywordChange(event) {
+      if (event && event.target && !event.target.value) {
+        this.handleActiveUserSearch()
+      }
+    },
+    handleActiveUserFilterChange() {
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    handleResetActiveUserFilters() {
+      this.activeUserFilters.keyword = ''
+      this.activeUserFilters.sort_order = 'asc'
+      this.activeUserFilters.expires_within_days = undefined
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    async fetchActiveUsers() {
+      this.activeUserLoading = true
+      try {
+        const res = await listActiveSubscriptionUsers({
+          keyword: this.activeUserFilters.keyword ? this.activeUserFilters.keyword.trim() : undefined,
+          sort_order: this.activeUserFilters.sort_order,
+          expires_within_days: this.activeUserFilters.expires_within_days,
+          page: this.activeUserPagination.current,
+          page_size: this.activeUserPagination.pageSize
+        })
+        const data = res.data || {}
+        this.activeUserList = data.items || data.list || []
+        this.activeUserPagination.total = data.total || 0
+      } finally {
+        this.activeUserLoading = false
+      }
+    },
     async fetchList() {
       this.loading = true
       try {
         const res = await listAllSubscriptions({
           status: this.filters.status,
+          keyword: this.filters.keyword ? this.filters.keyword.trim() : undefined,
           page: this.pagination.current,
           page_size: this.pagination.pageSize
         })
@@ -720,6 +925,7 @@ export default {
           await cancelSubscription(record.user_id)
           this.$message.success('套餐已取消')
           this.fetchList()
+          this.fetchActiveUsers()
         }
       })
     },
@@ -752,6 +958,11 @@ export default {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
       this.fetchList()
+    },
+    handleActiveUserTableChange(pagination) {
+      this.activeUserPagination.current = pagination.current
+      this.activeUserPagination.pageSize = pagination.pageSize
+      this.fetchActiveUsers()
     },
     handleUsageTableChange(pagination) {
       this.usagePagination.current = pagination.current

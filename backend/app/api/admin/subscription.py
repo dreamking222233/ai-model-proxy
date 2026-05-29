@@ -147,13 +147,36 @@ def get_user_subscriptions(
 @router.get("/list", response_model=ResponseModel)
 def list_all_subscriptions(
     status: str = Query(None, description="状态筛选: active/expired/cancelled"),
+    keyword: str = Query(None, description="按用户ID、用户名或邮箱查询"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
     """查询所有用户的套餐记录"""
-    records, total = SubscriptionService.list_all_subscriptions(db, status, page, page_size)
+    records, total = SubscriptionService.list_all_subscriptions(db, status, keyword, page, page_size)
+    return ResponseModel(data=_build_page_payload(records, total, page, page_size))
+
+
+@router.get("/active-users", response_model=ResponseModel)
+def list_active_subscription_users(
+    keyword: str = Query(None, description="按用户ID、用户名或邮箱查询"),
+    sort_order: str = Query("asc", description="剩余时长排序: asc/desc"),
+    expires_within_days: Optional[int] = Query(None, ge=1, le=3650, description="仅查询 N 天内到期"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    """查询当前拥有有效套餐的用户"""
+    records, total = SubscriptionService.list_active_subscription_users(
+        db,
+        keyword=keyword,
+        sort_order=sort_order,
+        expires_within_days=expires_within_days,
+        page=page,
+        page_size=page_size,
+    )
     return ResponseModel(data=_build_page_payload(records, total, page, page_size))
 
 

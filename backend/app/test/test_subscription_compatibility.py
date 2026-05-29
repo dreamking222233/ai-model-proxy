@@ -1,12 +1,19 @@
 import unittest
+from collections import defaultdict
 from contextlib import nullcontext
 from decimal import Decimal
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
 from app.core.exceptions import ServiceException
 from app.core.dependencies import verify_api_key_from_headers
+from app.models.log import UserSubscription
+from app.models.user import SysUser
 from app.services.auth_service import AuthService
 from app.services.channel_service import ChannelService
 from app.services.proxy_service import ProxyService
@@ -1717,6 +1724,181 @@ class AdminUserSubscriptionDisplayTest(unittest.TestCase):
 
         self.assertEqual(items[0]["subscription_type"], "quota")
         self.assertEqual(items[0]["subscription_expires_at"], expires_at.isoformat())
+
+
+class AdminSubscriptionRecordSearchTest(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
+        self.db = self.SessionLocal()
+        self._id_counters = defaultdict(int)
+        event.listen(self.db, "before_flush", self._assign_sqlite_bigint_ids)
+
+    def tearDown(self):
+        event.remove(self.db, "before_flush", self._assign_sqlite_bigint_ids)
+        self.db.close()
+        self.engine.dispose()
+
+    def _assign_sqlite_bigint_ids(self, session, _flush_context, _instances):
+        for obj in session.new:
+            if not hasattr(obj, "id") or getattr(obj, "id", None) is not None:
+                continue
+            self._id_counters[obj.__class__] += 1
+            setattr(obj, "id", self._id_counters[obj.__class__])
+
+    def _create_user_with_subscription(
+        self,
+        user_id: int,
+        username: str,
+        email: str,
+        status: str = "active",
+        start_delta_days: int = -1,
+        end_delta_days: int = 29,
+    ):
+        now = SubscriptionService.get_current_time()
+        user = self.db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            self.db.add(
+                SysUser(
+                    id=user_id,
+                    username=username,
+                    email=email,
+                    password_hash="hash",
+                    role="user",
+                    status=1,
+                )
+            )
+            self.db.flush()
+        self.db.add(
+            UserSubscription(
+                user_id=user_id,
+                plan_name="月度无限包",
+                plan_type="monthly",
+                plan_kind_snapshot="unlimited",
+                duration_days_snapshot=30,
+                quota_metric="cost_usd",
+                quota_value=Decimal("100"),
+                reset_period="day",
+                reset_timezone="Asia/Shanghai",
+                activation_mode="append",
+                start_time=now + timedelta(days=start_delta_days),
+                end_time=now + timedelta(days=end_delta_days),
+                status=status,
+                activated_at=now,
+            )
+        )
+
+    def test_list_all_subscriptions_filters_by_username(self):
+        self._create_user_with_subscription(157, "liujixin", "liujixin@example.com")
+        self._create_user_with_subscription(158, "other-user", "other@example.com")
+        self.db.commit()
+
+        items, total = SubscriptionService.list_all_subscriptions(
+            self.db,
+            keyword="liujixin",
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+        self.assertEqual(items[0]["username"], "liujixin")
+
+    def test_list_all_subscriptions_filters_by_user_id(self):
+        self._create_user_with_subscription(157, "liujixin", "liujixin@example.com")
+        self._create_user_with_subscription(158, "other-user", "other@example.com")
+        self.db.commit()
+
+        items, total = SubscriptionService.list_all_subscriptions(
+            self.db,
+            keyword="157",
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+
+    def test_list_all_subscriptions_filters_by_email(self):
+        self._create_user_with_subscription(157, "liujixin", "liujixin@example.com")
+        self._create_user_with_subscription(158, "other-user", "other@example.com")
+        self.db.commit()
+
+        items, total = SubscriptionService.list_all_subscriptions(
+            self.db,
+            keyword="liujixin@example.com",
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+
+    def test_list_all_subscriptions_combines_keyword_and_status(self):
+        self._create_user_with_subscription(157, "liujixin", "liujixin@example.com", status="cancelled")
+        self._create_user_with_subscription(158, "liujixin-other", "other@example.com", status="active")
+        self.db.commit()
+
+        items, total = SubscriptionService.list_all_subscriptions(
+            self.db,
+            status="cancelled",
+            keyword="liujixin",
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+        self.assertEqual(items[0]["status"], "cancelled")
+
+    def test_list_active_subscription_users_sorts_by_remaining_time(self):
+        self._create_user_with_subscription(157, "soon-user", "soon@example.com", end_delta_days=2)
+        self._create_user_with_subscription(158, "later-user", "later@example.com", end_delta_days=10)
+        self.db.commit()
+
+        asc_items, asc_total = SubscriptionService.list_active_subscription_users(
+            self.db,
+            sort_order="asc",
+        )
+        desc_items, desc_total = SubscriptionService.list_active_subscription_users(
+            self.db,
+            sort_order="desc",
+        )
+
+        self.assertEqual(asc_total, 2)
+        self.assertEqual(desc_total, 2)
+        self.assertEqual([item["user_id"] for item in asc_items], [157, 158])
+        self.assertEqual([item["user_id"] for item in desc_items], [158, 157])
+        self.assertLessEqual(asc_items[0]["remaining_days"], asc_items[1]["remaining_days"])
+
+    def test_list_active_subscription_users_filters_expiring_soon(self):
+        self._create_user_with_subscription(157, "soon-user", "soon@example.com", end_delta_days=2)
+        self._create_user_with_subscription(158, "later-user", "later@example.com", end_delta_days=10)
+        self.db.commit()
+
+        items, total = SubscriptionService.list_active_subscription_users(
+            self.db,
+            expires_within_days=7,
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+
+    def test_list_active_subscription_users_excludes_inactive_records(self):
+        self._create_user_with_subscription(157, "active-user", "active@example.com", end_delta_days=2)
+        self._create_user_with_subscription(158, "cancelled-user", "cancelled@example.com", status="cancelled", end_delta_days=2)
+        self._create_user_with_subscription(159, "expired-user", "expired@example.com", end_delta_days=-1)
+        self._create_user_with_subscription(160, "future-user", "future@example.com", start_delta_days=1, end_delta_days=10)
+        self.db.commit()
+
+        items, total = SubscriptionService.list_active_subscription_users(self.db)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+
+    def test_list_active_subscription_users_returns_one_current_record_per_user(self):
+        self._create_user_with_subscription(157, "overlap-user", "overlap@example.com", end_delta_days=2)
+        self._create_user_with_subscription(157, "overlap-user", "overlap@example.com", end_delta_days=10)
+        self.db.commit()
+
+        items, total = SubscriptionService.list_active_subscription_users(self.db)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["user_id"], 157)
+        self.assertGreaterEqual(items[0]["remaining_days"], 9)
 
 
 if __name__ == "__main__":

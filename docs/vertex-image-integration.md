@@ -484,29 +484,9 @@ priority: 3
 
 ---
 
-## 8. 验证脚本
+## 8. 验证
 
-当前仓库中已经有一个可运行的 Vertex 图片验证脚本：
-
-- `backend/app/test/test_vertex_api.py`
-
-该脚本当前使用：
-
-- `google-genai`
-- `vertexai=True`
-- `api_key=...`
-- `imagen-4.0-generate-001`
-
-运行方式：
-
-```bash
-/Volumes/environment/Python/anaconda3/envs/ai-invoke-service/bin/python backend/app/test/test_vertex_api.py
-```
-
-最近一次验证结果：
-
-- 成功生成图片
-- 输出文件位于 `backend/app/test/output/`
+当前仓库不再保留 `backend/app/test/` 验证脚本。Vertex 图片能力需要在具备 `google-genai`、`vertexai=True`、有效 API Key 和 Imagen 模型权限的环境中做手动验证。
 
 ---
 

@@ -285,22 +285,15 @@ services/
 
 ## 测试与质量
 
-测试文件位于 `app/test/`，共约 29 个测试文件：
+当前仓库不再保留 `app/test/` 测试目录。
 
-| 分类 | 文件 |
-|------|------|
-| 认证 | `test_auth_service.py` |
-| 渠道健康 | `test_channel_health_hardening.py`, `test_channel_health_monitor_switch.py` |
-| 代理转发 | `test_proxy_channel_failure_hardening.py`, `test_proxy_model_alias_rewrite.py` |
-| 图片计费 | `test_image_billing.py`, `test_vertex_image_channel.py`, `test_openai_image_channel.py`, `test_google_image_resolution_rules.py` |
-| 套餐 | `test_subscription_compatibility.py` |
-| 缓存 | `cache/test_single_turn_chat_cache.py`, `cache/test_multi_turn_chat_cache.py`, `cache/test_chat_cache_lifecycle.py`, `cache/test_anthropic_messages_cache.py` |
-| 流式 | `test_stream_heartbeat.py` |
-| 统计 | `test_admin_dashboard_stats.py`, `test_user_stats_ranking.py` |
-| Anthropic 桥接 | `test_anthropic_bridge_claude_code_guidance.py` |
-| 图片生成脚本 | `createImg/` |
+后端变更默认使用以下方式做基础验证：
 
-运行方式：直接 `python -m pytest app/test/` 或单文件 `python app/test/test_auth_service.py`。
+```bash
+python -m py_compile <changed-python-files>
+```
+
+涉及真实模型、支付、渠道或线上数据的问题，结合对应本地/线上环境做针对性手动验证。
 
 ---
 

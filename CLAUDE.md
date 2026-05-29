@@ -153,16 +153,9 @@ npm run build        # 生产构建
 
 ## 测试策略
 
-- 测试文件位于 `backend/app/test/`，使用 Python 标准 `unittest` 或直接脚本运行。
-- 测试分类：
-  - `test_auth_service.py` — 认证逻辑
-  - `test_channel_health_*.py` — 渠道健康监控
-  - `test_proxy_*.py` — 代理转发与故障转移
-  - `test_image_billing.py` — 图片计费
-  - `test_subscription_compatibility.py` — 套餐兼容性
-  - `cache/` — 缓存相关（单轮/多轮/生命周期/Anthropic）
-  - `createImg/` — 图片生成集成测试脚本
-- 无前端自动化测试配置（仅手动测试）。
+- 当前仓库不再保留 `backend/app/test/` 测试目录。
+- 后端变更以 `python -m py_compile` 做基础语法验证，并结合本地/线上环境做针对性手动验证。
+- 前端无自动化测试配置，使用 `npm run build` 和手动验证。
 
 ---
 

@@ -8643,13 +8643,18 @@ class ProxyService:
 
                         if quota_amount_to_consume <= 0:
                             if balance_charge_amount <= 0:
-                                raise ProxyService._build_quota_balance_insufficient_error()
-                            billing_mode = "balance"
-                            subscription_id = None
-                            quota_metric = None
-                            quota_consumed_amount = Decimal("0")
-                            quota_limit_snapshot = Decimal("0")
-                            balance_before, balance_after = apply_balance_charge(balance_charge_amount)
+                                subscription_cycle_id = cycle.id
+                                quota_used_after = SubscriptionService._normalize_decimal(cycle.used_amount)
+                                quota_cycle_date = cycle.cycle_date
+                                balance_before = float(balance.balance) if balance else 0.0
+                                balance_after = float(balance.balance) if balance else 0.0
+                            else:
+                                billing_mode = "balance"
+                                subscription_id = None
+                                quota_metric = None
+                                quota_consumed_amount = Decimal("0")
+                                quota_limit_snapshot = Decimal("0")
+                                balance_before, balance_after = apply_balance_charge(balance_charge_amount)
                         else:
                             try:
                                 quota_usage = SubscriptionService.consume_quota_amount_after_request(

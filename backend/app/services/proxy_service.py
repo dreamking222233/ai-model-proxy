@@ -252,16 +252,6 @@ class ProxyService:
         return True
 
     @staticmethod
-    def _can_balance_cover_amount(
-        available_balance: Decimal,
-        amount: Optional[Decimal],
-    ) -> bool:
-        requested_amount = SubscriptionService._normalize_decimal(amount)
-        if requested_amount <= 0:
-            return available_balance > SubscriptionService.MIN_TEXT_REQUEST_USD_THRESHOLD
-        return available_balance >= requested_amount
-
-    @staticmethod
     def _can_fallback_to_balance_for_quota_precheck(
         db: Session,
         user_id: int,

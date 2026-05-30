@@ -1107,12 +1107,17 @@ class SubscriptionService:
         request_id: str,
         quota_metric: str,
         quota_limit: Decimal,
+        allow_over_limit: bool = False,
     ) -> bool:
+        statement = update(SubscriptionUsageCycle).where(
+            SubscriptionUsageCycle.id == cycle_id
+        )
+        if not allow_over_limit:
+            statement = statement.where(
+                (func.coalesce(SubscriptionUsageCycle.used_amount, 0) + consumed_amount) <= quota_limit
+            )
         result = db.execute(
-            update(SubscriptionUsageCycle)
-            .where(SubscriptionUsageCycle.id == cycle_id)
-            .where((func.coalesce(SubscriptionUsageCycle.used_amount, 0) + consumed_amount) <= quota_limit)
-            .values(
+            statement.values(
                 quota_metric=quota_metric,
                 quota_limit=quota_limit,
                 used_amount=func.coalesce(SubscriptionUsageCycle.used_amount, 0) + consumed_amount,
@@ -1229,12 +1234,6 @@ class SubscriptionService:
         remaining_amount = quota_limit - used_amount
         if remaining_amount <= 0:
             raise SubscriptionService._build_quota_exceeded_error(active_subscription)
-        estimated_amount = SubscriptionService._get_estimated_quota_consumption(
-            active_subscription,
-            quota_precheck,
-        )
-        if estimated_amount > 0 and remaining_amount < estimated_amount:
-            raise SubscriptionService._build_quota_exceeded_error(active_subscription, estimated=True)
 
         return {"subscription": active_subscription, "cycle": cycle}
 
@@ -1271,6 +1270,7 @@ class SubscriptionService:
         request_id: str,
         consumed_amount: Decimal,
         now: Optional[datetime] = None,
+        allow_over_limit: bool = False,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
         quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
@@ -1289,6 +1289,7 @@ class SubscriptionService:
                 request_id=request_id,
                 quota_metric=quota_metric,
                 quota_limit=quota_limit,
+                allow_over_limit=allow_over_limit,
             )
             if updated:
                 db.flush()

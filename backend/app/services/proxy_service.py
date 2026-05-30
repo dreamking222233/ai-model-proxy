@@ -224,6 +224,10 @@ class ProxyService:
         return Decimal(str(balance.balance or 0))
 
     @staticmethod
+    def _has_positive_balance(balance: Optional[UserBalance]) -> bool:
+        return ProxyService._balance_decimal(balance) > 0
+
+    @staticmethod
     def _can_balance_cover_text_precheck(
         db: Session,
         user_id: int,
@@ -232,10 +236,20 @@ class ProxyService:
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
-        estimated_cost = None
-        if quota_precheck:
-            estimated_cost = quota_precheck.get("estimated_total_cost")
-        return ProxyService._can_balance_cover_amount(available_balance, estimated_cost)
+        if available_balance <= 0:
+            return False
+
+        estimated_cost = quota_precheck.get("estimated_total_cost") if quota_precheck else None
+        requested_amount = SubscriptionService._normalize_decimal(estimated_cost)
+        if requested_amount > 0 and available_balance < requested_amount:
+            logger.info(
+                "Allowing text request with positive balance despite high precheck estimate: "
+                "user_id=%s balance=%s estimated_cost=%s",
+                user_id,
+                available_balance,
+                requested_amount,
+            )
+        return True
 
     @staticmethod
     def _can_balance_cover_amount(
@@ -256,12 +270,24 @@ class ProxyService:
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
+        if available_balance <= 0:
+            return False
+
         estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
             db,
             user_id,
             quota_precheck,
         )
-        return ProxyService._can_balance_cover_amount(available_balance, estimated_balance_charge)
+        requested_amount = SubscriptionService._normalize_decimal(estimated_balance_charge)
+        if requested_amount > 0 and available_balance < requested_amount:
+            logger.info(
+                "Allowing quota balance fallback with positive balance despite high precheck estimate: "
+                "user_id=%s balance=%s estimated_balance_charge=%s",
+                user_id,
+                available_balance,
+                requested_amount,
+            )
+        return True
 
     @staticmethod
     def _calculate_balance_charge_after_quota(
@@ -8577,18 +8603,15 @@ class ProxyService:
                 balance_before_decimal = ProxyService._balance_decimal(balance)
                 if amount <= 0:
                     return float(balance_before_decimal), float(balance_before_decimal)
-                if not balance or balance_before_decimal < amount:
+                if not balance or balance_before_decimal <= 0:
                     raise ProxyService._build_balance_precheck_insufficient_error()
                 balance_before_local = float(balance_before_decimal)
                 balance.balance = balance_before_decimal - amount
                 balance.total_consumed += amount
                 return balance_before_local, float(balance.balance)
 
-            def balance_can_cover_actual_charge(amount: Decimal = total_cost_decimal) -> bool:
-                return ProxyService._can_balance_cover_amount(
-                    ProxyService._balance_decimal(balance),
-                    amount,
-                )
+            def balance_can_pay_next_charge() -> bool:
+                return ProxyService._has_positive_balance(balance)
 
             if fresh_user.subscription_type == "balance":
                 balance_before, balance_after = apply_balance_charge(total_cost_decimal)
@@ -8600,7 +8623,7 @@ class ProxyService:
                     usage_now,
                 )
                 if not active_subscription:
-                    if balance_can_cover_actual_charge(total_cost_decimal):
+                    if balance_can_pay_next_charge():
                         billing_mode = "balance"
                         balance_before, balance_after = apply_balance_charge(total_cost_decimal)
                     else:
@@ -8638,8 +8661,14 @@ class ProxyService:
                             quota_consumed_amount,
                             quota_remaining_amount,
                         )
-                        if balance_charge_amount > 0 and not balance_can_cover_actual_charge(balance_charge_amount):
-                            raise ProxyService._build_quota_balance_insufficient_error()
+                        allow_quota_over_limit = False
+                        if balance_charge_amount > 0 and not balance_can_pay_next_charge():
+                            if quota_amount_to_consume > 0:
+                                quota_amount_to_consume = quota_consumed_amount
+                                balance_charge_amount = Decimal("0")
+                                allow_quota_over_limit = True
+                            else:
+                                raise ProxyService._build_quota_balance_insufficient_error()
 
                         if quota_amount_to_consume <= 0:
                             if balance_charge_amount <= 0:
@@ -8663,6 +8692,7 @@ class ProxyService:
                                     request_id=request_id,
                                     consumed_amount=quota_amount_to_consume,
                                     now=usage_now,
+                                    allow_over_limit=allow_quota_over_limit,
                                 )
                             except ServiceException as exc:
                                 if exc.error_code == "SUBSCRIPTION_QUOTA_UPDATE_FAILED":
@@ -8687,10 +8717,14 @@ class ProxyService:
                                         quota_consumed_amount,
                                         refreshed_quota_remaining,
                                     )
-                                    if refreshed_balance_charge_amount > 0 and not balance_can_cover_actual_charge(
-                                        refreshed_balance_charge_amount
-                                    ):
-                                        raise ProxyService._build_quota_balance_insufficient_error()
+                                    refreshed_allow_quota_over_limit = False
+                                    if refreshed_balance_charge_amount > 0 and not balance_can_pay_next_charge():
+                                        if refreshed_quota_amount_to_consume > 0:
+                                            refreshed_quota_amount_to_consume = quota_consumed_amount
+                                            refreshed_balance_charge_amount = Decimal("0")
+                                            refreshed_allow_quota_over_limit = True
+                                        else:
+                                            raise ProxyService._build_quota_balance_insufficient_error()
 
                                     if refreshed_quota_amount_to_consume > 0:
                                         quota_usage = SubscriptionService.consume_quota_amount_after_request(
@@ -8699,6 +8733,7 @@ class ProxyService:
                                             request_id=request_id,
                                             consumed_amount=refreshed_quota_amount_to_consume,
                                             now=usage_now,
+                                            allow_over_limit=refreshed_allow_quota_over_limit,
                                         )
                                         subscription_cycle_id = quota_usage["subscription_cycle_id"]
                                         quota_metric = quota_usage["quota_metric"]
@@ -8714,7 +8749,7 @@ class ProxyService:
                                         else:
                                             balance_before = float(balance.balance) if balance else 0.0
                                             balance_after = float(balance.balance) if balance else 0.0
-                                    elif balance_can_cover_actual_charge(total_cost_decimal):
+                                    elif balance_can_pay_next_charge():
                                         billing_mode = "balance"
                                         subscription_id = None
                                         quota_metric = None

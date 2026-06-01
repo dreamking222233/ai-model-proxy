@@ -37,6 +37,7 @@ class ModelChannelMapping(Base):
     unified_model_id = Column(BigInteger, nullable=False)
     channel_id = Column(BigInteger, nullable=False, index=True)
     actual_model_name = Column(String(128), nullable=False, comment="Actual model name in this channel")
+    default_reasoning_effort = Column(String(16), nullable=True, comment="Default reasoning effort for mapped GPT upstreams")
     enabled = Column(SmallInteger, nullable=False, default=1)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 

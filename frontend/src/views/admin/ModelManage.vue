@@ -154,6 +154,11 @@
                 </a-tag>
               </template>
 
+              <template slot="defaultReasoningEffort" slot-scope="text">
+                <a-tag v-if="text" color="purple">{{ text }}</a-tag>
+                <span v-else class="muted-text">-</span>
+              </template>
+
               <template slot="action" slot-scope="text, record">
                 <a-popconfirm
                   title="确定要删除此映射吗？"
@@ -349,6 +354,21 @@
         <a-form-item label="实际模型名">
           <a-input v-model="mappingForm.actual_model_name" placeholder="该渠道上的模型名称" />
         </a-form-item>
+        <a-form-item label="默认推理强度">
+          <a-select
+            v-model="mappingForm.default_reasoning_effort"
+            placeholder="不设置"
+            allow-clear
+          >
+            <a-select-option
+              v-for="item in reasoningEffortOptions"
+              :key="item.value"
+              :value="item.value"
+            >
+              {{ item.label }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -494,6 +514,7 @@ export default {
         { title: '分辨率能力', dataIndex: 'supported_image_sizes', key: 'supportedImageSizes', width: 180, scopedSlots: { customRender: 'supportedImageSizes' } },
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '实际模型名', dataIndex: 'actual_model_name', key: 'actual_model_name' },
+        { title: '默认推理强度', dataIndex: 'default_reasoning_effort', key: 'default_reasoning_effort', width: 130, scopedSlots: { customRender: 'defaultReasoningEffort' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
         { title: '操作', key: 'action', width: 100, scopedSlots: { customRender: 'action' } }
       ],
@@ -501,8 +522,16 @@ export default {
       mappingModalLoading: false,
       mappingForm: {
         channel_id: undefined,
-        actual_model_name: ''
+        actual_model_name: '',
+        default_reasoning_effort: undefined
       },
+      reasoningEffortOptions: [
+        { label: 'minimal', value: 'minimal' },
+        { label: 'low', value: 'low' },
+        { label: 'medium', value: 'medium' },
+        { label: 'high', value: 'high' },
+        { label: 'xhigh', value: 'xhigh' }
+      ],
       channelOptions: [],
 
       // Override Rules
@@ -862,7 +891,8 @@ export default {
       }
       this.mappingForm = {
         channel_id: undefined,
-        actual_model_name: ''
+        actual_model_name: '',
+        default_reasoning_effort: undefined
       }
       this.mappingModalVisible = true
     },
@@ -881,7 +911,8 @@ export default {
         await createMapping({
           unified_model_id: this.selectedModel.id,
           channel_id: this.mappingForm.channel_id,
-          actual_model_name: this.mappingForm.actual_model_name
+          actual_model_name: this.mappingForm.actual_model_name,
+          default_reasoning_effort: this.mappingForm.default_reasoning_effort || null
         })
         this.$message.success('映射创建成功')
         this.mappingModalVisible = false

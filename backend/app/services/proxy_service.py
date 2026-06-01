@@ -36,7 +36,7 @@ from app.config import settings
 from app.database import release_session_connection, session_scope
 from app.models.user import SysUser, UserApiKey
 from app.models.channel import Channel
-from app.models.model import UnifiedModel
+from app.models.model import UnifiedModel, ModelChannelMapping
 from app.models.log import (
     RequestLog,
     UserBalance,
@@ -115,6 +115,7 @@ class ProxyService:
     }
     _RESPONSES_IMAGE_TOOL_TYPES = {"image_generation", "image_generation_call"}
     _RESPONSES_FAST_SERVICE_TIER = "priority"
+    _RESPONSES_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
     _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
     _LONG_CONTEXT_TOKEN_THRESHOLD = 262144
@@ -962,6 +963,7 @@ class ProxyService:
             "stream": bool(request_data.get("stream", False)),
             "message_count": len(messages),
             "max_tokens": request_data.get("max_tokens"),
+            "reasoning": ProxyService._compact_for_debug_log(request_data.get("reasoning")),
             "tools_count": len(tools),
             "tool_names": tool_names,
             "tool_choice": ProxyService._compact_for_debug_log(request_data.get("tool_choice")),
@@ -2293,10 +2295,149 @@ class ProxyService:
         return responses_tools, None
 
     @staticmethod
+    def _normalize_responses_reasoning_effort(value: Any) -> Optional[str]:
+        """Normalize a Responses reasoning effort value."""
+        normalized = str(value or "").strip().lower()
+        if normalized in ProxyService._RESPONSES_REASONING_EFFORTS:
+            return normalized
+        return None
+
+    @staticmethod
+    def _has_explicit_responses_reasoning_effort(request_data: dict) -> bool:
+        raw_reasoning = request_data.get("reasoning")
+        if not isinstance(raw_reasoning, dict):
+            return False
+        return bool(ProxyService._normalize_responses_reasoning_effort(raw_reasoning.get("effort")))
+
+    @staticmethod
+    def _apply_responses_mapping_default_reasoning_effort(
+        request_data: dict,
+        *,
+        upstream_model_name: str,
+        default_reasoning_effort: Optional[str],
+    ) -> None:
+        """Apply mapping-level default effort without overriding a client value."""
+        if not ProxyService._is_responses_reasoning_model(upstream_model_name):
+            return
+        if ProxyService._has_explicit_responses_reasoning_effort(request_data):
+            return
+
+        reasoning_effort = ProxyService._normalize_responses_reasoning_effort(
+            default_reasoning_effort
+        )
+        if not reasoning_effort:
+            return
+
+        raw_reasoning = request_data.get("reasoning")
+        request_data["reasoning"] = dict(raw_reasoning) if isinstance(raw_reasoning, dict) else {}
+        request_data["reasoning"]["effort"] = reasoning_effort
+
+    @staticmethod
+    def _map_anthropic_thinking_budget_to_responses_effort(value: Any) -> Optional[str]:
+        """Map Anthropic extended-thinking budget hints to Responses effort levels."""
+        try:
+            budget_tokens = int(value)
+        except (TypeError, ValueError):
+            return None
+
+        if budget_tokens <= 0:
+            return None
+        if budget_tokens >= 8192:
+            return "high"
+        if budget_tokens >= 4096:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _resolve_anthropic_bridge_reasoning_effort(
+        request_data: dict,
+        *,
+        default_reasoning_effort: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> Optional[str]:
+        """Resolve Responses reasoning effort for Anthropic requests bridged to GPT."""
+        raw_reasoning = request_data.get("reasoning")
+        if isinstance(raw_reasoning, dict):
+            effort = ProxyService._normalize_responses_reasoning_effort(
+                raw_reasoning.get("effort")
+            )
+            if effort:
+                return effort
+
+        raw_thinking = request_data.get("thinking")
+        if isinstance(raw_thinking, dict):
+            effort = ProxyService._normalize_responses_reasoning_effort(
+                raw_thinking.get("effort")
+            )
+            if effort:
+                return effort
+
+            thinking_type = str(raw_thinking.get("type") or "").strip().lower()
+            if thinking_type in {"enabled", "auto"}:
+                mapped_effort = ProxyService._map_anthropic_thinking_budget_to_responses_effort(
+                    raw_thinking.get("budget_tokens")
+                )
+                if mapped_effort:
+                    return mapped_effort
+
+        default_effort = ProxyService._normalize_responses_reasoning_effort(
+            default_reasoning_effort
+        )
+        if default_effort:
+            return default_effort
+
+        normalized_headers = {
+            str(key).lower(): value
+            for key, value in (request_headers or {}).items()
+            if isinstance(value, str)
+        }
+        anthropic_beta = normalized_headers.get("anthropic-beta", "")
+        if "effort-" in anthropic_beta.lower():
+            return "high"
+
+        return None
+
+    @staticmethod
+    def _is_responses_reasoning_model(model_name: Any) -> bool:
+        """Return whether an upstream model should accept Responses-style reasoning effort."""
+        normalized = str(model_name or "").strip().lower()
+        if not normalized:
+            return False
+        return (
+            "gpt" in normalized
+            or "codex" in normalized
+            or normalized.startswith(("o1", "o3", "o4"))
+        )
+
+    @staticmethod
+    def _apply_anthropic_passthrough_reasoning_effort(
+        request_data: dict,
+        *,
+        upstream_model_name: str,
+        default_reasoning_effort: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> None:
+        """Attach reasoning effort when Anthropic messages are mapped to a GPT upstream model."""
+        if not ProxyService._is_responses_reasoning_model(upstream_model_name):
+            return
+        if ProxyService._has_explicit_responses_reasoning_effort(request_data):
+            return
+
+        reasoning_effort = ProxyService._resolve_anthropic_bridge_reasoning_effort(
+            request_data,
+            default_reasoning_effort=default_reasoning_effort,
+            request_headers=request_headers,
+        )
+        if reasoning_effort:
+            request_data["reasoning"] = {"effort": reasoning_effort}
+
+    @staticmethod
     def _convert_anthropic_request_to_responses(
         request_data: dict,
         *,
         requested_model: str,
+        default_reasoning_effort: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> dict:
         """Convert an Anthropic Messages request into an OpenAI Responses request."""
         request_copy = copy.deepcopy(request_data)
@@ -2309,6 +2450,14 @@ class ProxyService:
         max_tokens = request_copy.get("max_tokens")
         if max_tokens is not None:
             responses_request["max_output_tokens"] = max_tokens
+
+        reasoning_effort = ProxyService._resolve_anthropic_bridge_reasoning_effort(
+            request_copy,
+            default_reasoning_effort=default_reasoning_effort,
+            request_headers=request_headers,
+        )
+        if reasoning_effort:
+            responses_request["reasoning"] = {"effort": reasoning_effort}
 
         input_items: list[dict] = []
 
@@ -3353,6 +3502,16 @@ class ProxyService:
                 )
                 channel_request = copy.deepcopy(client_request)
                 channel_request["model"] = upstream_model_name
+                default_reasoning_effort = ProxyService._get_mapping_default_reasoning_effort(
+                    db,
+                    unified_model.id,
+                    channel.id,
+                )
+                ProxyService._apply_responses_mapping_default_reasoning_effort(
+                    channel_request,
+                    upstream_model_name=upstream_model_name,
+                    default_reasoning_effort=default_reasoning_effort,
+                )
                 channel_request = ProxyService._prepare_responses_request_body(
                     upstream_model_name,
                     channel_request,
@@ -3546,6 +3705,16 @@ class ProxyService:
                     default_openai_api="responses",
                 )
                 channel_request["model"] = upstream_model_name
+                default_reasoning_effort = ProxyService._get_mapping_default_reasoning_effort(
+                    db,
+                    unified_model.id,
+                    channel.id,
+                )
+                ProxyService._apply_responses_mapping_default_reasoning_effort(
+                    channel_request,
+                    upstream_model_name=upstream_model_name,
+                    default_reasoning_effort=default_reasoning_effort,
+                )
                 channel_request = ProxyService._prepare_responses_request_body(
                     upstream_model_name,
                     channel_request,
@@ -3788,6 +3957,33 @@ class ProxyService:
                 continue
             filtered.append((channel, actual_model_name))
         return filtered
+
+    @staticmethod
+    def _get_mapping_default_reasoning_effort(
+        db: Session,
+        unified_model_id: int,
+        channel_id: int,
+    ) -> Optional[str]:
+        """Read the mapping-level default reasoning effort for a channel candidate."""
+        try:
+            value = (
+                db.query(ModelChannelMapping.default_reasoning_effort)
+                .filter(
+                    ModelChannelMapping.unified_model_id == unified_model_id,
+                    ModelChannelMapping.channel_id == channel_id,
+                    ModelChannelMapping.enabled == 1,
+                )
+                .scalar()
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to load mapping default reasoning effort. unified_model_id=%s channel_id=%s error=%s",
+                unified_model_id,
+                channel_id,
+                exc,
+            )
+            return None
+        return ProxyService._normalize_responses_reasoning_effort(value)
 
     @staticmethod
     def _is_responses_image_tool_payload(value: Any) -> bool:
@@ -5117,6 +5313,11 @@ class ProxyService:
                 channel,
                 actual_model_name,
             )
+            default_reasoning_effort = ProxyService._get_mapping_default_reasoning_effort(
+                db,
+                unified_model.id,
+                channel.id,
+            )
             explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, upstream_model_name)
             legacy_compat_retry = (
                 not explicit_compat
@@ -5132,6 +5333,13 @@ class ProxyService:
                 try:
                     request_data_copy = dict(request_data)
                     request_data_copy["model"] = upstream_model_name
+                    if upstream_api in {"anthropic_messages", "responses"}:
+                        ProxyService._apply_anthropic_passthrough_reasoning_effort(
+                            request_data_copy,
+                            upstream_model_name=upstream_model_name,
+                            default_reasoning_effort=default_reasoning_effort,
+                            request_headers=request_headers,
+                        )
                     if upstream_api == "anthropic_messages" and not compat_mode:
                         ProxyService._guard_legacy_claude_tool_context(
                             channel,
@@ -5163,6 +5371,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
                         try:
@@ -5170,6 +5379,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 force_compat=compat_mode,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
@@ -5186,6 +5396,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
                     else:
@@ -5194,6 +5405,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
                         try:
@@ -5201,6 +5413,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 force_compat=compat_mode,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
@@ -5217,6 +5430,7 @@ class ProxyService:
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
+                                default_reasoning_effort=default_reasoning_effort,
                                 conversation_shadow_info=conversation_shadow_info,
                             )
                 except ServiceException as exc:
@@ -6203,6 +6417,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        default_reasoning_effort: Optional[str] = None,
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         """Stream an Anthropic client request through an OpenAI Responses upstream."""
@@ -6211,11 +6426,21 @@ class ProxyService:
         responses_request = ProxyService._convert_anthropic_request_to_responses(
             request_data,
             requested_model=requested_model,
+            default_reasoning_effort=default_reasoning_effort,
+            request_headers=request_headers,
         )
         responses_request["stream"] = True
         responses_request = ProxyService._prepare_responses_request_body(
             str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
             responses_request,
+        )
+        ProxyService._log_responses_request_json(
+            "anthropic_bridge_prepared",
+            request_id,
+            responses_request,
+            requested_model=requested_model,
+            channel=channel,
+            client_ip=client_ip,
         )
         upstream_event_sequence: list[str] = []
         upstream_event_counts: dict[str, int] = {}
@@ -7064,6 +7289,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        default_reasoning_effort: Optional[str] = None,
         force_compat: bool = False,
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
@@ -7085,6 +7311,7 @@ class ProxyService:
          requested_model,
          client_ip,
          request_headers=request_headers,
+         default_reasoning_effort=default_reasoning_effort,
          conversation_shadow_info=conversation_shadow_info,
          )
 
@@ -7118,6 +7345,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        default_reasoning_effort: Optional[str] = None,
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> JSONResponse:
         """Send an Anthropic request through an OpenAI Responses upstream."""
@@ -7129,11 +7357,21 @@ class ProxyService:
         responses_request = ProxyService._convert_anthropic_request_to_responses(
             request_data,
             requested_model=requested_model,
+            default_reasoning_effort=default_reasoning_effort,
+            request_headers=request_headers,
         )
         responses_request["stream"] = False
         responses_request = ProxyService._prepare_responses_request_body(
             str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
             responses_request,
+        )
+        ProxyService._log_responses_request_json(
+            "anthropic_bridge_prepared",
+            request_id,
+            responses_request,
+            requested_model=requested_model,
+            channel=channel,
+            client_ip=client_ip,
         )
 
         async def upstream_call():
@@ -7651,6 +7889,7 @@ class ProxyService:
         requested_model: str,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        default_reasoning_effort: Optional[str] = None,
         force_compat: bool = False,
         conversation_shadow_info: Optional[dict[str, Any]] = None,
     ) -> JSONResponse:

@@ -247,6 +247,7 @@ CREATE TABLE `model_channel_mapping` (
     `unified_model_id` BIGINT UNSIGNED NOT NULL,
     `channel_id` BIGINT UNSIGNED NOT NULL,
     `actual_model_name` VARCHAR(128) NOT NULL COMMENT '该渠道中的实际模型名称',
+    `default_reasoning_effort` VARCHAR(16) DEFAULT NULL COMMENT '默认推理强度: minimal/low/medium/high/xhigh',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),

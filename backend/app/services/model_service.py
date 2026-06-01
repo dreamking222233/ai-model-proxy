@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 class ModelService:
     """CRUD operations for models, mappings, override rules, and model resolution."""
 
+    REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
+
     GOOGLE_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "gemini-2.5-flash-image": ("1K",),
         "gemini-3.1-flash-image-preview": ("512", "1K", "2K", "4K"),
@@ -46,6 +48,20 @@ class ModelService:
         if value is None:
             return default
         return float(value)
+
+    @staticmethod
+    def _normalize_reasoning_effort(value: object) -> Optional[str]:
+        """Normalize admin-configured Responses reasoning effort values."""
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in ModelService.REASONING_EFFORT_VALUES:
+            raise ServiceException(
+                400,
+                "默认推理强度只能是 minimal、low、medium、high、xhigh",
+                "INVALID_REASONING_EFFORT",
+            )
+        return normalized
 
     @staticmethod
     def normalize_google_image_size(value: object) -> Optional[str]:
@@ -290,6 +306,7 @@ class ModelService:
             "unified_model_id": mapping.unified_model_id,
             "channel_id": mapping.channel_id,
             "actual_model_name": mapping.actual_model_name,
+            "default_reasoning_effort": mapping.default_reasoning_effort,
             "enabled": mapping.enabled,
             "channel_name": channel.name if channel else None,
             "channel_protocol_type": protocol_type,
@@ -307,6 +324,7 @@ class ModelService:
             "unified_model_id": m.unified_model_id,
             "channel_id": m.channel_id,
             "actual_model_name": m.actual_model_name,
+            "default_reasoning_effort": m.default_reasoning_effort,
             "enabled": m.enabled,
             "created_at": m.created_at.isoformat() if m.created_at else None,
         }
@@ -539,10 +557,15 @@ class ModelService:
         if existing:
             raise ServiceException(400, "当前模型与渠道的映射已存在", "DUPLICATE_MAPPING")
 
+        default_reasoning_effort = ModelService._normalize_reasoning_effort(
+            d.get("default_reasoning_effort")
+        )
+
         mapping = ModelChannelMapping(
             unified_model_id=d["unified_model_id"],
             channel_id=d["channel_id"],
             actual_model_name=d["actual_model_name"],
+            default_reasoning_effort=default_reasoning_effort,
             enabled=d.get("enabled", 1),
         )
         db.add(mapping)
@@ -556,6 +579,11 @@ class ModelService:
         mapping = db.query(ModelChannelMapping).filter(ModelChannelMapping.id == mapping_id).first()
         if not mapping:
             raise ServiceException(404, "模型渠道映射不存在", "MAPPING_NOT_FOUND")
+
+        if "default_reasoning_effort" in data:
+            mapping.default_reasoning_effort = ModelService._normalize_reasoning_effort(
+                data.get("default_reasoning_effort")
+            )
 
         for field in ("actual_model_name", "enabled"):
             value = data.get(field)

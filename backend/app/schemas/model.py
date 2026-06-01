@@ -96,6 +96,7 @@ class ModelChannelMappingCreate(BaseModel):
     unified_model_id: int
     channel_id: int
     actual_model_name: str = Field(..., min_length=1, max_length=128)
+    default_reasoning_effort: Optional[str] = Field(None, max_length=16)
     enabled: int = Field(default=1, ge=0, le=1)
 
 
@@ -106,6 +107,7 @@ class ModelChannelMappingInfo(BaseModel):
     unified_model_id: int
     channel_id: int
     actual_model_name: str
+    default_reasoning_effort: Optional[str] = None
     enabled: int
     channel_name: Optional[str] = None
     created_at: Optional[datetime] = None

@@ -430,6 +430,36 @@ class ProxyService:
                 request_data["instructions"] = prompt
 
     @staticmethod
+    def _normalize_anthropic_system_messages(request_data: dict) -> None:
+        """Move system/developer message roles into Anthropic's top-level system field."""
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            return
+
+        system_blocks: list[dict] = []
+        normalized_messages: list[Any] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                normalized_messages.append(message)
+                continue
+
+            role = str(message.get("role", "") or "").strip().lower()
+            if role in {"system", "developer"}:
+                system_blocks.extend(
+                    ProxyService._build_anthropic_text_blocks(message.get("content"))
+                )
+                continue
+            normalized_messages.append(message)
+
+        if not system_blocks:
+            return
+
+        existing = request_data.get("system")
+        existing_blocks = ProxyService._build_anthropic_text_blocks(existing)
+        request_data["system"] = existing_blocks + system_blocks
+        request_data["messages"] = normalized_messages
+
+    @staticmethod
     def _public_actual_model_name(
         requested_model: Optional[str],
         actual_model: Optional[str],
@@ -5250,6 +5280,8 @@ class ProxyService:
         request_id = str(uuid.uuid4())
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+
+        ProxyService._normalize_anthropic_system_messages(request_data)
 
         # Inject model identity system prompt
         ProxyService._inject_model_identity(request_data, requested_model, "anthropic")

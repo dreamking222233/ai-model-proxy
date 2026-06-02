@@ -300,13 +300,19 @@
         </template>
 
         <template slot="status" slot-scope="text, record">
-          <div style="cursor: pointer;" @click="handleStatusClick(record)">
+          <div style="cursor: pointer;" @click.stop="handleStatusClick(record)">
             <a-badge v-if="text === 'success'" status="success" text="成功" />
             <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
             <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
             <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
             <a-badge v-else status="default" :text="String(text || '-')" />
           </div>
+        </template>
+
+        <template slot="detailAction" slot-scope="text, record">
+          <a-button type="link" size="small" @click.stop="handleStatusClick(record)">
+            查看详情
+          </a-button>
         </template>
 
         <template slot="responseTime" slot-scope="text">
@@ -586,6 +592,7 @@ export default {
         { title: '请求模型', dataIndex: 'model', key: 'model', width: 140, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
         { title: '用量', key: 'tokens', width: 300, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
+        { title: '详情', key: 'detailAction', width: 100, align: 'center', scopedSlots: { customRender: 'detailAction' } },
         { title: '响应时间', dataIndex: 'response_time_ms', key: 'responseTime', width: 110, align: 'right', scopedSlots: { customRender: 'responseTime' } },
         { title: '计费', dataIndex: 'total_cost', key: 'total_cost', width: 180, align: 'right', scopedSlots: { customRender: 'total_cost' } },
         { title: 'IP地址', dataIndex: 'client_ip', key: 'client_ip', width: 130, scopedSlots: { customRender: 'client_ip' } },
@@ -886,7 +893,7 @@ export default {
       })
     },
     getModalContainer() {
-      return this.$el || document.body
+      return document.body
     },
     customRow(record) {
       return {

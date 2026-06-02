@@ -719,7 +719,7 @@ export default {
       })
     },
     getModalContainer() {
-      return this.$el || document.body
+      return document.body
     }
   }
 }

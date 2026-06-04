@@ -973,7 +973,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('circuit_breaker_recovery', '600', 'number', '熔断恢复时间(秒)'),
 ('health_check_test_message', '你好', 'string', '健康检查测试消息'),
 ('request_timeout', '30', 'number', '请求超时时间(秒)'),
-('max_retry_count', '3', 'number', '最大重试次数'),
+('max_retry_count', '3', 'number', '上游失败重试次数'),
 ('api_base_url', 'https://your-domain.com', 'string', 'API基础地址，用于快速开始页面展示给用户的接入地址'),
 ('request_body_cache_enabled', 'false', 'boolean', '是否启用请求体分段缓存分析'),
 ('request_body_cache_user_visible', 'false', 'boolean', '用户端是否显示缓存读取/创建信息'),

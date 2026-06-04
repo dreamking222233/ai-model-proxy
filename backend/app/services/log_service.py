@@ -535,6 +535,16 @@ class LogService:
         if agent_id is not None:
             query = query.filter(RequestLog.agent_id == agent_id)
 
+        cost_query = db.query(ConsumptionRecord).filter(
+            ConsumptionRecord.created_at >= since,
+            ConsumptionRecord.created_at <= until,
+            ConsumptionRecord.total_cost > 0,
+            ConsumptionRecord.request_id.isnot(None),
+            ConsumptionRecord.model_name.isnot(None),
+        )
+        if agent_id is not None:
+            cost_query = cost_query.filter(ConsumptionRecord.agent_id == agent_id)
+
         if bucket_mode == "two_hour":
             success_expr = LogService._visible_success_condition()
             bucket_expr = func.concat(
@@ -542,6 +552,24 @@ class LogService:
                 func.lpad(func.floor(func.hour(RequestLog.created_at) / 2) * 2, 2, "0"),
                 ":00",
             )
+            cost_bucket_expr = func.concat(
+                func.date_format(ConsumptionRecord.created_at, "%Y-%m-%d "),
+                func.lpad(func.floor(func.hour(ConsumptionRecord.created_at) / 2) * 2, 2, "0"),
+                ":00",
+            )
+            cost_rows = (
+                cost_query.with_entities(
+                    cost_bucket_expr.label("bucket_key"),
+                    func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).label("total_cost"),
+                )
+                .group_by(cost_bucket_expr)
+                .order_by(cost_bucket_expr.asc())
+                .all()
+            )
+            cost_by_bucket = {
+                str(row.bucket_key): float(row.total_cost or 0)
+                for row in cost_rows
+            }
             rows = (
                 query.with_entities(
                     bucket_expr.label("bucket_key"),
@@ -568,6 +596,7 @@ class LogService:
                     "total_input_tokens": int(row.total_input_tokens or 0),
                     "total_output_tokens": int(row.total_output_tokens or 0),
                     "total_tokens": int(row.total_tokens or 0),
+                    "total_cost": cost_by_bucket.get(str(row.bucket_key), 0.0),
                 }
                 for row in rows
             }
@@ -586,11 +615,25 @@ class LogService:
                         "total_input_tokens": 0,
                         "total_output_tokens": 0,
                         "total_tokens": 0,
+                        "total_cost": 0.0,
                     },
                 )
                 for offset in range(12)
             ]
 
+        cost_rows = (
+            cost_query.with_entities(
+                func.date(ConsumptionRecord.created_at).label("date"),
+                func.coalesce(func.sum(ConsumptionRecord.total_cost), 0).label("total_cost"),
+            )
+            .group_by(func.date(ConsumptionRecord.created_at))
+            .order_by(func.date(ConsumptionRecord.created_at).asc())
+            .all()
+        )
+        cost_by_date = {
+            str(row.date): float(row.total_cost or 0)
+            for row in cost_rows
+        }
         rows = (
             query.with_entities(
                 func.date(RequestLog.created_at).label("date"),
@@ -617,6 +660,7 @@ class LogService:
                 "total_input_tokens": int(row.total_input_tokens or 0),
                 "total_output_tokens": int(row.total_output_tokens or 0),
                 "total_tokens": int(row.total_tokens or 0),
+                "total_cost": cost_by_date.get(str(row.date), 0.0),
             }
             for row in rows
         }
@@ -636,6 +680,7 @@ class LogService:
                     "total_input_tokens": 0,
                     "total_output_tokens": 0,
                     "total_tokens": 0,
+                    "total_cost": 0.0,
                 },
             )
             for offset in range(total_days)

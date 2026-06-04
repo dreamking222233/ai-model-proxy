@@ -607,6 +607,24 @@ export default {
       const imageCount = Number(record.image_count)
       return Number.isFinite(imageCount) && imageCount > 0 ? imageCount : 1
     },
+    getImageSizeText(record) {
+      if (!this.isImageRequest(record)) return ''
+      return String(record && record.image_size || '').trim()
+    },
+    getRequestTypeText(record) {
+      const map = {
+        image_generation: '图片请求',
+        responses: 'Responses',
+        chat: '文本请求'
+      }
+      return map[String(record && record.request_type || 'chat')] || String(record && record.request_type || 'chat')
+    },
+    formatQuotaAmount(value, metric) {
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}`
+      }
+      return `${this.formatNumber(value)} Token`
+    },
     getTokenPercent(part, total) {
       if (!total || !part) return '0%'
       return Math.round((part / total) * 100) + '%'

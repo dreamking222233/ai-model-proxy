@@ -20,7 +20,7 @@ import re
 import time
 import uuid
 from urllib.parse import urlparse
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Callable, Optional
 
 from datetime import datetime, timedelta
@@ -69,7 +69,13 @@ _UPSTREAM_CONNECT_TIMEOUT = 15.0
 _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 _UPSTREAM_RETRY_MAX_RETRIES = 3
 _UPSTREAM_RETRY_ATTEMPTS = _UPSTREAM_RETRY_MAX_RETRIES + 1
+_UPSTREAM_RETRY_MAX_CONFIGURED_RETRIES = 10
 _UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_UPSTREAM_FAILURE_VISIBLE_MESSAGE = "调用失败，渠道异常，请稍后重试"
+_UPSTREAM_REQUEST_VISIBLE_MESSAGE = "请求参数不符合上游渠道要求，请检查后重试"
+_CONTEXT_TOO_LONG_VISIBLE_MESSAGE = "请求超出最大上下文,请压缩对话"
+_CONTEXT_TOO_LONG_HINT_THRESHOLD = 250000
+_MODEL_256K_CONTEXT_LIMIT = 256000
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
 _TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
@@ -1845,6 +1851,41 @@ class ProxyService:
         )
 
     @staticmethod
+    def _resolve_upstream_retry_attempts(db: Optional[Session] = None) -> int:
+        """Return initial attempt + configured retry count for upstream calls."""
+        configured_retries = _UPSTREAM_RETRY_MAX_RETRIES
+        if db is not None:
+            try:
+                configured_value = get_system_config(db, "max_retry_count", _UPSTREAM_RETRY_MAX_RETRIES)
+                configured_retries = (
+                    _UPSTREAM_RETRY_MAX_RETRIES
+                    if configured_value is None or configured_value == ""
+                    else int(configured_value)
+                )
+            except Exception as exc:
+                logger.warning("Failed to read max_retry_count, using default: %s", exc)
+                configured_retries = _UPSTREAM_RETRY_MAX_RETRIES
+        configured_retries = max(0, min(configured_retries, _UPSTREAM_RETRY_MAX_CONFIGURED_RETRIES))
+        return configured_retries + 1
+
+    @staticmethod
+    def _apply_runtime_retry_config(db: Optional[Session], channel: Channel) -> None:
+        try:
+            setattr(channel, "_runtime_upstream_retry_attempts", ProxyService._resolve_upstream_retry_attempts(db))
+        except Exception as exc:
+            logger.warning("Failed to attach upstream retry config to channel: %s", exc)
+
+    @staticmethod
+    def _resolve_runtime_retry_attempts(channel: Channel, max_attempts: Optional[int]) -> int:
+        if max_attempts is not None:
+            return max(1, int(max_attempts))
+        configured_attempts = getattr(channel, "_runtime_upstream_retry_attempts", None)
+        try:
+            return max(1, int(configured_attempts or _UPSTREAM_RETRY_ATTEMPTS))
+        except (TypeError, ValueError):
+            return _UPSTREAM_RETRY_ATTEMPTS
+
+    @staticmethod
     async def _post_with_retries(
         url: str,
         payload: dict[str, Any],
@@ -1854,9 +1895,10 @@ class ProxyService:
         channel: Channel,
         timeout: httpx.Timeout,
         log_label: str,
-        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+        max_attempts: Optional[int] = None,
     ) -> httpx.Response:
         """POST once or retry transient upstream failures on the same channel."""
+        max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, max_attempts)
         attempt = 0
         last_exception: Optional[Exception] = None
 
@@ -1925,9 +1967,10 @@ class ProxyService:
         channel: Channel,
         timeout: httpx.Timeout,
         log_label: str,
-        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+        max_attempts: Optional[int] = None,
     ) -> httpx.Response:
         """POST multipart data and retry transient upstream failures."""
+        max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, max_attempts)
         attempt = 0
         last_exception: Optional[Exception] = None
 
@@ -1996,10 +2039,11 @@ class ProxyService:
         channel: Channel,
         timeout: httpx.Timeout,
         log_label: str,
-        max_attempts: int = _UPSTREAM_RETRY_ATTEMPTS,
+        max_attempts: Optional[int] = None,
         retry_boundary: Optional[Callable[[str], bool]] = None,
     ):
         """Yield upstream stream lines, retrying only before the first client-visible line."""
+        max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, max_attempts)
         attempt = 0
         last_exception: Optional[Exception] = None
 
@@ -3303,9 +3347,13 @@ class ProxyService:
 
     @staticmethod
     def _localize_user_visible_error_text(value: Any) -> str:
-        text = str(value or "").strip()
+        raw_text = str(value or "").strip()
+        text = raw_text
         if not text:
             return text
+
+        if ProxyService._looks_like_raw_upstream_error(raw_text):
+            return _UPSTREAM_FAILURE_VISIBLE_MESSAGE
 
         replacements = {
             "No available channel for this model": "当前模型暂无可用渠道，请稍后重试",
@@ -3353,13 +3401,198 @@ class ProxyService:
         return text
 
     @staticmethod
+    def _looks_like_raw_upstream_error(value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+
+        http_status = ProxyService._extract_upstream_http_status(text)
+        has_structured_error = ProxyService._contains_structured_error_payload(text)
+        has_upstream_marker = bool(
+            re.search(
+                r"\b(upstream|provider|providers|channel|distributor|gateway|proxy)\b|上游|渠道",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        has_failure_marker = bool(
+            re.search(
+                r"\b(error|exception|failed|failure|unavailable|rate\s*limit|timeout|auth[_ -]?unavailable|forbidden)\b"
+                r"|异常|失败|不可用|限流|超时|鉴权|认证",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        has_upstream_metadata = bool(
+            re.search(
+                r"\bproviders?\s*=|\brequest[_ -]?id\b|\btrace[_ -]?id\b|\bgroup\b|\bdistributor\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        if has_structured_error:
+            return True
+        if "all channels failed:" in lowered:
+            return True
+        if http_status is not None and (has_upstream_marker or has_failure_marker or has_upstream_metadata):
+            return True
+        if has_upstream_metadata and (has_upstream_marker or has_failure_marker):
+            return True
+        return False
+
+    @staticmethod
+    def _contains_structured_error_payload(value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        decoder = json.JSONDecoder()
+        index = 0
+        inspected = 0
+        while index < len(text) and inspected < 5:
+            brace_index = text.find("{", index)
+            if brace_index < 0:
+                return False
+            try:
+                payload, consumed = decoder.raw_decode(text[brace_index:])
+            except json.JSONDecodeError:
+                index = brace_index + 1
+                continue
+            inspected += 1
+            if ProxyService._json_payload_has_error_shape(payload):
+                return True
+            index = brace_index + max(consumed, 1)
+        return False
+
+    @staticmethod
+    def _json_payload_has_error_shape(payload: Any, depth: int = 0) -> bool:
+        if depth > 4:
+            return False
+        if isinstance(payload, dict):
+            keys = {str(key).lower() for key in payload.keys()}
+            if "error" in keys:
+                return True
+            message_keys = {"message", "error_message", "detail"}
+            signal_keys = {"code", "type", "status", "status_code", "error_code"}
+            if keys & message_keys and keys & signal_keys:
+                return True
+            return any(
+                ProxyService._json_payload_has_error_shape(item, depth + 1)
+                for item in payload.values()
+            )
+        if isinstance(payload, list):
+            return any(
+                ProxyService._json_payload_has_error_shape(item, depth + 1)
+                for item in payload[:5]
+            )
+        return False
+
+    @staticmethod
+    def _extract_upstream_http_status(value: Any) -> Optional[int]:
+        text = str(value or "")
+        match = re.search(r"\bHTTP\s*[:：]?\s*(\d{3})\b", text, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(r"[（(]\s*HTTP\s*(\d{3})\s*[)）]", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _attach_upstream_detail(exc: ServiceException, upstream_detail: Any) -> ServiceException:
+        try:
+            setattr(exc, "_upstream_detail", str(upstream_detail or ""))
+        except Exception:
+            pass
+        return exc
+
+    @staticmethod
+    def _request_error_log_detail(exc: ServiceException) -> str:
+        upstream_detail = getattr(exc, "_upstream_detail", None)
+        if upstream_detail:
+            return str(upstream_detail)
+        return str(exc.detail or "")
+
+    @staticmethod
+    def _failure_error_log_detail(
+        error: Optional[Exception],
+        requested_model: Optional[str] = None,
+        actual_model: Optional[str] = None,
+    ) -> str:
+        if not error:
+            return "Unknown error"
+        upstream_detail = getattr(error, "_upstream_detail", None)
+        if upstream_detail:
+            return str(upstream_detail)
+        detail = str(error or "")
+        if ProxyService._looks_like_raw_upstream_error(detail):
+            return detail or "Unknown error"
+        if requested_model:
+            return ProxyService._sanitize_visible_model_text(detail, requested_model, actual_model)
+        return detail or "Unknown error"
+
+    @staticmethod
+    def _build_user_visible_upstream_request_error(
+        error_code: str = "UPSTREAM_INVALID_REQUEST",
+        *,
+        upstream_detail: Any = None,
+        status_code: int = 400,
+    ) -> ServiceException:
+        if error_code == "CONTENT_TOO_LONG":
+            message = _CONTEXT_TOO_LONG_VISIBLE_MESSAGE
+        elif int(status_code or 400) >= 500 or int(status_code or 0) in {403, 408, 409, 425, 429}:
+            message = _UPSTREAM_FAILURE_VISIBLE_MESSAGE
+            status_code = 503
+        else:
+            message = _UPSTREAM_REQUEST_VISIBLE_MESSAGE
+        return ProxyService._attach_upstream_detail(
+            ServiceException(int(status_code or 400), message, error_code),
+            upstream_detail,
+        )
+
+    @staticmethod
+    def _sanitize_upstream_service_exception_for_user(exc: ServiceException) -> ServiceException:
+        upstream_status = ProxyService._extract_upstream_http_status(exc.detail)
+        upstream_detail = getattr(exc, "_upstream_detail", None) or exc.detail
+        if exc.error_code == "CONTENT_TOO_LONG":
+            message = _CONTEXT_TOO_LONG_VISIBLE_MESSAGE
+        elif (
+            exc.status_code >= 500
+            or exc.status_code in {403, 408, 409, 425, 429}
+            or (upstream_status is not None and (upstream_status >= 500 or upstream_status in {403, 408, 409, 425, 429}))
+        ):
+            message = _UPSTREAM_FAILURE_VISIBLE_MESSAGE
+        else:
+            message = _UPSTREAM_REQUEST_VISIBLE_MESSAGE
+        return ProxyService._attach_upstream_detail(
+            ServiceException(503 if message == _UPSTREAM_FAILURE_VISIBLE_MESSAGE else exc.status_code, message, exc.error_code),
+            upstream_detail,
+        )
+
+    @staticmethod
+    def _build_all_channels_failed_exception() -> ServiceException:
+        return ServiceException(503, _UPSTREAM_FAILURE_VISIBLE_MESSAGE, "ALL_CHANNELS_FAILED")
+
+    @staticmethod
+    def _stream_error_log_detail(
+        stream_error: Exception,
+        mapped_request_error: Optional[ServiceException] = None,
+    ) -> str:
+        if mapped_request_error:
+            return ProxyService._request_error_log_detail(mapped_request_error)
+        return str(stream_error or "")
+
+    @staticmethod
     def _sanitize_user_visible_service_exception(
         exc: ServiceException,
         requested_model: str,
         actual_model: Optional[str] = None,
     ) -> ServiceException:
         """Return a new user-visible exception with mapped model names redacted."""
-        return ServiceException(
+        sanitized = ServiceException(
             exc.status_code,
             ProxyService._sanitize_visible_model_text(
                 exc.detail,
@@ -3368,6 +3601,10 @@ class ProxyService:
             ),
             exc.error_code,
         )
+        upstream_detail = getattr(exc, "_upstream_detail", None)
+        if upstream_detail:
+            ProxyService._attach_upstream_detail(sanitized, upstream_detail)
+        return sanitized
 
     @staticmethod
     def _extract_upstream_error_message(error_detail: str) -> str:
@@ -3412,12 +3649,24 @@ class ProxyService:
 
         error_detail = str(exc or "").strip()
         lowered = error_detail.lower()
+        upstream_status = ProxyService._extract_upstream_http_status(error_detail)
         if not any(
             marker in lowered
             for marker in (
+                "upstream returned http",
+                "上游服务返回异常",
                 "http 400",
+                "http 403",
+                "http 408",
+                "http 409",
                 "http 413",
                 "http 422",
+                "http 425",
+                "http 429",
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
                 "improperly formed request",
                 "invalid beta flag",
                 "invalid signature in thinking block",
@@ -3431,13 +3680,19 @@ class ProxyService:
         ):
             return None
 
-        upstream_message = ProxyService._extract_upstream_error_message(error_detail)
-
         if "invalid beta flag" in lowered:
-            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+            return ProxyService._build_user_visible_upstream_request_error(
+                "UPSTREAM_INVALID_REQUEST",
+                upstream_detail=error_detail,
+                status_code=upstream_status or 400,
+            )
 
         if "invalid signature in thinking block" in lowered:
-            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+            return ProxyService._build_user_visible_upstream_request_error(
+                "UPSTREAM_INVALID_REQUEST",
+                upstream_detail=error_detail,
+                status_code=upstream_status or 400,
+            )
 
         if any(
             marker in lowered
@@ -3450,15 +3705,35 @@ class ProxyService:
                 "too many tokens",
             )
         ):
-            return ServiceException(400, upstream_message, "CONTENT_TOO_LONG")
+            return ProxyService._build_user_visible_upstream_request_error(
+                "CONTENT_TOO_LONG",
+                upstream_detail=error_detail,
+                status_code=400,
+            )
 
         if "improperly formed request" in lowered:
-            return ServiceException(400, upstream_message, "UPSTREAM_INVALID_REQUEST")
+            return ProxyService._build_user_visible_upstream_request_error(
+                "UPSTREAM_INVALID_REQUEST",
+                upstream_detail=error_detail,
+                status_code=upstream_status or 400,
+            )
 
-        return ServiceException(
-            400,
-            upstream_message,
+        if upstream_status is not None and (
+            upstream_status >= 500 or upstream_status in {403, 408, 409, 425, 429}
+        ):
+            return None
+
+        if upstream_status is not None:
+            return ProxyService._build_user_visible_upstream_request_error(
+                "UPSTREAM_INVALID_REQUEST",
+                upstream_detail=error_detail,
+                status_code=upstream_status,
+            )
+
+        return ProxyService._build_user_visible_upstream_request_error(
             "UPSTREAM_INVALID_REQUEST",
+            upstream_detail=error_detail,
+            status_code=upstream_status or 400,
         )
 
     # -------------------------------------------------------------------
@@ -3524,6 +3799,7 @@ class ProxyService:
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
                     channel,
@@ -3568,7 +3844,7 @@ class ProxyService:
                 )
             except ServiceException as exc:
                 if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
-                    request_error = exc
+                    request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                     logger.info(
                         "Responses channel %s (%d) rejected request without counting channel failure: %s",
                         channel.name, channel.id, exc.detail,
@@ -3602,16 +3878,12 @@ class ProxyService:
                 continue
 
         if request_error:
-            error_detail = request_error.detail
+            error_detail = ProxyService._request_error_log_detail(request_error)
         else:
-            error_detail = (
-                ProxyService._sanitize_visible_model_text(
-                    str(last_error),
-                    requested_model,
-                    last_error_model,
-                )
-                if last_error
-                else "Unknown error"
+            error_detail = ProxyService._failure_error_log_detail(
+                last_error,
+                requested_model,
+                last_error_model,
             )
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
@@ -3621,7 +3893,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()
 
     @staticmethod
     async def handle_responses_websocket(
@@ -3728,6 +4000,7 @@ class ProxyService:
             last_error: Exception | None = None
             last_cache_info: Optional[dict[str, Any]] = None
             for channel, actual_model_name in channels:
+                ProxyService._apply_runtime_retry_config(db, channel)
                 channel_request = copy.deepcopy(normalized_request)
                 upstream_model_name, _ = ProxyService._resolve_mapped_upstream_target(
                     channel,
@@ -3813,7 +4086,9 @@ class ProxyService:
                     if not exc.can_retry:
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
-                            client_ip, True, str(exc), channel=channel,
+                            client_ip, True,
+                            ProxyService._failure_error_log_detail(exc),
+                            channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=cache_info,
                             billing_context=billing_context,
@@ -3840,7 +4115,7 @@ class ProxyService:
             if turn_completed:
                 continue
 
-            error_detail = str(last_error) if last_error else "Unknown error"
+            error_detail = ProxyService._failure_error_log_detail(last_error)
             ProxyService._log_failed_request(
                 db, user, api_key_record, request_id, requested_model,
                 client_ip, True, error_detail,
@@ -3849,7 +4124,7 @@ class ProxyService:
             )
             await websocket.send_text(json.dumps(
                 ProxyService._build_responses_error_payload(
-                    f"All channels failed: {error_detail}",
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
                     status_code=503,
                 ),
                 ensure_ascii=False,
@@ -3876,6 +4151,7 @@ class ProxyService:
             )
         if request_data:
             ProxyService._remove_responses_image_generation_tool(request_data)
+            ProxyService._validate_request_length(db, request_data, unified_model, protocol="responses")
 
         quota_precheck = None
         if request_data:
@@ -4419,6 +4695,7 @@ class ProxyService:
                             payload.get("error", {}).get("message")
                             or "Upstream responses error"
                         )
+                        continue
                     elif payload_type == "response.output_text.delta":
                         # 收集文本内容
                         delta = payload.get("delta", "")
@@ -4433,24 +4710,12 @@ class ProxyService:
                     yield "data: [DONE]\n\n"
                 else:
                     if saw_error:
-                        stream_error = Exception(error_message or "Upstream responses error")
+                        raise Exception(error_message or "Upstream responses error")
                     else:
-                        stream_error = Exception("stream closed before response.completed")
-                        yield ProxyService._payload_to_sse(
-                            ProxyService._build_responses_error_payload(
-                                str(stream_error),
-                                status_code=408,
-                            )
-                        )
+                        raise Exception("stream closed before response.completed")
             except Exception as exc:
                 stream_error = exc
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
-                yield ProxyService._payload_to_sse(
-                    ProxyService._build_responses_error_payload(
-                        str(exc),
-                        status_code=502,
-                    )
-                )
                 raise
 
             billing_callback(input_tokens, output_tokens, False)
@@ -4512,23 +4777,14 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
-                        sanitized_error_detail = (
-                            ProxyService._sanitize_user_visible_service_exception(
-                                mapped_request_error,
-                                requested_model,
-                                request_data.get("model"),
-                            ).detail
-                            if mapped_request_error
-                            else ProxyService._sanitize_visible_model_text(
-                                str(stream_error),
-                                requested_model,
-                                request_data.get("model"),
-                            )
+                        error_log_detail = ProxyService._stream_error_log_detail(
+                            stream_error,
+                            mapped_request_error,
                         )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            sanitized_error_detail,
+                            error_log_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -4589,10 +4845,18 @@ class ProxyService:
                 requested_model,
                 request_headers=request_headers,
             ):
+                payload_type = str(payload.get("type", "") or "")
+                if payload_type == "error":
+                    saw_error = True
+                    error_message = (
+                        payload.get("error", {}).get("message")
+                        or "Upstream responses error"
+                    )
+                    continue
+
                 sent_any_payload = True
                 if first_chunk_time is None:
                     first_chunk_time = time.time()
-                payload_type = str(payload.get("type", "") or "")
                 if payload_type == "response.completed":
                     completed = True
                     completed_output = ProxyService._extract_responses_output(payload)
@@ -4603,21 +4867,22 @@ class ProxyService:
                     )
                     input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
                     output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
-                elif payload_type == "error":
-                    saw_error = True
-                    error_message = (
-                        payload.get("error", {}).get("message")
-                        or "Upstream responses error"
-                    )
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             if sent_any_payload:
+                raw_error_detail = str(exc)
+                visible_error_message = ProxyService._sanitize_visible_model_text(
+                    raw_error_detail,
+                    requested_model,
+                    request_data.get("model"),
+                )
                 error_payload = ProxyService._build_responses_error_payload(
-                    str(exc),
+                    visible_error_message,
                     status_code=502,
                 )
                 await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
-                error = ResponsesTurnError(str(exc), can_retry=False)
+                error = ResponsesTurnError(visible_error_message, can_retry=False)
+                setattr(error, "_upstream_detail", raw_error_detail)
                 error.first_chunk_time = first_chunk_time
                 raise error from exc
             error = ResponsesTurnError(str(exc), can_retry=True)
@@ -4628,7 +4893,22 @@ class ProxyService:
             return completed_output, input_tokens, output_tokens, first_chunk_time, usage_summary
 
         if saw_error:
-            error = ResponsesTurnError(error_message or "Upstream responses error", can_retry=not sent_any_payload)
+            raw_error_detail = error_message or "Upstream responses error"
+            if sent_any_payload:
+                visible_error_message = ProxyService._sanitize_visible_model_text(
+                    raw_error_detail,
+                    requested_model,
+                    request_data.get("model"),
+                )
+                error_payload = ProxyService._build_responses_error_payload(
+                    visible_error_message,
+                    status_code=502,
+                )
+                await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
+                error = ResponsesTurnError(visible_error_message, can_retry=False)
+                setattr(error, "_upstream_detail", raw_error_detail)
+            else:
+                error = ResponsesTurnError(raw_error_detail, can_retry=True)
             error.first_chunk_time = first_chunk_time
             raise error
 
@@ -5078,7 +5358,7 @@ class ProxyService:
                 ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
                 # 2. Validate request content length
-                ProxyService._validate_request_length(db, request_data)
+                ProxyService._validate_request_length(db, request_data, unified_model, protocol="openai")
 
                 # 3. Get available channels sorted by priority
                 channels = ProxyService._prioritize_channels_for_request(
@@ -5121,6 +5401,7 @@ class ProxyService:
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
                 channel,
                 actual_model_name,
@@ -5189,7 +5470,7 @@ class ProxyService:
                             )
                             continue
 
-                        channel_request_error = exc
+                        channel_request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                         logger.info(
                             "Channel %s (%d) rejected request without counting channel failure: %s",
                             channel.name, channel.id, exc.detail,
@@ -5238,16 +5519,12 @@ class ProxyService:
 
         # All channels exhausted
         if request_error:
-            error_detail = request_error.detail
+            error_detail = ProxyService._request_error_log_detail(request_error)
         else:
-            error_detail = (
-                ProxyService._sanitize_visible_model_text(
-                    str(last_error),
-                    requested_model,
-                    last_error_model,
-                )
-                if last_error
-                else "Unknown error"
+            error_detail = ProxyService._failure_error_log_detail(
+                last_error,
+                requested_model,
+                last_error_model,
             )
         # Log the failure
         ProxyService._log_failed_request(
@@ -5257,7 +5534,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()
 
     # -------------------------------------------------------------------
     # Anthropic protocol entry point
@@ -5311,7 +5588,7 @@ class ProxyService:
             ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
             # 2. Validate request content length
-            ProxyService._validate_request_length(db, request_data)
+            ProxyService._validate_request_length(db, request_data, unified_model, protocol="anthropic")
 
             # 3. Get available channels
             channels = ProxyService._prioritize_channels_for_request(
@@ -5341,6 +5618,7 @@ class ProxyService:
         request_error: ServiceException | None = None
         request_cache_info: Optional[dict[str, Any]] = None
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
                 channel,
                 actual_model_name,
@@ -5485,7 +5763,7 @@ class ProxyService:
                             )
                             continue
 
-                        channel_request_error = exc
+                        channel_request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                         logger.info(
                             "Anthropic channel %s (%d) rejected request without counting channel failure: %s",
                             channel.name, channel.id, exc.detail,
@@ -5533,16 +5811,12 @@ class ProxyService:
                 continue
 
         if request_error:
-            error_detail = request_error.detail
+            error_detail = ProxyService._request_error_log_detail(request_error)
         else:
-            error_detail = (
-                ProxyService._sanitize_visible_model_text(
-                    str(last_error),
-                    requested_model,
-                    last_error_model,
-                )
-                if last_error
-                else "Unknown error"
+            error_detail = ProxyService._failure_error_log_detail(
+                last_error,
+                requested_model,
+                last_error_model,
             )
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model,
@@ -5554,7 +5828,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()
 
     # ===================================================================
     # OpenAI streaming
@@ -5759,23 +6033,14 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
-                        sanitized_error_detail = (
-                            ProxyService._sanitize_user_visible_service_exception(
-                                mapped_request_error,
-                                requested_model,
-                                request_data.get("model"),
-                            ).detail
-                            if mapped_request_error
-                            else ProxyService._sanitize_visible_model_text(
-                                str(stream_error),
-                                requested_model,
-                                request_data.get("model"),
-                            )
+                        error_log_detail = ProxyService._stream_error_log_detail(
+                            stream_error,
+                            mapped_request_error,
                         )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            sanitized_error_detail,
+                            error_log_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -6260,23 +6525,14 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
-                        sanitized_error_detail = (
-                            ProxyService._sanitize_user_visible_service_exception(
-                                mapped_request_error,
-                                requested_model,
-                                request_data.get("model"),
-                            ).detail
-                            if mapped_request_error
-                            else ProxyService._sanitize_visible_model_text(
-                                str(stream_error),
-                                requested_model,
-                                request_data.get("model"),
-                            )
+                        error_log_detail = ProxyService._stream_error_log_detail(
+                            stream_error,
+                            mapped_request_error,
                         )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            sanitized_error_detail,
+                            error_log_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -7232,23 +7488,14 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
-                        sanitized_error_detail = (
-                            ProxyService._sanitize_user_visible_service_exception(
-                                mapped_request_error,
-                                requested_model,
-                                request_data.get("model"),
-                            ).detail
-                            if mapped_request_error
-                            else ProxyService._sanitize_visible_model_text(
-                                str(stream_error),
-                                requested_model,
-                                request_data.get("model"),
-                            )
+                        error_log_detail = ProxyService._stream_error_log_detail(
+                            stream_error,
+                            mapped_request_error,
                         )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            sanitized_error_detail,
+                            error_log_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -7606,12 +7853,76 @@ class ProxyService:
                         current_headers = dict(headers)
                         current_headers.update(variant.get("header_overrides") or {})
 
-                        async with client.stream(
-                            "POST",
-                            url,
-                            json=variant["request_data"],
-                            headers=current_headers,
-                        ) as response:
+                        @asynccontextmanager
+                        async def open_anthropic_stream_with_retries():
+                            max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, None)
+                            attempt = 0
+                            last_exception: Optional[Exception] = None
+
+                            while attempt < max_attempts:
+                                attempt += 1
+                                yielded_response = False
+                                try:
+                                    async with client.stream(
+                                        "POST",
+                                        url,
+                                        json=variant["request_data"],
+                                        headers=current_headers,
+                                    ) as response:
+                                        if (
+                                            response.status_code != 200
+                                            and attempt < max_attempts
+                                            and ProxyService._should_retry_upstream_status(response.status_code)
+                                        ):
+                                            body = await response.aread()
+                                            retry_delay = 0.6 * attempt
+                                            logger.warning(
+                                                "Anthropic stream retrying upstream request_id=%s channel=%s "
+                                                "channel_id=%s attempt=%s/%s status=%s delay=%.1fs body=%s",
+                                                request_id,
+                                                channel.name,
+                                                channel.id,
+                                                attempt,
+                                                max_attempts,
+                                                response.status_code,
+                                                retry_delay,
+                                                body.decode("utf-8", errors="replace")[:300],
+                                            )
+                                            await asyncio.sleep(retry_delay)
+                                            continue
+
+                                        yielded_response = True
+                                        yield response
+                                        return
+                                except Exception as exc:
+                                    last_exception = exc
+                                    if yielded_response:
+                                        raise
+                                    if (
+                                        attempt < max_attempts
+                                        and ProxyService._should_retry_upstream_exception(exc)
+                                    ):
+                                        retry_delay = 0.6 * attempt
+                                        logger.warning(
+                                            "Anthropic stream retrying upstream request_id=%s channel=%s "
+                                            "channel_id=%s attempt=%s/%s error=%s delay=%.1fs",
+                                            request_id,
+                                            channel.name,
+                                            channel.id,
+                                            attempt,
+                                            max_attempts,
+                                            exc,
+                                            retry_delay,
+                                        )
+                                        await asyncio.sleep(retry_delay)
+                                        continue
+                                    raise
+
+                            if last_exception:
+                                raise last_exception
+                            raise RuntimeError("Anthropic stream retry loop exited unexpectedly")
+
+                        async with open_anthropic_stream_with_retries() as response:
                             if response.status_code != 200:
                                 body = await response.aread()
                                 body_text = body.decode("utf-8", errors="replace")[:500]
@@ -7849,23 +8160,14 @@ class ProxyService:
                         if not mapped_request_error:
                             ProxyService._record_channel_failure(db, channel, stream_error)
                         error_cache_info = merged_cache_info or ProxyService._extract_cache_info_from_error(stream_error)
-                        sanitized_error_detail = (
-                            ProxyService._sanitize_user_visible_service_exception(
-                                mapped_request_error,
-                                requested_model,
-                                request_data.get("model"),
-                            ).detail
-                            if mapped_request_error
-                            else ProxyService._sanitize_visible_model_text(
-                                str(stream_error),
-                                requested_model,
-                                request_data.get("model"),
-                            )
+                        error_log_detail = ProxyService._stream_error_log_detail(
+                            stream_error,
+                            mapped_request_error,
                         )
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
                             client_ip, True,
-                            sanitized_error_detail,
+                            error_log_detail,
                             channel=channel,
                             response_time_ms=response_time_ms,
                             cache_info=error_cache_info,
@@ -9237,7 +9539,7 @@ class ProxyService:
                         total_tokens=0,
                         response_time_ms=response_time_ms,
                         status="error",
-                        error_message=error_message[:2000] if error_message else None,
+                        error_message=error_message if error_message else None,
                         client_ip=client_ip,
                     )
                 )
@@ -9431,7 +9733,7 @@ class ProxyService:
                         service_tier=service_tier,
                         fast_price_multiplier_snapshot=fast_price_multiplier,
                         status="error",
-                        error_message=error_message[:2000] if error_message else None,
+                        error_message=error_message if error_message else None,
                         client_ip=client_ip,
                     )
                 )
@@ -9862,10 +10164,11 @@ class ProxyService:
         )
         if not 200 <= response.status_code < 300:
             body_text = response.text[:1000]
-            raise ServiceException(
-                400 if 400 <= response.status_code < 500 else 503,
-                f"Grok 视频任务创建失败（HTTP {response.status_code}）：{body_text}",
+            upstream_detail = f"Grok 视频任务创建失败（HTTP {response.status_code}）：{body_text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
                 "OPENAI_VIDEO_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
             )
 
         response_body = response.json()
@@ -10004,6 +10307,7 @@ class ProxyService:
             "INVALID_VIDEO_PRESET",
         }
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
                 if protocol_type != "openai":
@@ -10029,7 +10333,7 @@ class ProxyService:
                     request_error = exc
                     break
                 if exc.error_code in upstream_request_error_codes and exc.status_code < 500:
-                    request_error = exc
+                    request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                     logger.info(
                         "Video channel %s (%d) rejected request without counting channel failure: %s",
                         channel.name,
@@ -10051,7 +10355,11 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
-        error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
+        error_detail = (
+            ProxyService._request_error_log_detail(request_error)
+            if request_error
+            else ProxyService._failure_error_log_detail(last_error)
+        )
         ProxyService._log_failed_request(
             db,
             user,
@@ -10069,7 +10377,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用视频渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()
 
     @staticmethod
     async def handle_video_chat_completions_request(
@@ -10120,7 +10428,9 @@ class ProxyService:
         }
 
         last_error: Exception | None = None
+        request_error: ServiceException | None = None
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 if str(getattr(channel, "protocol_type", "") or "").lower() != "openai":
                     continue
@@ -10175,6 +10485,15 @@ class ProxyService:
                     "IMAGE_CREDIT_BALANCE_NOT_FOUND",
                 }:
                     raise
+                if exc.error_code == "OPENAI_VIDEO_GENERATION_FAILED" and exc.status_code < 500:
+                    request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
+                    logger.info(
+                        "Video chat channel %s (%d) rejected request without counting channel failure: %s",
+                        channel.name,
+                        channel.id,
+                        exc.detail,
+                    )
+                    continue
                 last_error = exc
                 ProxyService._record_channel_failure(db, channel, exc)
                 continue
@@ -10184,7 +10503,11 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
-        error_detail = str(last_error) if last_error else "Unknown error"
+        error_detail = (
+            ProxyService._request_error_log_detail(request_error)
+            if request_error
+            else ProxyService._failure_error_log_detail(last_error)
+        )
         ProxyService._log_failed_request(
             db,
             user,
@@ -10200,7 +10523,9 @@ class ProxyService:
             image_count=0,
             image_size=normalized_size,
         )
-        raise ServiceException(503, f"所有可用视频渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        if request_error:
+            raise request_error
+        raise ProxyService._build_all_channels_failed_exception()
 
     @staticmethod
     async def _non_stream_openai_video_chat_request(
@@ -10238,10 +10563,11 @@ class ProxyService:
             log_label="OpenAI video chat",
         )
         if not 200 <= response.status_code < 300:
-            raise ServiceException(
-                400 if 400 <= response.status_code < 500 else 503,
-                f"Grok 视频文生任务失败（HTTP {response.status_code}）：{response.text[:1000]}",
+            upstream_detail = f"Grok 视频文生任务失败（HTTP {response.status_code}）：{response.text[:1000]}"
+            raise ProxyService._build_user_visible_upstream_request_error(
                 "OPENAI_VIDEO_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
             )
         response_body = response.json()
         if not isinstance(response_body, dict):
@@ -10502,10 +10828,22 @@ class ProxyService:
                 request_headers=request_headers,
             )
             if response.status_code != 200:
-                raise ServiceException(
-                    400 if 400 <= response.status_code < 500 else 503,
-                    f"Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}",
-                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                upstream_detail = f"Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+                logger.warning(
+                    "Video retrieve upstream error channel=%s channel_id=%s video_id=%s status=%s body=%s",
+                    getattr(channel, "name", None),
+                    getattr(channel, "id", None),
+                    video_id,
+                    response.status_code,
+                    response.text[:1000],
+                )
+                raise ProxyService._attach_upstream_detail(
+                    ServiceException(
+                        503,
+                        _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                        "OPENAI_VIDEO_RETRIEVE_FAILED",
+                    ),
+                    upstream_detail,
                 )
 
             try:
@@ -10533,10 +10871,14 @@ class ProxyService:
                     or status_data.get("message")
                     or status_data
                 )
-                raise ServiceException(
-                    502,
+                logger.warning("Video generation failed video_id=%s detail=%s", video_id, error_message)
+                raise ProxyService._attach_upstream_detail(
+                    ServiceException(
+                        502,
+                        _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                        "VIDEO_GENERATION_FAILED",
+                    ),
                     f"Grok 视频生成失败：{error_message}",
-                    "VIDEO_GENERATION_FAILED",
                 )
             if time.time() - start_time >= timeout:
                 raise ServiceException(
@@ -10576,12 +10918,32 @@ class ProxyService:
                 "OPENAI_VIDEO_GENERATION_FAILED",
             )
 
-        final_status, elapsed_seconds = await ProxyService._wait_for_video_completion(
-            db,
-            user,
-            video_id,
-            request_headers=request_headers,
-        )
+        try:
+            final_status, elapsed_seconds = await ProxyService._wait_for_video_completion(
+                db,
+                user,
+                video_id,
+                request_headers=request_headers,
+            )
+        except ServiceException as exc:
+            if exc.error_code in {"OPENAI_VIDEO_RETRIEVE_FAILED", "VIDEO_GENERATION_FAILED"}:
+                route = ProxyService._resolve_stored_video_route(db, user, video_id)
+                channel = route[0] if route else None
+                actual_model = route[2] if route else None
+                ProxyService._log_failed_request(
+                    db,
+                    user,
+                    api_key_record,
+                    str(uuid.uuid4()),
+                    str(request_data.get("model") or ""),
+                    client_ip,
+                    False,
+                    ProxyService._request_error_log_detail(exc),
+                    channel=channel,
+                    request_type="video_wait",
+                    actual_model=actual_model or None,
+                )
+            raise
         status = ProxyService._video_status_value(final_status)
         response_body["status"] = status
         response_body["final_status"] = final_status
@@ -10702,10 +11064,22 @@ class ProxyService:
             body = (await response.aread()).decode("utf-8", errors="replace")[:1000]
             await response.aclose()
             await client.aclose()
-            raise ServiceException(
-                409 if response.status_code == 409 else (400 if 400 <= response.status_code < 500 else 503),
-                f"Grok 视频内容获取失败（HTTP {response.status_code}）：{body}",
-                "OPENAI_VIDEO_CONTENT_FAILED",
+            upstream_detail = f"Grok 视频内容获取失败（HTTP {response.status_code}）：{body}"
+            logger.warning(
+                "Video content upstream error channel=%s channel_id=%s video_id=%s status=%s body=%s",
+                getattr(channel, "name", None),
+                getattr(channel, "id", None),
+                video_id,
+                response.status_code,
+                body,
+            )
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_CONTENT_FAILED",
+                ),
+                upstream_detail,
             )
 
         async def iter_content():
@@ -10742,10 +11116,35 @@ class ProxyService:
             raise ServiceException(404, "视频任务不存在或当前用户无权访问", "VIDEO_TASK_NOT_FOUND")
 
         if response.status_code != 200:
-            raise ServiceException(
-                400 if 400 <= response.status_code < 500 else 503,
-                f"Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}",
-                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            upstream_detail = f"Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+            logger.warning(
+                "Video retrieve upstream error channel=%s channel_id=%s video_id=%s status=%s body=%s",
+                getattr(channel, "name", None),
+                getattr(channel, "id", None),
+                video_id,
+                response.status_code,
+                response.text[:1000],
+            )
+            ProxyService._log_failed_request(
+                db,
+                user,
+                api_key_record,
+                str(uuid.uuid4()),
+                _requested_model or "",
+                client_ip,
+                False,
+                upstream_detail,
+                channel=channel,
+                request_type="video_retrieve",
+                actual_model=_actual_model or None,
+            )
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                upstream_detail,
             )
         return JSONResponse(content=response.json())
 
@@ -10764,18 +11163,40 @@ class ProxyService:
         else:
             raise ServiceException(404, "视频任务不存在或当前用户无权访问", "VIDEO_TASK_NOT_FOUND")
 
-        return await ProxyService._stream_video_content_route(
-            channel,
-            video_id,
-            request_headers=request_headers,
-        )
+        try:
+            return await ProxyService._stream_video_content_route(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+        except ServiceException as exc:
+            if exc.error_code == "OPENAI_VIDEO_CONTENT_FAILED":
+                ProxyService._log_failed_request(
+                    db,
+                    user,
+                    api_key_record,
+                    str(uuid.uuid4()),
+                    _requested_model or "",
+                    client_ip,
+                    False,
+                    ProxyService._request_error_log_detail(exc),
+                    channel=channel,
+                    request_type="video_content",
+                    actual_model=_actual_model or None,
+                )
+            raise
 
     # ===================================================================
     # Helper: validate request content length
     # ===================================================================
 
     @staticmethod
-    def _validate_request_length(db: Session, request_data: dict) -> None:
+    def _validate_request_length(
+        db: Session,
+        request_data: dict,
+        unified_model: Optional[UnifiedModel] = None,
+        protocol: str = "openai",
+    ) -> None:
         """
         Validate request content length to prevent upstream quota exhaustion.
 
@@ -10788,45 +11209,69 @@ class ProxyService:
         """
         try:
             # Get configuration limits
-            max_message_length = get_system_config(db, "max_message_length", 500000)
-            max_context_tokens = get_system_config(db, "max_context_tokens", 200000)
+            max_message_length = int(get_system_config(db, "max_message_length", 500000) or 500000)
+            max_context_tokens = int(get_system_config(db, "max_context_tokens", 200000) or 200000)
+
+            normalized_protocol = str(protocol or "openai").lower()
 
             # Extract messages from request
             messages = request_data.get("messages", [])
-            if not messages:
-                return
 
             # Calculate total content length
             total_length = 0
-            for msg in messages:
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    total_length += len(content)
-                elif isinstance(content, list):
-                    # Handle multi-part content (text + images)
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            total_length += len(part.get("text", ""))
+            if isinstance(messages, list):
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        total_length += len(str(msg))
+                        continue
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        total_length += len(content)
+                    elif isinstance(content, list):
+                        # Handle multi-part content (text + images)
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") in {"text", "input_text", "output_text"}:
+                                total_length += len(part.get("text", ""))
+                            elif isinstance(part, str):
+                                total_length += len(part)
+                    elif content is not None:
+                        total_length += len(str(content))
 
             # Check character length limit
             if total_length > max_message_length:
                 raise ServiceException(
                     400,
-                    f"请求内容过长，当前 {total_length:,} 字符，超过限制 {max_message_length:,} 字符。"
-                    f"请减少上下文长度或分批处理。",
+                    _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
                     "CONTENT_TOO_LONG"
                 )
 
-            # Estimate token count (rough estimate: 1 token ≈ 4 characters for English, 1.5 for Chinese)
-            # Use conservative estimate of 2.5 characters per token
-            estimated_tokens = int(total_length / 2.5)
+            if normalized_protocol == "responses":
+                estimated_tokens = ProxyService.estimate_responses_input_tokens(request_data)
+            elif normalized_protocol == "anthropic":
+                estimated_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
+            else:
+                estimated_tokens = ProxyService.estimate_openai_input_tokens(request_data)
+            configured_model_limit = int(getattr(unified_model, "max_tokens", 0) or 0)
+            effective_context_limit = max_context_tokens
+            if configured_model_limit > 0:
+                effective_context_limit = min(int(max_context_tokens or configured_model_limit), configured_model_limit)
 
-            if estimated_tokens > max_context_tokens:
+            if (
+                configured_model_limit > 0
+                and configured_model_limit <= _MODEL_256K_CONTEXT_LIMIT
+                and estimated_tokens > _CONTEXT_TOO_LONG_HINT_THRESHOLD
+            ):
                 raise ServiceException(
                     400,
-                    f"预估 Token 数量过多（约 {estimated_tokens:,} tokens），超过限制 {max_context_tokens:,} tokens。"
-                    f"请减少上下文长度或分批处理。",
-                    "TOKENS_TOO_MANY"
+                    _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
+                    "CONTENT_TOO_LONG",
+                )
+
+            if estimated_tokens > effective_context_limit:
+                raise ServiceException(
+                    400,
+                    _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
+                    "CONTENT_TOO_LONG"
                 )
 
         except ServiceException:
@@ -11576,11 +12021,11 @@ class ProxyService:
             log_label="OpenAI image non-stream",
         )
         if response.status_code != 200:
-            body_text = ProxyService._localize_openai_image_error_body(response.text[:1000])
-            raise ServiceException(
-                400 if 400 <= response.status_code < 500 else 503,
-                f"OpenAI 图片生成失败（HTTP {response.status_code}）：{body_text}",
+            upstream_detail = f"OpenAI 图片生成失败（HTTP {response.status_code}）：{response.text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
                 "OPENAI_IMAGE_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
             )
         response_body = response.json()
 
@@ -11734,11 +12179,11 @@ class ProxyService:
             log_label="OpenAI image edit non-stream",
         )
         if response.status_code != 200:
-            body_text = ProxyService._localize_openai_image_error_body(response.text[:1000])
-            raise ServiceException(
-                400 if 400 <= response.status_code < 500 else 503,
-                f"OpenAI 图片编辑失败（HTTP {response.status_code}）：{body_text}",
+            upstream_detail = f"OpenAI 图片编辑失败（HTTP {response.status_code}）：{response.text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
                 "OPENAI_IMAGE_EDIT_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
             )
         response_body = response.json()
 
@@ -12099,6 +12544,7 @@ class ProxyService:
             "VERTEX_IMAGE_DEPENDENCY_MISSING",
         }
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 upstream_model_name = actual_model_name or requested_model
                 return await ProxyService._non_stream_image_request(
@@ -12120,7 +12566,7 @@ class ProxyService:
                 )
             except ServiceException as exc:
                 if exc.error_code in upstream_request_error_codes and exc.status_code < 500:
-                    request_error = exc
+                    request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                     logger.info(
                         "Image channel %s (%d) rejected request without counting channel failure: %s",
                         channel.name,
@@ -12171,7 +12617,11 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
-        error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
+        error_detail = (
+            ProxyService._request_error_log_detail(request_error)
+            if request_error
+            else ProxyService._failure_error_log_detail(last_error)
+        )
         ProxyService._log_failed_request(
             db,
             user,
@@ -12189,7 +12639,7 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()
 
     @staticmethod
     async def handle_image_edit_request(
@@ -12270,6 +12720,7 @@ class ProxyService:
             "IMAGE_EDIT_NOT_SUPPORTED",
         }
         for channel, actual_model_name in channels:
+            ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 upstream_model_name = actual_model_name or requested_model
                 return await ProxyService._non_stream_image_edit_request(
@@ -12289,7 +12740,7 @@ class ProxyService:
                 )
             except ServiceException as exc:
                 if exc.error_code in upstream_request_error_codes and exc.status_code < 500:
-                    request_error = exc
+                    request_error = ProxyService._sanitize_upstream_service_exception_for_user(exc)
                     logger.info(
                         "Image edit channel %s (%d) rejected request without counting channel failure: %s",
                         channel.name,
@@ -12340,7 +12791,11 @@ class ProxyService:
                 ProxyService._record_channel_failure(db, channel, exc)
                 continue
 
-        error_detail = request_error.detail if request_error else (str(last_error) if last_error else "Unknown error")
+        error_detail = (
+            ProxyService._request_error_log_detail(request_error)
+            if request_error
+            else ProxyService._failure_error_log_detail(last_error)
+        )
         ProxyService._log_failed_request(
             db,
             user,
@@ -12358,4 +12813,4 @@ class ProxyService:
         )
         if request_error:
             raise request_error
-        raise ServiceException(503, f"所有可用渠道均请求失败：{error_detail}", "ALL_CHANNELS_FAILED")
+        raise ProxyService._build_all_channels_failed_exception()

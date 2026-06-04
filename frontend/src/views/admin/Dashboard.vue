@@ -28,7 +28,7 @@
 
     <a-spin :spinning="loading" tip="加载中...">
       <a-row :gutter="16" class="stat-row">
-        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="24" :sm="12" :xl="6">
+        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="24" :md="8">
           <div
             class="stat-card-wrapper"
             :style="{ animationDelay: `${index * 0.08}s` }"
@@ -40,7 +40,10 @@
                 </div>
                 <div class="stat-info">
                   <div class="stat-title">{{ card.title }}</div>
-                  <div class="stat-value">
+                  <div v-if="card.format === 'usd'" class="stat-value amount-value">
+                    {{ formatUsd(card.value) }}
+                  </div>
+                  <div v-else class="stat-value">
                     <count-to :start-val="0" :end-val="card.value" :duration="1500" />
                   </div>
                   <div class="stat-desc">{{ card.desc }}</div>
@@ -52,64 +55,8 @@
         </a-col>
       </a-row>
 
-      <a-row :gutter="16" class="stat-row secondary-stats">
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="code" class="progress-icon" />
-              <span class="progress-title">今日 Token 使用</span>
-            </div>
-            <div class="progress-value">
-              <count-to :start-val="0" :end-val="stats.today_tokens || 0" :duration="1500" />
-            </div>
-            <a-progress
-              :percent="tokenProgress"
-              :stroke-color="{ '0%': '#1d4ed8', '100%': '#0ea5e9' }"
-              :show-info="false"
-            />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="check-circle" class="progress-icon success" />
-              <span class="progress-title">成功率</span>
-            </div>
-            <div class="progress-value">
-              <count-to
-                :start-val="0"
-                :end-val="successRate"
-                :duration="1500"
-                :decimals="1"
-              />%
-            </div>
-            <a-progress
-              :percent="successRate"
-              :stroke-color="{ '0%': '#22c55e', '100%': '#86efac' }"
-              :show-info="false"
-            />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="warning" class="progress-icon error" />
-              <span class="progress-title">今日错误</span>
-            </div>
-            <div class="progress-value" :style="{ color: stats.today_errors > 0 ? '#dc2626' : '#16a34a' }">
-              <count-to :start-val="0" :end-val="stats.today_errors || 0" :duration="1500" />
-            </div>
-            <a-progress
-              :percent="errorRate"
-              :stroke-color="stats.today_errors > 0 ? '#ef4444' : '#22c55e'"
-              :show-info="false"
-            />
-          </a-card>
-        </a-col>
-      </a-row>
-
       <a-row :gutter="16" class="chart-row">
-        <a-col :xs="24" :xl="17" class="chart-col">
+        <a-col :span="24" class="chart-col">
           <a-card class="chart-card">
             <template slot="title">
               <div class="card-title-block">
@@ -130,52 +77,6 @@
               </a-radio-group>
             </template>
             <div ref="requestChart" class="chart"></div>
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :xl="7" class="chart-col">
-          <a-card class="chart-card">
-            <template slot="title">
-              <div class="card-title-block">
-                <span class="card-title-main">模型使用比率</span>
-                <span class="card-title-sub">按请求量统计模型调用占比</span>
-              </div>
-            </template>
-            <div class="model-usage-layout">
-              <div ref="modelChart" class="chart chart--compact"></div>
-              <div class="model-ranking-panel">
-                <div class="model-ranking" v-if="modelUsageTopFive.length">
-                  <div
-                    v-for="(item, index) in modelUsageTopFive"
-                    :key="`${item.model_name}-${index}`"
-                    class="model-ranking-item"
-                    :style="{ borderColor: toAlphaColor(getModelRankColor(index), 0.18) }"
-                  >
-                    <div class="model-ranking-left">
-                      <span
-                        class="model-ranking-index"
-                        :style="{ background: getModelRankColor(index) }"
-                      >{{ index + 1 }}</span>
-                      <span
-                        class="model-ranking-name"
-                        :title="item.model_name"
-                        :style="{ color: getModelRankColor(index) }"
-                      >{{ item.model_name }}</span>
-                    </div>
-                    <div class="model-ranking-right">
-                      <a-tag
-                        class="model-ranking-count"
-                        :style="{
-                          color: getModelRankColor(index),
-                          background: toAlphaColor(getModelRankColor(index), 0.12)
-                        }"
-                      >{{ formatNumber(item.request_count) }}</a-tag>
-                      <span class="model-ranking-ratio">{{ item.ratio }}%</span>
-                    </div>
-                  </div>
-                </div>
-                <div v-else class="model-ranking-empty">当前范围暂无模型调用排名</div>
-              </div>
-            </div>
           </a-card>
         </a-col>
       </a-row>
@@ -204,27 +105,11 @@
               <template slot="total_requests" slot-scope="text">
                 <a-tag class="metric-tag metric-tag-total">{{ formatNumber(text) }}</a-tag>
               </template>
-              <template slot="success_requests" slot-scope="text">
-                <a-tag class="metric-tag metric-tag-success">{{ formatNumber(text) }}</a-tag>
-              </template>
-              <template slot="failed_requests" slot-scope="text">
-                <a-tag
-                  :class="[
-                    'metric-tag',
-                    Number(text || 0) > 0 ? 'metric-tag-failed' : 'metric-tag-neutral'
-                  ]"
-                >
-                  {{ formatNumber(text) }}
-                </a-tag>
-              </template>
-              <template slot="input_tokens" slot-scope="text">
-                <a-tag class="token-tag token-tag-input">{{ formatNumber(text) }}</a-tag>
-              </template>
-              <template slot="output_tokens" slot-scope="text">
-                <a-tag class="token-tag token-tag-output">{{ formatNumber(text) }}</a-tag>
-              </template>
               <template slot="total_tokens" slot-scope="text">
                 <a-tag class="token-tag token-tag-total">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="total_cost" slot-scope="text">
+                <a-tag class="cost-tag">{{ formatUsd(text) }}</a-tag>
               </template>
             </a-table>
           </a-card>
@@ -243,8 +128,6 @@ const RANGE_LABEL_MAP = {
   '7d': '近 7 天',
   '30d': '近 30 天'
 }
-
-const MODEL_USAGE_COLORS = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#94a3b8']
 
 export default {
   name: 'Dashboard',
@@ -269,114 +152,62 @@ export default {
           scopedSlots: { customRender: 'date' }
         },
         {
-          title: '总请求数',
+          title: '请求次数',
           dataIndex: 'total_requests',
           key: 'total_requests',
           scopedSlots: { customRender: 'total_requests' }
         },
         {
-          title: '成功',
-          dataIndex: 'success_requests',
-          key: 'success_requests',
-          scopedSlots: { customRender: 'success_requests' }
-        },
-        {
-          title: '失败',
-          dataIndex: 'failed_requests',
-          key: 'failed_requests',
-          scopedSlots: { customRender: 'failed_requests' }
-        },
-        {
-          title: '输入 Token',
-          dataIndex: 'total_input_tokens',
-          key: 'total_input_tokens',
-          scopedSlots: { customRender: 'input_tokens' }
-        },
-        {
-          title: '输出 Token',
-          dataIndex: 'total_output_tokens',
-          key: 'total_output_tokens',
-          scopedSlots: { customRender: 'output_tokens' }
-        },
-        {
-          title: '总 Token',
+          title: '使用 Token',
           dataIndex: 'total_tokens',
           key: 'total_tokens',
           scopedSlots: { customRender: 'total_tokens' }
+        },
+        {
+          title: '消耗金额',
+          dataIndex: 'total_cost',
+          key: 'total_cost',
+          scopedSlots: { customRender: 'total_cost' }
         }
       ],
-      requestChart: null,
-      modelChart: null
+      requestChart: null
     }
   },
   computed: {
     statCards() {
       return [
         {
-          title: '用户总数',
-          value: this.stats.total_users || 0,
-          icon: 'team',
-          gradient: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
-          class: 'users-card',
-          desc: '平台注册用户',
-          onClick: () => this.$router.push('/admin/users')
-        },
-        {
-          title: '渠道总数',
-          value: this.stats.total_channels || 0,
-          icon: 'cloud-server',
-          gradient: 'linear-gradient(135deg, #f97316 0%, #fb7185 100%)',
-          class: 'channels-card',
-          desc: '已配置渠道',
-          onClick: () => this.$router.push('/admin/channels')
-        },
-        {
-          title: '模型总数',
-          value: this.stats.total_models || 0,
-          icon: 'appstore',
-          gradient: 'linear-gradient(135deg, #10b981 0%, #14b8a6 100%)',
-          class: 'models-card',
-          desc: '当前启用模型',
-          onClick: () => this.$router.push('/admin/models')
-        },
-        {
-          title: '今日请求',
+          title: '今日请求次数',
           value: this.stats.today_requests || 0,
           icon: 'thunderbolt',
-          gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
+          gradient: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
           class: 'requests-card',
           desc: '今日累计调用',
+          onClick: () => this.$router.push('/admin/logs')
+        },
+        {
+          title: '今日使用 Token',
+          value: this.stats.today_tokens || 0,
+          icon: 'code',
+          gradient: 'linear-gradient(135deg, #10b981 0%, #14b8a6 100%)',
+          class: 'tokens-card',
+          desc: '今日累计 Token',
+          onClick: () => this.$router.push('/admin/logs')
+        },
+        {
+          title: '今日使用金额',
+          value: this.stats.today_cost || 0,
+          icon: 'dollar',
+          gradient: 'linear-gradient(135deg, #f97316 0%, #fb7185 100%)',
+          class: 'cost-card',
+          desc: '今日累计 USD',
+          format: 'usd',
           onClick: () => this.$router.push('/admin/logs')
         }
       ]
     },
-    tokenProgress() {
-      const max = 1000000
-      return Math.min(((this.stats.today_tokens || 0) / max) * 100, 100)
-    },
-    successRate() {
-      const total = this.stats.today_requests || 0
-      const errors = this.stats.today_errors || 0
-      if (total === 0) return 100
-      return Number((((total - errors) / total) * 100).toFixed(1))
-    },
-    errorRate() {
-      const total = this.stats.today_requests || 0
-      const errors = this.stats.today_errors || 0
-      if (total === 0) return 0
-      return Number(((errors / total) * 100).toFixed(1))
-    },
     currentRangeLabel() {
       return RANGE_LABEL_MAP[this.selectedRange] || RANGE_LABEL_MAP['7d']
-    },
-    modelUsageTopFive() {
-      const modelUsage = Array.isArray(this.stats.model_usage_ratio)
-        ? this.stats.model_usage_ratio
-        : []
-      return modelUsage
-        .filter(item => item && item.model_name && item.model_name !== '其他')
-        .sort((a, b) => Number(b.request_count || 0) - Number(a.request_count || 0))
-        .slice(0, 5)
     },
     tableSubtitle() {
       return this.selectedRange === 'today'
@@ -398,26 +229,17 @@ export default {
     if (this.requestChart) {
       this.requestChart.dispose()
     }
-    if (this.modelChart) {
-      this.modelChart.dispose()
-    }
   },
   methods: {
     formatNumber(value) {
       return Number(value || 0).toLocaleString('zh-CN')
     },
-    getModelRankColor(index) {
-      return MODEL_USAGE_COLORS[index % MODEL_USAGE_COLORS.length]
-    },
-    toAlphaColor(hex, alpha = 1) {
-      const normalized = String(hex || '').replace('#', '')
-      if (normalized.length !== 6) {
-        return hex
-      }
-      const r = parseInt(normalized.slice(0, 2), 16)
-      const g = parseInt(normalized.slice(2, 4), 16)
-      const b = parseInt(normalized.slice(4, 6), 16)
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`
+    formatUsd(value) {
+      const amount = Number(value || 0)
+      return `$${amount.toLocaleString('en-US', {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 6
+      })}`
     },
     getRowKey(record) {
       return record.bucket_key || record.date || record.label
@@ -427,7 +249,6 @@ export default {
       try {
         const res = await getDashboardStats(this.selectedRange)
         this.stats = res.data || {}
-        this.updateModelChart()
       } catch (err) {
         this.$message.error('获取统计数据失败')
         console.error('Failed to fetch dashboard stats:', err)
@@ -477,17 +298,12 @@ export default {
         if (this.$refs.requestChart && !this.requestChart) {
           this.requestChart = echarts.init(this.$refs.requestChart)
         }
-        if (this.$refs.modelChart && !this.modelChart) {
-          this.modelChart = echarts.init(this.$refs.modelChart)
-        }
 
         this.updateRequestChart()
-        this.updateModelChart()
 
         if (!this.resizeHandler) {
           this.resizeHandler = () => {
             this.requestChart && this.requestChart.resize()
-            this.modelChart && this.modelChart.resize()
           }
           window.addEventListener('resize', this.resizeHandler)
         }
@@ -500,21 +316,29 @@ export default {
 
       const labels = this.requestStats.map(item => item.label || item.date)
       const requests = this.requestStats.map(item => Number(item.total_requests || 0))
-      const success = this.requestStats.map(item => Number(item.success_requests || 0))
-      const failed = this.requestStats.map(item => Number(item.failed_requests || 0))
+      const tokens = this.requestStats.map(item => Number(item.total_tokens || 0))
+      const costs = this.requestStats.map(item => Number(item.total_cost || 0))
 
       this.requestChart.setOption({
         tooltip: {
           trigger: 'axis',
-          axisPointer: { type: 'shadow' }
+          axisPointer: { type: 'shadow' },
+          formatter: params => {
+            return params.map(item => {
+              const value = item.seriesName === '消耗金额'
+                ? this.formatUsd(item.value)
+                : this.formatNumber(item.value)
+              return `${item.marker}${item.seriesName}：${value}`
+            }).join('<br/>')
+          }
         },
         legend: {
           top: 0,
-          data: ['总请求', '成功', '失败']
+          data: ['请求次数', '使用 Token', '消耗金额']
         },
         grid: {
           left: '3%',
-          right: '4%',
+          right: '5%',
           bottom: '3%',
           top: 48,
           containLabel: true
@@ -529,16 +353,30 @@ export default {
             rotate: this.selectedRange === '30d' ? 35 : 0
           }
         },
-        yAxis: {
-          type: 'value',
-          axisLine: { show: false },
-          splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
-          axisLabel: { color: '#64748b' }
-        },
+        yAxis: [
+          {
+            type: 'value',
+            name: '次数 / Token',
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
+            axisLabel: { color: '#64748b' }
+          },
+          {
+            type: 'value',
+            name: 'USD',
+            axisLine: { show: false },
+            splitLine: { show: false },
+            axisLabel: {
+              color: '#f97316',
+              formatter: value => `$${Number(value || 0).toFixed(4)}`
+            }
+          }
+        ],
         series: [
           {
-            name: '总请求',
+            name: '请求次数',
             type: 'line',
+            yAxisIndex: 0,
             smooth: true,
             symbolSize: 8,
             data: requests,
@@ -558,100 +396,25 @@ export default {
             }
           },
           {
-            name: '成功',
+            name: '使用 Token',
             type: 'bar',
+            yAxisIndex: 0,
             barMaxWidth: 26,
-            data: success,
-            itemStyle: { color: '#22c55e', borderRadius: [8, 8, 0, 0] }
+            data: tokens,
+            itemStyle: { color: '#10b981', borderRadius: [8, 8, 0, 0] }
           },
           {
-            name: '失败',
-            type: 'bar',
-            barMaxWidth: 26,
-            data: failed,
-            itemStyle: { color: '#ef4444', borderRadius: [8, 8, 0, 0] }
+            name: '消耗金额',
+            type: 'line',
+            yAxisIndex: 1,
+            smooth: true,
+            symbolSize: 8,
+            data: costs,
+            itemStyle: { color: '#f97316' },
+            lineStyle: { width: 3, color: '#f97316' }
           }
         ]
       })
-    },
-    updateModelChart() {
-      if (!this.modelChart) {
-        return
-      }
-
-      const modelUsage = Array.isArray(this.stats.model_usage_ratio)
-        ? this.stats.model_usage_ratio
-        : []
-      const seriesData = modelUsage.map((item, index) => ({
-        value: Number(item.request_count || 0),
-        name: item.model_name,
-        ratio: Number(item.ratio || 0),
-        totalTokens: Number(item.total_tokens || 0),
-        label: {
-          show: index < 3,
-          formatter: item.model_name,
-          color: MODEL_USAGE_COLORS[index % MODEL_USAGE_COLORS.length],
-          fontSize: 12,
-          fontWeight: 700
-        },
-        labelLine: {
-          show: index < 3,
-          length: 12,
-          length2: 10,
-          lineStyle: {
-            color: MODEL_USAGE_COLORS[index % MODEL_USAGE_COLORS.length],
-            width: 1.2
-          }
-        }
-      }))
-
-      this.modelChart.setOption({
-        color: MODEL_USAGE_COLORS,
-        tooltip: {
-          trigger: 'item',
-          formatter: params => {
-            const data = params.data || {}
-            return `${params.name}<br/>请求数：${this.formatNumber(data.value)}<br/>占比：${data.ratio}%<br/>Token：${this.formatNumber(data.totalTokens)}`
-          }
-        },
-        legend: { show: false },
-        graphic: seriesData.length
-          ? null
-          : [
-              {
-                type: 'text',
-                left: 'center',
-                top: 'middle',
-                style: {
-                  text: '暂无模型调用数据',
-                  fill: '#94a3b8',
-                  fontSize: 14
-                }
-              }
-            ],
-        series: [
-          {
-            type: 'pie',
-            radius: ['46%', '78%'],
-            center: ['48%', '44%'],
-            minAngle: 8,
-            avoidLabelOverlap: true,
-            label: {
-              show: false,
-              color: '#334155'
-            },
-            labelLine: {
-              show: false
-            },
-            itemStyle: {
-              borderColor: '#fff',
-              borderWidth: 2,
-              borderRadius: 10
-            },
-            data: seriesData
-          }
-        ]
-      }, true)
     }
   }
 }
@@ -774,6 +537,10 @@ export default {
             line-height: 1.1;
             margin-bottom: 8px;
             font-family: 'MonoLisa', monospace;
+
+            &.amount-value {
+              color: #c2410c;
+            }
           }
 
           .stat-desc {
@@ -795,56 +562,6 @@ export default {
         transition: all 0.5s ease;
         opacity: 0.14;
         z-index: 1;
-      }
-    }
-  }
-
-  .secondary-stats {
-    .progress-card {
-      border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.65);
-      background: rgba(255, 255, 255, 0.72);
-      backdrop-filter: blur(20px);
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
-      transition: all 0.3s ease;
-
-      &:hover {
-        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-        transform: translateY(-4px);
-      }
-
-      .progress-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 16px;
-
-        .progress-icon {
-          font-size: 22px;
-          color: #2563eb;
-
-          &.success {
-            color: #22c55e;
-          }
-
-          &.error {
-            color: #ef4444;
-          }
-        }
-
-        .progress-title {
-          font-size: 14px;
-          font-weight: 700;
-          color: #64748b;
-        }
-      }
-
-      .progress-value {
-        font-size: 30px;
-        font-weight: 800;
-        color: #0f172a;
-        margin-bottom: 12px;
-        font-family: 'MonoLisa', monospace;
       }
     }
   }
@@ -927,111 +644,6 @@ export default {
     height: 320px;
   }
 
-  .chart--compact {
-    height: 320px;
-    flex: 0 0 60%;
-    min-width: 280px;
-  }
-
-  .model-usage-layout {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    flex: 1;
-    height: 100%;
-  }
-
-  .model-ranking-panel {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .model-ranking {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .model-ranking-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
-    border-radius: 14px;
-    background: rgba(248, 250, 252, 0.9);
-    border: 1px solid rgba(226, 232, 240, 0.9);
-  }
-
-  .model-ranking-left {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1;
-  }
-
-  .model-ranking-index {
-    width: 24px;
-    height: 24px;
-    border-radius: 999px;
-    background: linear-gradient(135deg, #2563eb, #0ea5e9);
-    color: #fff;
-    font-size: 12px;
-    font-weight: 800;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .model-ranking-name {
-    min-width: 0;
-    color: #0f172a;
-    font-size: 13px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .model-ranking-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  .model-ranking-count {
-    margin: 0;
-    border: none;
-    border-radius: 999px;
-    background: rgba(37, 99, 235, 0.12);
-    color: #1d4ed8;
-    font-weight: 800;
-    font-family: 'MonoLisa', monospace;
-    padding: 2px 10px;
-  }
-
-  .model-ranking-ratio {
-    color: #64748b;
-    font-size: 12px;
-    font-weight: 700;
-    min-width: 40px;
-    text-align: right;
-  }
-
-  .model-ranking-empty {
-    margin-top: 12px;
-    padding: 12px 14px;
-    border-radius: 14px;
-    background: rgba(248, 250, 252, 0.9);
-    color: #94a3b8;
-    font-size: 13px;
-    font-weight: 600;
-    text-align: center;
-  }
-
   .table-card {
     /deep/ .ant-table {
       background: transparent;
@@ -1068,21 +680,6 @@ export default {
       background: rgba(37, 99, 235, 0.12);
     }
 
-    .metric-tag-success {
-      color: #15803d;
-      background: rgba(34, 197, 94, 0.14);
-    }
-
-    .metric-tag-failed {
-      color: #b91c1c;
-      background: rgba(239, 68, 68, 0.14);
-    }
-
-    .metric-tag-neutral {
-      color: #52525b;
-      background: rgba(148, 163, 184, 0.16);
-    }
-
     .token-tag {
       min-width: 96px;
       text-align: center;
@@ -1093,20 +690,22 @@ export default {
       font-family: 'MonoLisa', monospace;
     }
 
-    .token-tag-input {
-      color: #1d4ed8;
-      background: rgba(37, 99, 235, 0.12);
-    }
-
-    .token-tag-output {
-      color: #0f766e;
-      background: rgba(20, 184, 166, 0.14);
-    }
-
     .token-tag-total {
       color: #7c2d12;
       background: linear-gradient(135deg, rgba(251, 191, 36, 0.18), rgba(249, 115, 22, 0.18));
       box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.1);
+    }
+
+    .cost-tag {
+      min-width: 108px;
+      text-align: center;
+      border-radius: 999px;
+      border: none;
+      color: #c2410c;
+      background: rgba(249, 115, 22, 0.14);
+      font-weight: 800;
+      padding: 3px 12px;
+      font-family: 'MonoLisa', monospace;
     }
   }
 }
@@ -1145,16 +744,6 @@ export default {
       height: 300px;
     }
 
-    .model-usage-layout {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .chart--compact {
-      flex: none;
-      min-width: 0;
-      height: 240px;
-    }
   }
 }
 

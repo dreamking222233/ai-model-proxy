@@ -67,24 +67,11 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    from app.models.user import SysUser as UserModel
-    from app.models.channel import Channel
-    from app.models.model import UnifiedModel
-    from app.models.log import RequestLog
+    from app.models.log import ConsumptionRecord, RequestLog
     from sqlalchemy import func
     from app.services.log_service import LogService
 
     today, _ = LogService._get_timezone_day_window(1)
-
-    total_users = db.query(func.count(UserModel.id)).scalar()
-    total_channels = db.query(func.count(Channel.id)).scalar()
-    enabled_channels = db.query(func.count(Channel.id)).filter(
-        Channel.enabled == 1
-    ).scalar()
-    healthy_channels = db.query(func.count(Channel.id)).filter(
-        Channel.enabled == 1, Channel.is_healthy == 1
-    ).scalar()
-    total_models = db.query(func.count(UnifiedModel.id)).filter(UnifiedModel.enabled == 1).scalar()
 
     today_requests = db.query(func.count(RequestLog.id)).filter(
         RequestLog.created_at >= today
@@ -92,19 +79,15 @@ def get_dashboard_stats(
     today_tokens = db.query(func.coalesce(func.sum(RequestLog.total_tokens), 0)).filter(
         RequestLog.created_at >= today
     ).scalar()
-    today_errors = db.query(func.count(RequestLog.id)).filter(
-        RequestLog.created_at >= today, RequestLog.status != 'success'
+    today_cost = db.query(func.coalesce(func.sum(ConsumptionRecord.total_cost), 0)).filter(
+        ConsumptionRecord.created_at >= today,
+        ConsumptionRecord.total_cost > 0,
+        ConsumptionRecord.request_id.isnot(None),
+        ConsumptionRecord.model_name.isnot(None),
     ).scalar()
-    model_usage_ratio = LogService.get_model_usage_ratio(db, range_key=range_key)
 
     return ResponseModel(data={
-        "total_users": total_users,
-        "total_channels": total_channels,
-        "enabled_channels": enabled_channels,
-        "healthy_channels": healthy_channels,
-        "total_models": total_models,
         "today_requests": today_requests,
         "today_tokens": int(today_tokens),
-        "today_errors": today_errors,
-        "model_usage_ratio": model_usage_ratio,
+        "today_cost": float(today_cost or 0),
     })

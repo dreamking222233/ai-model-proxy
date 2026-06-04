@@ -957,7 +957,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('image_channel_health_check_interval', '21600', 'number', '纯图片渠道健康检查间隔(秒)'),
 ('health_check_test_message', '你好', 'string', '健康检查测试消息'),
 ('request_timeout', '30', 'number', '请求超时时间(秒)'),
-('max_retry_count', '3', 'number', '最大重试次数'),
+('max_retry_count', '3', 'number', '上游失败重试次数'),
 ('api_base_url', 'https://your-domain.com', 'string', 'API基础地址，用于快速开始页面展示给用户的接入地址'),
 ('platform_site_name', '小乐AI', 'string', '平台直营站点名称'),
 ('platform_site_subtitle', '一站式 AI 模型调用服务，让智能触手可及', 'string', '平台直营站点副标题'),

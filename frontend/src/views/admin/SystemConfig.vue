@@ -137,7 +137,27 @@
             </div>
           </div>
         </a-col>
-        <a-col :span="12">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="retweet" />
+              上游失败重试次数
+            </div>
+            <a-input-number
+              v-model="maxRetryCount"
+              :min="0"
+              :max="10"
+              class="config-input"
+            >
+              <template slot="addonAfter">次</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              上游临时失败后自动重试，0 表示不重试
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
           <div class="config-item">
             <div class="config-label">
               <a-icon type="reload" />
@@ -642,6 +662,7 @@ export default {
       tokenMultiplier: 1.0,
       circuitBreakerThreshold: 5,
       circuitBreakerRecovery: 600,
+      maxRetryCount: 3,
       anthropicPromptCacheEnabled: false,
       anthropicPromptCacheUserVisible: false,
       anthropicPromptCacheHistoryEnabled: true,
@@ -670,6 +691,7 @@ export default {
         'health_check_test_message': '测试消息',
         'price_multiplier': '价格倍率',
         'token_multiplier': '统一Token倍率',
+        'max_retry_count': '上游失败重试次数',
         'max_message_length': '最大消息长度',
         'max_context_tokens': '最大上下文Token数',
         'anthropic_prompt_cache_enabled': 'Anthropic Prompt Cache 开关',
@@ -764,6 +786,11 @@ export default {
             this.circuitBreakerThreshold = Number(config.config_value) || 5
           } else if (config.config_key === 'circuit_breaker_recovery') {
             this.circuitBreakerRecovery = Number(config.config_value) || 600
+          } else if (config.config_key === 'max_retry_count') {
+            this.maxRetryCount = Number(config.config_value)
+            if (Number.isNaN(this.maxRetryCount)) {
+              this.maxRetryCount = 3
+            }
           } else if (config.config_key === 'anthropic_prompt_cache_enabled') {
             this.anthropicPromptCacheEnabled = String(config.config_value).toLowerCase() === 'true'
           } else if (config.config_key === 'anthropic_prompt_cache_user_visible') {
@@ -816,6 +843,7 @@ export default {
           { key: 'price_multiplier', value: this.priceMultiplier },
           { key: 'token_multiplier', value: this.tokenMultiplier },
           { key: 'circuit_breaker_threshold', value: this.circuitBreakerThreshold },
+          { key: 'max_retry_count', value: this.maxRetryCount },
           { key: 'circuit_breaker_recovery', value: this.circuitBreakerRecovery }
         ]
 

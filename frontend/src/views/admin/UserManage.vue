@@ -144,12 +144,12 @@
                 <a-icon type="edit" />
               </a-button>
             </a-tooltip>
-            <a-tooltip v-if="record.subscription_type === 'balance'" title="余额操作">
+            <a-tooltip title="余额操作">
               <a-button type="link" size="small" style="color: #fa8c16" @click="handleRecharge(record, 'balance')">
                 <a-icon type="dollar" />
               </a-button>
             </a-tooltip>
-            <a-tooltip v-else title="套餐管理">
+            <a-tooltip v-if="record.subscription_type !== 'balance'" title="套餐管理">
               <a-button type="link" size="small" style="color: #722ed1" @click="goToSubscription(record)">
                 <a-icon type="crown" />
               </a-button>
@@ -525,8 +525,9 @@ export default {
       }
     },
     viewUserLogs(record) {
+      const targetPath = record.agent_id ? '/admin/agent-logs' : '/admin/logs'
       this.$router.push({
-        path: '/admin/logs',
+        path: targetPath,
         query: { user_id: record.id }
       })
     },

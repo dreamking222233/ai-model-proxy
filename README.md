@@ -79,6 +79,10 @@ npm install
 npm run serve
 ```
 
+### 4. 静态仪表盘页面
+
+- **独立静态仪表盘**：系统在 `frontend/public/dashboard_static.html` 目录下提供了一个完全独立的拟玻璃化（Glassmorphism）亮色设计静态分析仪表盘。支持在任何浏览器中本地双击打开（或通过 `/dashboard_static.html` 访问），内置 ECharts 平滑折线图、柱状图、饼图以及模型调用详细排行。
+
 ## 文档入口
 
 - [DEPLOYMENT.md](DEPLOYMENT.md)：生产环境部署文档

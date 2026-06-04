@@ -506,6 +506,12 @@ export default {
     }
   },
   mounted() {
+    if (this.$route.query.user_id) {
+      this.filters.user_id = this.$route.query.user_id
+    }
+    if (this.$route.query.agent_id) {
+      this.filters.agent_id = Number(this.$route.query.agent_id)
+    }
     this.fetchAgents()
     this.fetchList()
   },

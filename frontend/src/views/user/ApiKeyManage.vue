@@ -315,12 +315,16 @@
 
         <div class="import-preview" v-if="pendingImport.name">
           <div class="preview-row">
-            <span class="preview-label">供应商名称</span>
-            <code>{{ ccswitchProviderNamePrefix }} / {{ pendingImport.name }}</code>
+            <span class="preview-label">应用类型</span>
+            <code>{{ currentImportAppLabel }}</code>
           </div>
           <div class="preview-row">
-            <span class="preview-label">导入目标</span>
-            <code>{{ currentImportAppLabel }}</code>
+            <span class="preview-label">供应商名称</span>
+            <code>{{ ccswitchProviderName }}</code>
+          </div>
+          <div class="preview-row">
+            <span class="preview-label">官网地址</span>
+            <code>{{ ccswitchHomepage || '-' }}</code>
           </div>
           <div class="preview-row">
             <span class="preview-label">API 端点</span>
@@ -370,6 +374,7 @@ export default {
       },
       apiBase: '',
       siteName: '',
+      siteHomepage: '',
       copyStates: {},
       columns: [
         { title: '密钥名称', dataIndex: 'name', key: 'name', width: 180, fixed: 'left', scopedSlots: { customRender: 'name' } },
@@ -412,8 +417,11 @@ export default {
       }
       return ''
     },
-    ccswitchProviderNamePrefix() {
+    ccswitchProviderName() {
       return this.siteName || '当前站点'
+    },
+    ccswitchHomepage() {
+      return this.siteHomepage || (window.location && window.location.origin) || ''
     },
     activeKeysCount() {
       return this.apiKeys.filter(k => k.status === 'active').length
@@ -434,15 +442,33 @@ export default {
       try {
         const res = await getSiteConfig()
         const config = res.data || {}
-        this.siteName = config.site_name || ''
-        if (config.api_base_url) {
-          this.apiBase = config.api_base_url
+        this.siteName = (config.site_name || '').trim()
+        this.siteHomepage = this.resolveSiteHomepage(config)
+        const configuredApiBase = config.quickstart_api_base_url || config.api_base_url
+        if (configuredApiBase) {
+          this.apiBase = configuredApiBase
           return
         }
       } catch (e) {
         console.error('Failed to fetch site config:', e)
       }
       this.apiBase = window.location.origin
+      this.siteHomepage = window.location.origin
+    },
+    resolveSiteHomepage(config) {
+      const frontendDomain = String(config.frontend_domain || '').trim().replace(/\/+$/, '')
+      if (!frontendDomain) {
+        return window.location.origin
+      }
+      if (/^https?:\/\//i.test(frontendDomain)) {
+        return frontendDomain
+      }
+      const currentHost = (window.location && window.location.host) || ''
+      if (currentHost && frontendDomain === currentHost) {
+        return window.location.origin
+      }
+      const protocol = (window.location && window.location.protocol) || 'https:'
+      return `${protocol}//${frontendDomain}`
     },
     async fetchApiKeys() {
       this.loading = true
@@ -555,14 +581,15 @@ export default {
       this.importTargetApp = 'codex'
       this.importModalVisible = true
     },
-    buildCcSwitchDeepLink(apiKey, keyName, targetApp) {
+    buildCcSwitchDeepLink(apiKey, targetApp) {
       const supportedApps = ['codex', 'claude', 'openclaw', 'hermes']
       const app = supportedApps.includes(targetApp) ? targetApp : 'codex'
       const endpoint = targetApp === 'claude' ? this.relayBase : this.relayOpenaiBase
       const params = new URLSearchParams({
         resource: 'provider',
         app,
-        name: `${this.ccswitchProviderNamePrefix} / ${keyName}`,
+        name: this.ccswitchProviderName,
+        homepage: this.ccswitchHomepage,
         endpoint,
         apiKey
       })
@@ -620,7 +647,7 @@ export default {
         return
       }
       this.importModalVisible = false
-      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(this.pendingImport.key, this.pendingImport.name, this.importTargetApp))
+      this.openCcSwitchDeepLink(this.buildCcSwitchDeepLink(this.pendingImport.key, this.importTargetApp))
     },
     handleToggleStatus(record) {
       const isDisabling = record.status === 'active'

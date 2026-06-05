@@ -74,8 +74,6 @@ _UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _UPSTREAM_FAILURE_VISIBLE_MESSAGE = "调用失败，渠道异常，请稍后重试"
 _UPSTREAM_REQUEST_VISIBLE_MESSAGE = "请求参数不符合上游渠道要求，请检查后重试"
 _CONTEXT_TOO_LONG_VISIBLE_MESSAGE = "请求超出最大上下文,请压缩对话"
-_CONTEXT_TOO_LONG_HINT_THRESHOLD = 250000
-_MODEL_256K_CONTEXT_LIMIT = 256000
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
 _TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
@@ -11202,7 +11200,6 @@ class ProxyService:
 
         Checks:
         1. Total message content length (characters)
-        2. Estimated token count based on character length
 
         Raises:
             ServiceException: if content exceeds configured limits
@@ -11210,9 +11207,6 @@ class ProxyService:
         try:
             # Get configuration limits
             max_message_length = int(get_system_config(db, "max_message_length", 500000) or 500000)
-            max_context_tokens = int(get_system_config(db, "max_context_tokens", 200000) or 200000)
-
-            normalized_protocol = str(protocol or "openai").lower()
 
             # Extract messages from request
             messages = request_data.get("messages", [])
@@ -11245,34 +11239,11 @@ class ProxyService:
                     "CONTENT_TOO_LONG"
                 )
 
-            if normalized_protocol == "responses":
-                estimated_tokens = ProxyService.estimate_responses_input_tokens(request_data)
-            elif normalized_protocol == "anthropic":
-                estimated_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
-            else:
-                estimated_tokens = ProxyService.estimate_openai_input_tokens(request_data)
-            configured_model_limit = int(getattr(unified_model, "max_tokens", 0) or 0)
-            effective_context_limit = max_context_tokens
-            if configured_model_limit > 0:
-                effective_context_limit = min(int(max_context_tokens or configured_model_limit), configured_model_limit)
-
-            if (
-                configured_model_limit > 0
-                and configured_model_limit <= _MODEL_256K_CONTEXT_LIMIT
-                and estimated_tokens > _CONTEXT_TOO_LONG_HINT_THRESHOLD
-            ):
-                raise ServiceException(
-                    400,
-                    _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
-                    "CONTENT_TOO_LONG",
-                )
-
-            if estimated_tokens > effective_context_limit:
-                raise ServiceException(
-                    400,
-                    _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
-                    "CONTENT_TOO_LONG"
-                )
+            # Do not enforce estimated token limits here. The estimators count
+            # serialized tool schemas and protocol metadata, so they can
+            # substantially over-count Codex/Claude Code style requests. Let
+            # upstream perform exact token validation; upstream context errors
+            # are sanitized to _CONTEXT_TOO_LONG_VISIBLE_MESSAGE.
 
         except ServiceException:
             raise  # Re-raise validation errors

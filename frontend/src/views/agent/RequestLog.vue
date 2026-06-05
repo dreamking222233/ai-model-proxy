@@ -627,7 +627,7 @@ export default {
     formatDate,
     formatUtcDate,
     getDisplayModel(record) {
-      return (record && (record.model || record.requested_model)) || '-'
+      return (record && (record.requested_model || record.model)) || '-'
     },
     buildRequestParams() {
       const params = {
@@ -893,7 +893,7 @@ export default {
       })
     },
     getModalContainer() {
-      return document.body
+      return this.$el || document.body
     },
     customRow(record) {
       return {
@@ -1603,20 +1603,20 @@ export default {
     color: #bfbfbf;
   }
 
-  .request-detail-modal {
-    /deep/ .ant-modal-content {
+  /deep/ .request-detail-modal {
+    .ant-modal-content {
       border-radius: 18px;
       overflow: hidden;
       background: #f7f9fc;
     }
 
-    /deep/ .ant-modal-header {
+    .ant-modal-header {
       padding: 18px 24px;
       border-bottom: 1px solid #edf0f5;
       background: #fff;
     }
 
-    /deep/ .ant-modal-body {
+    .ant-modal-body {
       background: #f7f9fc;
     }
   }

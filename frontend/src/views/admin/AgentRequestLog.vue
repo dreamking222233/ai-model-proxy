@@ -312,11 +312,6 @@
               <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
             </div>
             <div class="detail-item">
-              <span class="detail-item-label">实际模型</span>
-              <a-tag v-if="selectedRecord.actual_model" class="actual-model-tag">{{ selectedRecord.actual_model }}</a-tag>
-              <span v-else class="detail-item-value text-muted">-</span>
-            </div>
-            <div class="detail-item">
               <span class="detail-item-label">渠道</span>
               <span class="detail-item-value">{{ selectedRecord.channel_name || '-' }}</span>
             </div>
@@ -743,7 +738,7 @@ export default {
       })
     },
     getModalContainer() {
-      return document.body
+      return this.$el || document.body
     }
   }
 }
@@ -1192,20 +1187,20 @@ export default {
     color: #8c8c8c;
   }
 
-  .request-detail-modal {
-    /deep/ .ant-modal-content {
+  /deep/ .request-detail-modal {
+    .ant-modal-content {
       border-radius: 18px;
       overflow: hidden;
       background: #f7f9fc;
     }
 
-    /deep/ .ant-modal-header {
+    .ant-modal-header {
       padding: 18px 24px;
       border-bottom: 1px solid #edf0f5;
       background: #fff;
     }
 
-    /deep/ .ant-modal-body {
+    .ant-modal-body {
       background: #f7f9fc;
     }
   }

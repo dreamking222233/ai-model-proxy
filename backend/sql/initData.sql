@@ -51,6 +51,7 @@ CREATE TABLE `sys_user` (
     `last_login_ip` VARCHAR(45) DEFAULT NULL,
     `subscription_type` VARCHAR(16) NOT NULL DEFAULT 'balance' COMMENT 'balance=按量计费, unlimited/quota=套餐缓存态',
     `subscription_expires_at` DATETIME DEFAULT NULL COMMENT '套餐过期时间',
+    `redemption_reset_count` BIGINT NOT NULL DEFAULT 0 COMMENT '兑换码资格重置次数',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),

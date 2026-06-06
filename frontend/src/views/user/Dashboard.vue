@@ -95,11 +95,11 @@
                 </div>
                 <div class="f-card-body">
                   <h3 class="f-title">兑换码充值</h3>
-                  <p class="f-desc">每位用户限用一次，实时刷新当前账户余额。</p>
+                  <p class="f-desc">当前剩余 {{ remainingRedeemCount }} 次兑换机会，到账后实时刷新账户余额。</p>
                   
                   <div v-if="hasRedeemed" class="status-box-success">
                     <a-icon type="check-circle" theme="filled" />
-                    <span>兑换码权益已领，去查看 <a @click="$router.push('/user/balance')">账单记录</a></span>
+                    <span>当前兑换次数已用完，去查看 <a @click="$router.push('/user/balance')">账单记录</a></span>
                   </div>
                   <div v-else class="redeem-input-group">
                     <a-input
@@ -254,7 +254,10 @@ export default {
       siteConfig: {},
       redemptionCode: '',
       redeemLoading: false,
-      hasRedeemed: false
+      hasRedeemed: false,
+      redeemedCount: 0,
+      allowedRedeemCount: 1,
+      remainingRedeemCount: 1
     }
   },
   computed: {
@@ -480,7 +483,7 @@ export default {
     },
     async handleRedeem() {
       if (this.hasRedeemed) {
-        this.$message.warning('您已使用过兑换码')
+        this.$message.warning('当前账户兑换次数已用完')
         return
       }
       if (!this.redemptionCode.trim()) {
@@ -490,9 +493,13 @@ export default {
       this.redeemLoading = true
       try {
         const res = await redeemCode({ code: this.redemptionCode.trim() })
+        const data = res.data || {}
         this.$message.success(res.message || '账户额度已刷新')
         this.redemptionCode = ''
-        this.hasRedeemed = true
+        this.redeemedCount = Number(data.redeemed_count || (this.redeemedCount + 1))
+        this.allowedRedeemCount = Number(data.allowed_redeem_count || this.allowedRedeemCount)
+        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
+        this.hasRedeemed = this.remainingRedeemCount <= 0
         this.fetchBalance()
       } catch (e) {
         console.error('Redeem failed:', e)
@@ -505,8 +512,14 @@ export default {
         const res = await getRedemptionStatus()
         const data = res.data || {}
         this.hasRedeemed = data.has_redeemed || false
+        this.redeemedCount = Number(data.redeemed_count || 0)
+        this.allowedRedeemCount = Number(data.allowed_redeem_count || 1)
+        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
       } catch (e) {
         this.hasRedeemed = false
+        this.redeemedCount = 0
+        this.allowedRedeemCount = 1
+        this.remainingRedeemCount = 1
       }
     }
   }

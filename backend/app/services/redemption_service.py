@@ -14,6 +14,7 @@ from sqlalchemy import and_, or_
 from app.models.redemption import RedemptionCode
 from app.models.log import UserBalance
 from app.models.agent import AgentRedemptionAmountRule, AgentBalance, AgentBalanceRecord
+from app.models.user import SysUser
 from app.core.exceptions import ServiceException
 
 
@@ -135,19 +136,34 @@ class RedemptionService:
     @staticmethod
     def check_user_redeemed(db: Session, user_id: int) -> bool:
         """
-        Check if a user has already redeemed any code.
+        Check whether the user's current redemption quota is exhausted.
 
         Args:
             user_id: The user to check.
 
         Returns:
-            True if the user has already redeemed a code.
+            True if the user cannot redeem any more codes right now.
         """
-        count = db.query(RedemptionCode).filter(
+        status = RedemptionService.get_user_redemption_info(db, user_id)
+        return bool(status.get("has_redeemed"))
+
+    @staticmethod
+    def _get_user_or_raise(db: Session, user_id: int) -> SysUser:
+        user = db.query(SysUser).filter(SysUser.id == user_id).first()
+        if not user:
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+        return user
+
+    @staticmethod
+    def _get_user_redemption_usage(db: Session, user_id: int) -> tuple[int, int, int]:
+        user = RedemptionService._get_user_or_raise(db, user_id)
+        redeemed_count = db.query(RedemptionCode).filter(
             RedemptionCode.used_by == user_id,
             RedemptionCode.status == "used"
         ).count()
-        return count > 0
+        allowed_count = 1 + int(getattr(user, "redemption_reset_count", 0) or 0)
+        remaining_count = max(allowed_count - redeemed_count, 0)
+        return redeemed_count, allowed_count, remaining_count
 
     @staticmethod
     def get_user_redemption_info(db: Session, user_id: int) -> dict:
@@ -158,27 +174,36 @@ class RedemptionService:
             user_id: The user to query.
 
         Returns:
-            Dict with has_redeemed flag and optional redemption details.
+            Dict with compatibility flag `has_redeemed` plus redeem usage counters.
         """
+        redeemed_count, allowed_count, remaining_count = RedemptionService._get_user_redemption_usage(db, user_id)
         record = db.query(RedemptionCode).filter(
             RedemptionCode.used_by == user_id,
             RedemptionCode.status == "used"
-        ).first()
+        ).order_by(RedemptionCode.used_at.desc(), RedemptionCode.id.desc()).first()
 
         if record:
             return {
-                "has_redeemed": True,
+                "has_redeemed": remaining_count <= 0,
+                "redeemed_count": redeemed_count,
+                "allowed_redeem_count": allowed_count,
+                "remaining_redeem_count": remaining_count,
                 "redeemed_amount": float(record.amount),
                 "redeemed_at": record.used_at.isoformat() if record.used_at else None,
             }
-        return {"has_redeemed": False}
+        return {
+            "has_redeemed": False,
+            "redeemed_count": redeemed_count,
+            "allowed_redeem_count": allowed_count,
+            "remaining_redeem_count": remaining_count,
+        }
 
     @staticmethod
     def redeem_code(db: Session, user_id: int, code: str) -> dict:
         """
         Redeem a code for a user.
 
-        Each user can only redeem ONE code in total.
+        Each user can redeem up to their currently allowed quota.
 
         Args:
             user_id: The user redeeming the code.
@@ -191,13 +216,13 @@ class RedemptionService:
             ServiceException: If code is invalid, already used, expired,
                               or user has already redeemed a code.
         """
-        # Check if user has already redeemed any code (one-time limit)
-        already_redeemed = db.query(RedemptionCode).filter(
-            RedemptionCode.used_by == user_id,
-            RedemptionCode.status == "used"
-        ).count()
-        if already_redeemed > 0:
-            raise ServiceException(400, "每位用户仅能使用一次兑换码，您已兑换过", "USER_ALREADY_REDEEMED")
+        redeemed_count, allowed_count, remaining_count = RedemptionService._get_user_redemption_usage(db, user_id)
+        if remaining_count <= 0:
+            raise ServiceException(
+                400,
+                f"当前账户可用兑换次数已用完（已使用 {redeemed_count}/{allowed_count} 次）",
+                "USER_ALREADY_REDEEMED",
+            )
 
         # Find the code with row-level lock to prevent concurrent redemption
         redemption = db.query(RedemptionCode).filter(
@@ -221,10 +246,7 @@ class RedemptionService:
             raise ServiceException(400, "兑换码已过期", "CODE_EXPIRED")
 
         if redemption.agent_id is not None:
-            from app.models.user import SysUser
-            user = db.query(SysUser).filter(SysUser.id == user_id).first()
-            if not user:
-                raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+            user = RedemptionService._get_user_or_raise(db, user_id)
             if int(user.agent_id or 0) != int(redemption.agent_id):
                 raise ServiceException(403, "兑换码不属于当前代理用户", "AGENT_REDEMPTION_SCOPE_MISMATCH")
 
@@ -250,6 +272,24 @@ class RedemptionService:
             "old_balance": old_balance,
             "new_balance": float(balance.balance),
             "redeemed_at": redemption.used_at.isoformat(),
+            "redeemed_count": redeemed_count + 1,
+            "allowed_redeem_count": allowed_count,
+            "remaining_redeem_count": max(allowed_count - redeemed_count - 1, 0),
+        }
+
+    @staticmethod
+    def reset_user_redemption_quota(db: Session, user_id: int) -> dict:
+        user = RedemptionService._get_user_or_raise(db, user_id)
+        user.redemption_reset_count = int(getattr(user, "redemption_reset_count", 0) or 0) + 1
+        db.commit()
+        redeemed_count, allowed_count, remaining_count = RedemptionService._get_user_redemption_usage(db, user_id)
+        return {
+            "user_id": user.id,
+            "username": user.username,
+            "redemption_reset_count": int(user.redemption_reset_count or 0),
+            "redeemed_count": redeemed_count,
+            "allowed_redeem_count": allowed_count,
+            "remaining_redeem_count": remaining_count,
         }
 
     @staticmethod

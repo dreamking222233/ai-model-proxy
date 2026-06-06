@@ -163,6 +163,17 @@
             </a>
           </a-tooltip>
           <a-popconfirm
+            v-if="record.status === 'used' && record.used_by"
+            title="重置后，该用户可再次兑换一个新的兑换码，确定继续？"
+            @confirm="handleResetUser(record)"
+          >
+            <a-tooltip title="重置该用户兑换资格">
+              <a class="action-link action-reset">
+                <a-icon type="redo" />
+              </a>
+            </a-tooltip>
+          </a-popconfirm>
+          <a-popconfirm
             v-if="record.status === 'unused'"
             title="确定删除此兑换码？"
             @confirm="handleDelete(record.id)"
@@ -353,7 +364,13 @@
 </template>
 
 <script>
-import { listRedemptionCodes, createRedemptionCode, batchCreateRedemptionCodes, deleteRedemptionCode } from '@/api/redemption'
+import {
+  listRedemptionCodes,
+  createRedemptionCode,
+  batchCreateRedemptionCodes,
+  deleteRedemptionCode,
+  resetUserRedemption
+} from '@/api/redemption'
 import { formatDate, formatUtcDate } from '@/utils'
 
 export default {
@@ -395,6 +412,7 @@ export default {
       previewModalVisible: false,
       previewCode: null,
       exportLoading: false,
+      resetLoadingUserId: null,
       statistics: {
         unused: 0,
         used: 0,
@@ -574,6 +592,23 @@ export default {
     showPreview(record) {
       this.previewCode = record
       this.previewModalVisible = true
+    },
+    async handleResetUser(record) {
+      if (!record.used_by) {
+        this.$message.warning('该兑换码缺少用户信息，无法重置')
+        return
+      }
+      this.resetLoadingUserId = record.used_by
+      try {
+        const res = await resetUserRedemption({ user_id: record.used_by })
+        const data = res.data || {}
+        const username = record.username || data.username || `ID:${record.used_by}`
+        this.$message.success(`${username} 的兑换资格已重置，当前剩余 ${data.remaining_redeem_count || 0} 次`)
+      } catch (e) {
+        // error handled by interceptor
+      } finally {
+        this.resetLoadingUserId = null
+      }
     },
     async handleDelete(id) {
       try {
@@ -974,6 +1009,10 @@ export default {
 
         &:hover {
           transform: scale(1.2);
+        }
+
+        &.action-reset {
+          color: #13c2c2;
         }
 
         &.action-delete {

@@ -118,10 +118,16 @@
         </a-tag>
       </template>
 
-      <template slot="enabled" slot-scope="text">
-        <a-tag :color="text ? 'green' : 'red'" class="status-tag">
-          {{ text ? '已启用' : '已禁用' }}
-        </a-tag>
+      <template slot="enabled" slot-scope="text, record">
+        <div class="channel-status-switch">
+          <a-switch
+            :checked="Boolean(text)"
+            :loading="Boolean(switchLoadingMap[record.id])"
+            checked-children="启用"
+            un-checked-children="禁用"
+            @change="checked => handleToggleEnabled(record, checked)"
+          />
+        </div>
       </template>
 
       <template slot="health_check_enabled" slot-scope="text">
@@ -335,6 +341,7 @@ export default {
       searchFocused: false,
       filterStatus: 'all',
       selectedRowKeys: [],
+      switchLoadingMap: {},
       showSuccessAnimation: false,
       pagination: {
         current: 1,
@@ -672,6 +679,20 @@ export default {
         console.error('Failed to delete channel:', err)
       }
     },
+    async handleToggleEnabled(record, enabled) {
+      const channelId = record.id
+      this.$set(this.switchLoadingMap, channelId, true)
+      try {
+        await updateChannel(channelId, { enabled })
+        record.enabled = enabled
+        this.$message.success(enabled ? '渠道已启用' : '渠道已禁用')
+      } catch (err) {
+        console.error('Failed to toggle channel status:', err)
+        this.$message.error('渠道状态更新失败')
+      } finally {
+        this.$set(this.switchLoadingMap, channelId, false)
+      }
+    },
     async handleModalOk() {
       // Validate all fields
       this.validateField('name')
@@ -980,6 +1001,12 @@ export default {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
+    }
+
+    .channel-status-switch {
+      display: flex;
+      align-items: center;
+      min-height: 32px;
     }
 
     .muted-text {

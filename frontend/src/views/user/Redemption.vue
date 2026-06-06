@@ -24,11 +24,12 @@
           <a-icon type="check-circle" />
         </div>
         <div class="redeemed-banner-content">
-          <h3>您已成功兑换过</h3>
+          <h3>当前兑换次数已用完</h3>
           <p>
-            每位用户仅能使用一次兑换码。您已于
+            您已于
             <span class="highlight">{{ formatTime(redeemedInfo.redeemed_at) }}</span>
-            兑换了 <span class="highlight">${{ (redeemedInfo.redeemed_amount || 0).toFixed(4) }}</span>。
+            兑换了 <span class="highlight">${{ (redeemedInfo.redeemed_amount || 0).toFixed(4) }}</span>，
+            当前已使用 <span class="highlight">{{ redeemedCount }}</span> / <span class="highlight">{{ allowedRedeemCount }}</span> 次。
           </p>
           <a-button type="primary" size="small" class="go-balance-btn" @click="$router.push('/user/balance')">
             <a-icon type="wallet" /> 查看余额
@@ -43,10 +44,10 @@
             <div class="redemption-icon-circle" :class="{ 'is-locked': hasRedeemed }">
               <a-icon :type="hasRedeemed ? 'lock' : 'gift'" />
             </div>
-            <h3 class="redemption-title">{{ hasRedeemed ? '兑换码已使用' : '输入兑换码' }}</h3>
+            <h3 class="redemption-title">{{ hasRedeemed ? '兑换次数已用完' : '输入兑换码' }}</h3>
             <p class="redemption-hint">
-              <template v-if="hasRedeemed">该账户兑换权限已锁定，无法再次兑换</template>
-              <template v-else>请输入管理员提供的密钥，每个账户仅限激活一次</template>
+              <template v-if="hasRedeemed">当前账户暂无剩余兑换次数，如已被管理员重置请刷新后重试</template>
+              <template v-else>请输入管理员提供的密钥，当前剩余 {{ remainingRedeemCount }} 次兑换机会</template>
             </p>
 
             <div class="form-container">
@@ -80,11 +81,11 @@
               </a-form>
             </div>
 
-            <div v-if="!hasRedeemed" class="safety-tip">
-              <a-icon type="safety-certificate" />
-              <span>本系统采用端到端加密验证，确保充值过程绝对安全</span>
-            </div>
+          <div v-if="!hasRedeemed" class="safety-tip">
+            <a-icon type="safety-certificate" />
+            <span>本次兑换成功后，剩余次数将更新为 {{ Math.max(remainingRedeemCount - 1, 0) }} 次</span>
           </div>
+        </div>
         </div>
 
         <!-- Instructions Card -->
@@ -104,7 +105,7 @@
           
           <div class="warning-alert">
             <a-icon type="warning" theme="filled" />
-            <div class="alert-text">每位用户仅限一次，兑换后不可撤回，请知晓。</div>
+            <div class="alert-text">每次兑换都会消耗 1 次资格，管理员重置后可再次兑换新码。</div>
           </div>
         </div>
       </div>
@@ -124,6 +125,9 @@ export default {
       loading: false,
       statusLoading: true,
       hasRedeemed: false,
+      redeemedCount: 0,
+      allowedRedeemCount: 1,
+      remainingRedeemCount: 1,
       redeemedInfo: {},
       instructions: [
         { title: '获取兑换码', desc: '向官方客服申请或通过平台限时活动获得激活码。' },
@@ -143,16 +147,22 @@ export default {
         const res = await getRedemptionStatus()
         const data = res.data || {}
         this.hasRedeemed = data.has_redeemed || false
+        this.redeemedCount = Number(data.redeemed_count || 0)
+        this.allowedRedeemCount = Number(data.allowed_redeem_count || 1)
+        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
         this.redeemedInfo = data
       } catch (err) {
         this.hasRedeemed = false
+        this.redeemedCount = 0
+        this.allowedRedeemCount = 1
+        this.remainingRedeemCount = 1
       } finally {
         this.statusLoading = false
       }
     },
     async handleRedeem() {
       if (this.hasRedeemed) {
-        this.$message.warning('您已使用过兑换码，每位用户仅限一次')
+        this.$message.warning('当前账户兑换次数已用完')
         return
       }
       if (!this.code || !this.code.trim()) {
@@ -165,10 +175,14 @@ export default {
         const res = await redeemCode({ code: this.code.trim() })
         this.$message.success(res.message || '激活成功！额度已同步至钱包')
         this.code = ''
-        this.hasRedeemed = true
+        const data = res.data || {}
+        this.redeemedCount = Number(data.redeemed_count || (this.redeemedCount + 1))
+        this.allowedRedeemCount = Number(data.allowed_redeem_count || this.allowedRedeemCount)
+        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
+        this.hasRedeemed = this.remainingRedeemCount <= 0
         this.redeemedInfo = {
-          redeemed_amount: res.data && res.data.amount,
-          redeemed_at: res.data && res.data.redeemed_at
+          redeemed_amount: data.amount,
+          redeemed_at: data.redeemed_at
         }
         setTimeout(() => {
           this.$router.push('/user/balance')

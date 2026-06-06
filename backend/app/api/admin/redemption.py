@@ -22,6 +22,10 @@ class BatchCreateCodeRequest(BaseModel):
     expires_days: Optional[int] = Field(None, ge=1, le=365, description="有效期天数")
 
 
+class ResetUserRedemptionRequest(BaseModel):
+    user_id: int = Field(..., gt=0, description="目标用户ID")
+
+
 router = APIRouter(prefix="/api/admin/redemption", tags=["管理员-兑换码"])
 
 
@@ -71,3 +75,13 @@ def delete_code(
     """删除兑换码（仅未使用的）"""
     RedemptionService.delete_code(db, code_id)
     return ResponseModel(message="兑换码删除成功")
+
+
+@router.post("/reset-user", response_model=ResponseModel, dependencies=[Depends(require_admin)])
+def reset_user_redemption(
+    data: ResetUserRedemptionRequest,
+    db: Session = Depends(get_db),
+):
+    """重置指定用户的兑换资格，允许再次兑换一个新码"""
+    result = RedemptionService.reset_user_redemption_quota(db, data.user_id)
+    return ResponseModel(data=result, message="用户兑换资格已重置")

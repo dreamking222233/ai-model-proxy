@@ -31,6 +31,7 @@ class SysUser(Base):
     last_login_ip = Column(String(45), nullable=True)
     subscription_type = Column(String(16), nullable=False, default="balance", comment="balance=按量计费, unlimited/quota=套餐缓存态")
     subscription_expires_at = Column(DateTime, nullable=True, comment="套餐过期时间")
+    redemption_reset_count = Column(BigInteger, nullable=False, default=0, comment="兑换码资格重置次数")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

@@ -33,6 +33,14 @@ export function deleteRedemptionCode(id) {
   })
 }
 
+export function resetUserRedemption(data) {
+  return request({
+    url: '/api/admin/redemption/reset-user',
+    method: 'post',
+    data
+  })
+}
+
 // ==================== User Redemption ====================
 
 export function redeemCode(data) {
@@ -43,7 +51,7 @@ export function redeemCode(data) {
   })
 }
 
-// 查询当前用户兑换状态（是否已使用过兑换码）
+// 查询当前用户兑换状态（剩余兑换次数、最近一次兑换信息）
 export function getRedemptionStatus() {
   return request({
     url: '/api/user/redemption/status',

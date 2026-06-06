@@ -42,6 +42,7 @@ CREATE TABLE `sys_user` (
     `avatar` VARCHAR(512) DEFAULT NULL,
     `last_login_at` DATETIME DEFAULT NULL,
     `last_login_ip` VARCHAR(45) DEFAULT NULL,
+    `redemption_reset_count` BIGINT NOT NULL DEFAULT 0 COMMENT '兑换码资格重置次数',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),

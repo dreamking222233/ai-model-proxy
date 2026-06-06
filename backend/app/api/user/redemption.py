@@ -22,7 +22,7 @@ def get_redemption_status(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """查询当前用户的兑换状态（是否已使用过兑换码）"""
+    """查询当前用户的兑换状态（剩余兑换次数、最近一次兑换信息）"""
     info = RedemptionService.get_user_redemption_info(db, current_user.id)
     return ResponseModel(data=info)
 
@@ -33,6 +33,6 @@ def redeem_code(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """兑换码充值（每位用户仅能使用一次）"""
+    """兑换码充值（按当前剩余兑换次数校验）"""
     result = RedemptionService.redeem_code(db, current_user.id, data.code)
     return ResponseModel(data=result, message=f"兑换成功，充值 ${result['amount']:.4f}")

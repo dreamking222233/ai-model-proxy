@@ -23,6 +23,9 @@
             </div>
             <div class="hero-right">
               <div class="glass-action-group">
+                <a-button class="glass-btn speed" @click="openSpeedTest">
+                  <a-icon type="thunderbolt" /> 线路测速
+                </a-button>
                 <a-button class="glass-btn secondary" @click="$router.push('/user/balance?tab=usage')">
                   <a-icon type="audit" /> 账单明细
                 </a-button>
@@ -193,7 +196,7 @@
                 :key="link.title"
                 class="quick-card-mini animate__animated animate__fadeInRight"
                 :style="{ animationDelay: `${index * 0.1}s` }"
-                @click="$router.push(link.route)"
+                @click="handleQuickLink(link)"
               >
                 <div class="mini-icon" :style="{ background: link.gradient }">
                   <a-icon :type="link.icon" />
@@ -208,7 +211,7 @@
               <!-- Extra Model Marketplace Link -->
               <div 
                 class="quick-card-mini special animate__animated animate__fadeInRight" 
-                style="animation-delay: 0.3s"
+                style="animation-delay: 0.4s"
                 @click="$router.push('/user/models')"
               >
                 <div class="mini-icon market">
@@ -257,7 +260,8 @@ export default {
       hasRedeemed: false,
       redeemedCount: 0,
       allowedRedeemCount: 1,
-      remainingRedeemCount: 1
+      remainingRedeemCount: 1,
+      speedTestUrl: 'https://www.tcptest.cn/http/https://api.xiaoleai.team'
     }
   },
   computed: {
@@ -337,6 +341,13 @@ export default {
           route: '/user/balance?tab=usage',
           icon: 'bar-chart',
           gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)'
+        },
+        {
+          title: '接口测速',
+          description: '检测 API 域名访问延迟。',
+          externalUrl: this.speedTestUrl,
+          icon: 'thunderbolt',
+          gradient: 'linear-gradient(135deg, #ff9a44 0%, #fc6076 100%)'
         }
       ]
     },
@@ -385,6 +396,16 @@ export default {
   },
   methods: {
     formatDate,
+    openSpeedTest() {
+      window.open(this.speedTestUrl, '_blank', 'noopener,noreferrer')
+    },
+    handleQuickLink(link) {
+      if (link.externalUrl) {
+        window.open(link.externalUrl, '_blank', 'noopener,noreferrer')
+        return
+      }
+      this.$router.push(link.route)
+    },
     refreshData() {
       this.fetchProfile()
       this.fetchBalance()
@@ -572,6 +593,17 @@ export default {
           &.primary {
             background: linear-gradient(135deg, #667eea, #764ba2); border: none; box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
             &:hover { transform: translateY(-3px); box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4); }
+          }
+          &.speed {
+            background: linear-gradient(135deg, #ff9a44, #fc6076);
+            border: none;
+            color: #fff;
+            box-shadow: 0 10px 20px rgba(252, 96, 118, 0.22);
+            &:hover {
+              color: #fff;
+              transform: translateY(-3px);
+              box-shadow: 0 15px 30px rgba(252, 96, 118, 0.32);
+            }
           }
           &.secondary { background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.6); color: #595959; &:hover { background: rgba(255, 255, 255, 0.8); color: #667eea; } }
         }

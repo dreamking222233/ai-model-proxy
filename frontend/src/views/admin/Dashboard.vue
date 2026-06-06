@@ -28,7 +28,7 @@
 
     <a-spin :spinning="loading" tip="加载中...">
       <a-row :gutter="16" class="stat-row">
-        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="24" :md="8">
+        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="24" :sm="12" :xl="8">
           <div
             class="stat-card-wrapper"
             :style="{ animationDelay: `${index * 0.08}s` }"
@@ -176,6 +176,24 @@ export default {
   computed: {
     statCards() {
       return [
+        {
+          title: '用户总数',
+          value: this.stats.user_total || 0,
+          icon: 'team',
+          gradient: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
+          class: 'users-card',
+          desc: '当前注册用户',
+          onClick: () => this.$router.push('/admin/users')
+        },
+        {
+          title: '模型总数',
+          value: this.stats.model_total || 0,
+          icon: 'appstore',
+          gradient: 'linear-gradient(135deg, #0f766e 0%, #14b8a6 100%)',
+          class: 'models-card',
+          desc: '当前已配置模型',
+          onClick: () => this.$router.push('/admin/models')
+        },
         {
           title: '今日请求次数',
           value: this.stats.today_requests || 0,

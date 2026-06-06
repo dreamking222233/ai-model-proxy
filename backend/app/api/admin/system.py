@@ -68,10 +68,15 @@ def get_dashboard_stats(
     current_user: SysUser = Depends(require_admin),
 ):
     from app.models.log import ConsumptionRecord, RequestLog
+    from app.models.model import UnifiedModel
     from sqlalchemy import func
     from app.services.log_service import LogService
 
     today, _ = LogService._get_timezone_day_window(1)
+    user_total = db.query(func.count(SysUser.id)).filter(
+        SysUser.role == "user"
+    ).scalar()
+    model_total = db.query(func.count(UnifiedModel.id)).scalar()
 
     today_requests = db.query(func.count(RequestLog.id)).filter(
         RequestLog.created_at >= today
@@ -87,6 +92,8 @@ def get_dashboard_stats(
     ).scalar()
 
     return ResponseModel(data={
+        "user_total": int(user_total or 0),
+        "model_total": int(model_total or 0),
         "today_requests": today_requests,
         "today_tokens": int(today_tokens),
         "today_cost": float(today_cost or 0),

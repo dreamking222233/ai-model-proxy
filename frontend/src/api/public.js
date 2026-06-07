@@ -6,3 +6,11 @@ export function getPublicSiteConfig() {
     method: 'get'
   })
 }
+
+export function getPublicModels() {
+  return request({
+    url: '/api/public/models',
+    method: 'get'
+  })
+}
+

@@ -38,6 +38,7 @@ def change_password(
 def get_usage_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    status: str = Query(None),
     start_date: str = Query(None),
     end_date: str = Query(None),
     db: Session = Depends(get_db),
@@ -45,8 +46,10 @@ def get_usage_logs(
 ):
     items, total = LogService.list_request_logs(
         db, page, page_size, user_id=current_user.id,
-        start_date=start_date, end_date=end_date
+        status=status, start_date=start_date, end_date=end_date,
+        include_internal_fields=True,
     )
+    items = LogService.build_user_visible_request_log_items(items)
 
     # Calculate summary statistics for the filtered date range
     summary = LogService.get_usage_summary(

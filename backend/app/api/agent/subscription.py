@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,16 @@ from app.services.agent_service import AgentService
 from app.services.subscription_service import SubscriptionService
 
 router = APIRouter(prefix="/api/agent/subscription", tags=["代理-套餐管理"])
+
+
+def _build_page_payload(items: list[dict], total: int, page: int, page_size: int) -> dict:
+    return {
+        "items": items,
+        "list": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/plans", response_model=ResponseModel)
@@ -63,6 +75,28 @@ def list_subscription_records(
         page_size=page_size,
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/active-users", response_model=ResponseModel)
+def list_active_subscription_users(
+    keyword: str = Query(None, description="按用户ID、用户名或邮箱查询"),
+    sort_order: str = Query("asc", description="剩余时长排序: asc/desc"),
+    expires_within_days: Optional[int] = Query(None, ge=1, le=3650, description="仅查询 N 天内到期"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_agent_admin),
+):
+    records, total = SubscriptionService.list_active_subscription_users(
+        db,
+        keyword=keyword,
+        sort_order=sort_order,
+        expires_within_days=expires_within_days,
+        agent_id=int(current_user.agent_id),
+        page=page,
+        page_size=page_size,
+    )
+    return ResponseModel(data=_build_page_payload(records, total, page, page_size))
 
 
 @router.post("/grant", response_model=ResponseModel)

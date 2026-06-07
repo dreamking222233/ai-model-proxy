@@ -262,6 +262,14 @@ export function listAgentSubscriptionRecords(params) {
   })
 }
 
+export function listAgentActiveSubscriptionUsers(params) {
+  return request({
+    url: '/api/agent/subscription/active-users',
+    method: 'get',
+    params
+  })
+}
+
 export function grantAgentSubscription(data) {
   return request({
     url: '/api/agent/subscription/grant',

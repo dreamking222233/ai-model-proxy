@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+import re
+from typing import Any, Optional
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -127,6 +128,173 @@ class LogService:
             return json.loads(details_json)
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
+
+    @staticmethod
+    def _sanitize_sensitive_error_json(value: Any) -> Any:
+        sensitive_keys = {
+            "actual_model",
+            "actual_model_name",
+            "model",
+            "channel",
+            "channel_id",
+            "channel_name",
+            "client_ip",
+            "user_id",
+            "username",
+            "user_api_key_id",
+            "api_key",
+        }
+        if isinstance(value, dict):
+            sanitized = {}
+            for key, item in value.items():
+                if str(key).lower() in sensitive_keys:
+                    sanitized[key] = "已隐藏"
+                else:
+                    sanitized[key] = LogService._sanitize_sensitive_error_json(item)
+            return sanitized
+        if isinstance(value, list):
+            return [LogService._sanitize_sensitive_error_json(item) for item in value]
+        return value
+
+    @staticmethod
+    def _mask_sensitive_error_text_match(match: re.Match) -> str:
+        token = match.group(0)
+        separator = "=" if "=" in token else ":"
+        key = token.split(separator, 1)[0].rstrip()
+        return f"{key}{separator}已隐藏"
+
+    @staticmethod
+    def _sanitize_user_visible_error_message(
+        error_message: Optional[str],
+        requested_model: Optional[str] = None,
+        actual_model: Optional[str] = None,
+        channel_name: Optional[str] = None,
+    ) -> Optional[str]:
+        """Remove routing details while keeping the customer-facing failure reason."""
+        text = str(error_message or "").strip()
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+            text = json.dumps(LogService._sanitize_sensitive_error_json(parsed), ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+        requested_text = str(requested_model or "").strip()
+        actual_text = str(actual_model or "").strip()
+        channel_text = str(channel_name or "").strip()
+
+        if actual_text and requested_text and actual_text != requested_text:
+            text = text.replace(actual_text, requested_text)
+            if actual_text.startswith("responses:"):
+                text = text.replace(actual_text.split(":", 1)[1], requested_text)
+        elif actual_text and actual_text != requested_text:
+            text = text.replace(actual_text, "请求模型")
+
+        if channel_text:
+            text = text.replace(channel_text, "上游通道")
+
+        # Normalize common internal routing fragments that can appear in raw upstream errors.
+        sensitive_key = (
+            r"actual_model_name|actual_model|channel_id|channel_name|"
+            r"user_api_key_id|client_ip|user_id|username|api_key|channel|model"
+        )
+        text = re.sub(
+            rf"(?i)([\"']?(?:{sensitive_key})[\"']?\s*:\s*)([\"']).*?\2",
+            r"\1\2已隐藏\2",
+            text,
+        )
+        text = re.sub(
+            rf"(?i)([\"']?(?:{sensitive_key})[\"']?\s*:\s*)(?![\"'])[^,}}\s]+",
+            r"\1已隐藏",
+            text,
+        )
+        text = re.sub(
+            rf"(?i)\b(?:{sensitive_key}|channel id|channel name)\s*[:=]\s*[^,\s;，；]+",
+            LogService._mask_sensitive_error_text_match,
+            text,
+        )
+        text = re.sub(r"(?i)\bon channel\s+[^:\s,;，；]+", "on upstream channel", text)
+        text = re.sub(r"(?i)(sk-[A-Za-z0-9_\-]{8})[A-Za-z0-9_\-]+", r"\1***", text)
+        return text
+
+    @staticmethod
+    def build_user_visible_request_log_items(items: list[dict]) -> list[dict]:
+        """Return a strict user-facing DTO for request logs."""
+        allowed_keys = {
+            "id",
+            "request_id",
+            "model",
+            "protocol_type",
+            "request_type",
+            "billing_type",
+            "is_stream",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "billable_input_tokens",
+            "raw_input_tokens",
+            "raw_output_tokens",
+            "raw_total_tokens",
+            "image_credits_charged",
+            "image_count",
+            "image_size",
+            "response_time_ms",
+            "cache_status",
+            "cache_hit_segments",
+            "cache_miss_segments",
+            "cache_bypass_segments",
+            "cache_reused_tokens",
+            "cache_new_tokens",
+            "cache_reused_chars",
+            "cache_new_chars",
+            "logical_input_tokens",
+            "upstream_input_tokens",
+            "upstream_cache_read_input_tokens",
+            "billable_cache_read_input_tokens",
+            "upstream_cache_creation_input_tokens",
+            "upstream_cache_creation_5m_input_tokens",
+            "upstream_cache_creation_1h_input_tokens",
+            "upstream_prompt_cache_status",
+            "raw_status",
+            "accounting_failed_after_success",
+            "status",
+            "error_message",
+            "subscription_cycle_id",
+            "quota_metric",
+            "quota_consumed_amount",
+            "quota_limit_snapshot",
+            "quota_used_after",
+            "quota_cycle_date",
+            "cache_read_cost",
+            "input_price_per_million_snapshot",
+            "output_price_per_million_snapshot",
+            "price_multiplier_snapshot",
+            "fast_price_multiplier_snapshot",
+            "context_tokens_snapshot",
+            "context_token_threshold_snapshot",
+            "context_price_multiplier_snapshot",
+            "effective_price_multiplier_snapshot",
+            "service_tier",
+            "token_multiplier_snapshot",
+            "input_cost",
+            "output_cost",
+            "total_cost",
+            "created_at",
+        }
+        result: list[dict] = []
+        for item in items:
+            public_item = {key: item.get(key) for key in allowed_keys if key in item}
+            public_item["model"] = item.get("model") or item.get("requested_model") or "-"
+            public_item["error_message"] = LogService._sanitize_user_visible_error_message(
+                item.get("error_message"),
+                item.get("requested_model") or item.get("model"),
+                item.get("actual_model"),
+                item.get("channel_name"),
+            )
+            result.append(public_item)
+        return result
 
     @staticmethod
     def _is_accounting_failure_after_success(status: Optional[str], error_message: Optional[str], total_tokens: int) -> bool:

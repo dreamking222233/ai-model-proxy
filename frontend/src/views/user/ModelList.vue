@@ -133,7 +133,7 @@
             >
               <div class="card-glass"></div>
               <div class="card-content">
-                <div class="card-top">
+                <div class="card-main-info">
                   <div class="model-avatar" :style="{ background: `linear-gradient(135deg, ${getProviderColor(model.model_name)}, ${adjustColor(getProviderColor(model.model_name), -20)})` }">
                     <img
                       v-if="getProvider(model.model_name).icon"
@@ -143,61 +143,17 @@
                     >
                     <span v-else class="initial-letter">{{ getProviderLetter(model.model_name) }}</span>
                   </div>
-                  <div class="model-info">
-                    <div class="model-name-group">
-                      <h3 class="model-name">{{ model.model_name }}</h3>
-                      <div class="model-status-dot"></div>
-                    </div>
-                    <div class="provider-label">{{ getProvider(model.model_name).label }}</div>
-                  </div>
-                  <div class="card-actions">
-                    <a-tooltip :title="copyingId === model.id ? '复制成功!' : '复制模型名称'">
-                      <button
-                        class="icon-btn copy-action-btn"
-                        :class="{ 'success': copyingId === model.id }"
-                        @click="handleCopy(model)"
-                      >
-                        <a-icon :type="copyingId === model.id ? 'check' : 'copy'" />
-                      </button>
-                    </a-tooltip>
-                  </div>
+                  <h3 class="model-display-name">{{ model.display_name || model.model_name }}</h3>
                 </div>
-
-                <div class="card-middle">
-                  <div class="pricing-display">
-                    <template v-if="model.billing_type === 'image_credit'">
-                      <div class="price-item image-price">
-                        <span class="label">{{ model.model_type === 'video' ? '视频消耗' : '图片消耗' }}</span>
-                        <span class="value">{{ getImageCreditText(model) }}</span>
-                      </div>
-                    </template>
-                    <template v-else>
-                      <div class="price-row">
-                        <div class="price-item">
-                          <span class="label">Input</span>
-                          <span class="value">${{ model.input_price }} <small>/1M</small></span>
-                        </div>
-                        <div class="price-divider"></div>
-                        <div class="price-item">
-                          <span class="label">Output</span>
-                          <span class="value">${{ model.output_price }} <small>/1M</small></span>
-                        </div>
-                      </div>
-                    </template>
-                  </div>
-                </div>
-
-                <div class="card-bottom">
-                  <div class="tag-group">
-                    <span v-if="model.billing_type === 'image_credit'" class="glass-tag gold">按媒体积分计费</span>
-                    <span v-else-if="model.billing_type === 'token' || model.input_price > 0 || model.output_price > 0" class="glass-tag blue">按 Token 计费</span>
-                    <span v-else class="glass-tag green">免费使用</span>
-
-                    <span v-if="model.model_type === 'image'" class="glass-tag purple">图像生成</span>
-                    <span v-else-if="model.model_type === 'video'" class="glass-tag purple">视频生成</span>
-                    <span v-else-if="model.max_tokens" class="glass-tag grey">{{ formatTokens(model.max_tokens) }} Context</span>
-                  </div>
-                </div>
+                <a-tooltip :title="copyingId === model.id ? '复制成功!' : '复制模型名称'">
+                  <button
+                    class="copy-action-btn-mini"
+                    :class="{ 'success': copyingId === model.id }"
+                    @click.stop="handleCopy(model)"
+                  >
+                    <a-icon :type="copyingId === model.id ? 'check' : 'copy'" />
+                  </button>
+                </a-tooltip>
               </div>
             </div>
           </transition-group>
@@ -213,9 +169,9 @@
 <script>
 import { listAvailableModels } from '@/api/model'
 import anthropicIcon from '@/assets/provider-icons/anthropic.svg'
-import openaiIcon from '@/assets/provider-icons/openai.svg'
+const openaiIcon = '/img/openai.053af0bb.svg'
 import googleIcon from '@/assets/provider-icons/google.svg'
-import grokIcon from '@/assets/provider-icons/grok.svg'
+const grokIcon = '/img/grok.97f7cd6e.svg'
 
 const PROVIDER_RULES = [
   { key: 'claude', label: 'Anthropic', color: '#d97706', icon: anthropicIcon },
@@ -647,22 +603,23 @@ export default {
   /* ===== Model Cards Optimization (Glassmorphism) ===== */
   .model-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
   }
 
   .model-card-v2 {
     position: relative;
-    border-radius: 20px;
+    border-radius: 12px;
     overflow: hidden;
     background: rgba(255, 255, 255, 0.75);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.6);
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: all 0.3s ease;
+    cursor: pointer;
     
     &:hover {
-      transform: translateY(-8px);
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
       border-color: rgba(102, 126, 234, 0.3);
       
       .card-glass {
@@ -670,7 +627,7 @@ export default {
       }
       
       .model-avatar {
-        transform: scale(1.1) rotate(5deg);
+        transform: scale(1.05);
       }
     }
 
@@ -682,85 +639,64 @@ export default {
       bottom: 0;
       background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.02) 100%);
       opacity: 0;
-      transition: opacity 0.4s;
+      transition: opacity 0.3s;
       pointer-events: none;
     }
 
     .card-content {
-      padding: 24px;
+      padding: 10px 16px;
       position: relative;
       z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
     }
 
-    .card-top {
+    .card-main-info {
       display: flex;
-      align-items: flex-start;
-      gap: 16px;
-      margin-bottom: 24px;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 0;
     }
 
     .model-avatar {
-      width: 52px;
-      height: 52px;
-      border-radius: 16px;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
       color: #fff;
-      font-size: 20px;
+      font-size: 11px;
       font-weight: 800;
-      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-      transition: all 0.4s;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+      transition: all 0.3s;
       flex-shrink: 0;
 
       .provider-icon {
-        width: 32px;
-        height: 32px;
+        width: 16px;
+        height: 16px;
         object-fit: contain;
         filter: brightness(0) invert(1);
       }
     }
 
-    .model-info {
-      flex: 1;
-      min-width: 0;
+    .model-display-name {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #2d3748;
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    .model-name-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-      
-      .model-name {
-        font-size: 16px;
-        font-weight: 700;
-        color: #1a202c;
-        margin: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      
-      .model-status-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: #48bb78;
-        box-shadow: 0 0 8px rgba(72, 187, 120, 0.6);
-      }
-    }
-
-    .provider-label {
-      font-size: 12px;
-      color: #718096;
-      font-weight: 500;
-    }
-
-    .icon-btn {
-      width: 36px;
-      height: 36px;
-      border-radius: 12px;
+    .copy-action-btn-mini {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
       border: none;
       background: #f7fafc;
       color: #a0aec0;
@@ -769,103 +705,16 @@ export default {
       align-items: center;
       justify-content: center;
       transition: all 0.3s;
+      flex-shrink: 0;
       
       &:hover {
         background: #edf2f7;
         color: #667eea;
-        transform: rotate(15deg);
       }
       
       &.success {
         background: #48bb78;
         color: #fff;
-        transform: scale(1.1);
-      }
-    }
-
-    .card-middle {
-      margin-bottom: 24px;
-    }
-
-    .pricing-display {
-      background: #f8fafc;
-      border-radius: 14px;
-      padding: 14px 18px;
-      
-      .price-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-      }
-      
-      .price-divider {
-        width: 1px;
-        height: 24px;
-        background: #e2e8f0;
-      }
-      
-      .price-item {
-        display: flex;
-        flex-direction: column;
-        
-        .label {
-          font-size: 10px;
-          color: #a0aec0;
-          text-transform: uppercase;
-          letter-spacing: 1px;
-          margin-bottom: 2px;
-        }
-        
-        .value {
-          font-size: 14px;
-          font-weight: 700;
-          color: #2d3748;
-          font-family: 'SF Mono', 'Monaco', monospace;
-          
-          small {
-            font-size: 10px;
-            font-weight: 400;
-            color: #718096;
-          }
-        }
-      }
-      
-      .image-price {
-        align-items: center;
-      }
-    }
-
-    .tag-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .glass-tag {
-      padding: 4px 10px;
-      border-radius: 8px;
-      font-size: 11px;
-      font-weight: 600;
-      
-      &.blue {
-        background: rgba(66, 153, 225, 0.1);
-        color: #3182ce;
-      }
-      &.gold {
-        background: rgba(236, 201, 75, 0.1);
-        color: #b7791f;
-      }
-      &.green {
-        background: rgba(72, 187, 120, 0.1);
-        color: #38a169;
-      }
-      &.purple {
-        background: rgba(159, 122, 234, 0.1);
-        color: #805ad5;
-      }
-      &.grey {
-        background: rgba(160, 174, 192, 0.1);
-        color: #4a5568;
       }
     }
   }
@@ -904,7 +753,7 @@ export default {
   /* ===== Responsive ===== */
   @media (max-width: 1200px) {
     .model-grid {
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     }
   }
 

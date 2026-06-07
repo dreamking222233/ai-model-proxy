@@ -44,6 +44,98 @@
         </a-card>
       </a-tab-pane>
 
+      <a-tab-pane key="active-users" tab="套餐用户">
+        <a-card class="table-card" :bordered="false">
+          <div class="table-toolbar toolbar-wrap">
+            <div class="toolbar-filters">
+              <a-input-search
+                v-model="activeUserFilters.keyword"
+                placeholder="输入用户ID、用户名或邮箱"
+                enter-button="查询"
+                allowClear
+                style="width: 280px"
+                @search="handleActiveUserSearch"
+                @change="handleActiveUserKeywordChange"
+              />
+              <a-select
+                v-model="activeUserFilters.sort_order"
+                style="width: 160px"
+                @change="handleActiveUserFilterChange"
+              >
+                <a-select-option value="asc">快到期优先</a-select-option>
+                <a-select-option value="desc">剩余最多优先</a-select-option>
+              </a-select>
+              <a-select
+                v-model="activeUserFilters.expires_within_days"
+                placeholder="到期筛选"
+                style="width: 150px"
+                allowClear
+                @change="handleActiveUserFilterChange"
+              >
+                <a-select-option :value="3">3 天内到期</a-select-option>
+                <a-select-option :value="7">7 天内到期</a-select-option>
+                <a-select-option :value="15">15 天内到期</a-select-option>
+              </a-select>
+            </div>
+            <div class="toolbar-actions">
+              <a-button @click="fetchActiveUsers">
+                <a-icon type="reload" />
+                刷新
+              </a-button>
+              <a-button @click="handleResetActiveUserFilters">
+                重置
+              </a-button>
+            </div>
+          </div>
+          <a-table
+            :columns="activeUserColumns"
+            :data-source="activeUserList"
+            :loading="activeUserLoading"
+            row-key="id"
+            :pagination="activeUserPagination"
+            :scroll="{ x: 1100 }"
+            @change="handleActiveUserTableChange"
+          >
+            <template slot="activeUser" slot-scope="text, record">
+              <div class="user-cell">
+                <span class="username">{{ record.username || `用户 #${record.user_id}` }}</span>
+                <span class="email">ID: {{ record.user_id }}{{ record.email ? ` · ${record.email}` : '' }}</span>
+              </div>
+            </template>
+            <template slot="activePlan" slot-scope="text, record">
+              <div>
+                <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
+                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限套餐' }}
+                </a-tag>
+                <div class="sub-title">{{ record.plan_name || '-' }}</div>
+                <div class="sub-text">{{ formatPlanQuota(record) }}</div>
+              </div>
+            </template>
+            <template slot="activeRemaining" slot-scope="text, record">
+              <div>
+                <a-tag :color="getRemainingTagColor(record.remaining_days)">
+                  {{ formatRemainingTime(record) }}
+                </a-tag>
+                <div class="sub-text">结束：{{ formatDate(record.end_time) }}</div>
+              </div>
+            </template>
+            <template slot="activePeriod" slot-scope="text, record">
+              <div class="sub-text">
+                <div>开始：{{ formatDate(record.start_time) }}</div>
+                <div>结束：{{ formatDate(record.end_time) }}</div>
+              </div>
+            </template>
+            <template slot="activeCycle" slot-scope="text, record">
+              <div v-if="record.current_cycle" class="sub-text">
+                <div>已用 {{ formatQuota(record.current_cycle.used_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
+                <div>剩余 {{ formatQuota(record.current_cycle.remaining_amount, record.current_cycle.quota_metric || record.quota_metric) }}</div>
+              </div>
+              <span v-else class="muted">-</span>
+            </template>
+          </a-table>
+        </a-card>
+      </a-tab-pane>
+
       <a-tab-pane key="records" tab="发放记录">
         <a-card class="table-card" :bordered="false">
           <div class="table-toolbar">
@@ -147,7 +239,14 @@
 
 <script>
 import { formatDate } from '@/utils'
-import { listAgentPlans, grantAgentSubscription, listAgentSubscriptionRecords, listAgentUsers, getAgentUser } from '@/api/agent'
+import {
+  listAgentPlans,
+  grantAgentSubscription,
+  listAgentSubscriptionRecords,
+  listAgentActiveSubscriptionUsers,
+  listAgentUsers,
+  getAgentUser
+} from '@/api/agent'
 
 export default {
   name: 'AgentSubscriptionManage',
@@ -156,6 +255,7 @@ export default {
       activeTab: 'plans',
       loading: false,
       recordLoading: false,
+      activeUserLoading: false,
       submitting: false,
       userSearchLoading: false,
       userSearchTimer: null,
@@ -163,8 +263,22 @@ export default {
       visible: false,
       selectedPlan: null,
       plans: [],
+      activeUserList: [],
       records: [],
+      activeUserFilters: {
+        keyword: '',
+        sort_order: 'asc',
+        expires_within_days: undefined
+      },
       recordFilters: { status: '' },
+      activeUserPagination: {
+        current: 1,
+        pageSize: 20,
+        total: 0,
+        showSizeChanger: true,
+        showQuickJumper: true,
+        showTotal: total => `共 ${total} 个套餐用户`
+      },
       recordPagination: {
         current: 1,
         pageSize: 20,
@@ -192,6 +306,13 @@ export default {
         { title: '开始时间', dataIndex: 'start_time', key: 'start_time', width: 170, scopedSlots: { customRender: 'time' } },
         { title: '结束时间', dataIndex: 'end_time', key: 'end_time', width: 170, scopedSlots: { customRender: 'time' } },
         { title: '发放时间', dataIndex: 'created_at', key: 'created_at', width: 170, scopedSlots: { customRender: 'time' } }
+      ],
+      activeUserColumns: [
+        { title: '用户', key: 'activeUser', width: 220, scopedSlots: { customRender: 'activeUser' } },
+        { title: '套餐', key: 'activePlan', width: 220, scopedSlots: { customRender: 'activePlan' } },
+        { title: '剩余时长', key: 'activeRemaining', width: 170, scopedSlots: { customRender: 'activeRemaining' } },
+        { title: '有效期', key: 'activePeriod', width: 220, scopedSlots: { customRender: 'activePeriod' } },
+        { title: '当前周期', key: 'activeCycle', width: 220, scopedSlots: { customRender: 'activeCycle' } }
       ]
     }
   },
@@ -199,6 +320,8 @@ export default {
     const userId = Number(this.$route.query.user_id || 0)
     if (userId > 0) {
       this.grantForm.user_id = userId
+      this.activeTab = 'active-users'
+      this.activeUserFilters.keyword = String(userId)
       this.ensureUserOption(userId)
     }
     this.refreshAll()
@@ -207,6 +330,7 @@ export default {
     formatDate,
     refreshAll() {
       this.fetchPlans()
+      this.fetchActiveUsers()
       this.fetchRecords()
     },
     async fetchPlans() {
@@ -241,6 +365,48 @@ export default {
       this.recordPagination.current = pagination.current
       this.recordPagination.pageSize = pagination.pageSize
       this.fetchRecords()
+    },
+    handleActiveUserSearch() {
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    handleActiveUserKeywordChange(event) {
+      if (event && event.target && !event.target.value) {
+        this.handleActiveUserSearch()
+      }
+    },
+    handleActiveUserFilterChange() {
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    handleResetActiveUserFilters() {
+      this.activeUserFilters.keyword = ''
+      this.activeUserFilters.sort_order = 'asc'
+      this.activeUserFilters.expires_within_days = undefined
+      this.activeUserPagination.current = 1
+      this.fetchActiveUsers()
+    },
+    handleActiveUserTableChange(pagination) {
+      this.activeUserPagination.current = pagination.current
+      this.activeUserPagination.pageSize = pagination.pageSize
+      this.fetchActiveUsers()
+    },
+    async fetchActiveUsers() {
+      this.activeUserLoading = true
+      try {
+        const res = await listAgentActiveSubscriptionUsers({
+          keyword: this.activeUserFilters.keyword ? this.activeUserFilters.keyword.trim() : undefined,
+          sort_order: this.activeUserFilters.sort_order,
+          expires_within_days: this.activeUserFilters.expires_within_days,
+          page: this.activeUserPagination.current,
+          page_size: this.activeUserPagination.pageSize
+        })
+        const data = res.data || {}
+        this.activeUserList = data.items || data.list || []
+        this.activeUserPagination.total = data.total || 0
+      } finally {
+        this.activeUserLoading = false
+      }
     },
     openGrant(record) {
       if (!this.canGrantPlan(record)) {
@@ -362,6 +528,21 @@ export default {
     getStatusBadge(status) {
       const map = { active: 'processing', expired: 'default', cancelled: 'error' }
       return map[status] || 'default'
+    },
+    formatRemainingTime(record) {
+      const seconds = Number((record && record.remaining_seconds) || 0)
+      const days = Number((record && record.remaining_days) || 0)
+      if (seconds <= 0) return '已到期'
+      if (days >= 1) return `剩余 ${days} 天`
+      const hours = Math.max(1, Math.ceil(seconds / 3600))
+      return `剩余 ${hours} 小时`
+    },
+    getRemainingTagColor(days) {
+      const value = Number(days || 0)
+      if (value <= 3) return 'red'
+      if (value <= 7) return 'orange'
+      if (value <= 15) return 'gold'
+      return 'green'
     }
   }
 }
@@ -420,6 +601,18 @@ export default {
         font-weight: 700;
       }
     }
+
+    .toolbar-wrap {
+      flex-wrap: wrap;
+    }
+
+    .toolbar-filters,
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
   }
 
   .user-cell {
@@ -440,6 +633,18 @@ export default {
 
   .muted {
     color: #9ca3af;
+  }
+
+  .sub-title {
+    margin-top: 6px;
+    color: #111827;
+    font-weight: 600;
+  }
+
+  .sub-text {
+    color: #8c8c8c;
+    font-size: 12px;
+    line-height: 1.6;
   }
 
   .quota-stock-cell {

@@ -1584,6 +1584,7 @@ class SubscriptionService:
         keyword: Optional[str] = None,
         sort_order: str = "asc",
         expires_within_days: Optional[int] = None,
+        agent_id: Optional[int] = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict], int]:
@@ -1611,6 +1612,8 @@ class SubscriptionService:
             .join(SysUser, UserSubscription.user_id == SysUser.id)
             .filter(active_ranked_subscriptions.c.row_number == 1)
         )
+        if agent_id is not None:
+            query = query.filter(SysUser.agent_id == agent_id)
         keyword_text = str(keyword or "").strip()
         if keyword_text:
             like = f"%{keyword_text}%"

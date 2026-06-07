@@ -299,11 +299,13 @@ const routes = [
   },
   {
     path: '/',
-    redirect: '/login'
+    name: 'Home',
+    component: () => import('@/views/Home.vue'),
+    meta: { title: '首页 - AI大模型聚合平台' }
   },
   {
     path: '*',
-    redirect: '/login'
+    redirect: '/'
   }
 ]
 

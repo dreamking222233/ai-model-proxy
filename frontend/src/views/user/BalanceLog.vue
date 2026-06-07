@@ -270,7 +270,7 @@
 
         <!-- 状态列 -->
         <template slot="col_status" slot-scope="text, record">
-          <div class="status-indicator" :class="text" @click.stop="toggleExpandedRow(record)">
+          <div class="status-indicator" :class="text" @click.stop="handleStatusClick(record)">
             <span class="status-dot"></span>
             <span class="status-text">{{ getStatusLabel(text) }}</span>
           </div>
@@ -296,6 +296,164 @@
       </a-card>
     </div>
 
+    <a-modal
+      v-model="detailModalVisible"
+      :title="detailModalTitle"
+      :width="920"
+      :footer="null"
+      :getContainer="getModalContainer"
+      :bodyStyle="{ padding: '0' }"
+      wrapClassName="request-detail-modal"
+    >
+      <div class="detail-modal-shell">
+        <div class="detail-hero">
+          <div class="detail-hero-main">
+            <div class="detail-title-row">
+              <span class="detail-title">{{ detailModalTitle }}</span>
+              <a-badge v-if="selectedRecord.status === 'success'" status="success" text="成功" />
+              <a-badge v-else-if="selectedRecord.status === 'error' || selectedRecord.status === 'failed'" status="error" text="失败" />
+              <a-badge v-else-if="selectedRecord.status === 'timeout'" status="warning" text="超时" />
+              <a-badge v-else-if="selectedRecord.status === 'pending'" status="processing" text="处理中" />
+              <a-badge v-else status="default" :text="String(selectedRecord.status || '-')" />
+              <a-tag v-if="selectedRecord.request_type" class="detail-chip">{{ getRequestTypeText(selectedRecord) }}</a-tag>
+            </div>
+            <div class="detail-subtitle">
+              <div class="detail-subtitle-line">
+                <span class="detail-label">请求 ID</span>
+                <code class="request-id-code">{{ selectedRecord.request_id || '-' }}</code>
+                <a-icon v-if="selectedRecord.request_id" type="copy" class="copy-icon-inline" @click="copyText(selectedRecord.request_id, '请求 ID')" />
+              </div>
+              <div class="detail-subtitle-line detail-subtitle-line--muted">
+                <span>只展示用户可见请求信息，内部渠道与实际模型不对外显示</span>
+              </div>
+            </div>
+          </div>
+          <div class="detail-hero-metrics">
+            <div class="hero-metric">
+              <span class="hero-metric-label">响应时间</span>
+              <span v-if="selectedRecord.response_time_ms != null" class="hero-metric-value" :class="getRtClass(selectedRecord.response_time_ms)">
+                {{ formatResponseTime(selectedRecord.response_time_ms) }}<span class="response-time-unit">s</span>
+              </span>
+              <span v-else class="hero-metric-value text-muted">-</span>
+            </div>
+            <div class="hero-metric">
+              <span class="hero-metric-label">请求时间</span>
+              <span class="hero-metric-value">{{ selectedRecord.created_at ? formatTime(selectedRecord.created_at) : '-' }}</span>
+            </div>
+            <div class="hero-metric">
+              <span class="hero-metric-label">计费</span>
+              <span class="hero-metric-value">
+                <template v-if="isImageRequest(selectedRecord)">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 积分</template>
+                <template v-else>${{ formatCurrency(selectedRecord.total_cost || 0) }}</template>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">基础信息</div>
+          <div class="detail-grid detail-grid--meta">
+            <div class="detail-item">
+              <span class="detail-item-label">请求模型 ID</span>
+              <a-tag class="model-tag">{{ getDisplayModel(selectedRecord) }}</a-tag>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">请求类型</span>
+              <span class="detail-item-value">{{ getRequestTypeText(selectedRecord) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">计费方式</span>
+              <span class="detail-item-value">{{ getBillingTypeText(selectedRecord) }}</span>
+            </div>
+            <div class="detail-item" v-if="selectedRecord.quota_metric">
+              <span class="detail-item-label">套餐额度结算</span>
+              <span class="detail-item-value">
+                {{ formatQuotaAmount(selectedRecord.quota_consumed_amount, selectedRecord.quota_metric) }}
+                <span v-if="selectedRecord.quota_cycle_date" class="detail-item-subtext">/ 周期 {{ selectedRecord.quota_cycle_date }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">用量概览</div>
+          <div v-if="isImageRequest(selectedRecord)" class="detail-empty-state">
+            <span class="detail-empty-text">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 图片积分 / {{ getImageCountDisplay(selectedRecord) }} 张</span>
+            <span v-if="getImageSizeText(selectedRecord)" class="detail-empty-hint">{{ getImageSizeText(selectedRecord) }}</span>
+          </div>
+          <div v-else class="detail-kpi-grid detail-kpi-grid--user">
+            <div class="detail-kpi-card detail-kpi-card--input">
+              <span class="detail-kpi-label">输入</span>
+              <span class="detail-kpi-value">{{ formatNumber(getBillableInputTokens(selectedRecord)) }}</span>
+              <span class="detail-kpi-hint">计费输入 Token</span>
+            </div>
+            <div class="detail-kpi-card detail-kpi-card--output">
+              <span class="detail-kpi-label">输出</span>
+              <span class="detail-kpi-value">{{ formatNumber(selectedRecord.output_tokens || 0) }}</span>
+              <span class="detail-kpi-hint">输出 Token</span>
+            </div>
+            <div class="detail-kpi-card detail-kpi-card--total">
+              <span class="detail-kpi-label">合计</span>
+              <span class="detail-kpi-value">{{ formatNumber(selectedRecord.total_tokens || 0) }}</span>
+              <span class="detail-kpi-hint">本次总 Token</span>
+            </div>
+            <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="detail-kpi-card detail-kpi-card--cache">
+              <span class="detail-kpi-label">缓存读取</span>
+              <span class="detail-kpi-value">{{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }}</span>
+              <span class="detail-kpi-hint">按输入 Token 计费</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="hasPromptCacheUsage(selectedRecord)" class="detail-section">
+          <div class="detail-section-title">缓存信息</div>
+          <div class="detail-chip-row">
+            <a-tag color="blue">{{ getPromptCacheStatusText(selectedRecord) }}</a-tag>
+            <a-tag v-if="getBillableCacheReadTokens(selectedRecord) > 0" color="geekblue">缓存读取 {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} tok</a-tag>
+            <a-tag v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" color="cyan">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok</a-tag>
+          </div>
+        </div>
+
+        <div v-if="selectedRecord.accounting_failed_after_success" class="detail-section detail-section--error">
+          <div class="detail-section-title">记账异常</div>
+          <div class="error-message-section">
+            <div class="error-message-header">
+              <a-icon type="warning" class="error-message-icon" />
+              <span class="error-message-title">请求已成功返回，但本地记账失败</span>
+            </div>
+            <div class="error-message-content">
+              <pre>{{ selectedRecord.error_message }}</pre>
+            </div>
+            <a-button size="small" @click="copyErrorMessage" class="error-copy-btn">
+              <a-icon type="copy" />
+              复制异常信息
+            </a-button>
+          </div>
+        </div>
+
+        <div v-else-if="selectedRecord.error_message" class="detail-section detail-section--error">
+          <div class="detail-section-title">错误详情</div>
+          <div class="error-message-section">
+            <div class="error-message-header">
+              <a-icon type="exclamation-circle" class="error-message-icon" />
+              <span class="error-message-title">请求失败错误详情</span>
+            </div>
+            <div class="error-message-content">
+              <pre>{{ selectedRecord.error_message }}</pre>
+            </div>
+            <a-button size="small" @click="copyErrorMessage" class="error-copy-btn">
+              <a-icon type="copy" />
+              复制错误信息
+            </a-button>
+          </div>
+        </div>
+
+        <div v-else class="no-error-message">
+          <a-icon type="check-circle" />
+          <span>该请求没有错误信息</span>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -311,6 +469,8 @@ export default {
       logs: [],
       dateRange: [],
       statusFilter: undefined,
+      detailModalVisible: false,
+      selectedRecord: {},
       siteConfig: {},
       userInfo: { balance: 0, image_credit_balance: 0 },
       summary: {
@@ -348,6 +508,17 @@ export default {
     },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
+    },
+    detailModalTitle() {
+      if (!this.selectedRecord.status) return '请求详情'
+      const statusMap = {
+        success: '请求详情 - 成功',
+        error: '请求详情 - 失败',
+        failed: '请求详情 - 失败',
+        timeout: '请求详情 - 超时',
+        pending: '请求详情 - 处理中'
+      }
+      return statusMap[this.selectedRecord.status] || '请求详情'
     }
   },
   created() {
@@ -416,6 +587,10 @@ export default {
       if (key == null) return
       this.expandedRowKeys = this.expandedRowKeys[0] === key ? [] : [key]
     },
+    handleStatusClick(record) {
+      this.selectedRecord = { ...record }
+      this.detailModalVisible = true
+    },
     customRow(record) {
       return {
         on: {
@@ -433,6 +608,13 @@ export default {
       navigator.clipboard && navigator.clipboard.writeText(text)
         .then(() => this.$message.success(`${label}已复制`))
         .catch(() => this.$message.error('复制失败'))
+    },
+    copyErrorMessage() {
+      if (!this.selectedRecord.error_message) return
+      this.copyText(this.selectedRecord.error_message, this.selectedRecord.accounting_failed_after_success ? '异常信息' : '错误信息')
+    },
+    getModalContainer() {
+      return this.$el || document.body
     },
     // ---- helpers ----
     getStatusLabel(status) {
@@ -1294,6 +1476,10 @@ export default {
     gap: 12px;
   }
 
+  .detail-kpi-grid--user {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
   .detail-kpi-card {
     padding: 14px;
     border-radius: 14px;
@@ -1629,6 +1815,9 @@ export default {
     .stats-grid { grid-template-columns: 1fr; }
     .wallet-main-card { min-width: auto; }
     .filter-toolbar { flex-direction: column; align-items: stretch; }
+    .detail-hero { flex-direction: column; }
+    .detail-hero-metrics { min-width: 0; grid-template-columns: 1fr; }
+    .detail-grid--meta { grid-template-columns: 1fr; }
   }
 }
 </style>

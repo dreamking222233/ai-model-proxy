@@ -270,6 +270,7 @@ class LogService:
             "cache_read_cost",
             "input_price_per_million_snapshot",
             "output_price_per_million_snapshot",
+            "request_price_snapshot",
             "price_multiplier_snapshot",
             "fast_price_multiplier_snapshot",
             "context_tokens_snapshot",
@@ -424,6 +425,7 @@ class LogService:
                     ConsumptionRecord.output_cost,
                     ConsumptionRecord.cache_read_cost,
                     ConsumptionRecord.total_cost,
+                    ConsumptionRecord.request_price_snapshot,
                     ConsumptionRecord.context_tokens_snapshot,
                     ConsumptionRecord.context_token_threshold_snapshot,
                     ConsumptionRecord.context_price_multiplier_snapshot,
@@ -454,6 +456,7 @@ class LogService:
             output_cost = getattr(consumption, "output_cost", 0)
             record_cache_read_cost = getattr(consumption, "cache_read_cost", 0)
             total_cost = getattr(consumption, "total_cost", 0)
+            record_request_price = getattr(consumption, "request_price_snapshot", 0)
             context_tokens_snapshot = log.context_tokens_snapshot
             if context_tokens_snapshot is None and consumption is not None:
                 context_tokens_snapshot = getattr(consumption, "context_tokens_snapshot", 0)
@@ -540,6 +543,7 @@ class LogService:
                 "cache_read_cost": float(log.cache_read_cost or record_cache_read_cost or 0),
                 "input_price_per_million_snapshot": float(log.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(log.output_price_per_million_snapshot or 0),
+                "request_price_snapshot": float(getattr(log, "request_price_snapshot", 0) or record_request_price or 0),
                 "price_multiplier_snapshot": float(log.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(log.fast_price_multiplier_snapshot or 1),
                 "context_tokens_snapshot": int(context_tokens_snapshot or 0),
@@ -1153,6 +1157,7 @@ class LogService:
                 "total_cost": float(r.total_cost),
                 "input_price_per_million_snapshot": float(r.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
+                "request_price_snapshot": float(getattr(r, "request_price_snapshot", 0) or 0),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),
                 "context_tokens_snapshot": int(r.context_tokens_snapshot or 0),

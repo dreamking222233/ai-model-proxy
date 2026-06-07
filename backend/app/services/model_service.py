@@ -42,6 +42,7 @@ class ModelService:
     VIDEO_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "grok-imagine-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
     }
+    BILLING_TYPES = {"token", "request", "image_credit", "free"}
 
     @staticmethod
     def _decimal_to_float(value, default: float = 0.0) -> float:
@@ -120,6 +121,25 @@ class ModelService:
             raise ServiceException(400, f"{field_name} 参数无效", "INVALID_IMAGE_CREDIT_AMOUNT")
         if amount <= Decimal("0"):
             raise ServiceException(400, f"{field_name} 必须大于 0", "INVALID_IMAGE_CREDIT_AMOUNT")
+        return amount
+
+    @staticmethod
+    def _normalize_billing_type(value: object) -> str:
+        billing_type = str(value or "token").strip().lower()
+        if billing_type not in ModelService.BILLING_TYPES:
+            raise ServiceException(400, "计费类型只能是 token、request、image_credit、free", "INVALID_BILLING_TYPE")
+        return billing_type
+
+    @staticmethod
+    def _normalize_request_price(value: object, billing_type: str) -> Decimal:
+        try:
+            amount = Decimal(str(value if value is not None and value != "" else 0)).quantize(Decimal("0.000001"))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ServiceException(400, "每次请求价格参数无效", "INVALID_REQUEST_PRICE")
+        if amount < Decimal("0"):
+            raise ServiceException(400, "每次请求价格不能小于 0", "INVALID_REQUEST_PRICE")
+        if billing_type == "request" and amount <= Decimal("0"):
+            raise ServiceException(400, "按请求次数计费时每次请求价格必须大于 0", "INVALID_REQUEST_PRICE")
         return amount
 
     @staticmethod
@@ -266,6 +286,7 @@ class ModelService:
             "input_price_per_million": ModelService._decimal_to_float(model.input_price_per_million),
             "output_price_per_million": ModelService._decimal_to_float(model.output_price_per_million),
             "billing_type": model.billing_type,
+            "request_price": ModelService._decimal_to_float(getattr(model, "request_price", 0)),
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
@@ -357,11 +378,14 @@ class ModelService:
         if existing:
             raise ServiceException(400, f"模型名称 '{d['model_name']}' 已存在", "DUPLICATE_MODEL")
 
+        billing_type = ModelService._normalize_billing_type(d.get("billing_type", "token"))
+        request_price = ModelService._normalize_request_price(d.get("request_price", 0), billing_type)
+
         resolution_rules = ModelService._validate_resolution_rules(
             d["model_name"],
             d.get("model_type", "chat"),
             d.get("protocol_type", "openai"),
-            d.get("billing_type", "token"),
+            billing_type,
             d.get("image_resolution_rules"),
         )
 
@@ -373,7 +397,8 @@ class ModelService:
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
             output_price_per_million=d.get("output_price_per_million", 0),
-            billing_type=d.get("billing_type", "token"),
+            billing_type=billing_type,
+            request_price=request_price,
             image_credit_multiplier=d.get("image_credit_multiplier", 1),
             enabled=d.get("enabled", 1),
             description=d.get("description"),
@@ -399,7 +424,13 @@ class ModelService:
         next_model_name = d.get("model_name", model.model_name)
         next_model_type = d.get("model_type", model.model_type)
         next_protocol_type = d.get("protocol_type", model.protocol_type)
-        next_billing_type = d.get("billing_type", model.billing_type)
+        next_billing_type = ModelService._normalize_billing_type(d.get("billing_type", model.billing_type))
+        next_request_price = ModelService._normalize_request_price(
+            d.get("request_price", getattr(model, "request_price", 0)),
+            next_billing_type,
+        )
+        d["billing_type"] = next_billing_type
+        d["request_price"] = next_request_price
         if "image_resolution_rules" in d:
             resolution_rules = ModelService._validate_resolution_rules(
                 next_model_name,
@@ -413,7 +444,7 @@ class ModelService:
         updatable_fields = [
             "model_name", "display_name", "model_type", "protocol_type",
             "max_tokens", "input_price_per_million", "output_price_per_million",
-            "billing_type", "image_credit_multiplier", "enabled", "description",
+            "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
         ]
         for field in updatable_fields:
             value = d.get(field)

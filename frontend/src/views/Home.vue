@@ -341,11 +341,22 @@ function getModelPriceText(model) {
     const price = Number(model.input_price || 0)
     return `￥${price.toFixed(2)} 起 / 百万 tokens`
   }
+  if (model.billing_type === 'request') {
+    const price = Number(model.request_price || 0)
+    return `$${price.toFixed(6)} / 次`
+  }
   if (model.image_credit_multiplier) {
     const mult = Number(model.image_credit_multiplier || 1)
     return `${mult.toFixed(2)} 积分 / 次`
   }
   return '系统支持'
+}
+
+function normalizeModelDisplayName(name) {
+  const displayName = name || ''
+  if (displayName === 'GPT-5.5 Ultra') return 'GPT-5.5'
+  if (displayName === 'GPT-5.4 Omni') return 'GPT-5.4'
+  return displayName
 }
 
 function normalizeModels(models) {
@@ -354,6 +365,7 @@ function normalizeModels(models) {
     return {
       ...model,
       id: stableId,
+      display_name: normalizeModelDisplayName(model.display_name),
       renderKey: `${stableId}-${model.model_name || index}`,
       cardId: `model-card-${stableId}`,
       brandSvg: getBrandSvg(model.model_name),

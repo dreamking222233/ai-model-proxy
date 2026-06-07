@@ -203,9 +203,14 @@
             </div>
             <div class="compact-expand-line">
               <span class="compact-expand-label">日志详情</span>
-              <span class="compact-expand-meta">输入价格 ${{ formatPrice(record.input_price_per_million_snapshot) }} / 1M tokens</span>
-              <span class="compact-expand-meta">补全价格 ${{ formatPrice(record.output_price_per_million_snapshot) }} / 1M tokens</span>
-              <span v-if="getBillableCacheReadTokens(record) > 0 || record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存读取价格 ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M tokens</span>
+              <template v-if="isRequestBilling(record)">
+                <span class="compact-expand-meta">单次价格 ${{ formatPrice(record.request_price_snapshot) }} / 次</span>
+              </template>
+              <template v-else>
+                <span class="compact-expand-meta">输入价格 ${{ formatPrice(record.input_price_per_million_snapshot) }} / 1M tokens</span>
+                <span class="compact-expand-meta">补全价格 ${{ formatPrice(record.output_price_per_million_snapshot) }} / 1M tokens</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0 || record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存读取价格 ${{ formatPrice(getEffectiveCacheReadPricePerMillion(record)) }} / 1M tokens</span>
+              </template>
               <span class="compact-expand-meta">基础价格倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
               <span class="compact-expand-meta">综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
               <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
@@ -213,10 +218,15 @@
             </div>
             <div class="compact-expand-line">
               <span class="compact-expand-label">计费过程</span>
-              <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
-              <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
-              <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
-              <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
+              <template v-if="isRequestBilling(record)">
+                <span class="compact-expand-metric">1 次 × ${{ formatPrice(record.request_price_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
+              </template>
+              <template v-else>
+                <span class="compact-expand-metric">输入 {{ formatNumber(getBillableInputTokens(record)) }} × ${{ formatPrice(record.input_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.input_cost || 0) }}</span>
+                <span class="compact-expand-metric">输出 {{ formatNumber(record.output_tokens || 0) }} × ${{ formatPrice(record.output_price_per_million_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.output_cost || 0) }}</span>
+                <span v-if="getBillableCacheReadTokens(record) > 0" class="compact-expand-metric compact-expand-metric--cache">缓存 {{ formatNumber(getBillableCacheReadTokens(record)) }} × ${{ formatPrice(getCacheReadPricePerMillion(record)) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }} = ${{ formatCurrency(record.cache_read_cost || 0) }}</span>
+                <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
+              </template>
               <strong class="compact-expand-metric compact-expand-metric--total">总计 ${{ formatCurrency(record.total_cost || 0) }}</strong>
             </div>
           </div>
@@ -443,7 +453,7 @@
             </div>
             <div class="detail-item">
               <span class="detail-item-label">计费方式</span>
-              <span class="detail-item-value">{{ isImageRequest(selectedRecord) ? getBillingTypeText(selectedRecord) : 'Token 计费' }}</span>
+              <span class="detail-item-value">{{ getBillingTypeText(selectedRecord) }}</span>
             </div>
             <div class="detail-item" v-if="selectedRecord.quota_metric">
               <span class="detail-item-label">套餐额度结算</span>
@@ -505,7 +515,14 @@
         <div v-if="!isImageRequest(selectedRecord)" class="detail-section">
           <div class="detail-section-title">计费详情</div>
           <div class="billing-panel">
-            <div class="billing-price-grid">
+            <div v-if="isRequestBilling(selectedRecord)" class="billing-price-grid">
+              <div class="billing-price-card">
+                <span class="billing-price-label">单次价格</span>
+                <span class="billing-price-value">${{ formatPrice(selectedRecord.request_price_snapshot) }}</span>
+                <span class="billing-price-hint">/ 次 × 综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(selectedRecord)) }}</span>
+              </div>
+            </div>
+            <div v-else class="billing-price-grid">
               <div class="billing-price-card">
                 <span class="billing-price-label">输入单价</span>
                 <span class="billing-price-value">${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
@@ -531,25 +548,34 @@
                 <span class="billing-formula-tag billing-formula-tag--muted">长上下文</span>
                 <span class="billing-formula-text">计费上下文（输入+输出+缓存读取）{{ formatNumber(getContextTokens(selectedRecord)) }} tok &gt; {{ formatNumber(getContextThreshold(selectedRecord)) }} tok，价格 x{{ formatMultiplier(getContextPriceMultiplier(selectedRecord)) }}</span>
               </div>
-              <div class="billing-formula-row">
-                <span class="billing-formula-tag">输入</span>
-                <span class="billing-formula-text">原始 {{ formatNumber(getRawInputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
-                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.input_cost || 0) }}</strong>
-              </div>
-              <div class="billing-formula-row">
-                <span class="billing-formula-tag billing-formula-tag--output">输出</span>
-                <span class="billing-formula-text">原始 {{ formatNumber(getRawOutputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(selectedRecord.output_tokens || 0) }} / 1M × ${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }}</span>
-                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.output_cost || 0) }}</strong>
-              </div>
-              <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-formula-row billing-formula-row--cache">
-                <span class="billing-formula-tag billing-formula-tag--cache">缓存</span>
-                <span class="billing-formula-text">原始 {{ formatNumber(getRawCacheReadTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }}</span>
-                <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}</strong>
-              </div>
-              <div v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" class="billing-formula-row billing-formula-row--muted">
-                <span class="billing-formula-tag billing-formula-tag--muted">创建</span>
-                <span class="billing-formula-text">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
-              </div>
+              <template v-if="isRequestBilling(selectedRecord)">
+                <div class="billing-formula-row">
+                  <span class="billing-formula-tag">按次</span>
+                  <span class="billing-formula-text">1 次 / 请求 × ${{ formatPrice(selectedRecord.request_price_snapshot) }} × 综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(selectedRecord)) }}</span>
+                  <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.total_cost || 0) }}</strong>
+                </div>
+              </template>
+              <template v-else>
+                <div class="billing-formula-row">
+                  <span class="billing-formula-tag">输入</span>
+                  <span class="billing-formula-text">原始 {{ formatNumber(getRawInputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableInputTokens(selectedRecord)) }} / 1M × ${{ formatPrice(selectedRecord.input_price_per_million_snapshot) }}</span>
+                  <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.input_cost || 0) }}</strong>
+                </div>
+                <div class="billing-formula-row">
+                  <span class="billing-formula-tag billing-formula-tag--output">输出</span>
+                  <span class="billing-formula-text">原始 {{ formatNumber(getRawOutputTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(selectedRecord.output_tokens || 0) }} / 1M × ${{ formatPrice(selectedRecord.output_price_per_million_snapshot) }}</span>
+                  <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.output_cost || 0) }}</strong>
+                </div>
+                <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-formula-row billing-formula-row--cache">
+                  <span class="billing-formula-tag billing-formula-tag--cache">缓存</span>
+                  <span class="billing-formula-text">原始 {{ formatNumber(getRawCacheReadTokens(selectedRecord)) }} × Token倍率 {{ formatMultiplier(selectedRecord.token_multiplier_snapshot) }} = {{ formatNumber(getBillableCacheReadTokens(selectedRecord)) }} / 1M × ${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }}</span>
+                  <strong class="billing-formula-cost">${{ formatCurrency(selectedRecord.cache_read_cost || 0) }}</strong>
+                </div>
+                <div v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" class="billing-formula-row billing-formula-row--muted">
+                  <span class="billing-formula-tag billing-formula-tag--muted">创建</span>
+                  <span class="billing-formula-text">缓存创建 {{ formatNumber(selectedRecord.upstream_cache_creation_input_tokens || 0) }} tok，不额外计费</span>
+                </div>
+              </template>
               <div class="billing-total-row">
                 <span class="billing-total-label">总计</span>
                 <strong class="billing-total-value">${{ formatCurrency(selectedRecord.total_cost || 0) }}</strong>
@@ -826,8 +852,12 @@ export default {
         }
         return `${this.formatNumber(this.getImageCreditsDisplay(record))} 图片积分`
       }
+      if (this.isRequestBilling(record)) {
+        return '按请求计费'
+      }
       const map = {
         token: '按 Token 计费',
+        request: '按请求计费',
         subscription: '套餐计费',
         free: '免费'
       }
@@ -893,6 +923,9 @@ export default {
     },
     isFastMode(record) {
       return this.getFastPriceMultiplier(record) > 1 || String(record && record.service_tier || '') === 'priority'
+    },
+    isRequestBilling(record) {
+      return String(record && record.billing_type || '') === 'request' || Number(record && record.request_price_snapshot || 0) > 0
     },
     getCacheReadPricePerMillion(record) {
       return Number(record && record.input_price_per_million_snapshot || 0) * 0.1

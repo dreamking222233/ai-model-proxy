@@ -433,6 +433,7 @@ CREATE TABLE `consumption_record` (
   `total_cost` decimal(12,6) NOT NULL DEFAULT '0.000000',
   `input_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `output_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
+  `request_price_snapshot` decimal(12,6) DEFAULT '0.000000' COMMENT '按请求计费单次价格快照',
   `price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `fast_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `context_tokens_snapshot` int DEFAULT '0' COMMENT '计费上下文Token快照',
@@ -807,6 +808,7 @@ CREATE TABLE `request_log` (
   `cache_read_cost` decimal(12,6) DEFAULT '0.000000',
   `input_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `output_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
+  `request_price_snapshot` decimal(12,6) DEFAULT '0.000000' COMMENT '按请求计费单次价格快照',
   `price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `fast_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `context_tokens_snapshot` int DEFAULT '0' COMMENT '计费上下文Token快照',
@@ -941,7 +943,8 @@ CREATE TABLE `unified_model` (
   `max_tokens` int DEFAULT NULL,
   `input_price_per_million` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '每百万输入Token单价(美元)',
   `output_price_per_million` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '每百万输出Token单价(美元)',
-  `billing_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'token' COMMENT 'token/image_credit/free',
+  `billing_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'token' COMMENT 'token/request/image_credit/free',
+  `request_price` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '按请求次数计费的单次请求价格(美元)',
   `image_credit_multiplier` decimal(12,3) NOT NULL DEFAULT '1.000' COMMENT '图片请求默认扣减倍率；视频模型表示每秒媒体积分单价',
   `enabled` tinyint NOT NULL DEFAULT '1',
   `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
@@ -1064,14 +1067,15 @@ VALUES (1, 0.000, 0.000, 0.000);
 -- 预置 Grok 视频模型
 INSERT INTO `unified_model` (
   `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
-  `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+  `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL, 0, 0, 'image_credit', 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
 ON DUPLICATE KEY UPDATE
   `display_name` = VALUES(`display_name`),
   `model_type` = VALUES(`model_type`),
   `protocol_type` = VALUES(`protocol_type`),
   `billing_type` = VALUES(`billing_type`),
+  `request_price` = VALUES(`request_price`),
   `image_credit_multiplier` = VALUES(`image_credit_multiplier`),
   `enabled` = VALUES(`enabled`),
   `description` = VALUES(`description`);

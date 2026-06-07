@@ -50,9 +50,9 @@ def list_public_models(
             "input_price": float(m.input_price_per_million) if m.input_price_per_million else 0,
             "output_price": float(m.output_price_per_million) if m.output_price_per_million else 0,
             "billing_type": m.billing_type,
+            "request_price": float(getattr(m, "request_price", 0) or 0),
             "image_credit_multiplier": float(m.image_credit_multiplier or 1),
             "description": m.description,
         })
 
     return ResponseModel(data=result)
-

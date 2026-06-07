@@ -200,6 +200,18 @@ class ProxyService:
                     if ProxyService._can_fallback_to_balance_for_quota_precheck(db, user.id, quota_precheck):
                         return
                     raise ProxyService._build_quota_balance_insufficient_error()
+                if ProxyService._precheck_requires_exact_cost(quota_precheck):
+                    estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
+                        db,
+                        user.id,
+                        quota_precheck,
+                    )
+                    if not ProxyService._can_balance_cover_exact_amount(
+                        db,
+                        user.id,
+                        estimated_balance_charge,
+                    ):
+                        raise ProxyService._build_quota_balance_insufficient_error()
             return
 
         if ProxyService._can_balance_cover_text_precheck(db, user.id, quota_precheck):
@@ -233,19 +245,43 @@ class ProxyService:
         return ProxyService._balance_decimal(balance) > 0
 
     @staticmethod
+    def _precheck_requires_exact_cost(quota_precheck: Optional[dict[str, Decimal]] = None) -> bool:
+        return bool(quota_precheck and quota_precheck.get("estimated_cost_is_exact"))
+
+    @staticmethod
+    def _can_balance_cover_exact_amount(
+        db: Session,
+        user_id: int,
+        amount: Optional[Decimal],
+    ) -> bool:
+        requested_amount = SubscriptionService._normalize_decimal(amount)
+        if requested_amount <= 0:
+            return True
+        available_balance = ProxyService._balance_decimal(
+            ProxyService._get_balance_record(db, user_id)
+        )
+        return available_balance >= requested_amount
+
+    @staticmethod
     def _can_balance_cover_text_precheck(
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
     ) -> bool:
+        estimated_cost = quota_precheck.get("estimated_total_cost") if quota_precheck else None
+        if estimated_cost is not None and SubscriptionService._normalize_decimal(estimated_cost) <= 0:
+            return True
+
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
         if available_balance <= 0:
             return False
 
-        estimated_cost = quota_precheck.get("estimated_total_cost") if quota_precheck else None
         requested_amount = SubscriptionService._normalize_decimal(estimated_cost)
+        exact_cost = ProxyService._precheck_requires_exact_cost(quota_precheck)
+        if exact_cost and not ProxyService._can_balance_cover_exact_amount(db, user_id, requested_amount):
+            return False
         if requested_amount > 0 and available_balance < requested_amount:
             logger.info(
                 "Allowing text request with positive balance despite high precheck estimate: "
@@ -274,6 +310,9 @@ class ProxyService:
             quota_precheck,
         )
         requested_amount = SubscriptionService._normalize_decimal(estimated_balance_charge)
+        exact_cost = ProxyService._precheck_requires_exact_cost(quota_precheck)
+        if exact_cost and not ProxyService._can_balance_cover_exact_amount(db, user_id, requested_amount):
+            return False
         if requested_amount > 0 and available_balance < requested_amount:
             logger.info(
                 "Allowing quota balance fallback with positive balance despite high precheck estimate: "
@@ -1473,23 +1512,60 @@ class ProxyService:
                 fast_price_multiplier,
                 context_price_multiplier,
             )
-            input_price = Decimal(str(unified_model.input_price_per_million or 0))
-            output_price = Decimal(str(unified_model.output_price_per_million or 0))
-            estimated_input_cost = (
-                Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
-            ) * input_price * effective_price_multiplier
-            estimated_output_token_count = max(estimated_output_tokens or 0, 0)
-            estimated_output_cost = (
-                Decimal(str(estimated_output_token_count)) / Decimal("1000000")
-            ) * output_price * effective_price_multiplier
-            quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
-            quota_precheck["estimated_quota_cost"] = (
-                (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price * official_quota_multiplier
-                + (Decimal(str(estimated_output_token_count)) / Decimal("1000000")) * output_price * official_quota_multiplier
-            )
+            billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
+            if billing_type == "request":
+                request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
+                request_context_price_multiplier = context_price_multiplier
+                if estimated_output_tokens is None:
+                    # Output usage is unknown before the upstream call. Use the long-context
+                    # multiplier as a conservative upper bound so exact fixed-price billing
+                    # cannot pass precheck and fail local accounting after a successful call.
+                    conservative_context_tokens = max(
+                        estimated_context_tokens,
+                        ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD + 1,
+                    )
+                    quota_precheck["estimated_total_tokens"] = Decimal(str(conservative_context_tokens))
+                    quota_precheck["context_tokens_snapshot"] = Decimal(str(conservative_context_tokens))
+                    request_context_price_multiplier = max(
+                        request_context_price_multiplier,
+                        ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER,
+                    )
+                request_effective_price_multiplier = ProxyService._build_effective_price_multiplier(
+                    price_multiplier,
+                    fast_price_multiplier,
+                    request_context_price_multiplier,
+                )
+                request_official_quota_multiplier = ProxyService._build_official_quota_multiplier(
+                    fast_price_multiplier,
+                    request_context_price_multiplier,
+                )
+                quota_precheck["estimated_total_cost"] = request_price * request_effective_price_multiplier
+                quota_precheck["estimated_quota_cost"] = request_price * request_official_quota_multiplier
+                quota_precheck["estimated_cost_is_exact"] = Decimal("1")
+                quota_precheck["context_price_multiplier_snapshot"] = request_context_price_multiplier
+                quota_precheck["effective_price_multiplier_snapshot"] = request_effective_price_multiplier
+            elif billing_type == "free":
+                quota_precheck["estimated_total_cost"] = Decimal("0")
+                quota_precheck["estimated_quota_cost"] = Decimal("0")
+                quota_precheck["estimated_cost_is_exact"] = Decimal("1")
+            else:
+                input_price = Decimal(str(unified_model.input_price_per_million or 0))
+                output_price = Decimal(str(unified_model.output_price_per_million or 0))
+                estimated_input_cost = (
+                    Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")
+                ) * input_price * effective_price_multiplier
+                estimated_output_token_count = max(estimated_output_tokens or 0, 0)
+                estimated_output_cost = (
+                    Decimal(str(estimated_output_token_count)) / Decimal("1000000")
+                ) * output_price * effective_price_multiplier
+                quota_precheck["estimated_total_cost"] = estimated_input_cost + estimated_output_cost
+                quota_precheck["estimated_quota_cost"] = (
+                    (Decimal(str(max(estimated_input_tokens, 0))) / Decimal("1000000")) * input_price * official_quota_multiplier
+                    + (Decimal(str(estimated_output_token_count)) / Decimal("1000000")) * output_price * official_quota_multiplier
+                )
             quota_precheck["service_tier"] = billing_context.get("service_tier")
             quota_precheck["fast_price_multiplier_snapshot"] = fast_price_multiplier
-            quota_precheck["effective_price_multiplier_snapshot"] = effective_price_multiplier
+            quota_precheck.setdefault("effective_price_multiplier_snapshot", effective_price_multiplier)
 
         return quota_precheck
 
@@ -9124,26 +9200,43 @@ class ProxyService:
             )
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
-            input_cost_decimal = (
-                Decimal(str(input_tokens)) / Decimal("1000000")
-            ) * input_price * effective_price_multiplier_decimal
-            cache_read_cost_decimal = (
-                Decimal(str(cache_read_input_tokens)) / Decimal("1000000")
-            ) * input_price * Decimal("0.1") * effective_price_multiplier_decimal
-            output_cost_decimal = (
-                Decimal(str(output_tokens)) / Decimal("1000000")
-            ) * output_price * effective_price_multiplier_decimal
-            total_cost_decimal = input_cost_decimal + cache_read_cost_decimal + output_cost_decimal
+            request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
+            billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
+            exact_request_billing = billing_type in {"request", "free"}
+            if billing_type == "request":
+                input_cost_decimal = Decimal("0")
+                cache_read_cost_decimal = Decimal("0")
+                output_cost_decimal = Decimal("0")
+                total_cost_decimal = request_price * effective_price_multiplier_decimal
+                quota_cost_decimal = request_price * official_quota_multiplier_decimal
+            elif billing_type == "free":
+                input_cost_decimal = Decimal("0")
+                cache_read_cost_decimal = Decimal("0")
+                output_cost_decimal = Decimal("0")
+                total_cost_decimal = Decimal("0")
+                quota_cost_decimal = Decimal("0")
+            else:
+                input_cost_decimal = (
+                    Decimal(str(input_tokens)) / Decimal("1000000")
+                ) * input_price * effective_price_multiplier_decimal
+                cache_read_cost_decimal = (
+                    Decimal(str(cache_read_input_tokens)) / Decimal("1000000")
+                ) * input_price * Decimal("0.1") * effective_price_multiplier_decimal
+                output_cost_decimal = (
+                    Decimal(str(output_tokens)) / Decimal("1000000")
+                ) * output_price * effective_price_multiplier_decimal
+                total_cost_decimal = input_cost_decimal + cache_read_cost_decimal + output_cost_decimal
+                quota_cost_decimal = (
+                    (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * official_quota_multiplier_decimal
+                    + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * official_quota_multiplier_decimal
+                    + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * official_quota_multiplier_decimal
+                )
             input_cost = float(input_cost_decimal)
             cache_read_cost = float(cache_read_cost_decimal)
             output_cost = float(output_cost_decimal)
             total_cost = float(total_cost_decimal)
-            quota_cost_decimal = (
-                (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * official_quota_multiplier_decimal
-                + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * official_quota_multiplier_decimal
-                + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * official_quota_multiplier_decimal
-            )
             quota_cost = float(quota_cost_decimal)
+            request_log_billing_type = billing_type if billing_type in {"request", "free"} else "token"
 
             billing_mode = "balance"
             subscription_id: int | None = None
@@ -9166,13 +9259,23 @@ class ProxyService:
                     return float(balance_before_decimal), float(balance_before_decimal)
                 if not balance or balance_before_decimal <= 0:
                     raise ProxyService._build_balance_precheck_insufficient_error()
+                if exact_request_billing and balance_before_decimal < amount:
+                    raise ProxyService._build_balance_precheck_insufficient_error()
                 balance_before_local = float(balance_before_decimal)
                 balance.balance = balance_before_decimal - amount
                 balance.total_consumed += amount
                 return balance_before_local, float(balance.balance)
 
-            def balance_can_pay_next_charge() -> bool:
-                return ProxyService._has_positive_balance(balance)
+            def balance_can_pay_next_charge(amount: Optional[Decimal] = None) -> bool:
+                if amount is None:
+                    return ProxyService._has_positive_balance(balance)
+                requested_amount = SubscriptionService._normalize_decimal(amount)
+                if requested_amount <= 0:
+                    return True
+                balance_before_decimal = ProxyService._balance_decimal(balance)
+                if exact_request_billing:
+                    return balance_before_decimal >= requested_amount
+                return balance_before_decimal > 0
 
             if fresh_user.subscription_type == "balance":
                 balance_before, balance_after = apply_balance_charge(total_cost_decimal)
@@ -9184,7 +9287,7 @@ class ProxyService:
                     usage_now,
                 )
                 if not active_subscription:
-                    if balance_can_pay_next_charge():
+                    if balance_can_pay_next_charge(total_cost_decimal):
                         billing_mode = "balance"
                         balance_before, balance_after = apply_balance_charge(total_cost_decimal)
                     else:
@@ -9223,7 +9326,9 @@ class ProxyService:
                             quota_remaining_amount,
                         )
                         allow_quota_over_limit = False
-                        if balance_charge_amount > 0 and not balance_can_pay_next_charge():
+                        if balance_charge_amount > 0 and not balance_can_pay_next_charge(balance_charge_amount):
+                            if exact_request_billing:
+                                raise ProxyService._build_quota_balance_insufficient_error()
                             if quota_amount_to_consume > 0:
                                 quota_amount_to_consume = quota_consumed_amount
                                 balance_charge_amount = Decimal("0")
@@ -9279,7 +9384,12 @@ class ProxyService:
                                         refreshed_quota_remaining,
                                     )
                                     refreshed_allow_quota_over_limit = False
-                                    if refreshed_balance_charge_amount > 0 and not balance_can_pay_next_charge():
+                                    if (
+                                        refreshed_balance_charge_amount > 0
+                                        and not balance_can_pay_next_charge(refreshed_balance_charge_amount)
+                                    ):
+                                        if exact_request_billing:
+                                            raise ProxyService._build_quota_balance_insufficient_error()
                                         if refreshed_quota_amount_to_consume > 0:
                                             refreshed_quota_amount_to_consume = quota_consumed_amount
                                             refreshed_balance_charge_amount = Decimal("0")
@@ -9310,7 +9420,7 @@ class ProxyService:
                                         else:
                                             balance_before = float(balance.balance) if balance else 0.0
                                             balance_after = float(balance.balance) if balance else 0.0
-                                    elif balance_can_pay_next_charge():
+                                    elif balance_can_pay_next_charge(total_cost_decimal):
                                         billing_mode = "balance"
                                         subscription_id = None
                                         quota_metric = None
@@ -9338,6 +9448,11 @@ class ProxyService:
                         balance_before = float(balance.balance) if balance else 0.0
                         balance_after = float(balance.balance) if balance else 0.0
 
+            final_request_log_billing_type = (
+                request_log_billing_type
+                if request_log_billing_type in {"request", "free"}
+                else ("subscription" if billing_mode in {"subscription", "mixed"} else "token")
+            )
             logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
             write_db.add(
                 ConsumptionRecord(
@@ -9368,6 +9483,7 @@ class ProxyService:
                     total_cost=Decimal(str(total_cost)),
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
+                    request_price_snapshot=request_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
                     context_tokens_snapshot=context_tokens_snapshot,
@@ -9403,7 +9519,7 @@ class ProxyService:
                         ),
                         protocol_type=channel.protocol_type,
                         request_type=request_type,
-                        billing_type="subscription" if billing_mode in {"subscription", "mixed"} else "token",
+                        billing_type=final_request_log_billing_type,
                     is_stream=1 if is_stream else 0,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -9454,6 +9570,7 @@ class ProxyService:
                     cache_read_cost=Decimal(str(cache_read_cost)),
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
+                    request_price_snapshot=request_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
                     context_tokens_snapshot=context_tokens_snapshot,

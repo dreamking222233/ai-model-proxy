@@ -35,6 +35,9 @@
             <a-tag v-if="text === 'image_credit'" color="gold">
               {{ record.model_type === 'video' ? `媒体积分 ${record.image_credit_multiplier || 0.5}/秒` : `媒体积分 x${record.image_credit_multiplier || 1}` }}
             </a-tag>
+            <a-tag v-else-if="text === 'request'" color="purple">
+              按次 ${{ formatPrice(record.request_price) }}
+            </a-tag>
             <a-tag v-else-if="text === 'free'" color="green">免费</a-tag>
             <a-tag v-else color="blue">Token</a-tag>
           </template>
@@ -76,12 +79,16 @@
             <span v-else class="muted-text">-</span>
           </template>
 
-          <template slot="inputPrice" slot-scope="text">
-            {{ text != null ? text : '-' }}
+          <template slot="inputPrice" slot-scope="text, record">
+            {{ record.billing_type === 'token' && text != null ? text : '-' }}
           </template>
 
-          <template slot="outputPrice" slot-scope="text">
-            {{ text != null ? text : '-' }}
+          <template slot="outputPrice" slot-scope="text, record">
+            {{ record.billing_type === 'token' && text != null ? text : '-' }}
+          </template>
+
+          <template slot="requestPrice" slot-scope="text, record">
+            {{ record.billing_type === 'request' && text != null ? `$${formatPrice(text)}` : '-' }}
           </template>
 
           <template slot="action" slot-scope="text, record">
@@ -256,9 +263,14 @@
         <a-form-item label="计费类型">
           <a-select v-model="modelForm.billing_type" placeholder="Select billing type">
             <a-select-option value="token">按 Token 计费</a-select-option>
+            <a-select-option value="request">按请求次数计费</a-select-option>
             <a-select-option value="image_credit">按媒体积分计费</a-select-option>
             <a-select-option value="free">免费</a-select-option>
           </a-select>
+        </a-form-item>
+        <a-form-item v-if="modelForm.billing_type === 'request'" label="每次请求价格 ($)">
+          <a-input-number v-model="modelForm.request_price" :min="0" :step="0.001" :precision="6" style="width: 100%;" />
+          <div class="form-tip">请求成功后按该固定美元价格计费；超过长上下文阈值时仍会叠加长上下文倍率。</div>
         </a-form-item>
         <a-form-item v-if="modelForm.billing_type === 'image_credit'" :label="modelForm.model_type === 'video' ? '每秒媒体积分' : '默认媒体积分倍率'">
           <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
@@ -294,7 +306,7 @@
           </div>
           <div class="resolution-config-tip">仅允许配置当前模型支持的分辨率；默认档位必须是已启用分辨率。</div>
         </a-form-item>
-        <a-row :gutter="16">
+        <a-row v-if="modelForm.billing_type === 'token'" :gutter="16">
           <a-col :span="12">
             <a-form-item label="输入价格 (每百万 Token)">
               <a-input-number v-model="modelForm.input_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
@@ -480,6 +492,7 @@ export default {
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
         { title: '输出价格', dataIndex: 'output_price_per_million', key: 'outputPrice', width: 110, scopedSlots: { customRender: 'outputPrice' } },
+        { title: '单次价格', dataIndex: 'request_price', key: 'requestPrice', width: 110, scopedSlots: { customRender: 'requestPrice' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
         { title: '操作', key: 'action', width: 140, scopedSlots: { customRender: 'action' } }
       ],
@@ -496,6 +509,7 @@ export default {
         model_type: 'chat',
         protocol_type: 'openai',
         billing_type: 'token',
+        request_price: 0,
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         input_price_per_million: 0,
@@ -756,6 +770,7 @@ export default {
         model_type: 'chat',
         protocol_type: 'openai',
         billing_type: 'token',
+        request_price: 0,
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         input_price_per_million: 0,
@@ -779,6 +794,7 @@ export default {
           model_type: model.model_type || 'chat',
           protocol_type: model.protocol_type || 'openai',
           billing_type: model.billing_type || 'token',
+          request_price: Number(model.request_price || 0),
           image_credit_multiplier: Number(model.image_credit_multiplier || 1),
           image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
             resolution_code: item.resolution_code,
@@ -817,6 +833,10 @@ export default {
     async handleModelModalOk() {
       if (!this.modelForm.model_name) {
         this.$message.warning('请输入模型名称')
+        return
+      }
+      if (this.modelForm.billing_type === 'request' && Number(this.modelForm.request_price || 0) <= 0) {
+        this.$message.warning('请输入大于 0 的每次请求价格')
         return
       }
       this.syncImageResolutionRules()
@@ -860,6 +880,12 @@ export default {
       } finally {
         this.modelModalLoading = false
       }
+    },
+
+    formatPrice(value) {
+      const num = Number(value || 0)
+      if (!Number.isFinite(num)) return '0.000000'
+      return num.toFixed(6)
     },
 
     // ==================== Mappings ====================
@@ -1154,6 +1180,13 @@ export default {
     margin-top: 8px;
     font-size: 12px;
     color: #8c8c8c;
+  }
+
+  .form-tip {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #8c8c8c;
+    line-height: 1.5;
   }
 
   .capability-tags {

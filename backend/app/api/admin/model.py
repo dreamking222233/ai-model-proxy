@@ -203,6 +203,7 @@ def get_channels_models(
                     "model_type": um.model_type,
                     "protocol_type": um.protocol_type,
                     "billing_type": um.billing_type,
+                    "request_price": float(getattr(um, "request_price", 0) or 0),
                     "image_credit_multiplier": float(um.image_credit_multiplier or 1),
                     "image_resolution_rules": (
                         ModelService.list_image_resolution_rules(db, um.id)

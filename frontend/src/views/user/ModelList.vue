@@ -82,6 +82,11 @@
               >按 Token</div>
               <div
                 class="billing-chip"
+                :class="{ active: selectedBilling === 'request' }"
+                @click="selectedBilling = 'request'"
+              >按请求</div>
+              <div
+                class="billing-chip"
                 :class="{ active: selectedBilling === 'image_credit' }"
                 @click="selectedBilling = 'image_credit'"
               >按媒体积分</div>
@@ -259,6 +264,8 @@ export default {
       }
       if (this.selectedBilling === 'token') {
         list = list.filter(m => (m.billing_type || 'token') === 'token')
+      } else if (this.selectedBilling === 'request') {
+        list = list.filter(m => m.billing_type === 'request')
       } else if (this.selectedBilling === 'image_credit') {
         list = list.filter(m => m.billing_type === 'image_credit')
       } else if (this.selectedBilling === 'free') {
@@ -303,6 +310,9 @@ export default {
       return n
     },
     getImageCreditText(model) {
+      if ((model.billing_type || 'token') === 'request') {
+        return `$${Number(model.request_price || 0).toFixed(6)} / 次`
+      }
       const rules = Array.isArray(model.image_resolution_rules) ? model.image_resolution_rules.filter(item => Number(item.enabled) === 1) : []
       if (rules.length) {
         const sorted = [...rules].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))

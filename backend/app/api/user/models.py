@@ -47,6 +47,7 @@ def list_available_models(
             "input_price": float(m.input_price_per_million) if m.input_price_per_million else 0,
             "output_price": float(m.output_price_per_million) if m.output_price_per_million else 0,
             "billing_type": m.billing_type,
+            "request_price": float(getattr(m, "request_price", 0) or 0),
             "image_credit_multiplier": float(m.image_credit_multiplier or 1),
             "image_resolution_rules": (
                 ModelService.list_image_resolution_rules(db, m.id)
@@ -119,6 +120,7 @@ def list_chat_models(
             "max_tokens": m.max_tokens,
             "api_type": api_type,
             "billing_type": m.billing_type,
+            "request_price": float(getattr(m, "request_price", 0) or 0),
             "image_credit_multiplier": float(m.image_credit_multiplier or 1),
             "image_resolution_rules": (
                 ModelService.list_image_resolution_rules(db, m.id)

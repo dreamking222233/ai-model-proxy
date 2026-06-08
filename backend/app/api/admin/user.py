@@ -88,11 +88,11 @@ def recharge_balance(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    balance = BalanceService.recharge(db, data.user_id, data.amount, current_user.id)
+    balance = BalanceService.recharge(db, data.user_id, data.amount, current_user.id, data.reason)
     LogService.create_operation_log(
         db, current_user.id, current_user.username,
         "recharge", "user_balance", data.user_id,
-        f"Recharged {data.amount} for user {data.user_id}",
+        f"Recharged {data.amount} for user {data.user_id}" + (f": {data.reason}" if data.reason else ""),
         None,
     )
     return ResponseModel(data=balance)

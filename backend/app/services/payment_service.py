@@ -888,6 +888,8 @@ class PaymentService:
             balance_before=balance_before,
             balance_after=balance.balance,
             billing_mode="balance",
+            operator_id=None,
+            remark=PaymentService._payment_channel_text(order.payment_channel),
         ))
 
     @staticmethod
@@ -939,7 +941,7 @@ class PaymentService:
             multiplier=Decimal("1"),
             action_type="recharge",
             operator_id=None,
-            remark="用户在线充值图片积分",
+            remark=PaymentService._payment_channel_text(order.payment_channel),
         ))
 
     @staticmethod

@@ -50,3 +50,28 @@ def get_consumption_records(
         "page_size": page_size,
         "cache_visible": cache_visible,
     })
+
+
+@router.get("/asset-records", response_model=ResponseModel)
+def get_asset_source_records(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    asset_type: str = Query("all"),
+    direction: str = Query("all"),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    items, total = BalanceService.get_asset_source_records(
+        db,
+        current_user.id,
+        page=page,
+        page_size=page_size,
+        asset_type=asset_type,
+        direction=direction,
+    )
+    return ResponseModel(data={
+        "list": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })

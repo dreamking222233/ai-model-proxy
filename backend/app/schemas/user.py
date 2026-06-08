@@ -127,6 +127,7 @@ class BalanceRechargeRequest(BaseModel):
 
     user_id: int
     amount: Decimal = Field(..., gt=0)
+    reason: Optional[str] = Field(None, max_length=255)
 
 
 class BalanceDeductRequest(BaseModel):

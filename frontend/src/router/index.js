@@ -176,6 +176,12 @@ const routes = [
         meta: { title: '账单与使用' }
       },
       {
+        path: 'asset-source',
+        name: 'AssetSource',
+        component: () => import('@/views/user/AssetSource.vue'),
+        meta: { title: '资产来源' }
+      },
+      {
         path: 'usage',
         redirect: {
           path: '/user/balance',

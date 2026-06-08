@@ -451,6 +451,8 @@ CREATE TABLE `consumption_record` (
   `quota_used_after` decimal(20,6) DEFAULT '0.000000',
   `quota_cycle_date` date DEFAULT NULL,
   `service_tier` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Responses service tier snapshot',
+  `operator_id` bigint unsigned DEFAULT NULL COMMENT '人工操作用户ID',
+  `remark` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '用户可见备注',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_user_id` (`user_id`),
@@ -459,7 +461,9 @@ CREATE TABLE `consumption_record` (
   KEY `idx_billing_mode` (`billing_mode`),
   KEY `idx_subscription_id` (`subscription_id`),
   KEY `idx_subscription_cycle_id` (`subscription_cycle_id`),
-  KEY `idx_consumption_agent_id` (`agent_id`)
+  KEY `idx_consumption_agent_id` (`agent_id`),
+  KEY `idx_consumption_operator_id` (`operator_id`),
+  KEY `idx_consumption_user_created_id` (`user_id`,`created_at`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ----------------------------

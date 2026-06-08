@@ -85,7 +85,7 @@ def recharge_balance(
         user_id=data.user_id,
         amount=data.amount,
         operator_user_id=current_user.id,
-        remark="agent_recharge_balance",
+        remark=data.reason,
     )
     LogService.create_operation_log(
         db,
@@ -94,7 +94,7 @@ def recharge_balance(
         "agent_recharge_balance",
         target_type="user_balance",
         target_id=data.user_id,
-        description=f"代理为用户 {data.user_id} 充值余额 {data.amount}",
+        description=f"代理为用户 {data.user_id} 充值余额 {data.amount}" + (f"：{data.reason}" if data.reason else ""),
         agent_id=int(current_user.agent_id),
     )
     return ResponseModel(data=result)

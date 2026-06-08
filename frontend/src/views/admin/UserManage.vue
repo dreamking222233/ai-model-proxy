@@ -265,10 +265,10 @@
             :placeholder="getRechargeAmountPlaceholder()"
           />
         </a-form-item>
-        <a-form-item v-if="rechargeForm.type === 'deduct'" label="扣除原因">
+        <a-form-item :label="rechargeForm.type === 'recharge' ? '充值备注' : '扣除原因'">
           <a-input
             v-model="rechargeForm.reason"
-            placeholder="请输入扣除原因（可选）"
+            :placeholder="rechargeForm.type === 'recharge' ? '请输入充值备注（可选）' : '请输入扣除原因（可选）'"
             :max-length="255"
           />
         </a-form-item>
@@ -506,10 +506,7 @@ export default {
             this.$message.success('图片积分扣除成功')
           }
         } else if (this.rechargeForm.type === 'recharge') {
-          await rechargeBalance({
-            user_id: this.rechargeForm.userId,
-            amount: this.rechargeForm.amount
-          })
+          await rechargeBalance(payload)
           this.$message.success('余额充值成功')
         } else {
           await deductBalance(payload)

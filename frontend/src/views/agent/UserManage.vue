@@ -170,8 +170,12 @@
             :placeholder="assetAmountPlaceholder"
           />
         </a-form-item>
-        <a-form-item v-if="assetForm.type === 'deduct'" label="扣除原因">
-          <a-input v-model="assetForm.reason" placeholder="请输入扣除原因（可选）" :max-length="255" />
+        <a-form-item :label="assetForm.type === 'recharge' ? '充值备注' : '扣除原因'">
+          <a-input
+            v-model="assetForm.reason"
+            :placeholder="assetForm.type === 'recharge' ? '请输入充值备注（可选）' : '请输入扣除原因（可选）'"
+            :max-length="255"
+          />
         </a-form-item>
       </a-form>
     </a-modal>

@@ -3,14 +3,24 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from sqlalchemy import func, literal, union_all
 from sqlalchemy.orm import Session
 
-from app.models.log import UserBalance, ConsumptionRecord, RequestLog
+from app.models.log import UserBalance, ConsumptionRecord, RequestLog, ImageCreditRecord
+from app.models.payment import PaymentRechargeOrder
 from app.core.exceptions import ServiceException
 
 
 class BalanceService:
     """User balance queries and admin recharge operations."""
+
+    ASSET_TYPES = {"all", "balance", "image_credit"}
+    DIRECTIONS = {"all", "increase", "decrease"}
+
+    @staticmethod
+    def _normalize_remark(remark: str | None) -> str | None:
+        text = str(remark or "").strip()
+        return text[:255] if text else None
 
     @staticmethod
     def get_balance(db: Session, user_id: int) -> dict:
@@ -36,7 +46,7 @@ class BalanceService:
         }
 
     @staticmethod
-    def recharge(db: Session, user_id: int, amount: Decimal, operator_id: int) -> dict:
+    def recharge(db: Session, user_id: int, amount: Decimal, operator_id: int, reason: str | None = None) -> dict:
         """
         Add funds to a user's balance.
 
@@ -82,6 +92,8 @@ class BalanceService:
             total_cost=-amount,  # negative cost = recharge
             balance_before=Decimal(str(balance_before)),
             balance_after=balance.balance,
+            operator_id=operator_id,
+            remark=BalanceService._normalize_remark(reason),
         )
         db.add(record)
         db.commit()
@@ -144,6 +156,8 @@ class BalanceService:
             total_cost=amount,  # positive cost = deduction
             balance_before=Decimal(str(balance_before)),
             balance_after=balance.balance,
+            operator_id=operator_id,
+            remark=BalanceService._normalize_remark(reason),
         )
         db.add(record)
         db.commit()
@@ -157,6 +171,189 @@ class BalanceService:
             "deducted_amount": float(amount),
             "operator_id": operator_id,
         }
+
+    @staticmethod
+    def _payment_channel_text(payment_channel: str | None) -> str:
+        channel = str(payment_channel or "").strip().lower()
+        return {"alipay": "支付宝", "wechat": "微信支付"}.get(channel, channel or "-")
+
+    @staticmethod
+    def _asset_type_text(asset_type: str | None) -> str:
+        return {"balance": "余额", "image_credit": "图片积分"}.get(asset_type or "", asset_type or "-")
+
+    @staticmethod
+    def _normalize_recharge_type(recharge_type: str | None) -> str:
+        normalized = str(recharge_type or "balance").strip().lower()
+        return normalized if normalized in {"balance", "image_credit"} else ""
+
+    @staticmethod
+    def _row_value(row, key: str):
+        mapping = getattr(row, "_mapping", None)
+        if mapping is not None and key in mapping:
+            return mapping[key]
+        return getattr(row, key)
+
+    @staticmethod
+    def _serialize_asset_source_record(row, order_map: dict[str, PaymentRechargeOrder]) -> dict:
+        asset_type = str(BalanceService._row_value(row, "asset_type") or "")
+        record_id = BalanceService._row_value(row, "id")
+        signed_amount = Decimal(str(BalanceService._row_value(row, "signed_amount") or 0))
+        direction = "increase" if signed_amount > 0 else "decrease"
+        request_id = str(BalanceService._row_value(row, "request_id") or "").strip() or None
+        model_name = str(BalanceService._row_value(row, "model_name") or "").strip() or None
+        agent_id = BalanceService._row_value(row, "agent_id")
+        operator_id = BalanceService._row_value(row, "operator_id")
+        action_type = str(BalanceService._row_value(row, "action_type") or "").strip() or None
+        billing_mode = str(BalanceService._row_value(row, "billing_mode") or "").strip() or None
+        remark = BalanceService._normalize_remark(BalanceService._row_value(row, "remark"))
+        created_at = BalanceService._row_value(row, "created_at")
+
+        order = order_map.get(request_id or "")
+        if (
+            order
+            and direction == "increase"
+            and str(getattr(order, "status", "") or "").strip().lower() == "paid"
+            and BalanceService._normalize_recharge_type(getattr(order, "recharge_type", None)) == asset_type
+        ):
+            source = "线上充值"
+            remark = BalanceService._payment_channel_text(getattr(order, "payment_channel", None))
+            action_type = "recharge"
+        elif agent_id:
+            source = "代理端"
+        elif operator_id:
+            source = "管理端"
+        elif action_type == "request" or (request_id and direction == "decrease") or (model_name and direction == "decrease"):
+            source = "模型调用"
+            remark = remark or model_name or "请求扣费"
+            action_type = action_type or "request"
+        elif direction == "increase":
+            source = "历史充值"
+            action_type = action_type or "recharge"
+            remark = remark or model_name
+        else:
+            source = "系统扣减"
+            action_type = action_type or "deduct"
+
+        return {
+            "id": int(record_id),
+            "record_key": f"{asset_type}-{record_id}",
+            "asset_type": asset_type,
+            "asset_type_text": BalanceService._asset_type_text(asset_type),
+            "direction": direction,
+            "amount": float(abs(signed_amount)),
+            "source": source,
+            "remark": remark,
+            "request_id": request_id,
+            "model_name": model_name,
+            "action_type": action_type,
+            "billing_mode": billing_mode,
+            "balance_before": float(Decimal(str(BalanceService._row_value(row, "balance_before") or 0))),
+            "balance_after": float(Decimal(str(BalanceService._row_value(row, "balance_after") or 0))),
+            "created_at": created_at.isoformat() if created_at else None,
+        }
+
+    @staticmethod
+    def get_asset_source_records(
+        db: Session,
+        user_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        asset_type: str = "all",
+        direction: str = "all",
+    ) -> tuple[list[dict], int]:
+        normalized_asset_type = str(asset_type or "all").strip().lower()
+        normalized_direction = str(direction or "all").strip().lower()
+        if normalized_asset_type not in BalanceService.ASSET_TYPES:
+            raise ServiceException(400, "不支持的资产类型", "ASSET_TYPE_INVALID")
+        if normalized_direction not in BalanceService.DIRECTIONS:
+            raise ServiceException(400, "不支持的变动方向", "ASSET_DIRECTION_INVALID")
+
+        page = max(int(page or 1), 1)
+        page_size = min(max(int(page_size or 20), 1), 100)
+        queries = []
+
+        if normalized_asset_type in {"all", "balance"}:
+            balance_query = db.query(
+                ConsumptionRecord.id.label("id"),
+                literal("balance").label("asset_type"),
+                (-ConsumptionRecord.total_cost).label("signed_amount"),
+                ConsumptionRecord.balance_before.label("balance_before"),
+                ConsumptionRecord.balance_after.label("balance_after"),
+                ConsumptionRecord.request_id.label("request_id"),
+                ConsumptionRecord.model_name.label("model_name"),
+                ConsumptionRecord.agent_id.label("agent_id"),
+                ConsumptionRecord.operator_id.label("operator_id"),
+                literal(None).label("action_type"),
+                ConsumptionRecord.billing_mode.label("billing_mode"),
+                ConsumptionRecord.remark.label("remark"),
+                ConsumptionRecord.created_at.label("created_at"),
+            ).filter(
+                ConsumptionRecord.user_id == user_id,
+                ConsumptionRecord.total_cost != Decimal("0"),
+            )
+            if normalized_direction == "increase":
+                balance_query = balance_query.filter(ConsumptionRecord.total_cost < Decimal("0"))
+            elif normalized_direction == "decrease":
+                balance_query = balance_query.filter(ConsumptionRecord.total_cost > Decimal("0"))
+            queries.append(balance_query)
+
+        if normalized_asset_type in {"all", "image_credit"}:
+            image_query = db.query(
+                ImageCreditRecord.id.label("id"),
+                literal("image_credit").label("asset_type"),
+                ImageCreditRecord.change_amount.label("signed_amount"),
+                ImageCreditRecord.balance_before.label("balance_before"),
+                ImageCreditRecord.balance_after.label("balance_after"),
+                ImageCreditRecord.request_id.label("request_id"),
+                ImageCreditRecord.model_name.label("model_name"),
+                ImageCreditRecord.agent_id.label("agent_id"),
+                ImageCreditRecord.operator_id.label("operator_id"),
+                ImageCreditRecord.action_type.label("action_type"),
+                literal(None).label("billing_mode"),
+                ImageCreditRecord.remark.label("remark"),
+                ImageCreditRecord.created_at.label("created_at"),
+            ).filter(
+                ImageCreditRecord.user_id == user_id,
+                ImageCreditRecord.change_amount != Decimal("0"),
+            )
+            if normalized_direction == "increase":
+                image_query = image_query.filter(ImageCreditRecord.change_amount > Decimal("0"))
+            elif normalized_direction == "decrease":
+                image_query = image_query.filter(ImageCreditRecord.change_amount < Decimal("0"))
+            queries.append(image_query)
+
+        if not queries:
+            return [], 0
+
+        combined = union_all(*[query.statement for query in queries]).subquery("asset_records")
+        total = db.query(func.count()).select_from(combined).scalar() or 0
+        rows = (
+            db.query(combined)
+            .order_by(combined.c.created_at.desc(), combined.c.id.desc(), combined.c.asset_type.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+
+        order_nos = sorted({
+            str(BalanceService._row_value(row, "request_id") or "").strip()
+            for row in rows
+            if str(BalanceService._row_value(row, "request_id") or "").strip()
+        })
+        order_map: dict[str, PaymentRechargeOrder] = {}
+        if order_nos:
+            orders = (
+                db.query(PaymentRechargeOrder)
+                .filter(
+                    PaymentRechargeOrder.user_id == user_id,
+                    PaymentRechargeOrder.status == "paid",
+                    PaymentRechargeOrder.order_no.in_(order_nos),
+                )
+                .all()
+            )
+            order_map = {str(order.order_no): order for order in orders}
+
+        return [BalanceService._serialize_asset_source_record(row, order_map) for row in rows], int(total)
 
     @staticmethod
     def get_consumption_records(

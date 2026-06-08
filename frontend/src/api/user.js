@@ -151,6 +151,14 @@ export function getConsumptionRecords(params) {
   })
 }
 
+export function getAssetSourceRecords(params) {
+  return request({
+    url: '/api/user/balance/asset-records',
+    method: 'get',
+    params
+  })
+}
+
 // ==================== User Profile ====================
 
 export function getProfile() {

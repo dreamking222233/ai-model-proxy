@@ -224,6 +224,8 @@ class ConsumptionRecord(Base):
     quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_cycle_date = Column(Date, nullable=True)
     service_tier = Column(String(32), nullable=True, comment="Responses service tier snapshot")
+    operator_id = Column(BigInteger, nullable=True, index=True, comment="Manual operation user id")
+    remark = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 

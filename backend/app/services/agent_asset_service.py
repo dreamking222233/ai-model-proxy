@@ -261,6 +261,8 @@ class AgentAssetService:
             total_cost=-amount_decimal,
             balance_before=user_before,
             balance_after=user_balance.balance,
+            operator_id=operator_user_id,
+            remark=remark,
         ))
         db.commit()
         db.refresh(agent_balance)
@@ -315,6 +317,8 @@ class AgentAssetService:
             total_cost=-amount,
             balance_before=user_before,
             balance_after=user_balance.balance,
+            operator_id=operator_user_id,
+            remark=remark,
         ))
         settlement = AgentSettlementService.create_settlement_record(
             db,
@@ -387,6 +391,8 @@ class AgentAssetService:
                 total_cost=amount_decimal,
                 balance_before=user_before,
                 balance_after=user_balance.balance,
+                operator_id=operator_user_id,
+                remark=remark,
             ))
             db.commit()
             db.refresh(agent_balance)
@@ -431,6 +437,8 @@ class AgentAssetService:
             total_cost=amount_decimal,
             balance_before=user_before,
             balance_after=user_balance.balance,
+            operator_id=operator_user_id,
+            remark=remark,
         ))
         db.commit()
         db.refresh(agent_balance)

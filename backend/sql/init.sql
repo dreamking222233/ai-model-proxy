@@ -536,14 +536,18 @@ CREATE TABLE `consumption_record` (
     `context_token_threshold_snapshot` INT DEFAULT 262144 COMMENT '长上下文计费阈值快照',
     `context_price_multiplier_snapshot` DECIMAL(12, 6) DEFAULT 1 COMMENT '长上下文价格倍率快照',
     `token_multiplier_snapshot` DECIMAL(12, 6) DEFAULT 1,
+    `operator_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '人工操作用户ID',
+    `remark` VARCHAR(255) DEFAULT NULL COMMENT '用户可见备注',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     KEY `idx_user_id` (`user_id`),
     KEY `idx_request_id` (`request_id`),
+    KEY `idx_consumption_operator_id` (`operator_id`),
     KEY `idx_billing_mode` (`billing_mode`),
     KEY `idx_subscription_id` (`subscription_id`),
     KEY `idx_subscription_cycle_id` (`subscription_cycle_id`),
-    KEY `idx_created_at` (`created_at`)
+    KEY `idx_created_at` (`created_at`),
+    KEY `idx_consumption_user_created_id` (`user_id`, `created_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ============================================================

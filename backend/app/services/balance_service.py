@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import func, literal, union_all
+from sqlalchemy import and_, exists, literal, or_
 from sqlalchemy.orm import Session
 
-from app.models.log import UserBalance, ConsumptionRecord, RequestLog, ImageCreditRecord
+from app.models.log import UserBalance, ConsumptionRecord, RequestLog
 from app.models.payment import PaymentRechargeOrder
 from app.core.exceptions import ServiceException
 
@@ -14,7 +14,7 @@ from app.core.exceptions import ServiceException
 class BalanceService:
     """User balance queries and admin recharge operations."""
 
-    ASSET_TYPES = {"all", "balance", "image_credit"}
+    ASSET_TYPES = {"all", "balance"}
     DIRECTIONS = {"all", "increase", "decrease"}
 
     @staticmethod
@@ -179,7 +179,7 @@ class BalanceService:
 
     @staticmethod
     def _asset_type_text(asset_type: str | None) -> str:
-        return {"balance": "余额", "image_credit": "图片积分"}.get(asset_type or "", asset_type or "-")
+        return {"balance": "余额"}.get(asset_type or "", asset_type or "-")
 
     @staticmethod
     def _normalize_recharge_type(recharge_type: str | None) -> str:
@@ -222,10 +222,6 @@ class BalanceService:
             source = "代理端"
         elif operator_id:
             source = "管理端"
-        elif action_type == "request" or (request_id and direction == "decrease") or (model_name and direction == "decrease"):
-            source = "模型调用"
-            remark = remark or model_name or "请求扣费"
-            action_type = action_type or "request"
         elif direction == "increase":
             source = "历史充值"
             action_type = action_type or "recharge"
@@ -270,66 +266,44 @@ class BalanceService:
 
         page = max(int(page or 1), 1)
         page_size = min(max(int(page_size or 20), 1), 100)
-        queries = []
+        blank_request = or_(ConsumptionRecord.request_id.is_(None), ConsumptionRecord.request_id == "")
+        blank_model = or_(ConsumptionRecord.model_name.is_(None), ConsumptionRecord.model_name == "")
+        manual_balance_change = and_(blank_request, blank_model)
+        paid_balance_recharge = exists().where(and_(
+            PaymentRechargeOrder.user_id == ConsumptionRecord.user_id,
+            PaymentRechargeOrder.order_no == ConsumptionRecord.request_id,
+            PaymentRechargeOrder.status == "paid",
+            PaymentRechargeOrder.recharge_type == "balance",
+        ))
 
-        if normalized_asset_type in {"all", "balance"}:
-            balance_query = db.query(
-                ConsumptionRecord.id.label("id"),
-                literal("balance").label("asset_type"),
-                (-ConsumptionRecord.total_cost).label("signed_amount"),
-                ConsumptionRecord.balance_before.label("balance_before"),
-                ConsumptionRecord.balance_after.label("balance_after"),
-                ConsumptionRecord.request_id.label("request_id"),
-                ConsumptionRecord.model_name.label("model_name"),
-                ConsumptionRecord.agent_id.label("agent_id"),
-                ConsumptionRecord.operator_id.label("operator_id"),
-                literal(None).label("action_type"),
-                ConsumptionRecord.billing_mode.label("billing_mode"),
-                ConsumptionRecord.remark.label("remark"),
-                ConsumptionRecord.created_at.label("created_at"),
-            ).filter(
-                ConsumptionRecord.user_id == user_id,
-                ConsumptionRecord.total_cost != Decimal("0"),
-            )
-            if normalized_direction == "increase":
-                balance_query = balance_query.filter(ConsumptionRecord.total_cost < Decimal("0"))
-            elif normalized_direction == "decrease":
-                balance_query = balance_query.filter(ConsumptionRecord.total_cost > Decimal("0"))
-            queries.append(balance_query)
+        balance_query = db.query(
+            ConsumptionRecord.id.label("id"),
+            literal("balance").label("asset_type"),
+            (-ConsumptionRecord.total_cost).label("signed_amount"),
+            ConsumptionRecord.balance_before.label("balance_before"),
+            ConsumptionRecord.balance_after.label("balance_after"),
+            ConsumptionRecord.request_id.label("request_id"),
+            ConsumptionRecord.model_name.label("model_name"),
+            ConsumptionRecord.agent_id.label("agent_id"),
+            ConsumptionRecord.operator_id.label("operator_id"),
+            literal(None).label("action_type"),
+            ConsumptionRecord.billing_mode.label("billing_mode"),
+            ConsumptionRecord.remark.label("remark"),
+            ConsumptionRecord.created_at.label("created_at"),
+        ).filter(
+            ConsumptionRecord.user_id == user_id,
+            ConsumptionRecord.total_cost != Decimal("0"),
+            or_(manual_balance_change, paid_balance_recharge),
+        )
+        if normalized_direction == "increase":
+            balance_query = balance_query.filter(ConsumptionRecord.total_cost < Decimal("0"))
+        elif normalized_direction == "decrease":
+            balance_query = balance_query.filter(ConsumptionRecord.total_cost > Decimal("0"))
 
-        if normalized_asset_type in {"all", "image_credit"}:
-            image_query = db.query(
-                ImageCreditRecord.id.label("id"),
-                literal("image_credit").label("asset_type"),
-                ImageCreditRecord.change_amount.label("signed_amount"),
-                ImageCreditRecord.balance_before.label("balance_before"),
-                ImageCreditRecord.balance_after.label("balance_after"),
-                ImageCreditRecord.request_id.label("request_id"),
-                ImageCreditRecord.model_name.label("model_name"),
-                ImageCreditRecord.agent_id.label("agent_id"),
-                ImageCreditRecord.operator_id.label("operator_id"),
-                ImageCreditRecord.action_type.label("action_type"),
-                literal(None).label("billing_mode"),
-                ImageCreditRecord.remark.label("remark"),
-                ImageCreditRecord.created_at.label("created_at"),
-            ).filter(
-                ImageCreditRecord.user_id == user_id,
-                ImageCreditRecord.change_amount != Decimal("0"),
-            )
-            if normalized_direction == "increase":
-                image_query = image_query.filter(ImageCreditRecord.change_amount > Decimal("0"))
-            elif normalized_direction == "decrease":
-                image_query = image_query.filter(ImageCreditRecord.change_amount < Decimal("0"))
-            queries.append(image_query)
-
-        if not queries:
-            return [], 0
-
-        combined = union_all(*[query.statement for query in queries]).subquery("asset_records")
-        total = db.query(func.count()).select_from(combined).scalar() or 0
+        total = balance_query.count()
         rows = (
-            db.query(combined)
-            .order_by(combined.c.created_at.desc(), combined.c.id.desc(), combined.c.asset_type.desc())
+            balance_query
+            .order_by(ConsumptionRecord.created_at.desc(), ConsumptionRecord.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()

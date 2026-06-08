@@ -8,7 +8,7 @@
     >
       <div class="logo" :class="{ 'logo-collapsed': collapsed }">
         <div class="logo-icon-wrap">
-          <img :src="require('@/assets/logo.png')" class="logo-img" alt="logo" />
+          <img :src="require('@/assets/brand-logo.png')" class="logo-img" alt="logo" />
         </div>
         <transition name="logo-text-fade">
           <span v-if="!collapsed" class="logo-text">代理控制台</span>

@@ -14,7 +14,7 @@
       <div class="navbar-container">
         <div class="brand">
           <div class="brand-logo-ring">
-            <a-icon type="thunderbolt" class="brand-logo-icon" />
+            <img src="@/assets/brand-logo.png" alt="Logo" class="brand-logo-img" />
           </div>
           <span class="brand-title">{{ siteConfig.site_name || 'AI 模型聚合平台' }}</span>
         </div>
@@ -44,8 +44,40 @@
     </header>
 
     <!-- 主视觉 Hero 区域 (全宽居中，更加高端) -->
-    <section class="hero-section">
+    <section id="galaxy" class="hero-section">
       <div class="hero-container hero-center">
+        <div
+          ref="galaxyContainer"
+          class="galaxy-container"
+          :class="{ 'galaxy-active': isGalaxyVisible && !reducedMotion }"
+        >
+          <div class="galaxy-stage">
+            <!-- 双重倾斜轨道环 -->
+            <div class="galaxy-track-ring outer"></div>
+            <div class="galaxy-track-ring inner"></div>
+
+            <!-- 模型节点 (潮汐锁定，自转反向抵消) -->
+            <div
+              v-for="model in displayModels"
+              :key="model.renderKey"
+              class="model-node"
+              :style="model.nodeStyle"
+              @mouseenter="hoverModel(model)"
+              @mouseleave="unhoverModel"
+              @click="scrollToModelCard(model)"
+            >
+              <div class="node-spin-resolver">
+                <div class="node-wrapper" :class="{ 'node-active': activeModel && activeModel.id === model.id }">
+                  <div class="node-icon" :class="model.brandClass">
+                    <span v-html="model.brandSvg"></span>
+                  </div>
+                  <div class="node-name">{{ model.display_name }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="hero-text-content">
           <div class="badge-wrapper">
             <span class="tech-badge">
@@ -76,71 +108,6 @@
             </template>
           </div>
         </div>
-      </div>
-    </section>
-
-    <!-- 独立的 3D 大模型星系专区 (全宽放大，围成圆圈) -->
-    <section id="galaxy" class="galaxy-section">
-      <div class="section-header">
-        <h2 class="section-title">智能大模型星系</h2>
-        <p class="section-subtitle">大模型节点环绕中心 AI CORE 公转，悬停以实时探索模型规格与起步单价</p>
-      </div>
-
-      <div
-        ref="galaxyContainer"
-        class="galaxy-container"
-        :class="{ 'galaxy-paused': isPaused, 'galaxy-active': isGalaxyVisible && !reducedMotion }"
-      >
-        <div class="galaxy-stage">
-          <!-- 中心 AI Core 能量源 -->
-          <div class="galaxy-core" :class="{ 'core-active': activeModel }">
-            <div class="core-inner-glow"></div>
-            <div class="core-pulse-ring"></div>
-            <div class="core-content">
-              <div v-if="activeModel" class="active-model-info">
-                <div class="active-logo" :class="activeModel.brandClass">
-                  <span v-html="activeModel.brandSvg"></span>
-                </div>
-                <div class="active-name">{{ activeModel.display_name }}</div>
-                <div class="active-price">
-                  {{ activeModel.priceText }}
-                </div>
-              </div>
-              <div class="core-default" v-else>
-                <a-icon type="api" class="core-icon-spin" />
-                <span>AI CORE</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 双重倾斜轨道环 -->
-          <div class="galaxy-track-ring outer"></div>
-          <div class="galaxy-track-ring inner"></div>
-
-          <!-- 模型节点 (潮汐锁定，自转反向抵消) -->
-          <div
-            v-for="model in displayModels"
-            :key="model.renderKey"
-            class="model-node"
-            :style="model.nodeStyle"
-            @mouseenter="hoverModel(model)"
-            @mouseleave="unhoverModel"
-            @click="scrollToModelCard(model)"
-          >
-            <div class="node-spin-resolver">
-              <div class="node-wrapper" :class="{ 'node-active': activeModel && activeModel.id === model.id }">
-                <div class="node-icon" :class="model.brandClass">
-                  <span v-html="model.brandSvg"></span>
-                </div>
-                <div class="node-name">{{ model.display_name }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="visual-tip">
-        <a-icon type="info-circle" /> 悬停在模型上查看单价，点击可直接滚动定位至下方详情卡片
       </div>
     </section>
 
@@ -219,7 +186,7 @@
       <div class="footer-container">
         <div class="footer-brand">
           <div class="brand-logo-ring mini-ring">
-            <a-icon type="thunderbolt" />
+            <img src="@/assets/brand-logo.png" alt="Logo" class="brand-logo-img" />
           </div>
           <span>{{ siteConfig.site_name || 'AI 模型聚合平台' }}</span>
         </div>
@@ -329,9 +296,9 @@ const FALLBACK_MODELS = [
   }
 ];
 
-const DEFAULT_ORBIT_RADIUS = 300
-const TABLET_ORBIT_RADIUS = 210
-const MOBILE_ORBIT_RADIUS = 145
+const DEFAULT_ORBIT_RADIUS = 320
+const TABLET_ORBIT_RADIUS = 230
+const MOBILE_ORBIT_RADIUS = 128
 const CANVAS_FRAME_INTERVAL = 1000 / 15
 const CONNECTION_DISTANCE = 120
 const CONNECTION_DISTANCE_SQ = CONNECTION_DISTANCE * CONNECTION_DISTANCE
@@ -377,12 +344,7 @@ function normalizeModels(models) {
 }
 
 function selectGalaxyModels(models) {
-  const chatModels = models.filter(m => m.model_type === 'chat').slice(0, 11)
-  const imageModels = models.filter(m => m.model_type === 'image').slice(0, 2)
-  const videoModels = models.filter(m => m.model_type === 'video').slice(0, 2)
-  const selected = [...chatModels, ...imageModels, ...videoModels]
-  if (selected.length > 0) return selected
-  return models.length > 0 ? models.slice(0, 15) : FALLBACK_VIEW_MODELS
+  return models.length > 0 ? models : FALLBACK_VIEW_MODELS
 }
 
 function withNodeStyles(models, radius) {
@@ -407,7 +369,6 @@ export default {
       siteConfig: {},
       models: FALLBACK_VIEW_MODELS,
       displayModels: withNodeStyles(selectGalaxyModels(FALLBACK_VIEW_MODELS), DEFAULT_ORBIT_RADIUS),
-      isPaused: false,
       isGalaxyVisible: false,
       activeModel: null,
       canvasAnimId: null,
@@ -505,12 +466,10 @@ export default {
 
     hoverModel(model) {
       if (this.activeModel && this.activeModel.id === model.id) return
-      this.isPaused = true
       this.activeModel = model
     },
 
     unhoverModel() {
-      this.isPaused = false
       this.activeModel = null
     },
 
@@ -886,16 +845,18 @@ export default {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  background: rgba(255, 255, 255, 0.9);
   display: flex;
   justify-content: center;
   align-items: center;
-  box-shadow: 0 4px 10px rgba(0, 242, 254, 0.25);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.18);
+  overflow: hidden;
 }
 
-.brand-logo-icon {
-  font-size: 18px;
-  color: #ffffff;
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .brand-title {
@@ -957,21 +918,29 @@ export default {
 
 /* ==================== Hero 区域 ==================== */
 .hero-section {
-  padding: 150px 0 60px 0;
+  min-height: 760px;
+  padding: 96px 0 72px 0;
   position: relative;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
 }
 
 .hero-container {
   max-width: 1200px;
+  min-height: 640px;
   margin: 0 auto;
   padding: 0 24px;
+  position: relative;
+  width: 100%;
 }
 
 .hero-center {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   text-align: center;
 }
 
@@ -980,6 +949,17 @@ export default {
   flex-direction: column;
   align-items: center;
   max-width: 800px;
+  position: relative;
+  z-index: 3;
+}
+
+.hero-text-content::before {
+  content: '';
+  position: absolute;
+  inset: -56px -96px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(245, 247, 250, 0.92) 0%, rgba(245, 247, 250, 0.78) 45%, rgba(245, 247, 250, 0) 72%);
 }
 
 .badge-wrapper {
@@ -1083,25 +1063,17 @@ export default {
   transform: translateY(-2px);
 }
 
-/* ==================== 3D 星系旋转大模型展示专区 ==================== */
-.galaxy-section {
-  padding: 50px 0 80px 0;
-  background: radial-gradient(circle at center, rgba(99, 102, 241, 0.02) 0%, transparent 70%);
-  position: relative;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  overflow: visible;
-}
-
+/* ==================== Hero 星系旋转大模型展示层 ==================== */
 .galaxy-container {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   width: 100%;
-  height: 680px;
+  height: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
-  position: relative;
+  pointer-events: none;
   contain: layout style;
 }
 
@@ -1123,132 +1095,6 @@ export default {
   to { transform: rotate(360deg); }
 }
 
-/* 核心 AI CORE 圆球 */
-.galaxy-core {
-  position: absolute;
-  width: 140px;
-  height: 140px;
-  border-radius: 50%;
-  z-index: 10;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95) 0%, rgba(243, 244, 246, 0.9) 70%);
-  border: 1px solid rgba(124, 58, 237, 0.15);
-  box-shadow: 0 10px 40px rgba(124, 58, 237, 0.1), inset 0 0 20px rgba(255, 255, 255, 0.7);
-  transition: all 0.4s ease;
-  transform: translateZ(0);
-  contain: layout style;
-  backface-visibility: hidden;
-}
-
-.core-active {
-  border-color: rgba(59, 130, 246, 0.35);
-  box-shadow: 0 10px 40px rgba(59, 130, 246, 0.18), inset 0 0 25px rgba(59, 130, 246, 0.1);
-}
-
-.core-inner-glow {
-  position: absolute;
-  width: 90%;
-  height: 90%;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(124, 58, 237, 0.08) 0%, transparent 70%);
-  animation: pulse 2.5s infinite ease-in-out;
-  will-change: transform, opacity;
-}
-
-.core-pulse-ring {
-  position: absolute;
-  width: 176px;
-  height: 176px;
-  border-radius: 50%;
-  border: 1px solid rgba(124, 58, 237, 0.12);
-  animation: ripples 3s infinite linear;
-  will-change: transform, opacity;
-}
-
-@keyframes ripples {
-  0% { transform: scale(0.85); opacity: 0.8; }
-  100% { transform: scale(1.4); opacity: 0; }
-}
-
-.core-content {
-  position: relative;
-  z-index: 2;
-  text-align: center;
-  color: #111827;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.core-default {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: #7c3aed;
-}
-
-.core-icon-spin {
-  font-size: 32px;
-  animation: spinSlow 8s infinite linear;
-}
-
-@keyframes spinSlow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.active-model-info {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px;
-  width: 140px;
-  animation: fadeInFast 0.3s ease-out;
-}
-
-.active-logo {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 6px;
-  transition: transform 0.3s;
-}
-
-.active-logo span {
-  display: flex;
-  align-items: center;
-}
-
-.active-name {
-  font-size: 12px;
-  font-weight: 700;
-  color: #1f2937;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  width: 120px;
-  margin-bottom: 6px;
-}
-
-.active-price {
-  font-size: 10px;
-  color: #2563eb;
-  font-weight: 600;
-  background: rgba(59, 130, 246, 0.06);
-  border: 1px solid rgba(59, 130, 246, 0.15);
-  border-radius: 12px;
-  padding: 2px 10px;
-  white-space: nowrap;
-}
-
 /* 双重环轨道线 */
 .galaxy-track-ring {
   position: absolute;
@@ -1258,13 +1104,13 @@ export default {
 }
 
 .galaxy-track-ring.outer {
-  width: 600px;
-  height: 600px;
+  width: 640px;
+  height: 640px;
 }
 
 .galaxy-track-ring.inner {
-  width: 380px;
-  height: 380px;
+  width: 420px;
+  height: 420px;
   opacity: 0.5;
 }
 
@@ -1274,6 +1120,7 @@ export default {
   cursor: pointer;
   z-index: 20;
   backface-visibility: hidden;
+  pointer-events: auto;
 }
 
 /* 公转反向抵消容器，保持节点内容始终正向展示 */
@@ -1289,25 +1136,20 @@ export default {
   to { transform: rotate(-360deg); }
 }
 
-/* 悬停暂停公转和自转状态 */
+/* 星系进入视口后启动公转和节点反向抵消 */
 .galaxy-active .galaxy-stage,
 .galaxy-active .node-spin-resolver {
   animation-play-state: running;
 }
 
-.galaxy-paused .galaxy-stage,
-.galaxy-paused .node-spin-resolver {
-  animation-play-state: paused !important;
-}
-
 .node-wrapper {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   background: rgba(255, 255, 255, 0.85);
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 30px;
-  padding: 10px 20px;
+  padding: 9px 16px;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04);
@@ -1334,7 +1176,7 @@ export default {
 }
 
 .node-name {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   color: #374151;
   white-space: nowrap;
@@ -1352,19 +1194,6 @@ export default {
 .node-wrapper:hover .node-name,
 .node-active .node-name {
   color: #111827;
-}
-
-.visual-tip {
-  margin-top: 18px;
-  font-size: 13px;
-  color: #9ca3af;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  z-index: 10;
-  min-height: 20px;
-  position: relative;
 }
 
 /* ==================== 品牌专属色彩 ==================== */
@@ -1618,33 +1447,23 @@ export default {
   box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2) !important;
 }
 
-.mini-ring i {
-  font-size: 14px !important;
-}
-
 .footer-copyright {
   font-size: 12px;
   color: #6b7280;
   margin: 0;
 }
 
-/* ==================== 核心关键帧 ==================== */
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 0.9; }
-  50% { transform: scale(1.05); opacity: 1; }
-}
-
-@keyframes fadeInFast {
-  from { opacity: 0; transform: scale(0.9); }
-  to { opacity: 1; transform: scale(1); }
-}
-
 /* ==================== 移动端响应式 ==================== */
 @media (max-width: 992px) {
+  .hero-section {
+    min-height: 660px;
+    padding: 96px 0 64px 0;
+  }
   .hero-container {
     grid-template-columns: 1fr;
     text-align: center;
     gap: 40px;
+    min-height: 500px;
   }
   .hero-text-content {
     align-items: center;
@@ -1656,16 +1475,13 @@ export default {
     grid-template-columns: 1fr;
     gap: 20px;
   }
-  .galaxy-container {
-    height: 500px;
-  }
   .galaxy-track-ring.outer {
-    width: 420px;
-    height: 420px;
+    width: 460px;
+    height: 460px;
   }
   .galaxy-track-ring.inner {
-    width: 270px;
-    height: 270px;
+    width: 300px;
+    height: 300px;
   }
   .node-wrapper {
     gap: 9px;
@@ -1693,29 +1509,19 @@ export default {
     font-size: 36px;
   }
   .hero-section {
-    padding: 100px 0 60px 0;
+    min-height: 560px;
+    padding: 90px 0 54px 0;
   }
-  .galaxy-section {
-    padding: 36px 0 72px 0;
-  }
-  .galaxy-container {
-    height: 380px;
-  }
-  .galaxy-core {
-    width: 112px;
-    height: 112px;
-  }
-  .core-pulse-ring {
-    width: 142px;
-    height: 142px;
+  .hero-container {
+    min-height: 420px;
   }
   .galaxy-track-ring.outer {
-    width: 290px;
-    height: 290px;
+    width: 256px;
+    height: 256px;
   }
   .galaxy-track-ring.inner {
-    width: 190px;
-    height: 190px;
+    width: 170px;
+    height: 170px;
   }
   .node-wrapper {
     padding: 7px 11px;
@@ -1739,12 +1545,6 @@ export default {
   .models-grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   }
-  .visual-tip {
-    margin-top: 16px;
-    padding: 0 20px;
-    text-align: center;
-    line-height: 1.6;
-  }
   .footer-container {
     flex-direction: column;
     gap: 16px;
@@ -1761,29 +1561,25 @@ export default {
     width: 100%;
     justify-content: center;
   }
-  .galaxy-container {
-    height: 330px;
+  .hero-section {
+    min-height: 540px;
   }
-  .galaxy-core {
-    width: 96px;
-    height: 96px;
+  .hero-container {
+    min-height: 400px;
   }
   .galaxy-track-ring.outer {
-    width: 250px;
-    height: 250px;
+    width: 240px;
+    height: 240px;
   }
   .galaxy-track-ring.inner {
-    width: 165px;
-    height: 165px;
+    width: 160px;
+    height: 160px;
   }
   .node-name {
     display: none;
   }
   .node-wrapper {
     padding: 9px;
-  }
-  .visual-tip {
-    margin-top: 12px;
   }
 }
 

@@ -221,14 +221,18 @@
                       <code class="e-url">{{ relayOpenaiBase }}/image/created</code>
                     </div>
                     <p class="api-doc-intro">
-                      用于文生图，两个接口都可用，均为非流式 HTTP 调用。
+                      用于文生图，两个接口都可用，均为非流式 HTTP 调用；服务端会等待上游返回有效 <code>b64_json</code> 图片后再计费。
                       推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>、<code>n</code>。
                     </p>
                     <p class="api-doc-intro">
                       当前支持的图片模型包括 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、
                       <code>gemini-3-pro-image-preview</code> 和 <code>gpt-image-2</code>。
-                      其中 <code>gpt-image-2</code> 支持 <code>1 &lt;= n &lt;= 4</code>，会在 <code>data</code> 数组中返回多张图片；
+                      其中 OpenAI Image Native Size 渠道支持 <code>1K/2K/4K</code> 原生尺寸映射，<code>gpt-image-2</code> 支持 <code>1 &lt;= n &lt;= 4</code>，会在 <code>data</code> 数组中返回多张图片；
                       计费按 <code>0.5</code> 图片积分/张线性累加。
+                    </p>
+                    <p class="api-doc-intro">
+                      生图耗时可能超过 100 秒，客户端建议将 HTTP timeout 设置为 <code>600</code> 秒以上。
+                      也可通过 <code>{{ relayOpenaiBase }}/responses</code> 使用 Responses 协议调用 <code>image_generation</code> 工具，工具内必须指定图片模型。
                     </p>
 
                     <div class="code-editor-block">
@@ -297,7 +301,7 @@
                     </div>
                     <p class="api-doc-intro">
                       用于上传原图后进行编辑，采用 <code>multipart/form-data</code>。
-                      当前支持的编辑模型为 <code>gpt-image-2</code>，按 <code>0.5</code> 图片积分/次计费。
+                      当前支持的编辑模型为 <code>gpt-image-2</code>，系统会在返回有效图片后按实际有效图片数扣除图片积分。
                     </p>
                     <p class="api-doc-intro">
                       编辑接口支持重复上传多个 <code>image</code> 字段，系统会将多张图片一并提交给上游进行组合编辑；<code>n</code> 固定为 <code>1</code>。
@@ -564,31 +568,130 @@ print(msg.content[0].text)`
     imageGenerationPythonCode() {
       return `import requests
 import base64
+import json
 from pathlib import Path
 
-url = "${this.relayOpenaiBase}/images/generations"
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer sk-你的密钥"
-}
-payload = {
-    "model": "gpt-image-2",
-    "prompt": "生成一张赛博朋克风格的城市夜景海报",
-    "response_format": "b64_json",
-    "image_size": "1K",
-    "aspect_ratio": "1:1",
-    "n": 2
-}
+BASE_URL = "${this.relayOpenaiBase}"
+API_KEY = "sk-你的密钥"
+TIMEOUT_SECONDS = 600
 
-resp = requests.post(url, headers=headers, json=payload, timeout=300)
-resp.raise_for_status()
-result = resp.json()
 
-for index, item in enumerate(result.get("data", []), start=1):
-    image_bytes = base64.b64decode(item["b64_json"])
-    Path(f"generated_{index}.png").write_bytes(image_bytes)
+def api_headers(json_request=True):
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    if json_request:
+        headers["Content-Type"] = "application/json"
+    return headers
 
-print(result)`
+
+def parse_error(resp):
+    try:
+        payload = resp.json()
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict) and err.get("message"):
+            return err["message"]
+        if isinstance(payload, dict):
+            return payload.get("message") or payload.get("detail") or resp.text
+    except Exception:
+        pass
+    return resp.text
+
+
+def decode_image_b64(value):
+    raw = str(value or "").strip()
+    if raw.startswith("data:") and "," in raw:
+        raw = raw.split(",", 1)[1]
+    raw = "".join(raw.split())
+    raw += "=" * ((4 - len(raw) % 4) % 4)
+    data = base64.b64decode(raw, validate=True)
+    if data.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+        return data, ".png"
+    if data.startswith(b"\\xff\\xd8\\xff"):
+        return data, ".jpg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return data, ".gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return data, ".webp"
+    raise ValueError("响应中的 b64_json 不是受支持的图片格式")
+
+
+def save_image_items(items, prefix):
+    saved = []
+    for index, item in enumerate(items, start=1):
+        image_bytes, suffix = decode_image_b64(item["b64_json"])
+        path = Path(f"{prefix}_{index}{suffix}")
+        path.write_bytes(image_bytes)
+        saved.append(str(path))
+    return saved
+
+
+def create_image():
+    payload = {
+        "model": "gpt-image-2",
+        "prompt": "生成一张 9:16 竖屏、2K 细节的赛博朋克城市夜景海报",
+        "response_format": "b64_json",
+        "image_size": "2K",
+        "aspect_ratio": "9:16",
+        "n": 1
+    }
+    resp = requests.post(
+        f"{BASE_URL}/images/generations",
+        headers=api_headers(),
+        json=payload,
+        timeout=TIMEOUT_SECONDS,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"图片生成失败 HTTP {resp.status_code}: {parse_error(resp)}")
+    result = resp.json()
+    data = result.get("data") or []
+    if not data:
+        raise RuntimeError("图片生成成功但 data 为空")
+    saved = save_image_items(data, "generated")
+    print("图片生成保存：", saved)
+    print("计费信息：", json.dumps(result.get("usage", {}), ensure_ascii=False, indent=2))
+    return result
+
+
+def create_image_with_responses():
+    payload = {
+        "model": "gpt-5.4-mini",
+        "stream": False,
+        "input": "生成一张 9:16 竖屏、2K 细节的赛博朋克城市夜景海报",
+        "tools": [{
+            "type": "image_generation",
+            "model": "gpt-image-2",
+            "image_size": "2K",
+            "aspect_ratio": "9:16",
+            "quality": "high",
+            "n": 1
+        }],
+        "tool_choice": {"type": "image_generation"}
+    }
+    resp = requests.post(
+        f"{BASE_URL}/responses",
+        headers=api_headers(),
+        json=payload,
+        timeout=TIMEOUT_SECONDS,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Responses 生图失败 HTTP {resp.status_code}: {parse_error(resp)}")
+    result = resp.json()
+    image_items = [
+        {"b64_json": item["result"]}
+        for item in result.get("output", [])
+        if item.get("type") == "image_generation_call" and item.get("result")
+    ]
+    if not image_items:
+        raise RuntimeError("Responses 生图完成但 output 中没有 image_generation_call.result")
+    saved = save_image_items(image_items, "responses_generated")
+    print("Responses 生图保存：", saved)
+    print("计费信息：", json.dumps(result.get("usage", {}), ensure_ascii=False, indent=2))
+    return result
+
+
+if __name__ == "__main__":
+    create_image()
+    # 需要 Responses 协议时取消下一行注释：
+    # create_image_with_responses()`
     },
     imageGenerationCurlCode() {
       return `curl -X POST "${this.relayOpenaiBase}/images/generations" \\
@@ -626,11 +729,11 @@ data = {
 }
 
 try:
-    resp = requests.post(url, headers=headers, files=files, data=data, timeout=300)
+    resp = requests.post(url, headers=headers, files=files, data=data, timeout=600)
     resp.raise_for_status()
     result = resp.json()
     for index, item in enumerate(result.get("data", []), start=1):
-        image_bytes = base64.b64decode(item["b64_json"])
+        image_bytes = base64.b64decode(item["b64_json"], validate=True)
         Path(f"edited_{index}.png").write_bytes(image_bytes)
     print(result)
 finally:
@@ -693,11 +796,12 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
         { name: 'model', required: '是', description: '要调用的图片模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 或 gpt-image-2。' },
         { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
         { name: 'response_format', required: '否', description: '返回格式，当前仅支持 b64_json。建议固定传 b64_json。' },
-        { name: 'image_size', required: '否', description: '图片分辨率档位参数，支持 512、1K、2K、4K；Google 模型会映射为原生分辨率，gpt-image-2 会通过提示词适配。' },
-        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16；gpt-image-2 会通过提示词适配。' },
+        { name: 'image_size', required: '否', description: '图片分辨率档位参数，支持 512、1K、2K、4K；OpenAI Image Native Size 渠道会映射为原生像素尺寸。' },
+        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16；Native Size 渠道会与 image_size 组合映射为原生 size。' },
         { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，系统会透传为 Google imageSize。' },
-        { name: 'size', required: '否', description: '兼容参数。若传 512/1K/2K/4K，会按分辨率处理；若传 1024x1024 等旧尺寸，会尝试映射为 aspect_ratio。' },
+        { name: 'size', required: '否', description: '兼容参数。可直接传 1024x1024、2048x3584 等像素尺寸；系统会据此推断分辨率档位和比例。' },
         { name: 'n', required: '否', description: '期望图片数量。当前 gpt-image-2 支持 1-4，并会在 data 数组中返回对应张数；其他图片模型当前仅支持 1。' },
+        { name: 'timeout', required: '客户端设置', description: '生图可能超过 100 秒，建议客户端 HTTP timeout 设置为 600 秒以上。' },
         { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
       ]
     },

@@ -95,9 +95,10 @@ curl -L "https://你的域名/v1/videos/video_xxx/content" \
 
 视频生成复用现有图片积分账户作为媒体积分账户：
 
-- `unified_model.billing_type=image_credit` 时，创建任务成功后扣减积分。
+- `unified_model.billing_type=image_credit` 时，任务创建阶段不扣减积分；必须在完成状态且视频内容校验成功后才扣减积分。
 - 视频模型的 `unified_model.image_credit_multiplier` 表示每秒媒体积分单价。
 - 扣减数量为 `image_credit_multiplier * seconds`。
 - 请求日志使用 `request_type=video_generation` 区分视频请求。
+- 上游返回失败、未返回视频 URL、视频 URL 内容为空或返回 JSON/text 错误内容时，记录失败日志且不扣减积分。
 
 默认升级脚本将 `grok-imagine-video` 设置为 `0.500` 积分/秒，可在管理端按实际成本调整。

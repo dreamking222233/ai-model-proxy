@@ -246,6 +246,7 @@ import {
 
 var DEFAULT_IMAGE_SIZES = ['512', '1K', '2K', '4K']
 var DEFAULT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
+var IMAGE_REQUEST_TIMEOUT_MS = 10 * 60 * 1000
 
 export default {
   name: 'MobileChat',
@@ -653,7 +654,7 @@ export default {
       this.imageGenerating = true
       
       session.messages.push({ role: 'user', content: prompt, timestamp: Date.now(), requestKind: 'image_generation' })
-      var lastMsg = { role: 'assistant', kind: 'image_generating', content: '正在生成...', timestamp: Date.now(), images: [], meta: { aspectRatio: this.selectedAspectRatio } }
+      var lastMsg = { role: 'assistant', kind: 'image_generating', content: '正在生成图片，可能需要数分钟...', timestamp: Date.now(), images: [], meta: { aspectRatio: this.selectedAspectRatio } }
       session.messages.push(lastMsg)
       saveSession(session, this.storageNamespace)
       this.refreshSessions()
@@ -671,15 +672,55 @@ export default {
       }).catch(err => {
         session.messages.pop()
         this.imageGenerating = false
-        this.errorMsg = err.message
+        this.errorMsg = err.message || '生图失败，请稍后重试'
+        session.updatedAt = Date.now()
+        saveSession(session, this.storageNamespace)
+        this.refreshSessions()
+        this.loadBalance()
       })
     },
     sendImageRequest: function (prompt) {
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      var timeoutId = null
+      if (controller) {
+        timeoutId = setTimeout(function () {
+          controller.abort()
+        }, IMAGE_REQUEST_TIMEOUT_MS)
+      }
+
       return fetch(this.relayBase + '/v1/images/generations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.apiKey },
-        body: JSON.stringify({ model: this.currentModel, prompt, response_format: 'b64_json', image_size: this.selectedImageSize, aspect_ratio: this.selectedAspectRatio, n: 1 })
-      }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t) }))
+        body: JSON.stringify({ model: this.currentModel, prompt, response_format: 'b64_json', image_size: this.selectedImageSize, aspect_ratio: this.selectedAspectRatio, n: 1 }),
+        signal: controller ? controller.signal : undefined
+      }).then(r => {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (r.ok) return r.json()
+        return r.text().then(t => {
+          var errMsg = '生图请求失败 (' + r.status + ')'
+          try {
+            var parsed = JSON.parse(t)
+            errMsg = (parsed.error && parsed.error.message) || parsed.message || parsed.detail || errMsg
+          } catch (e) {
+            if (t) errMsg = t
+          }
+          throw new Error(errMsg)
+        })
+      }).catch(err => {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (err && err.name === 'AbortError') {
+          throw new Error('生图等待超过 10 分钟，请稍后重试')
+        }
+        if (err && err.message === 'Failed to fetch') {
+          throw new Error('生图请求连接失败，请检查网络、API 服务或代理超时配置')
+        }
+        throw err
+      }).then(result => {
+        if (!result || !Array.isArray(result.data) || result.data.length === 0) {
+          throw new Error('生图结果为空，请稍后重试')
+        }
+        return result
+      })
     },
     buildImageResultItems: function (session, data) {
       var tasks = data.map((item, i) => {

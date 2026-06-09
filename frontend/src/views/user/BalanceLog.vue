@@ -62,7 +62,7 @@
             <a-icon type="info-circle" class="info-icon" />
             <span class="card-title">图片积分说明</span>
           </div>
-          <p class="card-desc">生图模型采用图片积分独立计费，不消耗余额。成功后按倍率扣除积分。</p>
+          <p class="card-desc">生图模型采用图片积分独立计费，不消耗余额。gpt-image-2 按 1K 0.5、2K 1、4K 2 积分/张计费。</p>
           <div class="image-credit-footer">
             <span class="label">当前余额</span>
             <span class="value">{{ formatNumber(userInfo.image_credit_balance || 0) }}</span>
@@ -157,6 +157,20 @@
       >
           <template slot="expandedRowRender" slot-scope="record">
             <div class="compact-expand-panel">
+              <template v-if="isImageRequest(record)">
+                <div class="compact-expand-line">
+                  <span class="compact-expand-label">用量</span>
+                  <span class="compact-expand-metric compact-expand-metric--image">{{ getImageCountDisplay(record) }} 张</span>
+                  <span class="compact-expand-metric compact-expand-metric--image">{{ getImageSizeLabel(record) }}</span>
+                  <span class="compact-expand-metric compact-expand-metric--total">{{ formatNumber(getImageCreditsDisplay(record)) }} 图片积分</span>
+                </div>
+                <div class="compact-expand-line">
+                  <span class="compact-expand-label">计费过程</span>
+                  <span class="compact-expand-metric">{{ getImageSizeLabel(record) }} × {{ getImageCountDisplay(record) }} 张 × {{ formatNumber(getImageUnitCredits(record)) }} 积分/张</span>
+                  <strong class="compact-expand-metric compact-expand-metric--total">总计 {{ formatNumber(getImageCreditsDisplay(record)) }} 积分</strong>
+                </div>
+              </template>
+              <template v-else>
               <div class="compact-expand-line">
                 <span class="compact-expand-label">用量</span>
                 <span class="compact-expand-metric">入 {{ formatNumber(getBillableInputTokens(record)) }}</span>
@@ -183,6 +197,7 @@
                 <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存创建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }} 不计费</span>
                 <strong class="compact-expand-metric compact-expand-metric--total">总计 ${{ formatCurrency(record.total_cost || 0) }}</strong>
               </div>
+              </template>
             </div>
           </template>
 
@@ -199,11 +214,12 @@
             <div v-if="isImageRequest(record)" class="token-viz image-viz">
               <div class="viz-row">
                 <span class="viz-main">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
-                <span class="viz-sub">{{ getImageCountDisplay(record) }} 图</span>
+                <span class="viz-sub">{{ getImageUsageSummary(record) }}</span>
               </div>
               <div class="viz-tags">
-                <span class="v-tag purple">IMAGE</span>
-                <span class="v-tag gray">{{ getBillingTypeText(record) }}</span>
+                <span class="v-tag purple">{{ getImageSizeLabel(record) }}</span>
+                <span class="v-tag gray">{{ getImageUnitCreditText(record) }}</span>
+                <span class="v-tag gray">{{ getRequestTypeText(record) }}</span>
               </div>
             </div>
             <div v-else class="token-viz">
@@ -241,7 +257,10 @@
           <!-- 计费列 -->
         <template slot="col_cost" slot-scope="text, record">
           <div class="cost-cell">
-            <span v-if="isImageRequest(record)" class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 💰</span>
+            <div v-if="isImageRequest(record)" class="price-container image-price-container">
+              <span class="price image">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
+              <span class="billing-mode image">{{ getImageSizeLabel(record) }}</span>
+            </div>
             <template v-else-if="text">
               <a-tooltip placement="left">
                 <template slot="title">
@@ -375,8 +394,8 @@
         <div class="detail-section">
           <div class="detail-section-title">用量概览</div>
           <div v-if="isImageRequest(selectedRecord)" class="detail-empty-state">
-            <span class="detail-empty-text">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 图片积分 / {{ getImageCountDisplay(selectedRecord) }} 张</span>
-            <span v-if="getImageSizeText(selectedRecord)" class="detail-empty-hint">{{ getImageSizeText(selectedRecord) }}</span>
+            <span class="detail-empty-text">{{ getImageUsageSummary(selectedRecord) }}</span>
+            <span class="detail-empty-hint">{{ getImageUnitCreditText(selectedRecord) }}</span>
           </div>
           <div v-else class="detail-kpi-grid detail-kpi-grid--user">
             <div class="detail-kpi-card detail-kpi-card--input">
@@ -430,11 +449,16 @@
                 <span class="billing-price-value">{{ getImageSizeText(selectedRecord) }}</span>
                 <span class="billing-price-hint">请求分辨率</span>
               </div>
+              <div class="billing-price-card">
+                <span class="billing-price-label">单张计费</span>
+                <span class="billing-price-value">{{ formatNumber(getImageUnitCredits(selectedRecord)) }}</span>
+                <span class="billing-price-hint">{{ getImageSizeLabel(selectedRecord) }} / 张</span>
+              </div>
             </div>
             <div class="billing-formula-list">
               <div class="billing-formula-row">
                 <span class="billing-formula-tag">积分</span>
-                <span class="billing-formula-text">{{ getRequestTypeText(selectedRecord) }} / {{ getImageCountDisplay(selectedRecord) }} 张</span>
+                <span class="billing-formula-text">{{ getImageSizeLabel(selectedRecord) }} × {{ getImageCountDisplay(selectedRecord) }} 张 × {{ formatNumber(getImageUnitCredits(selectedRecord)) }} 积分/张</span>
                 <strong class="billing-formula-cost">{{ formatNumber(getImageCreditsDisplay(selectedRecord)) }} 积分</strong>
               </div>
               <div class="billing-total-row">
@@ -760,6 +784,27 @@ export default {
     getImageSizeText(record) {
       if (!this.isImageRequest(record)) return ''
       return String(record && record.image_size || '').trim()
+    },
+    getImageSizeLabel(record) {
+      return this.getImageSizeText(record) || '未记录尺寸'
+    },
+    getImageUnitCredits(record) {
+      if (!this.isImageRequest(record) || !this.isRequestSuccess(record)) return 0
+      const count = this.getImageCountDisplay(record)
+      const credits = this.getImageCreditsDisplay(record)
+      if (count > 0 && credits > 0) return credits / count
+      const size = this.getImageSizeText(record).toUpperCase()
+      const fallback = { '512': 0.5, '1K': 0.5, '2K': 1, '4K': 2 }
+      return fallback[size] || 0
+    },
+    getImageUnitCreditText(record) {
+      if (!this.isImageRequest(record)) return ''
+      if (!this.isRequestSuccess(record)) return '未扣积分'
+      return `${this.getImageSizeLabel(record)} 单张 ${this.formatNumber(this.getImageUnitCredits(record))} 积分`
+    },
+    getImageUsageSummary(record) {
+      if (!this.isImageRequest(record)) return ''
+      return `${this.getImageCountDisplay(record)} 张 · ${this.getImageSizeLabel(record)} · ${this.getRequestTypeText(record)}`
     },
     getRequestTypeText(record) {
       const map = {
@@ -1247,7 +1292,7 @@ export default {
   .image-viz {
     .viz-main { font-weight: 700; color: #722ed1; font-size: 14px; }
     .viz-sub { color: #8c8c8c; font-size: 12px; margin-left: 8px; }
-    .viz-tags { margin-top: 4px; display: flex; gap: 4px; }
+    .viz-tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
     .v-tag {
       font-size: 10px; padding: 0 6px; border-radius: 4px;
       &.purple { background: rgba(114,46,209,0.1); color: #722ed1; font-weight: 700; }
@@ -1268,9 +1313,13 @@ export default {
       align-items: flex-end;
     }
 
+    .image-price-container {
+      gap: 2px;
+    }
+
     .price { font-family: 'SF Mono', monospace; font-weight: 700; font-size: 15px; cursor: help; border-bottom: 1px dotted rgba(0,0,0,0.1); }
     .price.token { color: #f5222d; }
-    .price.image { color: #722ed1; border-bottom-color: rgba(114, 46, 209, 0.2); }
+    .price.image { color: #722ed1; border-bottom-color: rgba(114, 46, 209, 0.2); cursor: default; }
     .price.free { color: #52c41a; border-bottom: none; cursor: default; }
     
     .billing-mode {
@@ -1278,6 +1327,7 @@ export default {
       color: #bfbfbf;
       font-weight: 600;
       &.fast { color: #fa8c16; background: rgba(250, 140, 22, 0.08); padding: 0 4px; border-radius: 4px; }
+      &.image { color: #722ed1; background: rgba(114, 46, 209, 0.08); padding: 0 5px; border-radius: 4px; }
     }
 
     .fast-detail-tag {
@@ -1348,6 +1398,12 @@ export default {
   .compact-expand-metric--total {
     background: rgba(82, 196, 26, 0.12);
     color: #389e0d;
+    font-weight: 600;
+  }
+
+  .compact-expand-metric--image {
+    background: rgba(114, 46, 209, 0.1);
+    color: #722ed1;
     font-weight: 600;
   }
 

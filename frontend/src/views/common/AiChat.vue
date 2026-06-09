@@ -442,7 +442,7 @@ var DEFAULT_ASPECT_RATIO_LABELS = {
   '3:4': '3:4 竖图 ▯'
 }
 var DEFAULT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
-var IMAGE_REQUEST_TIMEOUT_MS = 300000
+var IMAGE_REQUEST_TIMEOUT_MS = 10 * 60 * 1000
 var VIDEO_REQUEST_TIMEOUT_MS = 20 * 60 * 1000
 var VIDEO_SECONDS_OPTIONS = [6, 10, 12, 16, 20]
 var VIDEO_SIZE_OPTIONS = ['720x1280', '1280x720', '1024x1024', '1024x1792', '1792x1024']
@@ -1822,7 +1822,7 @@ console.log(response.choices[0].message.content);`
       currentSession.messages.push({
         role: 'assistant',
         kind: 'image_generating',
-        content: '正在生成图片...',
+        content: '正在生成图片，可能需要数分钟...',
         timestamp: Date.now(),
         images: [],
         meta: {
@@ -1914,7 +1914,7 @@ console.log(response.choices[0].message.content);`
       currentSession.messages.push({
         role: 'assistant',
         kind: 'image_generating',
-        content: '正在编辑图片...',
+        content: '正在编辑图片，可能需要数分钟...',
         timestamp: Date.now(),
         images: [],
         meta: {
@@ -2021,10 +2021,10 @@ console.log(response.choices[0].message.content);`
       }).catch(function (err) {
         if (timeoutId) clearTimeout(timeoutId)
         if (err && err.name === 'AbortError') {
-          throw new Error('生图超时，请稍后重试')
+          throw new Error('生图等待超过 10 分钟，请稍后重试')
         }
         if (err && err.message === 'Failed to fetch') {
-          throw new Error('生图请求未发送成功，请检查 API 基础地址配置、同源代理或浏览器控制台中的跨域报错')
+          throw new Error('生图请求连接失败，请检查网络、API 服务或代理超时配置')
         }
         throw err
       }).then(function (result) {
@@ -2090,10 +2090,10 @@ console.log(response.choices[0].message.content);`
       }).catch(function (err) {
         if (timeoutId) clearTimeout(timeoutId)
         if (err && err.name === 'AbortError') {
-          throw new Error('图片编辑超时，请稍后重试')
+          throw new Error('图片编辑等待超过 10 分钟，请稍后重试')
         }
         if (err && err.message === 'Failed to fetch') {
-          throw new Error('图片编辑请求未发送成功，请检查 API 基础地址配置、同源代理或浏览器控制台中的跨域报错')
+          throw new Error('图片编辑请求连接失败，请检查网络、API 服务或代理超时配置')
         }
         throw err
       }).then(function (result) {

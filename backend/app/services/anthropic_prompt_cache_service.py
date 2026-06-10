@@ -432,6 +432,8 @@ class AnthropicPromptCacheService:
                 variant_request,
                 history_ttl=history_ttl,
             )
+        AnthropicPromptCacheService._normalize_cache_control_ttl_order(variant_request)
+        AnthropicPromptCacheService._enforce_cache_control_limit(variant_request)
 
         requires_beta = static_ttl == "1h" and applied_static
         header_overrides: dict[str, str] = {}
@@ -564,29 +566,84 @@ class AnthropicPromptCacheService:
 
     @staticmethod
     def _inject_history_breakpoint(request_data: dict[str, Any], *, history_ttl: str) -> bool:
-        """Inject a rolling-history breakpoint on the latest cacheable user block."""
+        """Inject a rolling-history breakpoint on the previous cacheable user block."""
         if not AnthropicPromptCacheService._can_add_cache_control(request_data):
             return False
         messages = request_data.get("messages")
         if not isinstance(messages, list):
             return False
 
-        for message in reversed(messages):
-            if not isinstance(message, dict) or str(message.get("role") or "") != "user":
-                continue
+        user_messages = [
+            message
+            for message in messages
+            if isinstance(message, dict) and str(message.get("role") or "") == "user"
+        ]
+        if len(user_messages) < 2:
+            return False
 
-            content = message.get("content")
-            if isinstance(content, list):
-                for block in reversed(content):
-                    if AnthropicPromptCacheService._is_cacheable_block(block):
-                        block["cache_control"] = AnthropicPromptCacheService._build_cache_control(history_ttl)
-                        return True
-            elif AnthropicPromptCacheService._is_cacheable_block(content):
-                content["cache_control"] = AnthropicPromptCacheService._build_cache_control(history_ttl)
-                return True
-            break
+        message = user_messages[-2]
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in reversed(content):
+                if AnthropicPromptCacheService._is_cacheable_block(block):
+                    block["cache_control"] = AnthropicPromptCacheService._build_cache_control(history_ttl)
+                    return True
+        elif AnthropicPromptCacheService._is_cacheable_block(content):
+            content["cache_control"] = AnthropicPromptCacheService._build_cache_control(history_ttl)
+            return True
 
         return False
+
+    @staticmethod
+    def _iter_cache_control_blocks(request_data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return cacheable containers in Anthropic prefix order."""
+        blocks: list[dict[str, Any]] = []
+
+        tools = request_data.get("tools")
+        if isinstance(tools, list):
+            blocks.extend(tool for tool in tools if isinstance(tool, dict) and "cache_control" in tool)
+
+        system_value = request_data.get("system")
+        system_blocks = system_value if isinstance(system_value, list) else [system_value]
+        blocks.extend(
+            block for block in system_blocks if isinstance(block, dict) and "cache_control" in block
+        )
+
+        messages = request_data.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, list):
+                    blocks.extend(
+                        block for block in content if isinstance(block, dict) and "cache_control" in block
+                    )
+                elif isinstance(content, dict) and "cache_control" in content:
+                    blocks.append(content)
+        return blocks
+
+    @staticmethod
+    def _normalize_cache_control_ttl_order(request_data: dict[str, Any]) -> None:
+        """Keep Anthropic TTLs in valid prefix order: 1h breakpoints before 5m."""
+        seen_5m = False
+        for block in AnthropicPromptCacheService._iter_cache_control_blocks(request_data):
+            cache_control = block.get("cache_control")
+            if not isinstance(cache_control, dict):
+                continue
+            ttl = str(cache_control.get("ttl") or "5m").lower()
+            if ttl == "1h" and seen_5m:
+                cache_control.pop("ttl", None)
+                ttl = "5m"
+            if ttl != "1h":
+                seen_5m = True
+
+    @staticmethod
+    def _enforce_cache_control_limit(request_data: dict[str, Any]) -> None:
+        """Drop extra cache_control metadata if a request still exceeds Anthropic's limit."""
+        blocks = AnthropicPromptCacheService._iter_cache_control_blocks(request_data)
+        for block in blocks[AnthropicPromptCacheService._MAX_CACHE_CONTROL_BREAKPOINTS:]:
+            block.pop("cache_control", None)
 
     @staticmethod
     def _can_add_cache_control(request_data: dict[str, Any]) -> bool:

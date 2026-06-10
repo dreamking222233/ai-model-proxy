@@ -575,6 +575,63 @@
         </a-col>
       </a-row>
 
+      <a-row :gutter="24" class="config-row">
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="deployment-unit" />
+              渠道亲和
+            </div>
+            <a-switch
+              v-model="channelAffinityEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              同一会话优先复用上次成功渠道
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="clock-circle" />
+              亲和 TTL
+            </div>
+            <a-input-number
+              v-model="channelAffinityTtlSeconds"
+              :min="60"
+              :max="86400"
+              class="config-input"
+            >
+              <template slot="addonAfter">秒</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              默认 3600 秒，适合长对话缓存池复用
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="branches" />
+              亲和 Fallback
+            </div>
+            <a-switch
+              v-model="channelAffinityFallbackEnabled"
+              checked-children="开"
+              un-checked-children="关"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              缺少会话 ID 时按稳定前缀生成亲和键
+            </div>
+          </div>
+        </a-col>
+      </a-row>
+
       <div class="action-buttons">
         <a-button type="primary" @click="saveCacheConfig" :loading="savingCacheConfig" size="large" class="save-btn">
           <a-icon type="save" />
@@ -736,6 +793,9 @@ export default {
       requestBodyCacheUserVisible: false,
       requestBodyCacheTtl: 1800,
       requestBodyCacheMinChars: 256,
+      channelAffinityEnabled: true,
+      channelAffinityTtlSeconds: 3600,
+      channelAffinityFallbackEnabled: true,
       triggeringHealthCheck: false,
       savingConfig: false,
       savingCacheConfig: false,
@@ -771,7 +831,10 @@ export default {
         'request_body_cache_user_visible': '用户端显示缓存',
         'request_body_cache_ttl_seconds': '请求体缓存TTL',
         'request_body_cache_min_chars': '最小缓存片段长度',
-        'request_body_cache_formats': '请求体缓存格式'
+        'request_body_cache_formats': '请求体缓存格式',
+        'channel_affinity_enabled': '渠道亲和开关',
+        'channel_affinity_ttl_seconds': '渠道亲和TTL',
+        'channel_affinity_fallback_enabled': '渠道亲和Fallback'
       },
       columns: [
         {
@@ -890,6 +953,12 @@ export default {
             this.requestBodyCacheTtl = Number(config.config_value) || 1800
           } else if (config.config_key === 'request_body_cache_min_chars') {
             this.requestBodyCacheMinChars = Number(config.config_value) || 256
+          } else if (config.config_key === 'channel_affinity_enabled') {
+            this.channelAffinityEnabled = String(config.config_value).toLowerCase() === 'true'
+          } else if (config.config_key === 'channel_affinity_ttl_seconds') {
+            this.channelAffinityTtlSeconds = Number(config.config_value) || 3600
+          } else if (config.config_key === 'channel_affinity_fallback_enabled') {
+            this.channelAffinityFallbackEnabled = String(config.config_value).toLowerCase() === 'true'
           }
         })
       } catch (err) {
@@ -955,7 +1024,10 @@ export default {
           { key: 'request_body_cache_enabled', value: this.requestBodyCacheEnabled ? 'true' : 'false' },
           { key: 'request_body_cache_user_visible', value: this.requestBodyCacheUserVisible ? 'true' : 'false' },
           { key: 'request_body_cache_ttl_seconds', value: String(this.requestBodyCacheTtl) },
-          { key: 'request_body_cache_min_chars', value: String(this.requestBodyCacheMinChars) }
+          { key: 'request_body_cache_min_chars', value: String(this.requestBodyCacheMinChars) },
+          { key: 'channel_affinity_enabled', value: this.channelAffinityEnabled ? 'true' : 'false' },
+          { key: 'channel_affinity_ttl_seconds', value: String(this.channelAffinityTtlSeconds) },
+          { key: 'channel_affinity_fallback_enabled', value: this.channelAffinityFallbackEnabled ? 'true' : 'false' }
         ]
 
         for (const update of updates) {

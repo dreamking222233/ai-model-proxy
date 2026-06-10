@@ -195,6 +195,57 @@ class AnthropicPromptCachePolicyTest(unittest.TestCase):
         self.assertEqual(first["meta"]["control_policy"], "normalize")
         self.assertEqual(first["meta"]["control_policy_source"], "normalize_user")
 
+    def test_history_breakpoint_uses_previous_user_turn(self):
+        request = {
+            "model": "claude-opus-4-8",
+            "system": [{"type": "text", "text": "stable system"}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "first user"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "assistant"}]},
+                {"role": "user", "content": [{"type": "text", "text": "latest user"}]},
+            ],
+        }
+
+        with patch(
+            "app.services.anthropic_prompt_cache_service.get_system_config",
+            side_effect=_config_side_effect("augment"),
+        ):
+            variants = AnthropicPromptCacheService.build_request_variants(None, request)
+
+        first = variants[0]["request_data"]
+        self.assertIn("cache_control", first["system"][0])
+        self.assertIn("cache_control", first["messages"][0]["content"][0])
+        self.assertNotIn("cache_control", first["messages"][2]["content"][0])
+
+    def test_ttl_order_downgrades_late_1h_after_5m(self):
+        request = {
+            "model": "claude-opus-4-8",
+            "tools": [
+                {
+                    "name": "read_file",
+                    "description": "Read a file.",
+                    "input_schema": {"type": "object"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "system": [{"type": "text", "text": "stable system"}],
+        }
+
+        with patch(
+            "app.services.anthropic_prompt_cache_service.get_system_config",
+            side_effect=_config_side_effect("augment"),
+        ) as mocked_config:
+            def _get_config(_db, key, default=None):
+                if key == "anthropic_prompt_cache_static_ttl":
+                    return "1h"
+                return _config_side_effect("augment")(_db, key, default)
+
+            mocked_config.side_effect = _get_config
+            variants = AnthropicPromptCacheService.build_request_variants(None, request)
+
+        first = variants[0]["request_data"]
+        self.assertNotIn("ttl", first["system"][0]["cache_control"])
+
 
 if __name__ == "__main__":
     unittest.main()

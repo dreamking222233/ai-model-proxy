@@ -50,6 +50,7 @@ from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
+from app.services.channel_affinity_service import ChannelAffinityService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
 from app.core.exceptions import ServiceException
@@ -1895,6 +1896,32 @@ class ProxyService:
             return 2, priority
 
         return sorted(channels, key=sort_key)
+
+    @staticmethod
+    def _apply_channel_affinity(
+        db: Session,
+        channels: list[tuple[Channel, str]],
+        *,
+        user: SysUser,
+        requested_model: str,
+        request_protocol: str,
+        request_data: Optional[dict[str, Any]] = None,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> list[tuple[Channel, str]]:
+        """Prefer the last successful channel for the same stable conversation."""
+        try:
+            return ChannelAffinityService.prioritize_channels(
+                db,
+                channels,
+                user=user,
+                requested_model=requested_model,
+                request_protocol=request_protocol,
+                request_data=request_data,
+                request_headers=request_headers,
+            )
+        except Exception as exc:
+            logger.warning("Channel affinity ordering skipped: %s", exc)
+            return channels
 
     @staticmethod
     def _extract_openai_text_content(value: Any) -> str:
@@ -4221,6 +4248,7 @@ class ProxyService:
                 user,
                 requested_model,
                 client_request,
+                request_headers,
             )
         except Exception as exc:
             ProxyService._log_pre_request_failure(
@@ -4426,6 +4454,7 @@ class ProxyService:
                     user,
                     requested_model,
                     normalized_request,
+                    request_headers,
                 )
             except ServiceException as exc:
                 release_session_connection(db)
@@ -4581,6 +4610,7 @@ class ProxyService:
         user: SysUser,
         requested_model: str,
         request_data: Optional[dict] = None,
+        request_headers: Optional[dict[str, str]] = None,
     ) -> tuple[UnifiedModel, list[tuple[Channel, str]]]:
         """Resolve a Responses request into a model plus channel candidates."""
         unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
@@ -4620,6 +4650,15 @@ class ProxyService:
                 "Responses 渠道映射指向图片模型，请使用 /v1/images/generations 或 /v1/images/edits",
                 "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
             )
+        channels = ProxyService._apply_channel_affinity(
+            db,
+            channels,
+            user=user,
+            requested_model=requested_model,
+            request_protocol="responses",
+            request_data=request_data,
+            request_headers=request_headers,
+        )
         return unified_model, channels
 
     @staticmethod
@@ -5810,6 +5849,15 @@ class ProxyService:
                     ModelService.get_available_channels(db, unified_model.id),
                     "openai",
                 )
+                channels = ProxyService._apply_channel_affinity(
+                    db,
+                    channels,
+                    user=user,
+                    requested_model=requested_model,
+                    request_protocol="openai",
+                    request_data=request_data,
+                    request_headers=request_headers,
+                )
                 if not channels:
                     raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
@@ -6040,6 +6088,15 @@ class ProxyService:
             channels = ProxyService._prioritize_channels_for_request(
                 ModelService.get_available_channels(db, unified_model.id),
                 "anthropic",
+            )
+            channels = ProxyService._apply_channel_affinity(
+                db,
+                channels,
+                user=user,
+                requested_model=requested_model,
+                request_protocol="anthropic",
+                request_data=request_data,
+                request_headers=request_headers,
             )
             if not channels:
                 raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
@@ -10062,6 +10119,7 @@ class ProxyService:
         billing_context: Optional[dict[str, Any]] = None,
     ) -> None:
         ProxyService._record_success(db, channel)
+        ChannelAffinityService.record_success(channel)
         try:
             ProxyService._deduct_balance_and_log(
                 db,

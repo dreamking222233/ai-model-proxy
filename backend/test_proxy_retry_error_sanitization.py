@@ -68,6 +68,42 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
                     "调用失败，渠道异常，请稍后重试",
                 )
 
+    def test_upstream_status_retry_defaults_to_channel_failures(self):
+        for status_code in (401, 402, 403, 404, 408, 429, 500, 502, 503, 521):
+            with self.subTest(status_code=status_code):
+                self.assertTrue(ProxyService._should_retry_upstream_status(status_code))
+
+    def test_upstream_status_does_not_retry_request_side_errors(self):
+        for status_code in (400, 413, 422):
+            with self.subTest(status_code=status_code):
+                self.assertFalse(ProxyService._should_retry_upstream_status(status_code))
+
+    def test_upstream_response_body_can_disable_retry(self):
+        self.assertFalse(
+            ProxyService._should_retry_upstream_response(
+                500,
+                '{"error":{"message":"Missing required parameter: input"}}',
+            )
+        )
+        self.assertTrue(
+            ProxyService._should_retry_upstream_response(
+                500,
+                '{"error":{"message":"The usage limit has been reached"}}',
+            )
+        )
+
+    def test_non_standard_upstream_http_error_is_generic_after_retries(self):
+        raw_detail = 'Upstream returned HTTP 402: {"error":{"message":"account pool balance exhausted"}}'
+        exc = ProxyService._build_user_visible_upstream_request_error(
+            "UPSTREAM_PAYMENT_REQUIRED",
+            upstream_detail=raw_detail,
+            status_code=402,
+        )
+
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(exc.detail, "调用失败，渠道异常，请稍后重试")
+        self.assertEqual(ProxyService._request_error_log_detail(exc), raw_detail)
+
     def test_failure_log_detail_keeps_upstream_detail_for_sanitized_exception(self):
         raw_detail = '上游服务返回异常（HTTP 503）：{"error":{"message":"providers=codex 上游中文错误"}}'
         exc = ProxyService._build_user_visible_upstream_request_error(
@@ -226,6 +262,34 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websocket.messages, [])
         self.assertIn("providers=codex", str(ctx.exception))
 
+    async def test_responses_websocket_request_error_before_output_is_not_retryable(self):
+        async def fake_iter(*_args, **_kwargs):
+            yield {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "invalid_request",
+                    "message": "Missing required parameter: input",
+                },
+            }
+
+        websocket = FakeWebSocket()
+        channel = Channel(id=1, name="test")
+        with patch.object(ProxyService, "_iter_responses_upstream_payloads", fake_iter):
+            with self.assertRaises(ResponsesTurnError) as ctx:
+                await ProxyService._forward_responses_websocket_turn(
+                    websocket,
+                    channel,
+                    {"model": "actual-model"},
+                    "requested-model",
+                )
+
+        self.assertFalse(ctx.exception.can_retry)
+        self.assertTrue(getattr(ctx.exception, "_is_request_error"))
+        self.assertEqual(len(websocket.messages), 1)
+        error_payload = json.loads(websocket.messages[0])
+        self.assertEqual(error_payload["error"]["message"], "请求参数不符合上游渠道要求，请检查后重试")
+
     async def test_responses_websocket_upstream_error_after_output_is_sanitized(self):
         async def fake_iter(*_args, **_kwargs):
             yield {"type": "response.output_text.delta", "delta": "hello"}
@@ -251,6 +315,63 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error_payload["error"]["message"], "调用失败，渠道异常，请稍后重试")
         self.assertNotIn("providers=codex", websocket.messages[1])
         self.assertIn("providers=codex", getattr(ctx.exception, "_upstream_detail"))
+
+    def test_responses_stream_usage_limit_error_is_retryable(self):
+        payload = {
+            "type": "error",
+            "error": {"message": "The usage limit has been reached"},
+        }
+
+        self.assertTrue(ProxyService._should_retry_responses_stream_error(payload))
+
+    def test_responses_stream_invalid_request_error_is_not_retryable(self):
+        payload = {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_request",
+                "message": "Missing required parameter: input",
+            },
+        }
+
+        self.assertFalse(ProxyService._should_retry_responses_stream_error(payload))
+
+    async def test_responses_stream_retries_initial_sse_error(self):
+        calls = 0
+        seen_max_attempts = []
+
+        async def fake_lines(*_args, **kwargs):
+            nonlocal calls
+            calls += 1
+            seen_max_attempts.append(kwargs.get("max_attempts"))
+            if calls == 1:
+                yield 'data: {"type":"error","error":{"message":"The usage limit has been reached"}}'
+                return
+            yield 'data: {"type":"response.completed","response":{"model":"actual-model","usage":{"input_tokens":1,"output_tokens":2}}}'
+
+        async def fake_sleep(_delay):
+            return None
+
+        channel = Channel(id=1, name="test", base_url="https://example.test/v1")
+        setattr(channel, "_runtime_upstream_retry_attempts", 2)
+
+        with patch.object(ProxyService, "_stream_lines_with_retries", fake_lines):
+            with patch("app.services.proxy_service.asyncio.sleep", fake_sleep):
+                payloads = [
+                    payload
+                    async for payload in ProxyService._iter_responses_upstream_payloads(
+                        channel,
+                        {"model": "actual-model"},
+                        "requested-model",
+                        request_id="req-test",
+                    )
+                ]
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(seen_max_attempts, [1, 1])
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["type"], "response.completed")
+        self.assertEqual(payloads[0]["response"]["model"], "requested-model")
 
 
 if __name__ == "__main__":

@@ -72,7 +72,7 @@ _UPSTREAM_DEFAULT_USER_AGENT = "Mozilla/5.0"
 _UPSTREAM_RETRY_MAX_RETRIES = 3
 _UPSTREAM_RETRY_ATTEMPTS = _UPSTREAM_RETRY_MAX_RETRIES + 1
 _UPSTREAM_RETRY_MAX_CONFIGURED_RETRIES = 10
-_UPSTREAM_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES = {400, 413, 422}
 _UPSTREAM_FAILURE_VISIBLE_MESSAGE = "调用失败，渠道异常，请稍后重试"
 _UPSTREAM_REQUEST_VISIBLE_MESSAGE = "请求参数不符合上游渠道要求，请检查后重试"
 _CONTEXT_TOO_LONG_VISIBLE_MESSAGE = "请求超出最大上下文,请压缩对话"
@@ -1974,8 +1974,21 @@ class ProxyService:
 
     @staticmethod
     def _should_retry_upstream_status(status_code: int) -> bool:
-        """Return whether one upstream HTTP status is worth retrying on the same channel."""
-        return int(status_code or 0) in _UPSTREAM_RETRYABLE_STATUS_CODES
+        """Return whether one upstream HTTP failure should be retried on the same channel."""
+        try:
+            normalized_status = int(status_code or 0)
+        except (TypeError, ValueError):
+            return False
+        if normalized_status < 400:
+            return False
+        return normalized_status not in _UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES
+
+    @staticmethod
+    def _should_retry_upstream_response(status_code: int, body_text: str = "") -> bool:
+        """Return whether an upstream HTTP response failure should retry."""
+        if not ProxyService._should_retry_upstream_status(status_code):
+            return False
+        return not ProxyService._looks_like_non_retryable_upstream_request_error(body_text)
 
     @staticmethod
     def _should_retry_upstream_exception(exc: Exception) -> bool:
@@ -1989,6 +2002,81 @@ class ProxyService:
                 httpx.RemoteProtocolError,
                 httpx.NetworkError,
             ),
+        )
+
+    @staticmethod
+    def _extract_responses_error_message(payload: dict[str, Any]) -> str:
+        """Extract a concise message from a Responses SSE error payload."""
+        if not isinstance(payload, dict):
+            return ""
+        error = payload.get("error")
+        if isinstance(error, dict):
+            for key in ("message", "detail", "code", "type"):
+                value = error.get(key)
+                if value:
+                    return str(value)
+        if isinstance(error, str):
+            return error
+        for key in ("message", "detail", "error_message"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _looks_like_non_retryable_upstream_request_error(message: str) -> bool:
+        """Return whether an upstream error is caused by the request itself."""
+        lowered = str(message or "").lower()
+        if not lowered:
+            return False
+        return any(
+            marker in lowered
+            for marker in (
+                "invalid_request",
+                "invalid request",
+                "bad request",
+                "improperly formed request",
+                "invalid beta flag",
+                "invalid signature in thinking block",
+                "payload too large",
+                "request too large",
+                "content too long",
+                "context length",
+                "context window",
+                "context_length_exceeded",
+                "maximum context",
+                "too many tokens",
+                "token limit",
+                "missing required",
+                "required parameter",
+                "invalid parameter",
+                "invalid schema",
+                "schema validation",
+                "unsupported parameter",
+                "unsupported value",
+                "unsupported content",
+                "unsupported file",
+                "unsupported media",
+            )
+        )
+
+    @staticmethod
+    def _should_retry_responses_stream_error(payload: dict[str, Any]) -> bool:
+        """Return whether an initial Responses SSE error should retry upstream."""
+        message = ProxyService._extract_responses_error_message(payload).lower()
+        try:
+            searchable_payload = json.dumps(payload, ensure_ascii=False, default=str).lower()
+        except (TypeError, ValueError):
+            searchable_payload = message
+        status = payload.get("status") or payload.get("status_code")
+        try:
+            normalized_status = int(status or 0)
+        except (TypeError, ValueError):
+            normalized_status = 0
+        if normalized_status >= 400:
+            return ProxyService._should_retry_upstream_status(normalized_status)
+        return not ProxyService._looks_like_non_retryable_upstream_request_error(
+            f"{message} {searchable_payload}"
         )
 
     @staticmethod
@@ -2053,7 +2141,10 @@ class ProxyService:
 
                 if (
                     attempt < max_attempts
-                    and ProxyService._should_retry_upstream_status(response.status_code)
+                    and ProxyService._should_retry_upstream_response(
+                        response.status_code,
+                        response.text[:1000],
+                    )
                 ):
                     retry_delay = 0.6 * attempt
                     logger.warning(
@@ -2125,7 +2216,10 @@ class ProxyService:
 
                 if (
                     attempt < max_attempts
-                    and ProxyService._should_retry_upstream_status(response.status_code)
+                    and ProxyService._should_retry_upstream_response(
+                        response.status_code,
+                        response.text[:1000],
+                    )
                 ):
                     retry_delay = 0.6 * attempt
                     logger.warning(
@@ -2198,7 +2292,10 @@ class ProxyService:
                             body = await response.aread()
                             if (
                                 attempt < max_attempts
-                                and ProxyService._should_retry_upstream_status(response.status_code)
+                                and ProxyService._should_retry_upstream_response(
+                                    response.status_code,
+                                    body.decode("utf-8", errors="replace")[:1000],
+                                )
                             ):
                                 retry_delay = 0.6 * attempt
                                 logger.warning(
@@ -3690,9 +3787,10 @@ class ProxyService:
         upstream_detail: Any = None,
         status_code: int = 400,
     ) -> ServiceException:
+        normalized_status = int(status_code or 400)
         if error_code == "CONTENT_TOO_LONG":
             message = _CONTEXT_TOO_LONG_VISIBLE_MESSAGE
-        elif int(status_code or 400) >= 500 or int(status_code or 0) in {403, 408, 409, 425, 429}:
+        elif normalized_status >= 400 and normalized_status not in _UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES:
             message = _UPSTREAM_FAILURE_VISIBLE_MESSAGE
             status_code = 503
         else:
@@ -3709,9 +3807,15 @@ class ProxyService:
         if exc.error_code == "CONTENT_TOO_LONG":
             message = _CONTEXT_TOO_LONG_VISIBLE_MESSAGE
         elif (
-            exc.status_code >= 500
-            or exc.status_code in {403, 408, 409, 425, 429}
-            or (upstream_status is not None and (upstream_status >= 500 or upstream_status in {403, 408, 409, 425, 429}))
+            (
+                exc.status_code >= 400
+                and exc.status_code not in _UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES
+            )
+            or (
+                upstream_status is not None
+                and upstream_status >= 400
+                and upstream_status not in _UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES
+            )
         ):
             message = _UPSTREAM_FAILURE_VISIBLE_MESSAGE
         else:
@@ -3849,9 +3953,11 @@ class ProxyService:
                 "http 413",
                 "payload too large",
                 "request too large",
+                "content too long",
                 "context length",
                 "context window",
                 "too many tokens",
+                "token limit",
             )
         ):
             return ProxyService._build_user_visible_upstream_request_error(
@@ -3867,9 +3973,7 @@ class ProxyService:
                 status_code=upstream_status or 400,
             )
 
-        if upstream_status is not None and (
-            upstream_status >= 500 or upstream_status in {403, 408, 409, 425, 429}
-        ):
+        if upstream_status is not None and ProxyService._should_retry_upstream_status(upstream_status):
             return None
 
         if upstream_status is not None:
@@ -4555,7 +4659,8 @@ class ProxyService:
                         "Responses websocket channel %s (%d) failed for model %s: %s",
                         channel.name, channel.id, actual_model_name, exc,
                     )
-                    ProxyService._record_channel_failure(db, channel, exc)
+                    if not getattr(exc, "_is_request_error", False):
+                        ProxyService._record_channel_failure(db, channel, exc)
                     if not exc.can_retry:
                         ProxyService._log_failed_request(
                             db, user, api_key_record, request_id, requested_model,
@@ -5144,6 +5249,7 @@ class ProxyService:
                     request_data,
                     requested_model,
                     request_headers=request_headers,
+                    request_id=request_id,
                 ):
                     payload_type = str(payload.get("type", "") or "")
                     if payload_type == "response.completed":
@@ -5319,7 +5425,9 @@ class ProxyService:
         sent_any_payload = False
         saw_error = False
         error_message = ""
+        error_payload: Optional[dict[str, Any]] = None
         first_chunk_time: Optional[float] = None
+        turn_request_id = str(request_data.get("_request_id") or request_data.get("id") or "responses_ws")
 
         try:
             async for payload in ProxyService._iter_responses_upstream_payloads(
@@ -5327,10 +5435,12 @@ class ProxyService:
                 request_data,
                 requested_model,
                 request_headers=request_headers,
+                request_id=turn_request_id,
             ):
                 payload_type = str(payload.get("type", "") or "")
                 if payload_type == "error":
                     saw_error = True
+                    error_payload = payload
                     error_message = (
                         payload.get("error", {}).get("message")
                         or "Upstream responses error"
@@ -5391,7 +5501,39 @@ class ProxyService:
                 error = ResponsesTurnError(visible_error_message, can_retry=False)
                 setattr(error, "_upstream_detail", raw_error_detail)
             else:
-                error = ResponsesTurnError(raw_error_detail, can_retry=True)
+                can_retry = (
+                    ProxyService._should_retry_responses_stream_error(error_payload)
+                    if isinstance(error_payload, dict)
+                    else True
+                )
+                if can_retry:
+                    error = ResponsesTurnError(raw_error_detail, can_retry=True)
+                else:
+                    visible_error_message = (
+                        _CONTEXT_TOO_LONG_VISIBLE_MESSAGE
+                        if ProxyService._looks_like_non_retryable_upstream_request_error(raw_error_detail)
+                        and any(
+                            marker in raw_error_detail.lower()
+                            for marker in (
+                                "context",
+                                "token limit",
+                                "too many tokens",
+                                "payload too large",
+                                "request too large",
+                                "content too long",
+                            )
+                        )
+                        else _UPSTREAM_REQUEST_VISIBLE_MESSAGE
+                    )
+                    error_payload_to_client = ProxyService._build_responses_error_payload(
+                        visible_error_message,
+                        status_code=400,
+                        error_type="invalid_request_error",
+                    )
+                    await websocket.send_text(json.dumps(error_payload_to_client, ensure_ascii=False))
+                    error = ResponsesTurnError(visible_error_message, can_retry=False)
+                    setattr(error, "_upstream_detail", raw_error_detail)
+                    setattr(error, "_is_request_error", True)
             error.first_chunk_time = first_chunk_time
             raise error
 
@@ -5415,27 +5557,95 @@ class ProxyService:
         request_data: dict,
         requested_model: str,
         request_headers: Optional[dict[str, str]] = None,
+        request_id: Optional[str] = None,
     ):
         """Yield parsed Responses payload dicts from upstream SSE or JSON."""
         start_url = channel.base_url.rstrip("/")
         url = f"{start_url}/responses"
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        resolved_request_id = str(request_id or request_data.get("_request_id") or "responses")
+        max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, None)
+        attempt = 0
 
-        async for line in ProxyService._stream_lines_with_retries(
-            url,
-            request_data,
-            headers,
-            request_id=str(request_data.get("_request_id") or "responses"),
-            channel=channel,
-            timeout=timeout,
-            log_label="Responses stream",
-            retry_boundary=ProxyService._is_responses_stream_retry_boundary,
-        ):
-            payload = ProxyService._parse_responses_payload_line(line)
-            if payload is None:
+        while attempt < max_attempts:
+            attempt += 1
+            emitted_visible_payload = False
+            retry_error_payload: Optional[dict[str, Any]] = None
+
+            try:
+                async for line in ProxyService._stream_lines_with_retries(
+                    url,
+                    request_data,
+                    headers,
+                    request_id=resolved_request_id,
+                    channel=channel,
+                    timeout=timeout,
+                    log_label="Responses stream",
+                    max_attempts=1,
+                    retry_boundary=ProxyService._is_responses_stream_retry_boundary,
+                ):
+                    payload = ProxyService._parse_responses_payload_line(line)
+                    if payload is None:
+                        continue
+                    rewritten_payload = ProxyService._rewrite_response_model(payload, requested_model)
+                    if (
+                        not emitted_visible_payload
+                        and str(rewritten_payload.get("type") or "") == "error"
+                        and ProxyService._should_retry_responses_stream_error(rewritten_payload)
+                    ):
+                        retry_error_payload = rewritten_payload
+                        break
+
+                    emitted_visible_payload = True
+                    yield rewritten_payload
+            except Exception as exc:
+                upstream_status = ProxyService._extract_upstream_http_status(str(exc))
+                should_retry_error = (
+                    ProxyService._should_retry_upstream_exception(exc)
+                    or (
+                        upstream_status is not None
+                        and ProxyService._should_retry_upstream_response(upstream_status, str(exc))
+                    )
+                )
+                if emitted_visible_payload or attempt >= max_attempts or not should_retry_error:
+                    raise
+                retry_delay = 0.6 * attempt
+                logger.warning(
+                    "Responses stream retrying upstream request_id=%s channel=%s channel_id=%s "
+                    "attempt=%s/%s error=%s delay=%.1fs",
+                    resolved_request_id,
+                    channel.name,
+                    channel.id,
+                    attempt,
+                    max_attempts,
+                    exc,
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
                 continue
-            yield ProxyService._rewrite_response_model(payload, requested_model)
+
+            if retry_error_payload is None:
+                return
+
+            if attempt < max_attempts:
+                retry_delay = 0.6 * attempt
+                logger.warning(
+                    "Responses stream retrying upstream SSE error request_id=%s channel=%s channel_id=%s "
+                    "attempt=%s/%s error=%s delay=%.1fs",
+                    resolved_request_id,
+                    channel.name,
+                    channel.id,
+                    attempt,
+                    max_attempts,
+                    ProxyService._extract_responses_error_message(retry_error_payload),
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+                continue
+
+            yield retry_error_payload
+            return
 
     @staticmethod
     def _parse_non_stream_responses_payload(raw_text: str) -> dict | None:
@@ -7684,6 +7894,7 @@ class ProxyService:
                     responses_request,
                     requested_model,
                     request_headers=request_headers,
+                    request_id=request_id,
                 ):
                     payload_type = str(payload.get("type", "") or "")
                     payload_detail = None
@@ -8374,12 +8585,19 @@ class ProxyService:
                                         json=variant["request_data"],
                                         headers=current_headers,
                                     ) as response:
-                                        if (
-                                            response.status_code != 200
-                                            and attempt < max_attempts
-                                            and ProxyService._should_retry_upstream_status(response.status_code)
-                                        ):
+                                        if response.status_code != 200:
                                             body = await response.aread()
+                                            body_text = body.decode("utf-8", errors="replace")
+                                            if not (
+                                                attempt < max_attempts
+                                                and ProxyService._should_retry_upstream_response(
+                                                    response.status_code,
+                                                    body_text[:1000],
+                                                )
+                                            ):
+                                                yielded_response = True
+                                                yield response
+                                                return
                                             retry_delay = 0.6 * attempt
                                             logger.warning(
                                                 "Anthropic stream retrying upstream request_id=%s channel=%s "
@@ -8391,7 +8609,7 @@ class ProxyService:
                                                 max_attempts,
                                                 response.status_code,
                                                 retry_delay,
-                                                body.decode("utf-8", errors="replace")[:300],
+                                                body_text[:300],
                                             )
                                             await asyncio.sleep(retry_delay)
                                             continue

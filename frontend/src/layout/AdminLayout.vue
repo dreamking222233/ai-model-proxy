@@ -72,6 +72,10 @@
             <a-icon type="transaction" />
             <span>支付明细</span>
           </a-menu-item>
+          <a-menu-item key="/admin/promotions">
+            <a-icon type="share-alt" />
+            <span>推广记录</span>
+          </a-menu-item>
           <a-menu-item key="/admin/redemption">
             <a-icon type="gift" />
             <span>兑换码管理</span>

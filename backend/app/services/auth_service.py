@@ -45,6 +45,7 @@ class AuthService:
         email: str,
         password: str,
         email_code: Optional[str] = None,
+        invite_code: Optional[str] = None,
         request_host: Optional[str] = None,
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
@@ -108,6 +109,9 @@ class AuthService:
         )
         db.add(balance)
         db.add(UserImageBalance(user_id=user.id, balance=0, total_recharged=0, total_consumed=0))
+        if str(invite_code or "").strip():
+            from app.services.promotion_service import PromotionService
+            PromotionService.bind_invited_user(db, user, invite_code, site_context)
         db.commit()
         db.refresh(user)
 

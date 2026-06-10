@@ -130,7 +130,8 @@ class ProxyService:
     }
     _RESPONSES_IMAGE_TOOL_TYPES = {"image_generation", "image_generation_call"}
     _RESPONSES_FAST_SERVICE_TIER = "priority"
-    _RESPONSES_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+    _RESPONSES_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+    _RESPONSES_REASONING_EFFORT_ALIASES = {"xhigh": "high"}
     _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
     _LONG_CONTEXT_TOKEN_THRESHOLD = 262144
@@ -595,6 +596,34 @@ class ProxyService:
     def _normalize_service_tier(value: Any) -> Optional[str]:
         text = str(value or "").strip()
         return text or None
+
+    @staticmethod
+    def _normalize_unsupported_reasoning_level(value: Any) -> Any:
+        """Downgrade unsupported reasoning effort labels before upstream forwarding."""
+        if isinstance(value, str) and value.strip().lower() == "xhigh":
+            return "high"
+        return value
+
+    @staticmethod
+    def _normalize_request_reasoning_levels(request_data: dict) -> dict:
+        """Return a request copy with unsupported reasoning levels normalized."""
+        if not isinstance(request_data, dict):
+            return request_data
+        normalized = copy.deepcopy(request_data)
+
+        if "reasoning_effort" in normalized:
+            normalized["reasoning_effort"] = ProxyService._normalize_unsupported_reasoning_level(
+                normalized.get("reasoning_effort")
+            )
+
+        for container_key in ("reasoning", "thinking"):
+            container = normalized.get(container_key)
+            if isinstance(container, dict) and "effort" in container:
+                container["effort"] = ProxyService._normalize_unsupported_reasoning_level(
+                    container.get("effort")
+                )
+
+        return normalized
 
     @staticmethod
     def _build_text_billing_context(
@@ -1795,7 +1824,7 @@ class ProxyService:
         force_compat: bool = False,
     ) -> dict:
         """Forward OpenAI requests without compatibility rewrites."""
-        return copy.deepcopy(request_data)
+        return ProxyService._normalize_request_reasoning_levels(request_data)
 
     @staticmethod
     def _sanitize_anthropic_content_for_kiro(content):
@@ -1809,7 +1838,7 @@ class ProxyService:
         force_compat: bool = False,
     ) -> dict:
         """Forward Anthropic requests without compatibility rewrites."""
-        return copy.deepcopy(request_data)
+        return ProxyService._normalize_request_reasoning_levels(request_data)
 
     @staticmethod
     def _resolve_mapped_upstream_target(
@@ -2457,9 +2486,16 @@ class ProxyService:
     def _normalize_responses_reasoning_effort(value: Any) -> Optional[str]:
         """Normalize a Responses reasoning effort value."""
         normalized = str(value or "").strip().lower()
+        if normalized in ProxyService._RESPONSES_REASONING_EFFORT_ALIASES:
+            return ProxyService._RESPONSES_REASONING_EFFORT_ALIASES[normalized]
         if normalized in ProxyService._RESPONSES_REASONING_EFFORTS:
             return normalized
         return None
+
+    @staticmethod
+    def _downgrade_unsupported_reasoning_effort(value: Optional[str]) -> Optional[str]:
+        """Map locally accepted but upstream-unsupported reasoning effort to a supported level."""
+        return ProxyService._RESPONSES_REASONING_EFFORT_ALIASES.get(value, value)
 
     @staticmethod
     def _has_explicit_responses_reasoning_effort(request_data: dict) -> bool:
@@ -2521,7 +2557,7 @@ class ProxyService:
                 raw_reasoning.get("effort")
             )
             if effort:
-                return effort
+                return ProxyService._downgrade_unsupported_reasoning_effort(effort)
 
         raw_thinking = request_data.get("thinking")
         if isinstance(raw_thinking, dict):
@@ -2529,7 +2565,7 @@ class ProxyService:
                 raw_thinking.get("effort")
             )
             if effort:
-                return effort
+                return ProxyService._downgrade_unsupported_reasoning_effort(effort)
 
             thinking_type = str(raw_thinking.get("type") or "").strip().lower()
             if thinking_type in {"enabled", "auto"}:
@@ -2543,7 +2579,7 @@ class ProxyService:
             default_reasoning_effort
         )
         if default_effort:
-            return default_effort
+            return ProxyService._downgrade_unsupported_reasoning_effort(default_effort)
 
         normalized_headers = {
             str(key).lower(): value
@@ -2600,6 +2636,7 @@ class ProxyService:
     ) -> dict:
         """Convert an Anthropic Messages request into an OpenAI Responses request."""
         request_copy = copy.deepcopy(request_data)
+        request_copy = ProxyService._normalize_request_reasoning_levels(request_copy)
         responses_request: dict[str, Any] = {
             "model": request_copy.get("model"),
             "stream": bool(request_copy.get("stream", False)),
@@ -4151,7 +4188,7 @@ class ProxyService:
         ``/responses`` endpoint.
         """
         request_id = str(uuid.uuid4())
-        client_request = copy.deepcopy(request_data)
+        client_request = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = str(client_request.get("model", "") or "")
         is_stream = bool(client_request.get("stream", True))
         client_request["stream"] = is_stream
@@ -4334,6 +4371,7 @@ class ProxyService:
                     ensure_ascii=False,
                 ))
                 continue
+            incoming_request = ProxyService._normalize_request_reasoning_levels(incoming_request)
 
             ProxyService._log_responses_request_json(
                 "websocket_incoming",
@@ -4857,7 +4895,7 @@ class ProxyService:
     @staticmethod
     def _prepare_responses_request_body(model_name: str, request_data: dict) -> dict:
         """Apply compatibility normalization before forwarding to upstream ``/responses``."""
-        prepared = copy.deepcopy(request_data)
+        prepared = ProxyService._normalize_request_reasoning_levels(request_data)
         prepared["input"] = ProxyService._normalize_responses_input(prepared.get("input"))
         prepared.setdefault("store", False)
         ProxyService._apply_responses_parallel_tool_mitigation(model_name, prepared)
@@ -5740,6 +5778,7 @@ class ProxyService:
             or all channels failing.
         """
         request_id = str(uuid.uuid4())
+        request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
 
@@ -5961,6 +6000,7 @@ class ProxyService:
         Same failover logic as OpenAI but with Anthropic message format.
         """
         request_id = str(uuid.uuid4())
+        request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
 

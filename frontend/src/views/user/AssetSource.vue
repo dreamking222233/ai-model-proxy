@@ -8,12 +8,24 @@
           <div class="summary-value">$ {{ formatMoney(balanceInfo.balance) }}</div>
         </div>
       </div>
+      <div class="summary-item image">
+        <div class="summary-icon"><a-icon type="picture" /></div>
+        <div>
+          <div class="summary-label">图片积分</div>
+          <div class="summary-value">{{ formatCredits(balanceInfo.image_credit_balance) }}</div>
+        </div>
+      </div>
     </div>
 
     <a-card class="table-panel" :bordered="false">
       <div class="table-toolbar">
-        <div class="toolbar-title">余额明细</div>
+        <div class="toolbar-title">资产明细</div>
         <div class="toolbar-actions">
+          <a-select v-model="filters.asset_type" style="width: 140px" @change="handleFilterChange">
+            <a-select-option value="all">全部资产</a-select-option>
+            <a-select-option value="balance">余额</a-select-option>
+            <a-select-option value="image_credit">图片积分</a-select-option>
+          </a-select>
           <a-select v-model="filters.direction" style="width: 140px" @change="handleFilterChange">
             <a-select-option value="all">全部变动</a-select-option>
             <a-select-option value="increase">增加</a-select-option>
@@ -50,9 +62,9 @@
 
         <template slot="balanceRange" slot-scope="text, record">
           <span class="range-text">
-            {{ formatBalanceValue(record.balance_before) }}
+            {{ formatBalanceValue(record.balance_before, record) }}
             <a-icon type="arrow-right" />
-            {{ formatBalanceValue(record.balance_after) }}
+            {{ formatBalanceValue(record.balance_after, record) }}
           </span>
         </template>
 
@@ -75,9 +87,11 @@ export default {
       loading: false,
       balanceLoading: false,
       balanceInfo: {
-        balance: 0
+        balance: 0,
+        image_credit_balance: 0
       },
       filters: {
+        asset_type: 'all',
         direction: 'all'
       },
       records: [],
@@ -89,7 +103,8 @@ export default {
         showTotal: total => `共 ${total} 条`
       },
       columns: [
-        { title: '变动', key: 'amount', width: 140, scopedSlots: { customRender: 'amount' } },
+        { title: '变动', key: 'amount', width: 160, scopedSlots: { customRender: 'amount' } },
+        { title: '资产', dataIndex: 'asset_type_text', key: 'asset_type_text', width: 110 },
         { title: '来源', dataIndex: 'source', key: 'source', width: 140, scopedSlots: { customRender: 'source' } },
         { title: '备注', dataIndex: 'remark', key: 'remark', width: 220, ellipsis: true, scopedSlots: { customRender: 'remark' } },
         { title: '变动前后', key: 'balanceRange', width: 240, scopedSlots: { customRender: 'balanceRange' } },
@@ -106,7 +121,7 @@ export default {
       this.balanceLoading = true
       try {
         const res = await getBalance()
-        this.balanceInfo = res.data || { balance: 0 }
+        this.balanceInfo = res.data || { balance: 0, image_credit_balance: 0 }
       } finally {
         this.balanceLoading = false
       }
@@ -117,6 +132,7 @@ export default {
         const res = await getAssetSourceRecords({
           page: this.pagination.current,
           page_size: this.pagination.pageSize,
+          asset_type: this.filters.asset_type,
           direction: this.filters.direction
         })
         const data = res.data || {}
@@ -140,10 +156,20 @@ export default {
       return Number.isFinite(num) ? num.toFixed(4) : '0.0000'
     },
     formatAmount(record) {
+      if (record && record.asset_type === 'image_credit') {
+        return `${this.formatCredits(record.amount)} 积分`
+      }
       return `$ ${this.formatMoney(record && record.amount)}`
     },
-    formatBalanceValue(value) {
+    formatBalanceValue(value, record) {
+      if (record && record.asset_type === 'image_credit') {
+        return `${this.formatCredits(value)} 积分`
+      }
       return `$ ${this.formatMoney(value)}`
+    },
+    formatCredits(value) {
+      const num = Number(value || 0)
+      return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
     },
     formatTime(value) {
       return value ? formatUtcDate(value) : '-'

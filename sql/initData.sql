@@ -687,6 +687,100 @@ CREATE TABLE `payment_recharge_order` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线充值订单表';
 
 -- ----------------------------
+-- Table structure for user_promotion_link
+-- ----------------------------
+DROP TABLE IF EXISTS `user_promotion_link`;
+CREATE TABLE `user_promotion_link` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` bigint unsigned NOT NULL,
+  `agent_id` bigint unsigned DEFAULT NULL,
+  `site_scope` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'platform',
+  `site_host` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `invite_code` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `register_count` bigint unsigned NOT NULL DEFAULT '0',
+  `recharge_user_count` bigint unsigned NOT NULL DEFAULT '0',
+  `total_reward_usd` decimal(12,6) NOT NULL DEFAULT '0.000000',
+  `total_reward_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_promotion_link_code` (`invite_code`),
+  UNIQUE KEY `uk_user_promotion_link_user` (`user_id`),
+  KEY `idx_user_promotion_link_agent` (`agent_id`),
+  KEY `idx_user_promotion_link_scope` (`site_scope`),
+  KEY `idx_user_promotion_link_status` (`status`),
+  KEY `idx_user_promotion_link_host` (`site_host`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户推广链接表';
+
+-- ----------------------------
+-- Table structure for user_promotion_relation
+-- ----------------------------
+DROP TABLE IF EXISTS `user_promotion_relation`;
+CREATE TABLE `user_promotion_relation` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `promoter_user_id` bigint unsigned NOT NULL,
+  `promoter_agent_id` bigint unsigned DEFAULT NULL,
+  `invite_code` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `invite_link_id` bigint unsigned NOT NULL,
+  `invited_user_id` bigint unsigned NOT NULL,
+  `invited_agent_id` bigint unsigned DEFAULT NULL,
+  `site_scope` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'platform',
+  `site_host` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `first_recharged_at` datetime DEFAULT NULL,
+  `total_recharge_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `total_reward_usd` decimal(12,6) NOT NULL DEFAULT '0.000000',
+  `total_reward_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_promotion_relation_invited` (`invited_user_id`),
+  KEY `idx_user_promotion_relation_promoter` (`promoter_user_id`),
+  KEY `idx_user_promotion_relation_promoter_agent` (`promoter_agent_id`),
+  KEY `idx_user_promotion_relation_code` (`invite_code`),
+  KEY `idx_user_promotion_relation_link` (`invite_link_id`),
+  KEY `idx_user_promotion_relation_invited_agent` (`invited_agent_id`),
+  KEY `idx_user_promotion_relation_scope` (`site_scope`),
+  KEY `idx_user_promotion_relation_first_recharged` (`first_recharged_at`),
+  KEY `idx_user_promotion_relation_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户推广绑定关系表';
+
+-- ----------------------------
+-- Table structure for user_promotion_reward
+-- ----------------------------
+DROP TABLE IF EXISTS `user_promotion_reward`;
+CREATE TABLE `user_promotion_reward` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `relation_id` bigint unsigned NOT NULL,
+  `promoter_user_id` bigint unsigned NOT NULL,
+  `promoter_agent_id` bigint unsigned DEFAULT NULL,
+  `invited_user_id` bigint unsigned NOT NULL,
+  `invite_code` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `order_id` bigint unsigned NOT NULL,
+  `order_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `recharge_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance',
+  `amount_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `credited_usd` decimal(12,6) NOT NULL DEFAULT '0.000000',
+  `credited_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000',
+  `reward_asset_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance',
+  `reward_amount` decimal(12,6) NOT NULL DEFAULT '0.000000',
+  `reward_rate` decimal(12,6) NOT NULL DEFAULT '0.000000',
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'applied',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_promotion_reward_order_asset` (`order_no`,`reward_asset_type`),
+  KEY `idx_user_promotion_reward_relation` (`relation_id`),
+  KEY `idx_user_promotion_reward_promoter` (`promoter_user_id`),
+  KEY `idx_user_promotion_reward_promoter_agent` (`promoter_agent_id`),
+  KEY `idx_user_promotion_reward_invited` (`invited_user_id`),
+  KEY `idx_user_promotion_reward_code` (`invite_code`),
+  KEY `idx_user_promotion_reward_order_id` (`order_id`),
+  KEY `idx_user_promotion_reward_recharge_type` (`recharge_type`),
+  KEY `idx_user_promotion_reward_asset` (`reward_asset_type`),
+  KEY `idx_user_promotion_reward_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户推广充值返现记录表';
+
+-- ----------------------------
 -- Table structure for redemption_code
 -- ----------------------------
 DROP TABLE IF EXISTS `redemption_code`;

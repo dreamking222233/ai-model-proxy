@@ -42,6 +42,11 @@ from app.models.payment import (
     AgentCashLedger,
     AgentCashWithdrawal,
 )
+from app.models.promotion import (
+    UserPromotionLink,
+    UserPromotionRelation,
+    UserPromotionReward,
+)
 
 __all__ = [
     "SysUser",
@@ -84,4 +89,7 @@ __all__ = [
     "AgentCashBalance",
     "AgentCashLedger",
     "AgentCashWithdrawal",
+    "UserPromotionLink",
+    "UserPromotionRelation",
+    "UserPromotionReward",
 ]

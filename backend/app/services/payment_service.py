@@ -1150,6 +1150,8 @@ class PaymentService:
         if is_new_settlement:
             PaymentService._credit_user_order_asset(db, locked)
             PaymentService._credit_agent_cash_balance(db, locked)
+            from app.services.promotion_service import PromotionService
+            PromotionService.apply_recharge_reward(db, locked)
             settlement.status = "applied"
             settlement.applied_at = datetime.utcnow()
 

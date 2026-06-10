@@ -3,18 +3,19 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import and_, exists, literal, or_
+from sqlalchemy import and_, exists, func, literal, or_
 from sqlalchemy.orm import Session
 
-from app.models.log import UserBalance, ConsumptionRecord, RequestLog
+from app.models.log import UserBalance, ConsumptionRecord, RequestLog, ImageCreditRecord
 from app.models.payment import PaymentRechargeOrder
+from app.models.promotion import UserPromotionReward
 from app.core.exceptions import ServiceException
 
 
 class BalanceService:
     """User balance queries and admin recharge operations."""
 
-    ASSET_TYPES = {"all", "balance"}
+    ASSET_TYPES = {"all", "balance", "image_credit"}
     DIRECTIONS = {"all", "increase", "decrease"}
 
     @staticmethod
@@ -179,7 +180,7 @@ class BalanceService:
 
     @staticmethod
     def _asset_type_text(asset_type: str | None) -> str:
-        return {"balance": "余额"}.get(asset_type or "", asset_type or "-")
+        return {"balance": "余额", "image_credit": "图片积分"}.get(asset_type or "", asset_type or "-")
 
     @staticmethod
     def _normalize_recharge_type(recharge_type: str | None) -> str:
@@ -194,7 +195,11 @@ class BalanceService:
         return getattr(row, key)
 
     @staticmethod
-    def _serialize_asset_source_record(row, order_map: dict[str, PaymentRechargeOrder]) -> dict:
+    def _serialize_asset_source_record(
+        row,
+        order_map: dict[str, PaymentRechargeOrder],
+        promotion_map: dict[tuple[str, str], UserPromotionReward],
+    ) -> dict:
         asset_type = str(BalanceService._row_value(row, "asset_type") or "")
         record_id = BalanceService._row_value(row, "id")
         signed_amount = Decimal(str(BalanceService._row_value(row, "signed_amount") or 0))
@@ -208,8 +213,13 @@ class BalanceService:
         remark = BalanceService._normalize_remark(BalanceService._row_value(row, "remark"))
         created_at = BalanceService._row_value(row, "created_at")
 
+        promotion = promotion_map.get((request_id or "", asset_type))
         order = order_map.get(request_id or "")
-        if (
+        if promotion and direction == "increase":
+            source = "推广返现"
+            action_type = "promotion_reward"
+            remark = remark or model_name or "推广返现"
+        elif (
             order
             and direction == "increase"
             and str(getattr(order, "status", "") or "").strip().lower() == "paid"
@@ -275,6 +285,11 @@ class BalanceService:
             PaymentRechargeOrder.status == "paid",
             PaymentRechargeOrder.recharge_type == "balance",
         ))
+        promotion_balance_reward = exists().where(and_(
+            UserPromotionReward.promoter_user_id == ConsumptionRecord.user_id,
+            UserPromotionReward.order_no == ConsumptionRecord.request_id,
+            UserPromotionReward.reward_asset_type == "balance",
+        ))
 
         balance_query = db.query(
             ConsumptionRecord.id.label("id"),
@@ -293,17 +308,47 @@ class BalanceService:
         ).filter(
             ConsumptionRecord.user_id == user_id,
             ConsumptionRecord.total_cost != Decimal("0"),
-            or_(manual_balance_change, paid_balance_recharge),
+            or_(manual_balance_change, paid_balance_recharge, promotion_balance_reward),
         )
         if normalized_direction == "increase":
             balance_query = balance_query.filter(ConsumptionRecord.total_cost < Decimal("0"))
         elif normalized_direction == "decrease":
             balance_query = balance_query.filter(ConsumptionRecord.total_cost > Decimal("0"))
 
-        total = balance_query.count()
+        image_query = db.query(
+            ImageCreditRecord.id.label("id"),
+            literal("image_credit").label("asset_type"),
+            ImageCreditRecord.change_amount.label("signed_amount"),
+            ImageCreditRecord.balance_before.label("balance_before"),
+            ImageCreditRecord.balance_after.label("balance_after"),
+            ImageCreditRecord.request_id.label("request_id"),
+            ImageCreditRecord.model_name.label("model_name"),
+            ImageCreditRecord.agent_id.label("agent_id"),
+            ImageCreditRecord.operator_id.label("operator_id"),
+            ImageCreditRecord.action_type.label("action_type"),
+            literal(None).label("billing_mode"),
+            ImageCreditRecord.remark.label("remark"),
+            ImageCreditRecord.created_at.label("created_at"),
+        ).filter(
+            ImageCreditRecord.user_id == user_id,
+            ImageCreditRecord.change_amount != Decimal("0"),
+        )
+        if normalized_direction == "increase":
+            image_query = image_query.filter(ImageCreditRecord.change_amount > Decimal("0"))
+        elif normalized_direction == "decrease":
+            image_query = image_query.filter(ImageCreditRecord.change_amount < Decimal("0"))
+
+        if normalized_asset_type == "balance":
+            combined = balance_query.subquery()
+        elif normalized_asset_type == "image_credit":
+            combined = image_query.subquery()
+        else:
+            combined = balance_query.union_all(image_query).subquery()
+
+        total = db.query(func.count()).select_from(combined).scalar() or 0
         rows = (
-            balance_query
-            .order_by(ConsumptionRecord.created_at.desc(), ConsumptionRecord.id.desc())
+            db.query(combined)
+            .order_by(combined.c.created_at.desc(), combined.c.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -326,8 +371,22 @@ class BalanceService:
                 .all()
             )
             order_map = {str(order.order_no): order for order in orders}
+        promotion_map: dict[tuple[str, str], UserPromotionReward] = {}
+        if order_nos:
+            rewards = (
+                db.query(UserPromotionReward)
+                .filter(
+                    UserPromotionReward.promoter_user_id == user_id,
+                    UserPromotionReward.order_no.in_(order_nos),
+                )
+                .all()
+            )
+            promotion_map = {
+                (str(reward.order_no), str(reward.reward_asset_type)): reward
+                for reward in rewards
+            }
 
-        return [BalanceService._serialize_asset_source_record(row, order_map) for row in rows], int(total)
+        return [BalanceService._serialize_asset_source_record(row, order_map, promotion_map) for row in rows], int(total)
 
     @staticmethod
     def get_consumption_records(

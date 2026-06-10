@@ -93,6 +93,12 @@ const routes = [
         meta: { title: '支付明细' }
       },
       {
+        path: 'promotions',
+        name: 'AdminPromotionManage',
+        component: () => import('@/views/admin/PromotionManage.vue'),
+        meta: { title: '推广记录' }
+      },
+      {
         path: 'logs',
         name: 'RequestLog',
         component: () => import('@/views/admin/RequestLog.vue'),
@@ -180,6 +186,12 @@ const routes = [
         name: 'AssetSource',
         component: () => import('@/views/user/AssetSource.vue'),
         meta: { title: '资产来源' }
+      },
+      {
+        path: 'promotion',
+        name: 'Promotion',
+        component: () => import('@/views/user/Promotion.vue'),
+        meta: { title: '推广链接' }
       },
       {
         path: 'usage',
@@ -288,6 +300,12 @@ const routes = [
         name: 'AgentPaymentManage',
         component: () => import('@/views/agent/PaymentManage.vue'),
         meta: { title: '充值记录' }
+      },
+      {
+        path: 'promotions',
+        name: 'AgentPromotionManage',
+        component: () => import('@/views/agent/PromotionManage.vue'),
+        meta: { title: '推广记录' }
       },
       {
         path: 'system',

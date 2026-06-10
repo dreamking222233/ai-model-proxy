@@ -12,7 +12,7 @@ class HealthCheckLog(Base):
 
     __tablename__ = "health_check_log"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     channel_id = Column(BigInteger, nullable=False, index=True)
     channel_name = Column(String(128), nullable=False)
     model_name = Column(String(128), nullable=True)
@@ -34,7 +34,7 @@ class RequestLog(Base):
         Index("idx_request_log_created_at_id", "created_at", "id"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     request_id = Column(String(36), nullable=False, unique=True, comment="UUID")
     user_id = Column(BigInteger, nullable=True, index=True)
     agent_id = Column(BigInteger, nullable=True, index=True, comment="所属代理ID")
@@ -113,7 +113,7 @@ class RequestCacheSummary(Base):
 
     __tablename__ = "request_cache_summary"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     request_id = Column(String(36), nullable=False, unique=True, index=True, comment="Request UUID")
     user_id = Column(BigInteger, nullable=True, index=True)
     requested_model = Column(String(128), nullable=True, index=True)
@@ -137,7 +137,7 @@ class SystemConfig(Base):
 
     __tablename__ = "system_config"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     config_key = Column(String(128), nullable=False, unique=True)
     config_value = Column(Text, nullable=False)
     config_type = Column(String(10), nullable=False, default="string")
@@ -151,7 +151,7 @@ class OperationLog(Base):
 
     __tablename__ = "operation_log"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=True, index=True)
     agent_id = Column(BigInteger, nullable=True, index=True)
     username = Column(String(64), nullable=True)
@@ -168,7 +168,7 @@ class UserBalance(Base):
 
     __tablename__ = "user_balance"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, unique=True)
     balance = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Balance (USD)")
     total_recharged = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Total recharged")
@@ -182,7 +182,7 @@ class ConsumptionRecord(Base):
 
     __tablename__ = "consumption_record"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
     agent_id = Column(BigInteger, nullable=True, index=True)
     request_id = Column(String(36), nullable=True, index=True)
@@ -234,7 +234,7 @@ class UserImageBalance(Base):
 
     __tablename__ = "user_image_balance"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, unique=True)
     balance = Column(DECIMAL(12, 3), nullable=False, default=0, comment="Image credit balance")
     total_recharged = Column(DECIMAL(12, 3), nullable=False, default=0, comment="Total image credits recharged")
@@ -248,7 +248,7 @@ class ImageCreditRecord(Base):
 
     __tablename__ = "image_credit_record"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, nullable=False, index=True)
     agent_id = Column(BigInteger, nullable=True, index=True)
     request_id = Column(String(36), nullable=True, index=True)

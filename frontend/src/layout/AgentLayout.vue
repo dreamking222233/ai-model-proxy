@@ -60,6 +60,10 @@
             <a-icon type="wallet" />
             <span>充值记录</span>
           </a-menu-item>
+          <a-menu-item key="/agent/promotions">
+            <a-icon type="share-alt" />
+            <span>推广记录</span>
+          </a-menu-item>
           <a-menu-item key="/agent/system">
             <a-icon type="setting" />
             <span>系统管理</span>

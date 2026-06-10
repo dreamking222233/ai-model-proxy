@@ -27,6 +27,7 @@ from app.api.admin.health import router as admin_health_router
 from app.api.admin.system import router as admin_system_router
 from app.api.admin.redemption import router as admin_redemption_router
 from app.api.admin.subscription import router as admin_subscription_router
+from app.api.admin.promotion import router as admin_promotion_router
 from app.api.user.api_key import router as user_api_key_router
 from app.api.user.balance import router as user_balance_router
 from app.api.user.payment import router as user_payment_router
@@ -34,6 +35,7 @@ from app.api.user.profile import router as user_profile_router
 from app.api.user.models import router as user_models_router
 from app.api.user.stats import router as user_stats_router
 from app.api.user.redemption import router as user_redemption_router
+from app.api.user.promotion import router as user_promotion_router
 from app.api.agent.user import router as agent_user_router
 from app.api.agent.payment import router as agent_payment_router
 from app.api.agent.log import router as agent_log_router
@@ -41,6 +43,7 @@ from app.api.agent.stats import router as agent_stats_router
 from app.api.agent.system import router as agent_system_router
 from app.api.agent.subscription import router as agent_subscription_router
 from app.api.agent.redemption import router as agent_redemption_router
+from app.api.agent.promotion import router as agent_promotion_router
 from app.api.proxy.openai_proxy import router as openai_proxy_router
 from app.api.proxy.anthropic_proxy import router as anthropic_proxy_router
 from app.api.proxy.image_proxy import router as image_proxy_router
@@ -124,6 +127,7 @@ app.include_router(admin_system_router)
 app.include_router(admin_redemption_router)
 app.include_router(admin_subscription_router)
 app.include_router(admin_payment_router)
+app.include_router(admin_promotion_router)
 
 # Register routers - User
 app.include_router(user_api_key_router)
@@ -133,6 +137,7 @@ app.include_router(user_profile_router)
 app.include_router(user_models_router)
 app.include_router(user_stats_router)
 app.include_router(user_redemption_router)
+app.include_router(user_promotion_router)
 
 # Register routers - Agent
 app.include_router(agent_user_router)
@@ -142,6 +147,7 @@ app.include_router(agent_stats_router)
 app.include_router(agent_system_router)
 app.include_router(agent_subscription_router)
 app.include_router(agent_redemption_router)
+app.include_router(agent_promotion_router)
 
 # Register routers - Proxy
 app.include_router(openai_proxy_router)

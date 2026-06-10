@@ -45,6 +45,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
     email_code: Optional[str] = Field(None, min_length=4, max_length=12)
+    invite_code: Optional[str] = Field(None, max_length=32)
 
 
 class EmailCodeRequest(BaseModel):

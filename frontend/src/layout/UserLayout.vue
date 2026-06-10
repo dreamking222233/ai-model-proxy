@@ -50,6 +50,10 @@
             <a-icon type="profile" />
             <span>资产来源</span>
           </a-menu-item>
+          <a-menu-item key="/user/promotion">
+            <a-icon type="share-alt" />
+            <span>推广链接</span>
+          </a-menu-item>
           <a-menu-item key="/user/redemption">
             <a-icon type="gift" />
             <span>兑换码充值</span>

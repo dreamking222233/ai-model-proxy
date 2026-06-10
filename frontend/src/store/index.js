@@ -50,8 +50,8 @@ export default new Vuex.Store({
       return res
     },
 
-    async register(_, { username, email, password, email_code }) {
-      const res = await registerApi(username, email, password, email_code)
+    async register(_, { username, email, password, email_code, invite_code }) {
+      const res = await registerApi(username, email, password, email_code, invite_code)
       return res
     },
 

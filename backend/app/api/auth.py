@@ -87,6 +87,7 @@ def register(req: RegisterRequest, request: Request, db: Session = Depends(get_d
         email=req.email,
         password=req.password,
         email_code=req.email_code,
+        invite_code=req.invite_code,
         request_host=request.headers.get("host"),
         x_site_host=request.headers.get("X-Site-Host"),
         origin=request.headers.get("Origin"),

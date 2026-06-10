@@ -468,7 +468,7 @@ export default {
       // 更新路由路径（不刷新页面）
       const targetPath = newMode === 'login' ? '/login' : '/register'
       if (this.$route.path !== targetPath) {
-        this.$router.replace(targetPath)
+        this.$router.replace({ path: targetPath, query: this.$route.query })
       }
     },
     handleBlur(fieldKey, formType, fieldName) {
@@ -736,6 +736,9 @@ export default {
         }
         if (this.emailVerificationRequired) {
           payload.email_code = values.email_code
+        }
+        if (this.$route.query && this.$route.query.invite_code) {
+          payload.invite_code = this.$route.query.invite_code
         }
         this.$store
           .dispatch('register', payload)

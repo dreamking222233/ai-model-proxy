@@ -8,11 +8,11 @@ export function login(username, password) {
   })
 }
 
-export function register(username, email, password, emailCode) {
+export function register(username, email, password, emailCode, inviteCode) {
   return request({
     url: '/api/auth/register',
     method: 'post',
-    data: { username, email, password, email_code: emailCode }
+    data: { username, email, password, email_code: emailCode, invite_code: inviteCode }
   })
 }
 

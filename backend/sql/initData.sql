@@ -1083,6 +1083,8 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('anthropic_prompt_cache_user_visible', 'false', 'boolean', '用户端是否显示 Anthropic Prompt Cache 读写详情'),
 ('anthropic_prompt_cache_billing_mode', 'logical', 'string', 'Anthropic Prompt Cache 计费口径：logical 或 actual_upstream'),
 ('anthropic_prompt_cache_control_policy', 'augment', 'string', '用户自带 cache_control 处理策略：preserve/augment/normalize'),
+('anthropic_prompt_cache_normalize_user_ids', '', 'string', '强制清洗用户自带 cache_control 的用户ID列表，逗号/空格/换行分隔'),
+('anthropic_prompt_cache_normalize_agent_ids', '', 'string', '强制清洗用户自带 cache_control 的代理ID列表，逗号/空格/换行分隔'),
 ('conversation_state_compaction_enabled', 'false', 'boolean', '是否启用会话状态压缩'),
 ('conversation_state_compaction_stage', 'shadow', 'string', '会话状态压缩阶段：off/shadow/non_stream_active/stream_shadow/stream_active'),
 ('conversation_state_compaction_mode', 'safe_history', 'string', '会话状态压缩模式：off/safe_history/stateful_preferred'),

@@ -69,10 +69,53 @@ class AnthropicPromptCacheService:
         return policy
 
     @staticmethod
+    def _parse_id_set(value: Any) -> set[int]:
+        """Parse comma/space/newline separated numeric ids from system_config."""
+        if value is None:
+            return set()
+        ids: set[int] = set()
+        for raw_item in str(value).replace("\n", ",").replace(" ", ",").split(","):
+            item = raw_item.strip()
+            if not item:
+                continue
+            try:
+                parsed = int(item)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                ids.add(parsed)
+        return ids
+
+    @staticmethod
+    def _resolve_control_policy(
+        db: Session,
+        *,
+        user_id: Optional[int] = None,
+        agent_id: Optional[int] = None,
+    ) -> tuple[str, str]:
+        """Resolve global policy with optional user/agent normalize overrides."""
+        base_policy = AnthropicPromptCacheService.get_control_policy(db)
+
+        normalize_user_ids = AnthropicPromptCacheService._parse_id_set(
+            get_system_config(db, "anthropic_prompt_cache_normalize_user_ids", "")
+        )
+        normalize_agent_ids = AnthropicPromptCacheService._parse_id_set(
+            get_system_config(db, "anthropic_prompt_cache_normalize_agent_ids", "")
+        )
+
+        if user_id and int(user_id) in normalize_user_ids:
+            return AnthropicPromptCacheService._CONTROL_POLICY_NORMALIZE, "normalize_user"
+        if agent_id and int(agent_id) in normalize_agent_ids:
+            return AnthropicPromptCacheService._CONTROL_POLICY_NORMALIZE, "normalize_agent"
+        return base_policy, "global"
+
+    @staticmethod
     def build_request_variants(
         db: Session,
         request_data: dict[str, Any],
         request_headers: Optional[dict[str, str]] = None,
+        user_id: Optional[int] = None,
+        agent_id: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Build request variants for prompt-cache main path and fallbacks."""
         base_variant = {
@@ -88,6 +131,7 @@ class AnthropicPromptCacheService:
                 "history_ttl": None,
                 "beta_header": None,
                 "control_policy": None,
+                "control_policy_source": None,
                 "user_cache_control_count": 0,
                 "user_cache_control_removed": False,
                 "system_cache_control_added": False,
@@ -97,7 +141,11 @@ class AnthropicPromptCacheService:
         if not AnthropicPromptCacheService.is_enabled(db):
             return [base_variant]
 
-        control_policy = AnthropicPromptCacheService.get_control_policy(db)
+        control_policy, control_policy_source = AnthropicPromptCacheService._resolve_control_policy(
+            db,
+            user_id=user_id,
+            agent_id=agent_id,
+        )
         user_cache_control_count = AnthropicPromptCacheService._count_existing_cache_control(request_data)
         has_user_cache_control = user_cache_control_count > 0
 
@@ -115,6 +163,7 @@ class AnthropicPromptCacheService:
                 "history_ttl": None,
                 "beta_header": None,
                 "control_policy": control_policy,
+                "control_policy_source": control_policy_source,
                 "user_cache_control_count": user_cache_control_count,
                 "user_cache_control_removed": False,
                 "system_cache_control_added": False,
@@ -158,6 +207,7 @@ class AnthropicPromptCacheService:
             beta_header=beta_header,
             label="full",
             control_policy=control_policy,
+            control_policy_source=control_policy_source,
             user_cache_control_count=user_cache_control_count,
             user_cache_control_removed=user_cache_control_removed,
         )
@@ -174,6 +224,7 @@ class AnthropicPromptCacheService:
                     beta_header="",
                     label="fallback_5m",
                     control_policy=control_policy,
+                    control_policy_source=control_policy_source,
                     user_cache_control_count=user_cache_control_count,
                     user_cache_control_removed=user_cache_control_removed,
                 )
@@ -185,6 +236,11 @@ class AnthropicPromptCacheService:
                     variants.append(fallback_variant)
 
         no_cache_variant = copy.deepcopy(base_variant)
+        if (
+            has_user_cache_control
+            and control_policy == AnthropicPromptCacheService._CONTROL_POLICY_NORMALIZE
+        ):
+            no_cache_variant["request_data"] = copy.deepcopy(request_for_full_variant)
         no_cache_variant["meta"] = {
             "attempted": False,
             "source": "system",
@@ -195,8 +251,9 @@ class AnthropicPromptCacheService:
             "history_ttl": None,
             "beta_header": None,
             "control_policy": control_policy,
+            "control_policy_source": control_policy_source,
             "user_cache_control_count": user_cache_control_count,
-            "user_cache_control_removed": False,
+            "user_cache_control_removed": user_cache_control_removed,
             "system_cache_control_added": False,
         }
         variants.append(no_cache_variant)
@@ -218,6 +275,7 @@ class AnthropicPromptCacheService:
                 "history_ttl": None,
                 "beta_header": None,
                 "control_policy": control_policy,
+                "control_policy_source": control_policy_source,
                 "user_cache_control_count": user_cache_control_count,
                 "user_cache_control_removed": False,
                 "system_cache_control_added": False,
@@ -316,6 +374,7 @@ class AnthropicPromptCacheService:
             "source": (attempt_meta or {}).get("source"),
             "skip_reason": (attempt_meta or {}).get("skip_reason"),
             "control_policy": (attempt_meta or {}).get("control_policy"),
+            "control_policy_source": (attempt_meta or {}).get("control_policy_source"),
             "user_cache_control_count": int((attempt_meta or {}).get("user_cache_control_count") or 0),
             "user_cache_control_removed": bool((attempt_meta or {}).get("user_cache_control_removed")),
             "system_cache_control_added": bool((attempt_meta or {}).get("system_cache_control_added")),
@@ -358,6 +417,7 @@ class AnthropicPromptCacheService:
         beta_header: str,
         label: str,
         control_policy: str,
+        control_policy_source: str,
         user_cache_control_count: int,
         user_cache_control_removed: bool,
     ) -> dict[str, Any]:
@@ -395,6 +455,7 @@ class AnthropicPromptCacheService:
                 "beta_header": beta_header if requires_beta and beta_header else None,
                 "label": label,
                 "control_policy": control_policy,
+                "control_policy_source": control_policy_source,
                 "user_cache_control_count": user_cache_control_count,
                 "user_cache_control_removed": user_cache_control_removed,
                 "system_cache_control_added": bool(applied_static or applied_history),

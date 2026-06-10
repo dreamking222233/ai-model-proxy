@@ -12,10 +12,30 @@ def _config_side_effect(policy: str):
         "anthropic_prompt_cache_history_enabled": True,
         "anthropic_prompt_cache_history_ttl": "5m",
         "anthropic_prompt_cache_beta_header": "",
+        "anthropic_prompt_cache_normalize_user_ids": "",
+        "anthropic_prompt_cache_normalize_agent_ids": "",
     }
 
     def _get_config(_db, key, default=None):
         return values.get(key, default)
+
+    return _get_config
+
+
+def _config_side_effect_with_scope(
+    policy: str,
+    *,
+    normalize_user_ids: str = "",
+    normalize_agent_ids: str = "",
+):
+    base = _config_side_effect(policy)
+
+    def _get_config(db, key, default=None):
+        if key == "anthropic_prompt_cache_normalize_user_ids":
+            return normalize_user_ids
+        if key == "anthropic_prompt_cache_normalize_agent_ids":
+            return normalize_agent_ids
+        return base(db, key, default)
 
     return _get_config
 
@@ -106,7 +126,74 @@ class AnthropicPromptCachePolicyTest(unittest.TestCase):
         fallback = variants[-1]
         self.assertFalse(fallback["meta"]["attempted"])
         self.assertNotIn("cache_control", fallback["request_data"]["tools"][0])
-        self.assertIn("cache_control", fallback["request_data"]["messages"][0]["content"][0])
+        self.assertNotIn("cache_control", fallback["request_data"]["messages"][0]["content"][0])
+
+    def test_user_scope_overrides_augment_to_normalize(self):
+        request = _request_with_user_cache_control()
+
+        with patch(
+            "app.services.anthropic_prompt_cache_service.get_system_config",
+            side_effect=_config_side_effect_with_scope(
+                "augment",
+                normalize_user_ids="244, 999",
+            ),
+        ):
+            variants = AnthropicPromptCacheService.build_request_variants(
+                None,
+                request,
+                user_id=244,
+                agent_id=5,
+            )
+
+        first = variants[0]
+        self.assertEqual(first["meta"]["control_policy"], "normalize")
+        self.assertEqual(first["meta"]["control_policy_source"], "normalize_user")
+        self.assertTrue(first["meta"]["user_cache_control_removed"])
+        self.assertNotIn("cache_control", first["request_data"]["messages"][0]["content"][0])
+
+    def test_agent_scope_overrides_augment_to_normalize(self):
+        request = _request_with_user_cache_control()
+
+        with patch(
+            "app.services.anthropic_prompt_cache_service.get_system_config",
+            side_effect=_config_side_effect_with_scope(
+                "augment",
+                normalize_agent_ids="5\n22",
+            ),
+        ):
+            variants = AnthropicPromptCacheService.build_request_variants(
+                None,
+                request,
+                user_id=244,
+                agent_id=5,
+            )
+
+        first = variants[0]
+        self.assertEqual(first["meta"]["control_policy"], "normalize")
+        self.assertEqual(first["meta"]["control_policy_source"], "normalize_agent")
+        self.assertTrue(first["meta"]["user_cache_control_removed"])
+
+    def test_user_scope_has_priority_over_agent_scope(self):
+        request = _request_with_user_cache_control()
+
+        with patch(
+            "app.services.anthropic_prompt_cache_service.get_system_config",
+            side_effect=_config_side_effect_with_scope(
+                "augment",
+                normalize_user_ids="244",
+                normalize_agent_ids="5",
+            ),
+        ):
+            variants = AnthropicPromptCacheService.build_request_variants(
+                None,
+                request,
+                user_id=244,
+                agent_id=5,
+            )
+
+        first = variants[0]
+        self.assertEqual(first["meta"]["control_policy"], "normalize")
+        self.assertEqual(first["meta"]["control_policy_source"], "normalize_user")
 
 
 if __name__ == "__main__":

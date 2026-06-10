@@ -327,6 +327,42 @@
             </div>
           </div>
         </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="user" />
+              清洗用户ID
+            </div>
+            <a-textarea
+              v-model="anthropicPromptCacheNormalizeUserIds"
+              placeholder="如 244，多个用逗号或换行分隔"
+              :auto-size="{ minRows: 1, maxRows: 3 }"
+              class="config-input"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              命中后移除用户自带 cache_control
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="team" />
+              清洗代理ID
+            </div>
+            <a-textarea
+              v-model="anthropicPromptCacheNormalizeAgentIds"
+              placeholder="如 5，多个用逗号或换行分隔"
+              :auto-size="{ minRows: 1, maxRows: 3 }"
+              class="config-input"
+            />
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              对代理下级灰度 normalize 策略
+            </div>
+          </div>
+        </a-col>
       </a-row>
 
       <a-row :gutter="24" class="config-row">
@@ -687,6 +723,8 @@ export default {
       anthropicPromptCacheHistoryTtl: '5m',
       anthropicPromptCacheBillingMode: 'logical',
       anthropicPromptCacheControlPolicy: 'augment',
+      anthropicPromptCacheNormalizeUserIds: '',
+      anthropicPromptCacheNormalizeAgentIds: '',
       conversationStateCompactionEnabled: false,
       conversationStateUserVisible: false,
       conversationStateAsyncCheckpointEnabled: true,
@@ -720,6 +758,8 @@ export default {
         'anthropic_prompt_cache_beta_header': 'Anthropic Prompt Cache Beta Header',
         'anthropic_prompt_cache_billing_mode': 'Anthropic Prompt Cache 计费口径',
         'anthropic_prompt_cache_control_policy': 'Anthropic Prompt Cache 用户断点策略',
+        'anthropic_prompt_cache_normalize_user_ids': 'Anthropic Prompt Cache 清洗用户ID',
+        'anthropic_prompt_cache_normalize_agent_ids': 'Anthropic Prompt Cache 清洗代理ID',
         'conversation_state_compaction_enabled': '会话压缩开关',
         'conversation_state_compaction_stage': '会话压缩阶段',
         'conversation_state_compaction_mode': '会话压缩模式',
@@ -824,6 +864,10 @@ export default {
             this.anthropicPromptCacheBillingMode = config.config_value || 'logical'
           } else if (config.config_key === 'anthropic_prompt_cache_control_policy') {
             this.anthropicPromptCacheControlPolicy = config.config_value || 'augment'
+          } else if (config.config_key === 'anthropic_prompt_cache_normalize_user_ids') {
+            this.anthropicPromptCacheNormalizeUserIds = config.config_value || ''
+          } else if (config.config_key === 'anthropic_prompt_cache_normalize_agent_ids') {
+            this.anthropicPromptCacheNormalizeAgentIds = config.config_value || ''
           } else if (config.config_key === 'conversation_state_compaction_enabled') {
             this.conversationStateCompactionEnabled = String(config.config_value).toLowerCase() === 'true'
           } else if (config.config_key === 'conversation_state_user_visible') {
@@ -899,6 +943,8 @@ export default {
           { key: 'anthropic_prompt_cache_history_ttl', value: this.anthropicPromptCacheHistoryTtl },
           { key: 'anthropic_prompt_cache_billing_mode', value: this.anthropicPromptCacheBillingMode },
           { key: 'anthropic_prompt_cache_control_policy', value: this.anthropicPromptCacheControlPolicy },
+          { key: 'anthropic_prompt_cache_normalize_user_ids', value: this.anthropicPromptCacheNormalizeUserIds || '' },
+          { key: 'anthropic_prompt_cache_normalize_agent_ids', value: this.anthropicPromptCacheNormalizeAgentIds || '' },
           { key: 'conversation_state_compaction_enabled', value: this.conversationStateCompactionEnabled ? 'true' : 'false' },
           { key: 'conversation_state_user_visible', value: this.conversationStateUserVisible ? 'true' : 'false' },
           { key: 'conversation_state_async_checkpoint_enabled', value: this.conversationStateAsyncCheckpointEnabled ? 'true' : 'false' },

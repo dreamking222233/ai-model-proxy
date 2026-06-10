@@ -8287,6 +8287,8 @@ class ProxyService:
                         db,
                         request_attempt["request_data"],
                         request_headers=request_headers,
+                        user_id=ProxyService._safe_object_id(user),
+                        agent_id=getattr(user, "agent_id", None),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
@@ -8727,6 +8729,8 @@ class ProxyService:
                         db,
                         request_payload,
                         request_headers=request_headers,
+                        user_id=ProxyService._safe_object_id(user),
+                        agent_id=getattr(user, "agent_id", None),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None

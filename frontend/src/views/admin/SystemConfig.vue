@@ -310,6 +310,23 @@
             </div>
           </div>
         </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="control" />
+              用户断点策略
+            </div>
+            <a-select v-model="anthropicPromptCacheControlPolicy" class="config-input">
+              <a-select-option value="preserve">preserve</a-select-option>
+              <a-select-option value="augment">augment</a-select-option>
+              <a-select-option value="normalize">normalize</a-select-option>
+            </a-select>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              augment 会保留用户断点并补充稳定断点
+            </div>
+          </div>
+        </a-col>
       </a-row>
 
       <a-row :gutter="24" class="config-row">
@@ -669,6 +686,7 @@ export default {
       anthropicPromptCacheStaticTtl: '5m',
       anthropicPromptCacheHistoryTtl: '5m',
       anthropicPromptCacheBillingMode: 'logical',
+      anthropicPromptCacheControlPolicy: 'augment',
       conversationStateCompactionEnabled: false,
       conversationStateUserVisible: false,
       conversationStateAsyncCheckpointEnabled: true,
@@ -701,6 +719,7 @@ export default {
         'anthropic_prompt_cache_history_ttl': 'Anthropic Prompt Cache 历史 TTL',
         'anthropic_prompt_cache_beta_header': 'Anthropic Prompt Cache Beta Header',
         'anthropic_prompt_cache_billing_mode': 'Anthropic Prompt Cache 计费口径',
+        'anthropic_prompt_cache_control_policy': 'Anthropic Prompt Cache 用户断点策略',
         'conversation_state_compaction_enabled': '会话压缩开关',
         'conversation_state_compaction_stage': '会话压缩阶段',
         'conversation_state_compaction_mode': '会话压缩模式',
@@ -803,6 +822,8 @@ export default {
             this.anthropicPromptCacheHistoryTtl = config.config_value || '5m'
           } else if (config.config_key === 'anthropic_prompt_cache_billing_mode') {
             this.anthropicPromptCacheBillingMode = config.config_value || 'logical'
+          } else if (config.config_key === 'anthropic_prompt_cache_control_policy') {
+            this.anthropicPromptCacheControlPolicy = config.config_value || 'augment'
           } else if (config.config_key === 'conversation_state_compaction_enabled') {
             this.conversationStateCompactionEnabled = String(config.config_value).toLowerCase() === 'true'
           } else if (config.config_key === 'conversation_state_user_visible') {
@@ -877,6 +898,7 @@ export default {
           { key: 'anthropic_prompt_cache_static_ttl', value: this.anthropicPromptCacheStaticTtl },
           { key: 'anthropic_prompt_cache_history_ttl', value: this.anthropicPromptCacheHistoryTtl },
           { key: 'anthropic_prompt_cache_billing_mode', value: this.anthropicPromptCacheBillingMode },
+          { key: 'anthropic_prompt_cache_control_policy', value: this.anthropicPromptCacheControlPolicy },
           { key: 'conversation_state_compaction_enabled', value: this.conversationStateCompactionEnabled ? 'true' : 'false' },
           { key: 'conversation_state_user_visible', value: this.conversationStateUserVisible ? 'true' : 'false' },
           { key: 'conversation_state_async_checkpoint_enabled', value: this.conversationStateAsyncCheckpointEnabled ? 'true' : 'false' },

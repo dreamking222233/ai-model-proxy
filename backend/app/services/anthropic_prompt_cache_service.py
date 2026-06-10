@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 class AnthropicPromptCacheService:
     """Build Anthropic prompt-cache request variants and parse upstream usage."""
 
+    _CONTROL_POLICY_PRESERVE = "preserve"
+    _CONTROL_POLICY_AUGMENT = "augment"
+    _CONTROL_POLICY_NORMALIZE = "normalize"
+    _CONTROL_POLICY_VALUES = {
+        _CONTROL_POLICY_PRESERVE,
+        _CONTROL_POLICY_AUGMENT,
+        _CONTROL_POLICY_NORMALIZE,
+    }
+    _MAX_CACHE_CONTROL_BREAKPOINTS = 4
+
     _ERROR_HINTS = (
         "cache_control",
         "prompt cache",
@@ -48,6 +58,17 @@ class AnthropicPromptCacheService:
         return mode if mode in {"logical", "actual_upstream"} else "logical"
 
     @staticmethod
+    def get_control_policy(db: Session) -> str:
+        """Return how to handle client-supplied cache_control metadata."""
+        policy = str(
+            get_system_config(db, "anthropic_prompt_cache_control_policy", "augment")
+            or "augment"
+        ).strip().lower()
+        if policy not in AnthropicPromptCacheService._CONTROL_POLICY_VALUES:
+            return AnthropicPromptCacheService._CONTROL_POLICY_AUGMENT
+        return policy
+
+    @staticmethod
     def build_request_variants(
         db: Session,
         request_data: dict[str, Any],
@@ -66,13 +87,24 @@ class AnthropicPromptCacheService:
                 "static_ttl": None,
                 "history_ttl": None,
                 "beta_header": None,
+                "control_policy": None,
+                "user_cache_control_count": 0,
+                "user_cache_control_removed": False,
+                "system_cache_control_added": False,
             },
         }
 
         if not AnthropicPromptCacheService.is_enabled(db):
             return [base_variant]
 
-        if AnthropicPromptCacheService._has_existing_cache_control(request_data):
+        control_policy = AnthropicPromptCacheService.get_control_policy(db)
+        user_cache_control_count = AnthropicPromptCacheService._count_existing_cache_control(request_data)
+        has_user_cache_control = user_cache_control_count > 0
+
+        if (
+            has_user_cache_control
+            and control_policy == AnthropicPromptCacheService._CONTROL_POLICY_PRESERVE
+        ):
             base_variant["meta"] = {
                 "attempted": False,
                 "source": "user",
@@ -82,6 +114,10 @@ class AnthropicPromptCacheService:
                 "static_ttl": None,
                 "history_ttl": None,
                 "beta_header": None,
+                "control_policy": control_policy,
+                "user_cache_control_count": user_cache_control_count,
+                "user_cache_control_removed": False,
+                "system_cache_control_added": False,
             }
             return [base_variant]
 
@@ -98,27 +134,48 @@ class AnthropicPromptCacheService:
         ).strip()
 
         variants: list[dict[str, Any]] = []
+        request_for_full_variant = request_data
+        user_cache_control_removed = False
+        if (
+            has_user_cache_control
+            and control_policy == AnthropicPromptCacheService._CONTROL_POLICY_NORMALIZE
+        ):
+            request_for_full_variant = copy.deepcopy(request_data)
+            user_cache_control_removed = AnthropicPromptCacheService._remove_existing_cache_control(
+                request_for_full_variant
+            )
+        effective_history_enabled = not (
+            has_user_cache_control
+            and control_policy == AnthropicPromptCacheService._CONTROL_POLICY_NORMALIZE
+        ) and history_enabled
+
         full_variant = AnthropicPromptCacheService._build_variant(
-            request_data=request_data,
+            request_data=request_for_full_variant,
             request_headers=request_headers,
             static_ttl=static_ttl,
-            history_enabled=history_enabled,
+            history_enabled=effective_history_enabled,
             history_ttl=history_ttl,
             beta_header=beta_header,
             label="full",
+            control_policy=control_policy,
+            user_cache_control_count=user_cache_control_count,
+            user_cache_control_removed=user_cache_control_removed,
         )
         if full_variant["meta"]["attempted"]:
             variants.append(full_variant)
 
             if static_ttl == "1h":
                 fallback_variant = AnthropicPromptCacheService._build_variant(
-                    request_data=request_data,
+                    request_data=request_for_full_variant,
                     request_headers=request_headers,
                     static_ttl="5m",
-                    history_enabled=history_enabled,
+                    history_enabled=effective_history_enabled,
                     history_ttl=history_ttl,
                     beta_header="",
                     label="fallback_5m",
+                    control_policy=control_policy,
+                    user_cache_control_count=user_cache_control_count,
+                    user_cache_control_removed=user_cache_control_removed,
                 )
                 if (
                     fallback_variant["meta"]["attempted"]
@@ -137,11 +194,34 @@ class AnthropicPromptCacheService:
             "static_ttl": None,
             "history_ttl": None,
             "beta_header": None,
+            "control_policy": control_policy,
+            "user_cache_control_count": user_cache_control_count,
+            "user_cache_control_removed": False,
+            "system_cache_control_added": False,
         }
         variants.append(no_cache_variant)
 
         if not variants or not variants[0]["meta"]["attempted"]:
-            base_variant["meta"]["skip_reason"] = "no_safe_breakpoint"
+            base_variant["meta"] = {
+                "attempted": False,
+                "source": "user" if has_user_cache_control else "system",
+                "skip_reason": (
+                    "user_cache_control_present_no_room"
+                    if has_user_cache_control
+                    and control_policy == AnthropicPromptCacheService._CONTROL_POLICY_AUGMENT
+                    and user_cache_control_count >= AnthropicPromptCacheService._MAX_CACHE_CONTROL_BREAKPOINTS
+                    else "no_safe_breakpoint"
+                ),
+                "applied_static_breakpoint": False,
+                "applied_history_breakpoint": False,
+                "static_ttl": None,
+                "history_ttl": None,
+                "beta_header": None,
+                "control_policy": control_policy,
+                "user_cache_control_count": user_cache_control_count,
+                "user_cache_control_removed": False,
+                "system_cache_control_added": False,
+            }
             return [base_variant]
 
         return variants
@@ -235,6 +315,10 @@ class AnthropicPromptCacheService:
             "attempted": bool((attempt_meta or {}).get("attempted")),
             "source": (attempt_meta or {}).get("source"),
             "skip_reason": (attempt_meta or {}).get("skip_reason"),
+            "control_policy": (attempt_meta or {}).get("control_policy"),
+            "user_cache_control_count": int((attempt_meta or {}).get("user_cache_control_count") or 0),
+            "user_cache_control_removed": bool((attempt_meta or {}).get("user_cache_control_removed")),
+            "system_cache_control_added": bool((attempt_meta or {}).get("system_cache_control_added")),
             "applied_static_breakpoint": bool((attempt_meta or {}).get("applied_static_breakpoint")),
             "applied_history_breakpoint": bool((attempt_meta or {}).get("applied_history_breakpoint")),
             "static_ttl": (attempt_meta or {}).get("static_ttl"),
@@ -273,6 +357,9 @@ class AnthropicPromptCacheService:
         history_ttl: str,
         beta_header: str,
         label: str,
+        control_policy: str,
+        user_cache_control_count: int,
+        user_cache_control_removed: bool,
     ) -> dict[str, Any]:
         variant_request = copy.deepcopy(request_data)
         applied_static = AnthropicPromptCacheService._inject_static_breakpoint(
@@ -299,7 +386,7 @@ class AnthropicPromptCacheService:
             "header_overrides": header_overrides,
             "meta": {
                 "attempted": bool(applied_static or applied_history),
-                "source": "system",
+                "source": "system+user" if user_cache_control_count and not user_cache_control_removed else "system",
                 "skip_reason": None if (applied_static or applied_history) else f"{label}_no_safe_breakpoint",
                 "applied_static_breakpoint": applied_static,
                 "applied_history_breakpoint": applied_history,
@@ -307,26 +394,36 @@ class AnthropicPromptCacheService:
                 "history_ttl": history_ttl if applied_history else None,
                 "beta_header": beta_header if requires_beta and beta_header else None,
                 "label": label,
+                "control_policy": control_policy,
+                "user_cache_control_count": user_cache_control_count,
+                "user_cache_control_removed": user_cache_control_removed,
+                "system_cache_control_added": bool(applied_static or applied_history),
             },
         }
 
     @staticmethod
     def _has_existing_cache_control(request_data: dict[str, Any]) -> bool:
         """Return whether the client already supplied cache-control metadata."""
+        return AnthropicPromptCacheService._count_existing_cache_control(request_data) > 0
+
+    @staticmethod
+    def _count_existing_cache_control(request_data: dict[str, Any]) -> int:
+        """Count client-supplied cache-control metadata."""
+        count = 0
         if "cache_control" in request_data:
-            return True
+            count += 1
 
         tools = request_data.get("tools")
         if isinstance(tools, list):
             for tool in tools:
                 if isinstance(tool, dict) and "cache_control" in tool:
-                    return True
+                    count += 1
 
         system_value = request_data.get("system")
         system_blocks = system_value if isinstance(system_value, list) else [system_value]
         for block in system_blocks:
             if isinstance(block, dict) and "cache_control" in block:
-                return True
+                count += 1
 
         messages = request_data.get("messages")
         if isinstance(messages, list):
@@ -337,14 +434,54 @@ class AnthropicPromptCacheService:
                 if isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and "cache_control" in block:
-                            return True
+                            count += 1
                 elif isinstance(content, dict) and "cache_control" in content:
-                    return True
-        return False
+                    count += 1
+        return count
+
+    @staticmethod
+    def _remove_existing_cache_control(request_data: dict[str, Any]) -> bool:
+        """Remove client-supplied cache_control metadata from supported request locations."""
+        removed = False
+        if isinstance(request_data, dict) and "cache_control" in request_data:
+            request_data.pop("cache_control", None)
+            removed = True
+
+        tools = request_data.get("tools")
+        if isinstance(tools, list):
+            for tool in tools:
+                if isinstance(tool, dict) and "cache_control" in tool:
+                    tool.pop("cache_control", None)
+                    removed = True
+
+        system_value = request_data.get("system")
+        system_blocks = system_value if isinstance(system_value, list) else [system_value]
+        for block in system_blocks:
+            if isinstance(block, dict) and "cache_control" in block:
+                block.pop("cache_control", None)
+                removed = True
+
+        messages = request_data.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "cache_control" in block:
+                            block.pop("cache_control", None)
+                            removed = True
+                elif isinstance(content, dict) and "cache_control" in content:
+                    content.pop("cache_control", None)
+                    removed = True
+        return removed
 
     @staticmethod
     def _inject_static_breakpoint(request_data: dict[str, Any], *, static_ttl: str) -> bool:
         """Inject a static-prefix breakpoint on the last safe tool/system block."""
+        if not AnthropicPromptCacheService._can_add_cache_control(request_data):
+            return False
         tools = request_data.get("tools")
         if isinstance(tools, list):
             for tool in reversed(tools):
@@ -367,6 +504,8 @@ class AnthropicPromptCacheService:
     @staticmethod
     def _inject_history_breakpoint(request_data: dict[str, Any], *, history_ttl: str) -> bool:
         """Inject a rolling-history breakpoint on the latest cacheable user block."""
+        if not AnthropicPromptCacheService._can_add_cache_control(request_data):
+            return False
         messages = request_data.get("messages")
         if not isinstance(messages, list):
             return False
@@ -387,6 +526,14 @@ class AnthropicPromptCacheService:
             break
 
         return False
+
+    @staticmethod
+    def _can_add_cache_control(request_data: dict[str, Any]) -> bool:
+        """Anthropic accepts a limited number of cache breakpoints per request."""
+        return (
+            AnthropicPromptCacheService._count_existing_cache_control(request_data)
+            < AnthropicPromptCacheService._MAX_CACHE_CONTROL_BREAKPOINTS
+        )
 
     @staticmethod
     def _is_cacheable_block(block: Any) -> bool:

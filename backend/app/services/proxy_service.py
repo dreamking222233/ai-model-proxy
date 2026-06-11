@@ -50,7 +50,6 @@ from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
-from app.services.channel_affinity_service import ChannelAffinityService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
 from app.core.exceptions import ServiceException
@@ -1842,36 +1841,20 @@ class ProxyService:
         return ProxyService._normalize_request_reasoning_levels(request_data)
 
     @staticmethod
-    def _looks_like_responses_upstream_model(model_name: str) -> bool:
-        """Detect OpenAI/Responses-style upstream targets mapped behind Anthropic models."""
-        normalized = str(model_name or "").strip().lower()
-        if not normalized:
-            return False
-
-        return (
-            "gpt" in normalized
-            or "codex" in normalized
-            or bool(re.search(r"(^|[/:_-])o\d(?:$|[-_.])", normalized))
-        )
-
-    @staticmethod
     def _resolve_mapped_upstream_target(
         channel: Channel,
         actual_model_name: str,
         *,
         default_openai_api: str = "openai_chat",
-        auto_responses_for_anthropic: bool = True,
     ) -> tuple[str, str]:
         """Resolve mapping directives like ``responses:gpt-5.4`` into model + API."""
-        raw_target = str(actual_model_name or "").strip()
+        raw_target = str(actual_model_name or "")
         prefix, separator, remainder = raw_target.partition(":")
-        if separator and prefix.strip().lower() == "responses" and remainder.strip():
-            return remainder.strip(), "responses"
+        if separator and prefix == "responses" and remainder:
+            return remainder, "responses"
 
-        protocol = str(getattr(channel, "protocol_type", "openai") or "openai").strip().lower()
+        protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
         if protocol == "anthropic":
-            if auto_responses_for_anthropic and ProxyService._looks_like_responses_upstream_model(raw_target):
-                return raw_target, "responses"
             return raw_target, "anthropic_messages"
         return raw_target, default_openai_api
 
@@ -1912,32 +1895,6 @@ class ProxyService:
             return 2, priority
 
         return sorted(channels, key=sort_key)
-
-    @staticmethod
-    def _apply_channel_affinity(
-        db: Session,
-        channels: list[tuple[Channel, str]],
-        *,
-        user: SysUser,
-        requested_model: str,
-        request_protocol: str,
-        request_data: Optional[dict[str, Any]] = None,
-        request_headers: Optional[dict[str, str]] = None,
-    ) -> list[tuple[Channel, str]]:
-        """Prefer the last successful channel for the same stable conversation."""
-        try:
-            return ChannelAffinityService.prioritize_channels(
-                db,
-                channels,
-                user=user,
-                requested_model=requested_model,
-                request_protocol=request_protocol,
-                request_data=request_data,
-                request_headers=request_headers,
-            )
-        except Exception as exc:
-            logger.warning("Channel affinity ordering skipped: %s", exc)
-            return channels
 
     @staticmethod
     def _extract_openai_text_content(value: Any) -> str:
@@ -2735,7 +2692,14 @@ class ProxyService:
     @staticmethod
     def _is_responses_reasoning_model(model_name: Any) -> bool:
         """Return whether an upstream model should accept Responses-style reasoning effort."""
-        return ProxyService._looks_like_responses_upstream_model(str(model_name or ""))
+        normalized = str(model_name or "").strip().lower()
+        if not normalized:
+            return False
+        return (
+            "gpt" in normalized
+            or "codex" in normalized
+            or normalized.startswith(("o1", "o3", "o4"))
+        )
 
     @staticmethod
     def _apply_anthropic_passthrough_reasoning_effort(
@@ -4361,7 +4325,6 @@ class ProxyService:
                 user,
                 requested_model,
                 client_request,
-                request_headers,
             )
         except Exception as exc:
             ProxyService._log_pre_request_failure(
@@ -4567,7 +4530,6 @@ class ProxyService:
                     user,
                     requested_model,
                     normalized_request,
-                    request_headers,
                 )
             except ServiceException as exc:
                 release_session_connection(db)
@@ -4724,7 +4686,6 @@ class ProxyService:
         user: SysUser,
         requested_model: str,
         request_data: Optional[dict] = None,
-        request_headers: Optional[dict[str, str]] = None,
     ) -> tuple[UnifiedModel, list[tuple[Channel, str]]]:
         """Resolve a Responses request into a model plus channel candidates."""
         unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
@@ -4764,15 +4725,6 @@ class ProxyService:
                 "Responses 渠道映射指向图片模型，请使用 /v1/images/generations 或 /v1/images/edits",
                 "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
             )
-        channels = ProxyService._apply_channel_affinity(
-            db,
-            channels,
-            user=user,
-            requested_model=requested_model,
-            request_protocol="responses",
-            request_data=request_data,
-            request_headers=request_headers,
-        )
         return unified_model, channels
 
     @staticmethod
@@ -6068,15 +6020,6 @@ class ProxyService:
                     ModelService.get_available_channels(db, unified_model.id),
                     "openai",
                 )
-                channels = ProxyService._apply_channel_affinity(
-                    db,
-                    channels,
-                    user=user,
-                    requested_model=requested_model,
-                    request_protocol="openai",
-                    request_data=request_data,
-                    request_headers=request_headers,
-                )
                 if not channels:
                     raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
@@ -6117,7 +6060,6 @@ class ProxyService:
             upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
                 channel,
                 actual_model_name,
-                auto_responses_for_anthropic=False,
             )
             explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, upstream_model_name)
             legacy_compat_retry = (
@@ -6308,15 +6250,6 @@ class ProxyService:
             channels = ProxyService._prioritize_channels_for_request(
                 ModelService.get_available_channels(db, unified_model.id),
                 "anthropic",
-            )
-            channels = ProxyService._apply_channel_affinity(
-                db,
-                channels,
-                user=user,
-                requested_model=requested_model,
-                request_protocol="anthropic",
-                request_data=request_data,
-                request_headers=request_headers,
             )
             if not channels:
                 raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
@@ -8565,8 +8498,6 @@ class ProxyService:
                         db,
                         request_attempt["request_data"],
                         request_headers=request_headers,
-                        user_id=ProxyService._safe_object_id(user),
-                        agent_id=getattr(user, "agent_id", None),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
@@ -9014,8 +8945,6 @@ class ProxyService:
                         db,
                         request_payload,
                         request_headers=request_headers,
-                        user_id=ProxyService._safe_object_id(user),
-                        agent_id=getattr(user, "agent_id", None),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
@@ -10347,7 +10276,6 @@ class ProxyService:
         billing_context: Optional[dict[str, Any]] = None,
     ) -> None:
         ProxyService._record_success(db, channel)
-        ChannelAffinityService.record_success(channel)
         try:
             ProxyService._deduct_balance_and_log(
                 db,

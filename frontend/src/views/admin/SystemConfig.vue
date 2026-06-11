@@ -310,59 +310,6 @@
             </div>
           </div>
         </a-col>
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="control" />
-              用户断点策略
-            </div>
-            <a-select v-model="anthropicPromptCacheControlPolicy" class="config-input">
-              <a-select-option value="preserve">preserve</a-select-option>
-              <a-select-option value="augment">augment</a-select-option>
-              <a-select-option value="normalize">normalize</a-select-option>
-            </a-select>
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              augment 会保留用户断点并补充稳定断点
-            </div>
-          </div>
-        </a-col>
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="user" />
-              清洗用户ID
-            </div>
-            <a-textarea
-              v-model="anthropicPromptCacheNormalizeUserIds"
-              placeholder="如 244，多个用逗号或换行分隔"
-              :auto-size="{ minRows: 1, maxRows: 3 }"
-              class="config-input"
-            />
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              命中后移除用户自带 cache_control
-            </div>
-          </div>
-        </a-col>
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="team" />
-              清洗代理ID
-            </div>
-            <a-textarea
-              v-model="anthropicPromptCacheNormalizeAgentIds"
-              placeholder="如 5，多个用逗号或换行分隔"
-              :auto-size="{ minRows: 1, maxRows: 3 }"
-              class="config-input"
-            />
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              对代理下级灰度 normalize 策略
-            </div>
-          </div>
-        </a-col>
       </a-row>
 
       <a-row :gutter="24" class="config-row">
@@ -575,63 +522,6 @@
         </a-col>
       </a-row>
 
-      <a-row :gutter="24" class="config-row">
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="deployment-unit" />
-              渠道亲和
-            </div>
-            <a-switch
-              v-model="channelAffinityEnabled"
-              checked-children="开"
-              un-checked-children="关"
-            />
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              同一会话优先复用上次成功渠道
-            </div>
-          </div>
-        </a-col>
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="clock-circle" />
-              亲和 TTL
-            </div>
-            <a-input-number
-              v-model="channelAffinityTtlSeconds"
-              :min="60"
-              :max="86400"
-              class="config-input"
-            >
-              <template slot="addonAfter">秒</template>
-            </a-input-number>
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              默认 3600 秒，适合长对话缓存池复用
-            </div>
-          </div>
-        </a-col>
-        <a-col :span="6">
-          <div class="config-item">
-            <div class="config-label">
-              <a-icon type="branches" />
-              亲和 Fallback
-            </div>
-            <a-switch
-              v-model="channelAffinityFallbackEnabled"
-              checked-children="开"
-              un-checked-children="关"
-            />
-            <div class="config-hint">
-              <a-icon type="bulb" />
-              缺少会话 ID 时按稳定前缀生成亲和键
-            </div>
-          </div>
-        </a-col>
-      </a-row>
-
       <div class="action-buttons">
         <a-button type="primary" @click="saveCacheConfig" :loading="savingCacheConfig" size="large" class="save-btn">
           <a-icon type="save" />
@@ -779,9 +669,6 @@ export default {
       anthropicPromptCacheStaticTtl: '5m',
       anthropicPromptCacheHistoryTtl: '5m',
       anthropicPromptCacheBillingMode: 'logical',
-      anthropicPromptCacheControlPolicy: 'augment',
-      anthropicPromptCacheNormalizeUserIds: '',
-      anthropicPromptCacheNormalizeAgentIds: '',
       conversationStateCompactionEnabled: false,
       conversationStateUserVisible: false,
       conversationStateAsyncCheckpointEnabled: true,
@@ -793,9 +680,6 @@ export default {
       requestBodyCacheUserVisible: false,
       requestBodyCacheTtl: 1800,
       requestBodyCacheMinChars: 256,
-      channelAffinityEnabled: true,
-      channelAffinityTtlSeconds: 3600,
-      channelAffinityFallbackEnabled: true,
       triggeringHealthCheck: false,
       savingConfig: false,
       savingCacheConfig: false,
@@ -817,9 +701,6 @@ export default {
         'anthropic_prompt_cache_history_ttl': 'Anthropic Prompt Cache 历史 TTL',
         'anthropic_prompt_cache_beta_header': 'Anthropic Prompt Cache Beta Header',
         'anthropic_prompt_cache_billing_mode': 'Anthropic Prompt Cache 计费口径',
-        'anthropic_prompt_cache_control_policy': 'Anthropic Prompt Cache 用户断点策略',
-        'anthropic_prompt_cache_normalize_user_ids': 'Anthropic Prompt Cache 清洗用户ID',
-        'anthropic_prompt_cache_normalize_agent_ids': 'Anthropic Prompt Cache 清洗代理ID',
         'conversation_state_compaction_enabled': '会话压缩开关',
         'conversation_state_compaction_stage': '会话压缩阶段',
         'conversation_state_compaction_mode': '会话压缩模式',
@@ -831,10 +712,7 @@ export default {
         'request_body_cache_user_visible': '用户端显示缓存',
         'request_body_cache_ttl_seconds': '请求体缓存TTL',
         'request_body_cache_min_chars': '最小缓存片段长度',
-        'request_body_cache_formats': '请求体缓存格式',
-        'channel_affinity_enabled': '渠道亲和开关',
-        'channel_affinity_ttl_seconds': '渠道亲和TTL',
-        'channel_affinity_fallback_enabled': '渠道亲和Fallback'
+        'request_body_cache_formats': '请求体缓存格式'
       },
       columns: [
         {
@@ -925,12 +803,6 @@ export default {
             this.anthropicPromptCacheHistoryTtl = config.config_value || '5m'
           } else if (config.config_key === 'anthropic_prompt_cache_billing_mode') {
             this.anthropicPromptCacheBillingMode = config.config_value || 'logical'
-          } else if (config.config_key === 'anthropic_prompt_cache_control_policy') {
-            this.anthropicPromptCacheControlPolicy = config.config_value || 'augment'
-          } else if (config.config_key === 'anthropic_prompt_cache_normalize_user_ids') {
-            this.anthropicPromptCacheNormalizeUserIds = config.config_value || ''
-          } else if (config.config_key === 'anthropic_prompt_cache_normalize_agent_ids') {
-            this.anthropicPromptCacheNormalizeAgentIds = config.config_value || ''
           } else if (config.config_key === 'conversation_state_compaction_enabled') {
             this.conversationStateCompactionEnabled = String(config.config_value).toLowerCase() === 'true'
           } else if (config.config_key === 'conversation_state_user_visible') {
@@ -953,12 +825,6 @@ export default {
             this.requestBodyCacheTtl = Number(config.config_value) || 1800
           } else if (config.config_key === 'request_body_cache_min_chars') {
             this.requestBodyCacheMinChars = Number(config.config_value) || 256
-          } else if (config.config_key === 'channel_affinity_enabled') {
-            this.channelAffinityEnabled = String(config.config_value).toLowerCase() === 'true'
-          } else if (config.config_key === 'channel_affinity_ttl_seconds') {
-            this.channelAffinityTtlSeconds = Number(config.config_value) || 3600
-          } else if (config.config_key === 'channel_affinity_fallback_enabled') {
-            this.channelAffinityFallbackEnabled = String(config.config_value).toLowerCase() === 'true'
           }
         })
       } catch (err) {
@@ -1011,9 +877,6 @@ export default {
           { key: 'anthropic_prompt_cache_static_ttl', value: this.anthropicPromptCacheStaticTtl },
           { key: 'anthropic_prompt_cache_history_ttl', value: this.anthropicPromptCacheHistoryTtl },
           { key: 'anthropic_prompt_cache_billing_mode', value: this.anthropicPromptCacheBillingMode },
-          { key: 'anthropic_prompt_cache_control_policy', value: this.anthropicPromptCacheControlPolicy },
-          { key: 'anthropic_prompt_cache_normalize_user_ids', value: this.anthropicPromptCacheNormalizeUserIds || '' },
-          { key: 'anthropic_prompt_cache_normalize_agent_ids', value: this.anthropicPromptCacheNormalizeAgentIds || '' },
           { key: 'conversation_state_compaction_enabled', value: this.conversationStateCompactionEnabled ? 'true' : 'false' },
           { key: 'conversation_state_user_visible', value: this.conversationStateUserVisible ? 'true' : 'false' },
           { key: 'conversation_state_async_checkpoint_enabled', value: this.conversationStateAsyncCheckpointEnabled ? 'true' : 'false' },
@@ -1024,10 +887,7 @@ export default {
           { key: 'request_body_cache_enabled', value: this.requestBodyCacheEnabled ? 'true' : 'false' },
           { key: 'request_body_cache_user_visible', value: this.requestBodyCacheUserVisible ? 'true' : 'false' },
           { key: 'request_body_cache_ttl_seconds', value: String(this.requestBodyCacheTtl) },
-          { key: 'request_body_cache_min_chars', value: String(this.requestBodyCacheMinChars) },
-          { key: 'channel_affinity_enabled', value: this.channelAffinityEnabled ? 'true' : 'false' },
-          { key: 'channel_affinity_ttl_seconds', value: String(this.channelAffinityTtlSeconds) },
-          { key: 'channel_affinity_fallback_enabled', value: this.channelAffinityFallbackEnabled ? 'true' : 'false' }
+          { key: 'request_body_cache_min_chars', value: String(this.requestBodyCacheMinChars) }
         ]
 
         for (const update of updates) {

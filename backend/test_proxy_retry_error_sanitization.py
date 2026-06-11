@@ -34,82 +34,6 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         setattr(channel, "_runtime_upstream_retry_attempts", 4)
         self.assertEqual(ProxyService._resolve_runtime_retry_attempts(channel, None), 4)
 
-    def test_anthropic_channel_routes_gpt_mapping_via_responses(self):
-        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
-
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "gpt-5.5"),
-            ("gpt-5.5", "responses"),
-        )
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, " gpt-5.4 "),
-            ("gpt-5.4", "responses"),
-        )
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "openai/gpt-5.5"),
-            ("openai/gpt-5.5", "responses"),
-        )
-
-    def test_anthropic_channel_routes_codex_and_o_series_mapping_via_responses(self):
-        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
-
-        samples = [
-            "codex-max",
-            "openai/codex-mini",
-            "o4-mini",
-            "openai/o5-high",
-        ]
-        for sample in samples:
-            with self.subTest(sample=sample):
-                self.assertEqual(
-                    ProxyService._resolve_mapped_upstream_target(channel, sample),
-                    (sample, "responses"),
-                )
-
-    def test_anthropic_channel_keeps_explicit_responses_mapping(self):
-        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
-
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "responses:gpt-5.5"),
-            ("gpt-5.5", "responses"),
-        )
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "Responses: gpt-5.5 "),
-            ("gpt-5.5", "responses"),
-        )
-
-    def test_anthropic_channel_keeps_claude_mapping_as_messages(self):
-        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
-
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "claude-opus-4-8"),
-            ("claude-opus-4-8", "anthropic_messages"),
-        )
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "opus-4"),
-            ("opus-4", "anthropic_messages"),
-        )
-
-    def test_openai_channel_uses_default_api_for_gpt_mapping(self):
-        channel = Channel(id=1, name="openai-upstream", protocol_type="openai")
-
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(channel, "gpt-5.5"),
-            ("gpt-5.5", "openai_chat"),
-        )
-
-    def test_openai_chat_entry_can_disable_anthropic_auto_responses_mapping(self):
-        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
-
-        self.assertEqual(
-            ProxyService._resolve_mapped_upstream_target(
-                channel,
-                "gpt-5.5",
-                auto_responses_for_anthropic=False,
-            ),
-            ("gpt-5.5", "anthropic_messages"),
-        )
-
     def test_upstream_request_error_is_sanitized_but_keeps_log_detail(self):
         exc = ProxyService._map_upstream_request_error(
             Exception(
@@ -134,6 +58,7 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
             'Upstream returned HTTP 502: {"error":{"message":"Upstream service temporarily unavailable"}}',
             'Upstream returned HTTP 429: {"error":{"message":"Upstream rate limit exceeded"}}',
             'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available (providers=codex)"}}',
+            'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available (providers=codex, model=gpt-5.4)","type":"server_error","code":"internal_server_error"}}',
             'Upstream returned HTTP 403: {"error":{"message":"Chat upstream returned 403"}}',
         ]
         for sample in samples:
@@ -143,6 +68,23 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
                     ProxyService._sanitize_visible_model_text(sample, "requested-model", "actual-model"),
                     "调用失败，渠道异常，请稍后重试",
                 )
+
+    def test_auth_unavailable_upstream_503_is_generic_for_user_but_kept_for_logs(self):
+        raw_detail = (
+            'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available '
+            '(providers=codex, model=gpt-5.4)","type":"server_error","code":"internal_server_error"}}'
+        )
+        exc = ProxyService._build_user_visible_upstream_request_error(
+            "UPSTREAM_SERVICE_UNAVAILABLE",
+            upstream_detail=raw_detail,
+            status_code=503,
+        )
+
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(exc.detail, "调用失败，渠道异常，请稍后重试")
+        self.assertNotIn("Upstream returned", exc.detail)
+        self.assertNotIn("providers=codex", exc.detail)
+        self.assertEqual(ProxyService._request_error_log_detail(exc), raw_detail)
 
     def test_upstream_status_retry_defaults_to_channel_failures(self):
         for status_code in (401, 402, 403, 404, 408, 429, 500, 502, 503, 521):

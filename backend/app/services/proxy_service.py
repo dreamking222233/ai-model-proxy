@@ -1842,20 +1842,36 @@ class ProxyService:
         return ProxyService._normalize_request_reasoning_levels(request_data)
 
     @staticmethod
+    def _looks_like_responses_upstream_model(model_name: str) -> bool:
+        """Detect OpenAI/Responses-style upstream targets mapped behind Anthropic models."""
+        normalized = str(model_name or "").strip().lower()
+        if not normalized:
+            return False
+
+        return (
+            "gpt" in normalized
+            or "codex" in normalized
+            or bool(re.search(r"(^|[/:_-])o\d(?:$|[-_.])", normalized))
+        )
+
+    @staticmethod
     def _resolve_mapped_upstream_target(
         channel: Channel,
         actual_model_name: str,
         *,
         default_openai_api: str = "openai_chat",
+        auto_responses_for_anthropic: bool = True,
     ) -> tuple[str, str]:
         """Resolve mapping directives like ``responses:gpt-5.4`` into model + API."""
-        raw_target = str(actual_model_name or "")
+        raw_target = str(actual_model_name or "").strip()
         prefix, separator, remainder = raw_target.partition(":")
-        if separator and prefix == "responses" and remainder:
-            return remainder, "responses"
+        if separator and prefix.strip().lower() == "responses" and remainder.strip():
+            return remainder.strip(), "responses"
 
-        protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
+        protocol = str(getattr(channel, "protocol_type", "openai") or "openai").strip().lower()
         if protocol == "anthropic":
+            if auto_responses_for_anthropic and ProxyService._looks_like_responses_upstream_model(raw_target):
+                return raw_target, "responses"
             return raw_target, "anthropic_messages"
         return raw_target, default_openai_api
 
@@ -2719,14 +2735,7 @@ class ProxyService:
     @staticmethod
     def _is_responses_reasoning_model(model_name: Any) -> bool:
         """Return whether an upstream model should accept Responses-style reasoning effort."""
-        normalized = str(model_name or "").strip().lower()
-        if not normalized:
-            return False
-        return (
-            "gpt" in normalized
-            or "codex" in normalized
-            or normalized.startswith(("o1", "o3", "o4"))
-        )
+        return ProxyService._looks_like_responses_upstream_model(str(model_name or ""))
 
     @staticmethod
     def _apply_anthropic_passthrough_reasoning_effort(
@@ -6108,6 +6117,7 @@ class ProxyService:
             upstream_model_name, upstream_api = ProxyService._resolve_mapped_upstream_target(
                 channel,
                 actual_model_name,
+                auto_responses_for_anthropic=False,
             )
             explicit_compat = ProxyService._is_kiro_amazonq_channel(channel, upstream_model_name)
             legacy_compat_retry = (

@@ -34,6 +34,82 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         setattr(channel, "_runtime_upstream_retry_attempts", 4)
         self.assertEqual(ProxyService._resolve_runtime_retry_attempts(channel, None), 4)
 
+    def test_anthropic_channel_routes_gpt_mapping_via_responses(self):
+        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
+
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "gpt-5.5"),
+            ("gpt-5.5", "responses"),
+        )
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, " gpt-5.4 "),
+            ("gpt-5.4", "responses"),
+        )
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "openai/gpt-5.5"),
+            ("openai/gpt-5.5", "responses"),
+        )
+
+    def test_anthropic_channel_routes_codex_and_o_series_mapping_via_responses(self):
+        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
+
+        samples = [
+            "codex-max",
+            "openai/codex-mini",
+            "o4-mini",
+            "openai/o5-high",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    ProxyService._resolve_mapped_upstream_target(channel, sample),
+                    (sample, "responses"),
+                )
+
+    def test_anthropic_channel_keeps_explicit_responses_mapping(self):
+        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
+
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "responses:gpt-5.5"),
+            ("gpt-5.5", "responses"),
+        )
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "Responses: gpt-5.5 "),
+            ("gpt-5.5", "responses"),
+        )
+
+    def test_anthropic_channel_keeps_claude_mapping_as_messages(self):
+        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
+
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "claude-opus-4-8"),
+            ("claude-opus-4-8", "anthropic_messages"),
+        )
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "opus-4"),
+            ("opus-4", "anthropic_messages"),
+        )
+
+    def test_openai_channel_uses_default_api_for_gpt_mapping(self):
+        channel = Channel(id=1, name="openai-upstream", protocol_type="openai")
+
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(channel, "gpt-5.5"),
+            ("gpt-5.5", "openai_chat"),
+        )
+
+    def test_openai_chat_entry_can_disable_anthropic_auto_responses_mapping(self):
+        channel = Channel(id=1, name="claude-upstream", protocol_type="anthropic")
+
+        self.assertEqual(
+            ProxyService._resolve_mapped_upstream_target(
+                channel,
+                "gpt-5.5",
+                auto_responses_for_anthropic=False,
+            ),
+            ("gpt-5.5", "anthropic_messages"),
+        )
+
     def test_upstream_request_error_is_sanitized_but_keeps_log_detail(self):
         exc = ProxyService._map_upstream_request_error(
             Exception(

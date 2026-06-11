@@ -1405,6 +1405,52 @@ class ProxyService:
         return int(total_length / 2.5)
 
     @staticmethod
+    def _estimate_context_text_tokens(value: Any) -> int:
+        """Estimate user-visible context text without counting tool schemas or metadata."""
+        total_length = ProxyService._measure_context_text_length(value)
+        if total_length <= 0:
+            return 0
+        return int(total_length / 2.5)
+
+    @staticmethod
+    def _measure_context_text_length(value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            return len(value)
+        if isinstance(value, (int, float, bool, Decimal)):
+            return len(str(value))
+        if isinstance(value, list):
+            return sum(ProxyService._measure_context_text_length(item) for item in value)
+        if not isinstance(value, dict):
+            return len(str(value))
+
+        item_type = str(value.get("type", "") or "")
+        if item_type in {"input_text", "output_text", "text"}:
+            return ProxyService._measure_context_text_length(value.get("text"))
+        if item_type in {"message", "content_block"}:
+            return ProxyService._measure_context_text_length(value.get("content"))
+
+        total = 0
+        for key in ("content", "text", "input", "instructions", "system"):
+            if key in value:
+                total += ProxyService._measure_context_text_length(value.get(key))
+        return total
+
+    @staticmethod
+    def _estimate_request_context_tokens(protocol: str, request_data: dict) -> int:
+        """Estimate actual conversation context for pre-upstream window checks."""
+        if protocol == "responses":
+            total = ProxyService._estimate_context_text_tokens(request_data.get("input"))
+            total += ProxyService._estimate_context_text_tokens(request_data.get("instructions"))
+            return total
+
+        total = ProxyService._estimate_context_text_tokens(request_data.get("messages"))
+        if protocol == "anthropic":
+            total += ProxyService._estimate_context_text_tokens(request_data.get("system"))
+        return total
+
+    @staticmethod
     def estimate_anthropic_input_tokens(request_data: dict) -> int:
         """Approximate Anthropic input tokens for ``/messages/count_tokens``."""
         total_tokens = ProxyService._estimate_message_text_tokens(
@@ -6002,6 +6048,10 @@ class ProxyService:
             else:
                 # Inject model identity only for text chat. Video prompts must remain clean.
                 ProxyService._inject_model_identity(request_data, requested_model, "openai")
+
+                # Validate context before quota precheck or upstream calls to avoid avoidable upstream cost.
+                ProxyService._validate_request_length(db, request_data, unified_model, protocol="openai")
+
                 quota_precheck = ProxyService._build_text_quota_precheck(
                     db,
                     "openai",
@@ -6011,9 +6061,6 @@ class ProxyService:
 
                 # 1. Check user entitlement before request
                 ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
-
-                # 2. Validate request content length
-                ProxyService._validate_request_length(db, request_data, unified_model, protocol="openai")
 
                 # 3. Get available channels sorted by priority
                 channels = ProxyService._prioritize_channels_for_request(
@@ -6233,6 +6280,9 @@ class ProxyService:
             # 2. Resolve model
             unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
 
+            # Validate context before quota precheck or upstream calls to avoid avoidable upstream cost.
+            ProxyService._validate_request_length(db, request_data, unified_model, protocol="anthropic")
+
             quota_precheck = ProxyService._build_text_quota_precheck(
                 db,
                 "anthropic",
@@ -6242,9 +6292,6 @@ class ProxyService:
 
             # 1. Check user entitlement before request
             ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
-
-            # 2. Validate request content length
-            ProxyService._validate_request_length(db, request_data, unified_model, protocol="anthropic")
 
             # 3. Get available channels
             channels = ProxyService._prioritize_channels_for_request(
@@ -12315,6 +12362,7 @@ class ProxyService:
 
         Checks:
         1. Total message content length (characters)
+        2. Estimated user context tokens against model/system context window
 
         Raises:
             ServiceException: if content exceeds configured limits
@@ -12346,7 +12394,6 @@ class ProxyService:
                     elif content is not None:
                         total_length += len(str(content))
 
-            # Check character length limit
             if total_length > max_message_length:
                 raise ServiceException(
                     400,
@@ -12354,11 +12401,29 @@ class ProxyService:
                     "CONTENT_TOO_LONG"
                 )
 
-            # Do not enforce estimated token limits here. The estimators count
-            # serialized tool schemas and protocol metadata, so they can
-            # substantially over-count Codex/Claude Code style requests. Let
-            # upstream perform exact token validation; upstream context errors
-            # are sanitized to _CONTEXT_TOO_LONG_VISIBLE_MESSAGE.
+            configured_model_limit = int(getattr(unified_model, "max_tokens", 0) or 0)
+            configured_system_limit = int(get_system_config(db, "max_context_tokens", 0) or 0)
+            effective_context_limit = 0
+            if configured_model_limit > 0 and configured_system_limit > 0:
+                effective_context_limit = min(configured_model_limit, configured_system_limit)
+            elif configured_model_limit > 0:
+                effective_context_limit = configured_model_limit
+            elif configured_system_limit > 0:
+                effective_context_limit = configured_system_limit
+
+            if effective_context_limit > 0:
+                estimated_context_tokens = ProxyService._estimate_request_context_tokens(
+                    protocol,
+                    request_data,
+                )
+                estimated_output_tokens = ProxyService._extract_estimated_output_tokens(protocol, request_data) or 0
+                estimated_total_context_tokens = max(estimated_context_tokens, 0) + max(estimated_output_tokens, 0)
+                if estimated_total_context_tokens > effective_context_limit:
+                    raise ServiceException(
+                        400,
+                        _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
+                        "CONTENT_TOO_LONG",
+                    )
 
         except ServiceException:
             raise  # Re-raise validation errors

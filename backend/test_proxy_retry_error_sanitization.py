@@ -258,6 +258,68 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
                 protocol="responses",
             )
 
+    def test_model_context_precheck_blocks_before_upstream_when_over_model_limit(self):
+        request_data = {
+            "messages": [
+                {"role": "user", "content": "a" * 700000},
+            ]
+        }
+        model = UnifiedModel(model_name="test-256k", max_tokens=256000)
+        with patch("app.services.proxy_service.get_system_config") as mocked_config:
+            mocked_config.side_effect = lambda _db, key, default=None: {
+                "max_message_length": 1000000,
+                "max_context_tokens": 0,
+            }.get(key, default)
+            with self.assertRaises(ServiceException) as ctx:
+                ProxyService._validate_request_length(object(), request_data, model, protocol="openai")
+
+        self.assertEqual(ctx.exception.error_code, "CONTENT_TOO_LONG")
+        self.assertEqual(ctx.exception.detail, "请求超出最大上下文,请压缩对话")
+
+    def test_model_context_precheck_uses_one_million_model_limit(self):
+        model = UnifiedModel(model_name="test-1m", max_tokens=1000000)
+        with patch("app.services.proxy_service.get_system_config") as mocked_config:
+            mocked_config.side_effect = lambda _db, key, default=None: {
+                "max_message_length": 3000000,
+                "max_context_tokens": 0,
+            }.get(key, default)
+            ProxyService._validate_request_length(
+                object(),
+                {"input": "a" * 2400000},
+                model,
+                protocol="responses",
+            )
+            with self.assertRaises(ServiceException) as ctx:
+                ProxyService._validate_request_length(
+                    object(),
+                    {"input": "a" * 2600000},
+                    model,
+                    protocol="responses",
+                )
+
+        self.assertEqual(ctx.exception.error_code, "CONTENT_TOO_LONG")
+
+    def test_context_precheck_does_not_count_large_tool_schema(self):
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "large_schema",
+                        "description": "x" * 1000000,
+                    },
+                }
+            ],
+        }
+        model = UnifiedModel(model_name="test-256k", max_tokens=256000)
+        with patch("app.services.proxy_service.get_system_config") as mocked_config:
+            mocked_config.side_effect = lambda _db, key, default=None: {
+                "max_message_length": 1000000,
+                "max_context_tokens": 0,
+            }.get(key, default)
+            ProxyService._validate_request_length(object(), request_data, model, protocol="openai")
+
     async def test_responses_websocket_upstream_error_before_output_is_not_sent(self):
         async def fake_iter(*_args, **_kwargs):
             yield {

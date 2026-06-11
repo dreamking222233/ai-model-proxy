@@ -33,6 +33,7 @@ def list_request_logs(
         start_date=start_date,
         end_date=end_date,
     )
+    items = LogService.build_agent_visible_request_log_items(items)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 
 

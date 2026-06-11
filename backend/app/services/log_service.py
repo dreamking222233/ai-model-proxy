@@ -175,6 +175,9 @@ class LogService:
         if not text:
             return None
 
+        if LogService._looks_like_raw_upstream_error(text):
+            return "调用失败，渠道异常，请稍后重试"
+
         try:
             parsed = json.loads(text)
             text = json.dumps(LogService._sanitize_sensitive_error_json(parsed), ensure_ascii=False, separators=(",", ":"))
@@ -218,6 +221,55 @@ class LogService:
         text = re.sub(r"(?i)\bon channel\s+[^:\s,;，；]+", "on upstream channel", text)
         text = re.sub(r"(?i)(sk-[A-Za-z0-9_\-]{8})[A-Za-z0-9_\-]+", r"\1***", text)
         return text
+
+    @staticmethod
+    def _looks_like_raw_upstream_error(value: Optional[str]) -> bool:
+        """Detect upstream/provider error blobs that should never be shown to users."""
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+
+        if "all channels failed:" in lowered:
+            return True
+
+        if re.search(r"\bupstream\s+returned\s+http\s+\d{3}\b", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"上游.*http\s*\d{3}|上游服务返回异常", text, flags=re.IGNORECASE):
+            return True
+
+        has_structured_error = bool(re.search(r'"error"\s*:\s*[{\[]|"type"\s*:\s*"[^"]*error', text, flags=re.IGNORECASE))
+        has_http_status = bool(re.search(r"\bHTTP\s*[:：]?\s*\d{3}\b|[（(]\s*HTTP\s*\d{3}\s*[)）]", text, flags=re.IGNORECASE))
+        has_upstream_marker = bool(
+            re.search(
+                r"\b(upstream|provider|providers|channel|distributor|gateway|proxy)\b|上游|渠道",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        has_failure_marker = bool(
+            re.search(
+                r"\b(error|exception|failed|failure|unavailable|rate\s*limit|timeout|auth[_ -]?unavailable|forbidden|blocked)\b"
+                r"|异常|失败|不可用|限流|超时|鉴权|认证|拦截",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        has_upstream_metadata = bool(
+            re.search(
+                r"\bproviders?\s*=|\brequest[_ -]?id\b|\btrace[_ -]?id\b|\bgroup\b|\bdistributor\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        if has_structured_error and (has_http_status or has_upstream_marker or has_failure_marker or has_upstream_metadata):
+            return True
+        if has_http_status and (has_upstream_marker or has_failure_marker or has_upstream_metadata):
+            return True
+        if has_upstream_metadata and (has_upstream_marker or has_failure_marker):
+            return True
+        return False
 
     @staticmethod
     def build_user_visible_request_log_items(items: list[dict]) -> list[dict]:
@@ -295,6 +347,17 @@ class LogService:
                 item.get("channel_name"),
             )
             result.append(public_item)
+        return result
+
+    @staticmethod
+    def build_agent_visible_request_log_items(items: list[dict]) -> list[dict]:
+        """Return request logs for agents without upstream routing/error details."""
+        result = LogService.build_user_visible_request_log_items(items)
+        source_by_request_id = {item.get("request_id"): item for item in items if item.get("request_id")}
+        for public_item in result:
+            source_item = source_by_request_id.get(public_item.get("request_id"), {})
+            public_item["user_id"] = source_item.get("user_id")
+            public_item["username"] = source_item.get("username")
         return result
 
     @staticmethod

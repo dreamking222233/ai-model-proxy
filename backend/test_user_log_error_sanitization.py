@@ -102,6 +102,46 @@ class UserLogErrorSanitizationTest(unittest.TestCase):
         self.assertNotIn("gpt-4o-mini", public_item["error_message"])
         self.assertNotIn("channel_id=12", public_item["error_message"])
 
+    def test_raw_upstream_http_error_is_replaced_with_generic_message(self):
+        samples = [
+            'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available (providers=codex, model=gpt-5.4)","type":"server_error","code":"internal_server_error"}}',
+            "Upstream returned HTTP 403: Your request was blocked.",
+            '上游服务返回异常（HTTP 429）：{"error":{"code":"model_cooldown","message":"All credentials are cooling down via provider codex"}}',
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                text = LogService._sanitize_user_visible_error_message(sample)
+                self.assertEqual(text, "调用失败，渠道异常，请稍后重试")
+                self.assertNotIn("Upstream returned", text)
+                self.assertNotIn("providers=codex", text)
+
+    def test_agent_visible_dto_keeps_user_identity_but_hides_internal_details(self):
+        items = LogService.build_agent_visible_request_log_items([
+            {
+                "id": 1,
+                "request_id": "req_1",
+                "model": "claude-opus-4-7",
+                "requested_model": "claude-opus-4-7",
+                "actual_model": "gpt-5.4",
+                "channel_name": "gptstore-codex",
+                "channel_id": 12,
+                "client_ip": "127.0.0.1",
+                "user_id": 7,
+                "username": "alice",
+                "status": "error",
+                "error_message": 'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable providers=codex model=gpt-5.4"}}',
+            }
+        ])
+
+        public_item = items[0]
+        self.assertEqual(public_item["user_id"], 7)
+        self.assertEqual(public_item["username"], "alice")
+        self.assertEqual(public_item["model"], "claude-opus-4-7")
+        self.assertEqual(public_item["error_message"], "调用失败，渠道异常，请稍后重试")
+        for key in ["actual_model", "channel_name", "channel_id", "client_ip"]:
+            self.assertNotIn(key, public_item)
+
 
 if __name__ == "__main__":
     unittest.main()

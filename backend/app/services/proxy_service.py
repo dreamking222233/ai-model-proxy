@@ -75,6 +75,8 @@ _UPSTREAM_NON_RETRYABLE_REQUEST_STATUS_CODES = {400, 413, 422}
 _UPSTREAM_FAILURE_VISIBLE_MESSAGE = "调用失败，渠道异常，请稍后重试"
 _UPSTREAM_REQUEST_VISIBLE_MESSAGE = "请求参数不符合上游渠道要求，请检查后重试"
 _CONTEXT_TOO_LONG_VISIBLE_MESSAGE = "请求超出最大上下文,请压缩对话"
+_EMPTY_RESPONSES_INPUT_VISIBLE_MESSAGE = "请求内容为空，请输入有效内容"
+_EMPTY_UPSTREAM_RESPONSE_VISIBLE_MESSAGE = "调用失败，渠道返回空响应，请稍后重试"
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
 _TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
@@ -626,6 +628,120 @@ class ProxyService:
         return normalized
 
     @staticmethod
+    def _remove_blank_message_names(request_data: dict) -> dict:
+        """Drop optional empty ``name`` fields that upstream Responses rejects."""
+        if not isinstance(request_data, dict):
+            return request_data
+
+        normalized = copy.deepcopy(request_data)
+        messages = normalized.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                if "name" in message and not str(message.get("name") or "").strip():
+                    message.pop("name", None)
+
+                tool_calls = message.get("tool_calls")
+                if not isinstance(tool_calls, list):
+                    continue
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function_payload = tool_call.get("function")
+                    if (
+                        isinstance(function_payload, dict)
+                        and "name" in function_payload
+                        and not str(function_payload.get("name") or "").strip()
+                    ):
+                        function_payload["name"] = "tool"
+
+        return normalized
+
+    @staticmethod
+    def _sanitize_responses_item_name(item: dict[str, Any]) -> None:
+        """Normalize invalid empty Responses item names in-place."""
+        if not isinstance(item, dict) or "name" not in item:
+            return
+        if str(item.get("name") or "").strip():
+            return
+        if str(item.get("type") or "") == "function_call":
+            item["name"] = "tool"
+        else:
+            item.pop("name", None)
+
+    @staticmethod
+    def _responses_value_has_meaningful_input(value: Any) -> bool:
+        """Return whether a Responses input/message payload contains user-supplied content."""
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (bytes, bytearray)):
+            return bool(value)
+        if isinstance(value, list):
+            return any(ProxyService._responses_value_has_meaningful_input(item) for item in value)
+        if isinstance(value, dict):
+            item_type = str(value.get("type") or "").strip().lower()
+            if item_type in {"input_image", "image_url"}:
+                return any(
+                    ProxyService._responses_value_has_meaningful_input(value.get(key))
+                    for key in ("image_url", "url", "file_id", "data")
+                )
+            if item_type in {"input_file", "file"}:
+                return any(
+                    ProxyService._responses_value_has_meaningful_input(value.get(key))
+                    for key in ("file_id", "filename", "file_data", "data", "url")
+                )
+
+            meaningful_keys = (
+                "input",
+                "content",
+                "text",
+                "output",
+                "arguments",
+                "image_url",
+                "file_id",
+                "file_data",
+                "url",
+                "data",
+            )
+            if any(
+                ProxyService._responses_value_has_meaningful_input(value.get(key))
+                for key in meaningful_keys
+                if key in value
+            ):
+                return True
+
+            ignored_keys = {
+                "id",
+                "type",
+                "role",
+                "name",
+                "status",
+                "call_id",
+                "item_id",
+                "index",
+            }
+            return any(
+                ProxyService._responses_value_has_meaningful_input(item_value)
+                for item_key, item_value in value.items()
+                if str(item_key) not in ignored_keys
+            )
+        return False
+
+    @staticmethod
+    def _responses_request_has_meaningful_input(request_data: dict[str, Any]) -> bool:
+        if not isinstance(request_data, dict):
+            return False
+        for key in ("input", "messages", "prompt"):
+            if key in request_data and ProxyService._responses_value_has_meaningful_input(
+                request_data.get(key)
+            ):
+                return True
+        return False
+
+    @staticmethod
     def _build_text_billing_context(
         protocol: str,
         request_data: Optional[dict[str, Any]] = None,
@@ -707,12 +823,15 @@ class ProxyService:
         channel: Channel | None = None,
         client_ip: Optional[str] = None,
     ) -> None:
-        """Emit full Responses request JSON for Codex fast-mode inspection."""
-        enabled = os.getenv("RESPONSES_REQUEST_JSON_LOG", "1").strip().lower()
+        """Emit compact Responses request diagnostics when explicitly enabled."""
+        enabled = os.getenv("RESPONSES_REQUEST_JSON_LOG", "0").strip().lower()
         if enabled in {"0", "false", "no", "off"}:
             return
 
         payload_json = ProxyService._stable_debug_dump(request_data)
+        payload_preview = payload_json[:2000]
+        if len(payload_json) > len(payload_preview):
+            payload_preview = f"{payload_preview}...<truncated {len(payload_json) - len(payload_preview)} chars>"
         summary = {
             "keys": sorted(request_data.keys()),
             "model": request_data.get("model"),
@@ -727,7 +846,7 @@ class ProxyService:
         }
         logger.info(
             "Responses request json stage=%s request_id=%s requested_model=%s actual_model=%s "
-            "channel=%s channel_id=%s client_ip=%s size_chars=%s summary=%s payload=%s",
+            "channel=%s channel_id=%s client_ip=%s size_chars=%s summary=%s payload_preview=%s",
             stage,
             request_id,
             requested_model,
@@ -740,7 +859,7 @@ class ProxyService:
             client_ip,
             len(payload_json),
             json.dumps(summary, ensure_ascii=False),
-            payload_json,
+            payload_preview,
         )
 
     @staticmethod
@@ -1870,7 +1989,8 @@ class ProxyService:
         force_compat: bool = False,
     ) -> dict:
         """Forward OpenAI requests without compatibility rewrites."""
-        return ProxyService._normalize_request_reasoning_levels(request_data)
+        prepared = ProxyService._normalize_request_reasoning_levels(request_data)
+        return ProxyService._remove_blank_message_names(prepared)
 
     @staticmethod
     def _sanitize_anthropic_content_for_kiro(content):
@@ -4354,6 +4474,26 @@ class ProxyService:
             )
 
         request_billing_context = ProxyService._build_text_billing_context("responses", client_request)
+        if not ProxyService._responses_request_has_meaningful_input(client_request):
+            empty_request_error = ServiceException(
+                400,
+                _EMPTY_RESPONSES_INPUT_VISIBLE_MESSAGE,
+                "EMPTY_RESPONSES_INPUT",
+            )
+            ProxyService._log_pre_request_failure(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                requested_model,
+                client_ip,
+                is_stream,
+                empty_request_error,
+                request_type="responses",
+                actual_model=client_request.get("model"),
+            )
+            raise empty_request_error
+
         ProxyService._log_responses_request_json(
             "incoming",
             request_id,
@@ -4928,6 +5068,7 @@ class ProxyService:
                 continue
 
             item = copy.deepcopy(raw_item)
+            ProxyService._sanitize_responses_item_name(item)
             if item.get("type") == "message":
                 role = str(item.get("role", "") or "").strip().lower()
                 content = item.get("content")
@@ -5296,6 +5437,7 @@ class ProxyService:
                         # 收集文本内容
                         delta = payload.get("delta", "")
                         if delta:
+                            collected_usage["_saw_output_text_delta"] = True
                             collector.add_chunk(delta)
                             if collected_usage.get("_first_stream_output_time") is None:
                                 collected_usage["_first_stream_output_time"] = time.time()
@@ -5303,6 +5445,12 @@ class ProxyService:
                     yield ProxyService._payload_to_sse(payload)
 
                 if completed:
+                    if (
+                        input_tokens <= 0
+                        and output_tokens <= 0
+                        and not collected_usage.get("_saw_output_text_delta")
+                    ):
+                        raise Exception(_EMPTY_UPSTREAM_RESPONSE_VISIBLE_MESSAGE)
                     yield "data: [DONE]\n\n"
                 else:
                     if saw_error:
@@ -12416,9 +12564,23 @@ class ProxyService:
                     protocol,
                     request_data,
                 )
-                estimated_output_tokens = ProxyService._extract_estimated_output_tokens(protocol, request_data) or 0
-                estimated_total_context_tokens = max(estimated_context_tokens, 0) + max(estimated_output_tokens, 0)
-                if estimated_total_context_tokens > effective_context_limit:
+                # This guard is meant to stop already-too-large input context before
+                # it reaches upstream. Do not add requested output budgets here:
+                # many clients send very large max_tokens defaults, which creates
+                # false positives for otherwise valid 100k-200k context requests.
+                if estimated_context_tokens > effective_context_limit:
+                    estimated_output_tokens = (
+                        ProxyService._extract_estimated_output_tokens(protocol, request_data) or 0
+                    )
+                    logger.warning(
+                        "Request context precheck blocked protocol=%s model=%s "
+                        "estimated_input_context=%s requested_output_budget=%s effective_limit=%s",
+                        protocol,
+                        getattr(unified_model, "model_name", None),
+                        estimated_context_tokens,
+                        estimated_output_tokens,
+                        effective_context_limit,
+                    )
                     raise ServiceException(
                         400,
                         _CONTEXT_TOO_LONG_VISIBLE_MESSAGE,
@@ -12476,6 +12638,21 @@ class ProxyService:
             return None
         width, height = parsed
         return f"{width}x{height}"
+
+    @staticmethod
+    def _clamp_openai_native_image_size(size_value: Optional[str]) -> Optional[str]:
+        """Clamp OpenAI native image sizes to upstream's 3840px edge limit."""
+        parsed = ProxyService._parse_explicit_pixel_size(size_value)
+        if not parsed:
+            return size_value
+        width, height = parsed
+        max_edge = max(width, height)
+        if max_edge <= 3840:
+            return f"{width}x{height}"
+        scale = 3840 / max_edge
+        clamped_width = max(1, int(round(width * scale)))
+        clamped_height = max(1, int(round(height * scale)))
+        return f"{clamped_width}x{clamped_height}"
 
     @staticmethod
     def _resolve_image_size_from_pixels(size_value: Any) -> Optional[str]:
@@ -12545,11 +12722,11 @@ class ProxyService:
                 "3:4": "2048x2816",
             },
             "4K": {
-                "1:1": "4096x4096",
+                "1:1": "3840x3840",
                 "16:9": "3840x2160",
                 "9:16": "2160x3840",
-                "3:2": "4096x2731",
-                "2:3": "2731x4096",
+                "3:2": "3840x2560",
+                "2:3": "2560x3840",
                 "4:3": "3840x2880",
                 "3:4": "2880x3840",
             },
@@ -12567,8 +12744,10 @@ class ProxyService:
     ) -> Optional[str]:
         explicit_size = ProxyService._normalize_pixel_size(request_data.get("size"))
         if explicit_size:
-            return explicit_size
-        return ProxyService._build_native_openai_image_size(image_size, aspect_ratio)
+            return ProxyService._clamp_openai_native_image_size(explicit_size)
+        return ProxyService._clamp_openai_native_image_size(
+            ProxyService._build_native_openai_image_size(image_size, aspect_ratio)
+        )
 
     @staticmethod
     def _resolve_openai_image_quality(request_data: dict) -> Optional[str]:

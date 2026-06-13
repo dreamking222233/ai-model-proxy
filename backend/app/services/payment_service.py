@@ -1147,14 +1147,6 @@ class PaymentService:
         settlement = PaymentService._claim_recharge_settlement(db, locked)
         is_new_settlement = settlement is not None
 
-        if is_new_settlement:
-            PaymentService._credit_user_order_asset(db, locked)
-            PaymentService._credit_agent_cash_balance(db, locked)
-            from app.services.promotion_service import PromotionService
-            PromotionService.apply_recharge_reward(db, locked)
-            settlement.status = "applied"
-            settlement.applied_at = datetime.utcnow()
-
         locked.status = "paid"
         if is_new_settlement or not locked.trade_status:
             locked.trade_status = str(validated.get("trade_status") or "")
@@ -1170,6 +1162,15 @@ class PaymentService:
                 locked.wechat_transaction_id = validated.get("wechat_transaction_id")
         if is_new_settlement or not locked.paid_at:
             locked.paid_at = datetime.utcnow()
+
+        if is_new_settlement:
+            PaymentService._credit_user_order_asset(db, locked)
+            PaymentService._credit_agent_cash_balance(db, locked)
+            from app.services.promotion_service import PromotionService
+            PromotionService.apply_recharge_reward(db, locked)
+            settlement.status = "applied"
+            settlement.applied_at = datetime.utcnow()
+
         if source == "notify" and (is_new_settlement or not locked.notify_raw):
             locked.notify_raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         elif source != "notify" and (is_new_settlement or not locked.return_raw):

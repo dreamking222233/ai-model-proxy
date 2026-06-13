@@ -1,6 +1,7 @@
 """Admin promotion visibility APIs."""
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import require_platform_admin
@@ -12,12 +13,30 @@ from app.services.promotion_service import PromotionService
 router = APIRouter(prefix="/api/admin/promotions", tags=["管理-推广记录"])
 
 
+class PromotionManualBindRequest(BaseModel):
+    promoter_user_id: int = Field(..., gt=0)
+    invited_user_id: int = Field(..., gt=0)
+
+
 @router.get("/summary", response_model=ResponseModel)
 def get_promotion_summary(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
     return ResponseModel(data=PromotionService.get_admin_summary(db))
+
+
+@router.post("/manual-bind", response_model=ResponseModel)
+def manual_bind_promotion_relation(
+    req: PromotionManualBindRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_platform_admin),
+):
+    return ResponseModel(data=PromotionService.manual_bind_relation(
+        db,
+        promoter_user_id=req.promoter_user_id,
+        invited_user_id=req.invited_user_id,
+    ))
 
 
 @router.get("/relations", response_model=ResponseModel)

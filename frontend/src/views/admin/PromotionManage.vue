@@ -37,6 +37,7 @@
               <a-select-option value="no">未充值</a-select-option>
             </a-select>
             <a-input v-model="relationFilters.agent_id" allowClear placeholder="代理ID，直营填0" style="width: 140px" @pressEnter="handleRelationSearch" />
+            <a-button type="primary" icon="link" @click="openManualBind">手动绑定</a-button>
           </div>
           <a-table
             row-key="relation_id"
@@ -89,11 +90,46 @@
         </a-tab-pane>
       </a-tabs>
     </a-card>
+
+    <a-modal
+      title="手动绑定推广关系"
+      :visible="manualBindVisible"
+      :confirm-loading="manualBindLoading"
+      ok-text="确认绑定"
+      cancel-text="取消"
+      @ok="submitManualBind"
+      @cancel="closeManualBind"
+    >
+      <a-alert
+        type="info"
+        show-icon
+        message="绑定后，被推广用户后续在线充值会为推广人产生返现；历史充值不会回溯返现。"
+        style="margin-bottom: 16px"
+      />
+      <a-form :form="manualBindForm" layout="vertical">
+        <a-form-item label="推广人用户ID">
+          <a-input-number
+            v-decorator="['promoter_user_id', { rules: [{ required: true, message: '请输入推广人用户ID' }] }]"
+            :min="1"
+            style="width: 100%"
+            placeholder="获得返现的用户ID"
+          />
+        </a-form-item>
+        <a-form-item label="被推广人用户ID">
+          <a-input-number
+            v-decorator="['invited_user_id', { rules: [{ required: true, message: '请输入被推广人用户ID' }] }]"
+            :min="1"
+            style="width: 100%"
+            placeholder="后续充值触发返现的用户ID"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
 <script>
-import { getAdminPromotionSummary, listAdminPromotionRelations, listAdminPromotionRewards } from '@/api/promotion'
+import { getAdminPromotionSummary, listAdminPromotionRelations, listAdminPromotionRewards, manualBindPromotionRelation } from '@/api/promotion'
 import { formatBeijingTime } from '@/utils'
 
 export default {
@@ -104,6 +140,8 @@ export default {
       loadingSummary: false,
       loadingRelations: false,
       loadingRewards: false,
+      manualBindVisible: false,
+      manualBindLoading: false,
       summary: {
         relation_count: 0,
         reward_count: 0,
@@ -140,6 +178,9 @@ export default {
       ]
     }
   },
+  beforeCreate() {
+    this.manualBindForm = this.$form.createForm(this, { name: 'manual_bind_promotion' })
+  },
   mounted() {
     this.refreshAll()
   },
@@ -150,6 +191,39 @@ export default {
   },
   methods: {
     refreshAll() { this.fetchSummary(); this.fetchRelations(); this.fetchRewards() },
+    openManualBind() {
+      this.manualBindVisible = true
+      this.$nextTick(() => {
+        this.manualBindForm.resetFields()
+      })
+    },
+    closeManualBind() {
+      if (this.manualBindLoading) return
+      this.manualBindVisible = false
+      this.manualBindForm.resetFields()
+    },
+    submitManualBind() {
+      this.manualBindForm.validateFields(async (err, values) => {
+        if (err) return
+        if (Number(values.promoter_user_id) === Number(values.invited_user_id)) {
+          this.$message.error('推广人和被推广人不能是同一用户')
+          return
+        }
+        this.manualBindLoading = true
+        try {
+          await manualBindPromotionRelation({
+            promoter_user_id: Number(values.promoter_user_id),
+            invited_user_id: Number(values.invited_user_id)
+          })
+          this.$message.success('推广关系绑定成功')
+          this.manualBindVisible = false
+          this.manualBindForm.resetFields()
+          this.refreshAll()
+        } finally {
+          this.manualBindLoading = false
+        }
+      })
+    },
     async fetchSummary() {
       this.loadingSummary = true
       try {

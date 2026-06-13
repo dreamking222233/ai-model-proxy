@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import create_engine
@@ -38,16 +39,21 @@ class UserPromotionTest(unittest.TestCase):
         self.promoter = SysUser(id=1, username="promoter", email="p@example.com", password_hash="hash", role="user", status=1)
         self.invited = SysUser(id=2, username="invited", email="i@example.com", password_hash="hash", role="user", status=1)
         self.agent_user = SysUser(id=3, username="agent-user", email="a@example.com", password_hash="hash", role="user", agent_id=10, status=1)
+        self.manual_invited = SysUser(id=4, username="manual-invited", email="m@example.com", password_hash="hash", role="user", status=1)
         self.db.add_all([
             self.promoter,
             self.invited,
             self.agent_user,
+            self.manual_invited,
             UserBalance(id=1, user_id=1, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
             UserBalance(id=2, user_id=2, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
+            UserBalance(id=4, user_id=4, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
             UserImageBalance(id=1, user_id=1, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
             UserImageBalance(id=2, user_id=2, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
+            UserImageBalance(id=4, user_id=4, balance=Decimal("0"), total_recharged=Decimal("0"), total_consumed=Decimal("0")),
         ])
         self.db.commit()
+        self.now = datetime(2026, 6, 14, 8, 0, 0)
 
     def tearDown(self):
         self.db.close()
@@ -90,6 +96,7 @@ class UserPromotionTest(unittest.TestCase):
             credited_usd=Decimal("5.000000"),
             credited_image_credits=Decimal("0"),
             status="paid",
+            paid_at=self.now,
             subject="充值",
         )
         self.db.add(order)
@@ -100,12 +107,12 @@ class UserPromotionTest(unittest.TestCase):
         self.db.commit()
 
         balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
-        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("2.500000"))
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("1.000000"))
         self.assertEqual(Decimal(str(balance.total_recharged)).quantize(Decimal("0.000001")), Decimal("0.000000"))
         self.assertEqual(self.db.query(UserPromotionReward).count(), 1)
         relation = self.db.query(UserPromotionRelation).first()
         self.assertIsNotNone(relation.first_recharged_at)
-        self.assertEqual(Decimal(str(relation.total_reward_usd)).quantize(Decimal("0.000001")), Decimal("2.500000"))
+        self.assertEqual(Decimal(str(relation.total_reward_usd)).quantize(Decimal("0.000001")), Decimal("1.000000"))
 
     def test_image_credit_recharge_reward(self):
         self.create_relation()
@@ -119,6 +126,7 @@ class UserPromotionTest(unittest.TestCase):
             credited_usd=Decimal("0"),
             credited_image_credits=Decimal("10.000"),
             status="paid",
+            paid_at=self.now,
             subject="充值",
         )
         self.db.add(order)
@@ -128,10 +136,107 @@ class UserPromotionTest(unittest.TestCase):
         self.db.commit()
 
         balance = self.db.query(UserImageBalance).filter(UserImageBalance.user_id == 1).first()
-        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.001")), Decimal("5.000"))
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.001")), Decimal("2.000"))
         self.assertEqual(Decimal(str(balance.total_recharged)).quantize(Decimal("0.001")), Decimal("0.000"))
         record = self.db.query(ImageCreditRecord).filter(ImageCreditRecord.user_id == 1).first()
         self.assertEqual(record.action_type, "promotion_reward")
+
+    def test_manual_bind_relation(self):
+        item = PromotionService.manual_bind_relation(self.db, promoter_user_id=1, invited_user_id=4)
+        self.assertEqual(item["promoter_user_id"], 1)
+        self.assertEqual(item["invited_user_id"], 4)
+        relation = self.db.query(UserPromotionRelation).filter(UserPromotionRelation.invited_user_id == 4).first()
+        self.assertIsNotNone(relation)
+        self.assertEqual(relation.promoter_user_id, 1)
+        link = self.db.query(UserPromotionLink).filter(UserPromotionLink.user_id == 1).first()
+        self.assertIsNotNone(link)
+        self.assertEqual(link.register_count, 1)
+
+    def test_manual_bind_rejects_cross_site_user(self):
+        with self.assertRaises(ServiceException) as ctx:
+            PromotionService.manual_bind_relation(self.db, promoter_user_id=1, invited_user_id=3)
+        self.assertEqual(ctx.exception.error_code, "PROMOTION_SITE_MISMATCH")
+
+    def test_unpaid_order_does_not_reward(self):
+        self.create_relation()
+        order = PaymentRechargeOrder(
+            id=3,
+            order_no="ALP202606100003",
+            payment_channel="alipay",
+            recharge_type="balance",
+            user_id=2,
+            amount_cny=Decimal("1.00"),
+            credited_usd=Decimal("5.000000"),
+            credited_image_credits=Decimal("0"),
+            status="pending",
+            subject="充值",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PromotionService.apply_recharge_reward(self.db, order)
+        self.db.commit()
+
+        self.assertEqual(self.db.query(UserPromotionReward).count(), 0)
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("0.000000"))
+
+    def test_order_created_before_manual_bind_does_not_reward(self):
+        order = PaymentRechargeOrder(
+            id=4,
+            order_no="ALP202606100004",
+            payment_channel="alipay",
+            recharge_type="balance",
+            user_id=4,
+            amount_cny=Decimal("1.00"),
+            credited_usd=Decimal("5.000000"),
+            credited_image_credits=Decimal("0"),
+            status="paid",
+            paid_at=self.now,
+            created_at=self.now,
+            subject="充值",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PromotionService.manual_bind_relation(self.db, promoter_user_id=1, invited_user_id=4)
+        relation = self.db.query(UserPromotionRelation).filter(UserPromotionRelation.invited_user_id == 4).first()
+        order.created_at = relation.created_at - timedelta(seconds=1)
+        self.db.commit()
+        self.db.refresh(order)
+        PromotionService.apply_recharge_reward(self.db, order)
+        self.db.commit()
+
+        self.assertEqual(self.db.query(UserPromotionReward).count(), 0)
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("0.000000"))
+
+    def test_order_created_after_manual_bind_rewards(self):
+        PromotionService.manual_bind_relation(self.db, promoter_user_id=1, invited_user_id=4)
+        relation = self.db.query(UserPromotionRelation).filter(UserPromotionRelation.invited_user_id == 4).first()
+        order = PaymentRechargeOrder(
+            id=5,
+            order_no="ALP202606100005",
+            payment_channel="alipay",
+            recharge_type="balance",
+            user_id=4,
+            amount_cny=Decimal("1.00"),
+            credited_usd=Decimal("5.000000"),
+            credited_image_credits=Decimal("0"),
+            status="paid",
+            paid_at=self.now + timedelta(seconds=1),
+            created_at=relation.created_at + timedelta(seconds=1),
+            subject="充值",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PromotionService.apply_recharge_reward(self.db, order)
+        self.db.commit()
+
+        self.assertEqual(self.db.query(UserPromotionReward).count(), 1)
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("1.000000"))
 
 
 if __name__ == "__main__":

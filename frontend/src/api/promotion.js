@@ -30,6 +30,14 @@ export function getAdminPromotionSummary() {
   })
 }
 
+export function manualBindPromotionRelation(data) {
+  return request({
+    url: '/api/admin/promotions/manual-bind',
+    method: 'post',
+    data
+  })
+}
+
 export function listAdminPromotionRewards(params) {
   return request({
     url: '/api/admin/promotions/rewards',

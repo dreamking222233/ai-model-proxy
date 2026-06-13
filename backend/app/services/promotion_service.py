@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import urlencode
 
@@ -23,7 +23,7 @@ from app.services.agent_service import AgentService, AgentSiteContext
 class PromotionService:
     """Promotion link generation, binding, reward settlement, and queries."""
 
-    REWARD_RATE = Decimal("0.5")
+    REWARD_RATE = Decimal("0.2")
     USD_SCALE = Decimal("0.000001")
     IMAGE_SCALE = Decimal("0.001")
     CNY_SCALE = Decimal("0.01")
@@ -44,8 +44,21 @@ class PromotionService:
         return float(PromotionService._decimal(value, scale))
 
     @staticmethod
-    def _serialize_dt(value) -> str | None:
-        return value.isoformat() if value else None
+    def _serialize_dt(value, *, assume_utc: bool = False) -> str | None:
+        if not value:
+            return None
+        if value.tzinfo is not None:
+            return value.isoformat()
+        tz = timezone.utc if assume_utc else timezone(timedelta(hours=8))
+        return value.replace(tzinfo=tz).isoformat()
+
+    @staticmethod
+    def _dt_as_utc_naive(value) -> datetime | None:
+        if not value:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
 
     @staticmethod
     def _platform_frontend_host() -> str:
@@ -213,6 +226,65 @@ class PromotionService:
         db.flush()
 
     @staticmethod
+    def manual_bind_relation(db: Session, promoter_user_id: int, invited_user_id: int) -> dict:
+        if int(promoter_user_id or 0) <= 0 or int(invited_user_id or 0) <= 0:
+            raise ServiceException(400, "用户ID无效", "PROMOTION_USER_ID_INVALID")
+        if int(promoter_user_id) == int(invited_user_id):
+            raise ServiceException(400, "不能绑定自己为自己的推广人", "PROMOTION_SELF_BIND_INVALID")
+
+        promoter = (
+            db.query(SysUser)
+            .filter(SysUser.id == int(promoter_user_id))
+            .with_for_update()
+            .first()
+        )
+        invited = (
+            db.query(SysUser)
+            .filter(SysUser.id == int(invited_user_id))
+            .with_for_update()
+            .first()
+        )
+        if not promoter or promoter.role != "user" or promoter.status != 1:
+            raise ServiceException(400, "推广用户不存在或状态无效", "PROMOTION_PROMOTER_INVALID")
+        if not invited or invited.role != "user" or invited.status != 1:
+            raise ServiceException(400, "被推广用户不存在或状态无效", "PROMOTION_INVITED_INVALID")
+
+        promoter_scope = PromotionService._site_scope_for_user(promoter)
+        invited_scope = PromotionService._site_scope_for_user(invited)
+        if promoter_scope != invited_scope or (promoter.agent_id or None) != (invited.agent_id or None):
+            raise ServiceException(400, "推广关系不能跨站点或跨代理绑定", "PROMOTION_SITE_MISMATCH")
+
+        existing = (
+            db.query(UserPromotionRelation.id)
+            .filter(UserPromotionRelation.invited_user_id == invited.id)
+            .first()
+        )
+        if existing:
+            raise ServiceException(400, "被推广用户已存在推广绑定关系", "PROMOTION_RELATION_EXISTS")
+
+        link = PromotionService.get_or_create_user_link(db, promoter, None)
+        site_host = PromotionService._resolve_site_host(db, promoter, None)
+        relation = UserPromotionRelation(
+            promoter_user_id=promoter.id,
+            promoter_agent_id=promoter.agent_id,
+            invite_code=link.invite_code,
+            invite_link_id=link.id,
+            invited_user_id=invited.id,
+            invited_agent_id=invited.agent_id,
+            site_scope=invited_scope,
+            site_host=site_host,
+            first_recharged_at=None,
+            total_recharge_cny=Decimal("0"),
+            total_reward_usd=Decimal("0"),
+            total_reward_image_credits=Decimal("0"),
+        )
+        db.add(relation)
+        link.register_count = int(link.register_count or 0) + 1
+        db.commit()
+        db.refresh(relation)
+        return PromotionService._serialize_relation(relation, promoter, invited)
+
+    @staticmethod
     def _get_or_create_user_image_balance_for_update(db: Session, user_id: int) -> UserImageBalance:
         balance = (
             db.query(UserImageBalance)
@@ -244,6 +316,8 @@ class PromotionService:
 
     @staticmethod
     def apply_recharge_reward(db: Session, order: PaymentRechargeOrder) -> None:
+        if str(getattr(order, "status", "") or "").strip().lower() != "paid" or not getattr(order, "paid_at", None):
+            return
         relation = (
             db.query(UserPromotionRelation)
             .filter(UserPromotionRelation.invited_user_id == order.user_id)
@@ -251,6 +325,10 @@ class PromotionService:
             .first()
         )
         if not relation:
+            return
+        order_created_at = PromotionService._dt_as_utc_naive(getattr(order, "created_at", None))
+        relation_created_at = PromotionService._dt_as_utc_naive(getattr(relation, "created_at", None))
+        if order_created_at and relation_created_at and order_created_at < relation_created_at:
             return
 
         recharge_type = str(order.recharge_type or "balance").strip().lower()
@@ -396,7 +474,7 @@ class PromotionService:
             "invited_email": invited.email,
             "registered_at": PromotionService._serialize_dt(relation.created_at),
             "has_recharged": relation.first_recharged_at is not None,
-            "first_recharged_at": PromotionService._serialize_dt(relation.first_recharged_at),
+            "first_recharged_at": PromotionService._serialize_dt(relation.first_recharged_at, assume_utc=True),
             "total_recharge_cny": PromotionService._num(relation.total_recharge_cny, PromotionService.CNY_SCALE),
             "total_reward_usd": PromotionService._num(relation.total_reward_usd, PromotionService.USD_SCALE),
             "total_reward_image_credits": PromotionService._num(relation.total_reward_image_credits, PromotionService.IMAGE_SCALE),
@@ -501,7 +579,7 @@ class PromotionService:
             "reward_asset_type": reward.reward_asset_type,
             "reward_amount": PromotionService._num(reward.reward_amount, PromotionService.IMAGE_SCALE if reward.reward_asset_type == "image_credit" else PromotionService.USD_SCALE),
             "reward_rate": PromotionService._num(reward.reward_rate, PromotionService.USD_SCALE),
-            "paid_at": PromotionService._serialize_dt(getattr(order, "paid_at", None)),
+            "paid_at": PromotionService._serialize_dt(getattr(order, "paid_at", None), assume_utc=True),
             "created_at": PromotionService._serialize_dt(reward.created_at),
         }
 

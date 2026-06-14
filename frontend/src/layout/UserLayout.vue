@@ -104,6 +104,13 @@
           />
         </div>
         <div class="header-right">
+          <a-badge :count="announcementCount" :offset="[-2, 6]">
+            <a-tooltip title="平台公告">
+              <button class="header-icon-btn" type="button" @click="openAnnouncementDrawer">
+                <a-icon type="notification" />
+              </button>
+            </a-tooltip>
+          </a-badge>
           <a-dropdown>
             <span class="user-dropdown">
               <a-avatar size="small" icon="user" style="margin-right: 8px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);" />
@@ -129,12 +136,39 @@
         <router-view />
       </a-layout-content>
     </a-layout>
+
+    <a-drawer
+      title="平台公告"
+      placement="right"
+      width="420"
+      :visible="announcementDrawerVisible"
+      @close="announcementDrawerVisible = false"
+    >
+      <a-spin :spinning="announcementLoading">
+        <div v-if="announcements.length" class="announcement-list">
+          <div v-for="item in announcements" :key="item.id" class="announcement-item">
+            <div class="announcement-head">
+              <div class="announcement-title">{{ item.title }}</div>
+              <a-tag :color="item.source === 'fixed' ? 'blue' : 'green'">
+                {{ item.source === 'fixed' ? '开屏' : '平台' }}
+              </a-tag>
+            </div>
+            <div class="announcement-content">{{ item.content }}</div>
+            <div v-if="item.support_wechat || item.support_qq" class="announcement-contact">
+              <span v-if="item.support_wechat"><a-icon type="wechat" /> {{ item.support_wechat }}</span>
+              <span v-if="item.support_qq"><a-icon type="qq" /> {{ item.support_qq }}</span>
+            </div>
+          </div>
+        </div>
+        <a-empty v-else description="暂无公告" />
+      </a-spin>
+    </a-drawer>
   </a-layout>
 </template>
 
 <script>
 import { getUser, clearSiteClientCache } from '@/utils/auth'
-import { getSiteConfig } from '@/api/user'
+import { getAnnouncements, getSiteConfig } from '@/api/user'
 import { logout as logoutApi } from '@/api/auth'
 
 export default {
@@ -142,7 +176,10 @@ export default {
   data() {
     return {
       collapsed: false,
-      siteConfig: {}
+      siteConfig: {},
+      announcementDrawerVisible: false,
+      announcementLoading: false,
+      announcements: []
     }
   },
   computed: {
@@ -159,12 +196,16 @@ export default {
     showRechargeMenu() {
       return Boolean(this.siteConfig.online_recharge_enabled)
     },
+    announcementCount() {
+      return this.announcements.length
+    },
     isFullscreen() {
       return this.$route.meta && this.$route.meta.fullscreen === true
     }
   },
   mounted() {
     this.fetchSiteConfig()
+    this.fetchAnnouncements()
   },
   methods: {
     async fetchSiteConfig() {
@@ -174,6 +215,21 @@ export default {
       } catch (e) {
         this.siteConfig = {}
       }
+    },
+    async fetchAnnouncements() {
+      this.announcementLoading = true
+      try {
+        const res = await getAnnouncements()
+        this.announcements = Array.isArray(res.data) ? res.data : []
+      } catch (e) {
+        this.announcements = []
+      } finally {
+        this.announcementLoading = false
+      }
+    },
+    openAnnouncementDrawer() {
+      this.announcementDrawerVisible = true
+      this.fetchAnnouncements()
     },
     handleMenuClick({ key }) {
       if (this.$route.path !== key) {
@@ -506,6 +562,28 @@ export default {
   }
 
   .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    .header-icon-btn {
+      width: 36px;
+      height: 36px;
+      border: 0;
+      border-radius: 8px;
+      background: rgba(102, 126, 234, 0.08);
+      color: #667eea;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.25s ease;
+
+      &:hover {
+        background: rgba(102, 126, 234, 0.16);
+      }
+    }
+
     .user-dropdown {
       cursor: pointer;
       display: flex;
@@ -522,6 +600,50 @@ export default {
       }
     }
   }
+}
+
+.announcement-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.announcement-item {
+  padding: 16px;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.announcement-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.announcement-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1.4;
+}
+
+.announcement-content {
+  white-space: pre-wrap;
+  color: #4b5563;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.announcement-contact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  color: #667eea;
+  font-weight: 600;
 }
 
 .admin-content {

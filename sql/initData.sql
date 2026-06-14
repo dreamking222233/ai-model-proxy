@@ -1029,6 +1029,28 @@ CREATE TABLE `system_config` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统配置表';
 
 -- ----------------------------
+-- Table structure for platform_announcement
+-- ----------------------------
+DROP TABLE IF EXISTS `platform_announcement`;
+CREATE TABLE `platform_announcement` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `title` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `status` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft' COMMENT 'draft/published/offline',
+  `show_popup` tinyint NOT NULL DEFAULT '1' COMMENT '1=登录开屏弹出,0=仅公告中心展示',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `published_at` datetime DEFAULT NULL,
+  `created_by_user_id` bigint unsigned DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_platform_announcement_status` (`status`),
+  KEY `idx_platform_announcement_popup` (`show_popup`),
+  KEY `idx_platform_announcement_sort` (`sort_order`,`id`),
+  KEY `idx_platform_announcement_creator` (`created_by_user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台公告表';
+
+-- ----------------------------
 -- Table structure for unified_model
 -- ----------------------------
 DROP TABLE IF EXISTS `unified_model`;

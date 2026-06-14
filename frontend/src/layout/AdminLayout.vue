@@ -104,6 +104,10 @@
             <a-icon type="setting" />
             <span>系统配置</span>
           </a-menu-item>
+          <a-menu-item key="/admin/announcements">
+            <a-icon type="notification" />
+            <span>公告管理</span>
+          </a-menu-item>
         </a-menu>
       </div>
 

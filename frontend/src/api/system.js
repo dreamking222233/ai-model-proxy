@@ -27,6 +27,62 @@ export function updateConfig(id, data) {
   })
 }
 
+// ==================== Announcements ====================
+
+export function getAnnouncementConfig() {
+  return request({
+    url: '/api/admin/system/announcements/config',
+    method: 'get'
+  })
+}
+
+export function updateAnnouncementConfig(data) {
+  return request({
+    url: '/api/admin/system/announcements/config',
+    method: 'put',
+    data
+  })
+}
+
+export function listAnnouncements(params) {
+  return request({
+    url: '/api/admin/system/announcements',
+    method: 'get',
+    params
+  })
+}
+
+export function createAnnouncement(data) {
+  return request({
+    url: '/api/admin/system/announcements',
+    method: 'post',
+    data
+  })
+}
+
+export function updateAnnouncement(id, data) {
+  return request({
+    url: `/api/admin/system/announcements/${id}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteAnnouncement(id) {
+  return request({
+    url: `/api/admin/system/announcements/${id}`,
+    method: 'delete'
+  })
+}
+
+export function updateAnnouncementStatus(id, data) {
+  return request({
+    url: `/api/admin/system/announcements/${id}/status`,
+    method: 'put',
+    data
+  })
+}
+
 // ==================== Health Monitoring ====================
 
 export function getHealthStatus() {

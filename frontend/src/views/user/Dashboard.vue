@@ -233,7 +233,7 @@
 
 <script>
 import CountTo from 'vue-count-to'
-import { getBalance, getUsageLogs, getProfile, getSiteConfig } from '@/api/user'
+import { getAnnouncements, getBalance, getUsageLogs, getProfile, getSiteConfig } from '@/api/user'
 import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
 import { formatDate } from '@/utils'
@@ -255,6 +255,7 @@ export default {
         totalTokens: 0
       },
       siteConfig: {},
+      announcements: [],
       redemptionCode: '',
       redeemLoading: false,
       hasRedeemed: false,
@@ -392,7 +393,8 @@ export default {
   },
   async mounted() {
     await this.fetchSiteConfig()
-    this.showAnnouncementModal()
+    await this.fetchAnnouncements()
+    this.showAnnouncementQueue()
   },
   methods: {
     formatDate,
@@ -413,18 +415,30 @@ export default {
       this.fetchRedemptionStatus()
       this.fetchSiteConfig()
     },
-    showAnnouncementModal() {
-      const hasShownAnnouncement = sessionStorage.getItem('hasShownAnnouncement')
-      if (hasShownAnnouncement) return
-
-      const title = this.siteConfig.announcement_title || '平台公告'
-      const contentText = this.siteConfig.announcement_content || '尊敬的用户，欢迎使用 AI 模型中转平台！'
+    showAnnouncementQueue(startIndex = 0) {
+      const popupItems = this.announcements.filter(item => item.popup !== false && item.show_popup !== false && item.content)
+      const nextIndex = popupItems.findIndex((item, index) => {
+        return index >= startIndex && !sessionStorage.getItem(this.announcementStorageKey(item))
+      })
+      if (nextIndex < 0) return
+      this.showAnnouncementModal(popupItems[nextIndex], () => {
+        this.showAnnouncementQueue(nextIndex + 1)
+      })
+    },
+    announcementStorageKey(item) {
+      return `announcement-shown:${item.id}`
+    },
+    showAnnouncementModal(item, onDone) {
+      const title = item.title || '平台公告'
+      const contentText = item.content || '尊敬的用户，欢迎使用 AI 模型中转平台！'
       const lines = String(contentText).split('\n').filter(Boolean)
+      const supportWechat = item.support_wechat || ''
+      const supportQq = item.support_qq || ''
       this.$info({
         title,
         width: 600,
         centered: true,
-        maskClosable: true,
+        maskClosable: false,
         content: (h) => {
           return h('div', { class: 'announcement-dialog' }, [
             h('p', { class: 'dialog-intro' }, lines[0] || contentText),
@@ -434,23 +448,27 @@ export default {
                 h('span', line)
               ]))
             ]),
-            h('div', { class: 'dialog-contact' }, [
-              h('div', { class: 'contact-pill' }, [
-                h('span', { class: 'icon' }, '💬'),
-                h('span', '微信: '),
-                h('strong', this.siteConfig.support_wechat || '-')
-              ]),
-              h('div', { class: 'contact-pill' }, [
-                h('span', { class: 'icon' }, '🐧'),
-                h('span', 'QQ: '),
-                h('strong', this.siteConfig.support_qq || '-')
-              ])
-            ])
+            supportWechat || supportQq
+              ? h('div', { class: 'dialog-contact' }, [
+                supportWechat ? h('div', { class: 'contact-pill' }, [
+                  h('span', { class: 'icon' }, '微信'),
+                  h('span', '微信: '),
+                  h('strong', supportWechat)
+                ]) : null,
+                supportQq ? h('div', { class: 'contact-pill' }, [
+                  h('span', { class: 'icon' }, 'QQ'),
+                  h('span', 'QQ: '),
+                  h('strong', supportQq)
+                ]) : null
+              ]) : null
           ])
         },
         okText: '好的，去体验',
         onOk: () => {
-          sessionStorage.setItem('hasShownAnnouncement', 'true')
+          sessionStorage.setItem(this.announcementStorageKey(item), 'true')
+          if (typeof onDone === 'function') {
+            this.$nextTick(onDone)
+          }
         }
       })
     },
@@ -472,6 +490,14 @@ export default {
         this.siteConfig = res.data || {}
       } catch (e) {
         this.siteConfig = {}
+      }
+    },
+    async fetchAnnouncements() {
+      try {
+        const res = await getAnnouncements()
+        this.announcements = Array.isArray(res.data) ? res.data : []
+      } catch (e) {
+        this.announcements = []
       }
     },
     async fetchBalance() {

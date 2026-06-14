@@ -7,7 +7,7 @@ from app.services.auth_service import AuthService
 from app.services.log_service import LogService
 from app.services.health_service import get_system_config
 from app.services.agent_service import AgentService
-from app.models.log import SystemConfig
+from app.models.log import PlatformAnnouncement, SystemConfig
 from app.schemas.user import PasswordChange
 from app.schemas.common import ResponseModel
 from fastapi import Query
@@ -97,6 +97,58 @@ def get_site_config(
     result["quickstart_api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")
     for config in configs:
         result[config.config_key] = config.config_value
+    return ResponseModel(data=result)
+
+
+@router.get("/announcements", response_model=ResponseModel)
+def get_announcements(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    """Return fixed and published announcements for the current site."""
+    site_config = AgentService.build_public_site_config(
+        db,
+        host=request.headers.get("host"),
+        x_site_host=request.headers.get("X-Site-Host"),
+        origin=request.headers.get("Origin"),
+        referer=request.headers.get("Referer"),
+    )
+    fixed_title = site_config.get("announcement_title") or "平台公告"
+    fixed_content = site_config.get("announcement_content") or ""
+    result = []
+    if fixed_content:
+        fixed_id = f"fixed-{site_config.get('site_scope') or 'platform'}-{site_config.get('agent_id') or 'platform'}"
+        result.append({
+            "id": fixed_id,
+            "title": fixed_title,
+            "content": fixed_content,
+            "source": "fixed",
+            "popup": True,
+            "show_popup": True,
+            "support_wechat": site_config.get("support_wechat") or "",
+            "support_qq": site_config.get("support_qq") or "",
+            "published_at": None,
+        })
+
+    published_items = (
+        db.query(PlatformAnnouncement)
+        .filter(PlatformAnnouncement.status == "published")
+        .order_by(PlatformAnnouncement.sort_order.desc(), PlatformAnnouncement.id.desc())
+        .all()
+    )
+    for item in published_items:
+        result.append({
+            "id": f"platform-{item.id}",
+            "title": item.title,
+            "content": item.content,
+            "source": "platform",
+            "popup": bool(item.show_popup),
+            "show_popup": bool(item.show_popup),
+            "support_wechat": "",
+            "support_qq": "",
+            "published_at": item.published_at.isoformat() if item.published_at else None,
+        })
     return ResponseModel(data=result)
 
 

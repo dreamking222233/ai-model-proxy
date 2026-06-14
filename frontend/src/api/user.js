@@ -183,6 +183,13 @@ export function getSiteConfig() {
   })
 }
 
+export function getAnnouncements() {
+  return request({
+    url: '/api/user/profile/announcements',
+    method: 'get'
+  })
+}
+
 export function getUsageLogs(params) {
   return request({
     url: '/api/user/profile/usage-logs',

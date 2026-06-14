@@ -3,7 +3,7 @@ import { clearAllChatStorage } from './chatStorage'
 const TOKEN_KEY = 'token'
 const USER_KEY = 'user'
 const CHAT_API_KEY_PREFIXES = ['chat_api_key', 'admin_chat_api_key', 'user_chat_api_key']
-const SESSION_STORAGE_PREFIXES = ['hasShownAnnouncement']
+const SESSION_STORAGE_PREFIXES = ['hasShownAnnouncement', 'announcement-shown']
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)
@@ -63,7 +63,7 @@ export function clearSiteClientCache() {
     for (let i = sessionStorage.length - 1; i >= 0; i--) {
       const key = sessionStorage.key(i)
       if (!key) continue
-      if (SESSION_STORAGE_PREFIXES.some(prefix => key === prefix || key.indexOf(prefix + '_') === 0)) {
+      if (SESSION_STORAGE_PREFIXES.some(prefix => key === prefix || key.indexOf(prefix + '_') === 0 || key.indexOf(prefix + ':') === 0)) {
         sessionStorage.removeItem(key)
       }
     }

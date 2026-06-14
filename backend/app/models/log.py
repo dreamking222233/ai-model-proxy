@@ -1,4 +1,4 @@
-"""ORM models for health_check_log, request_log, system_config, operation_log, user_balance, consumption_record."""
+"""ORM models for logs, system config, announcements, balances, and subscriptions."""
 
 from sqlalchemy import (
     Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, Date, func, UniqueConstraint, Index,
@@ -142,6 +142,28 @@ class SystemConfig(Base):
     config_value = Column(Text, nullable=False)
     config_type = Column(String(10), nullable=False, default="string")
     description = Column(String(512), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class PlatformAnnouncement(Base):
+    """Platform announcement entry managed by admins."""
+
+    __tablename__ = "platform_announcement"
+    __table_args__ = (
+        Index("idx_platform_announcement_status", "status"),
+        Index("idx_platform_announcement_popup", "show_popup"),
+        Index("idx_platform_announcement_sort", "sort_order", "id"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    title = Column(String(128), nullable=False)
+    content = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="draft", comment="draft/published/offline")
+    show_popup = Column(SmallInteger, nullable=False, default=1, comment="1=login popup, 0=header only")
+    sort_order = Column(Integer, nullable=False, default=0)
+    published_at = Column(DateTime, nullable=True)
+    created_by_user_id = Column(BigInteger, nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

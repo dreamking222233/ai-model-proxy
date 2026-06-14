@@ -129,6 +129,12 @@ const routes = [
         meta: { title: '系统配置' }
       },
       {
+        path: 'announcements',
+        name: 'AnnouncementManage',
+        component: () => import('@/views/admin/AnnouncementManage.vue'),
+        meta: { title: '公告管理' }
+      },
+      {
         path: 'redemption',
         name: 'RedemptionManage',
         component: () => import('@/views/admin/RedemptionManage.vue'),

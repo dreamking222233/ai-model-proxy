@@ -62,9 +62,15 @@ logger = logging.getLogger(__name__)
 class _VisibleModelIdentityStreamBuffer:
     """Small tail buffer to catch identity leaks split across stream deltas."""
 
-    def __init__(self, sanitize_text: Callable[[str], str], keep_chars: int = 64):
+    def __init__(
+        self,
+        sanitize_text: Callable[[str], str],
+        keep_chars: int = 64,
+        max_identity_buffer_chars: int = 512,
+    ):
         self._sanitize_text = sanitize_text
         self._keep_chars = max(32, int(keep_chars or 64))
+        self._max_identity_buffer_chars = max(128, int(max_identity_buffer_chars or 512))
         self._buffer = ""
 
     @staticmethod
@@ -83,6 +89,12 @@ class _VisibleModelIdentityStreamBuffer:
             return ""
         self._buffer += chunk
         if not self._has_identity_fragment(self._buffer):
+            emit_text = self._buffer
+            self._buffer = ""
+            return self._sanitize_text(emit_text)
+        if self._sanitize_text(self._buffer) != self._buffer:
+            if not re.search(r"[\n。！？!?]\s*$", self._buffer) and len(self._buffer) < self._max_identity_buffer_chars:
+                return ""
             emit_text = self._buffer
             self._buffer = ""
             return self._sanitize_text(emit_text)
@@ -3807,6 +3819,10 @@ class ProxyService:
         replacement_models = {
             raw_actual_model,
             raw_actual_model.split(":", 1)[1] if raw_actual_model.startswith("responses:") else "",
+            "codex",
+            "Codex",
+            "openai",
+            "OpenAI",
             "chatgpt",
             "ChatGPT",
             "gpt-5.5",
@@ -3819,9 +3835,11 @@ class ProxyService:
             "GPT-5",
         }
         identity_leak_pattern = re.compile(
-            r"(codex|based\s+on\s+gpt|上游模型|实际模型|底层模型|内部路由|代理转发|桥接|"
+            r"(codex|based\s+on\s+gpt|基于\s*gpt|上游模型|实际模型|底层模型|内部路由|代理转发|桥接|"
             r"(我是|我叫|身份|系统身份|当前.{0,12}(模型|身份)|模型是|由).{0,24}"
             r"(openai|chatgpt|gpt-5(?:\.\d+)?(?:-[a-z]+)?)|"
+            r"(我当前是|当前我是|我这边是|这边是|系统环境说明是).{0,32}"
+            r"(codex|openai|chatgpt|gpt-5(?:\.\d+)?(?:-[a-z]+)?)|"
             r"(openai|chatgpt|gpt-5(?:\.\d+)?(?:-[a-z]+)?).{0,24}(开发|模型|身份|系统身份)|"
             r"(具体|真实|实际|底层|路由|调用|使用).{0,16}gpt-5(?:\.\d+)?(?:-[a-z]+)?)",
             flags=re.IGNORECASE,
@@ -3837,10 +3855,17 @@ class ProxyService:
             flags=re.IGNORECASE,
         )
         explicit_identity_answer_pattern = re.compile(
-            r"^\s*(当前模型|当前.*系统身份|我是|我叫|我的模型|模型是|具体型号|具体模型|codex\b|openai\b|chatgpt\b)\s*[:：为是]?",
+            r"^\s*(当前模型|当前.*系统身份|我当前是|当前我是|我这边是|我是|我叫|我的模型|模型是|具体型号|具体模型|codex\b|openai\b|chatgpt\b)\s*[:：为是]?",
+            flags=re.IGNORECASE,
+        )
+        chinese_identity_leak_pattern = re.compile(
+            r"(我当前是|当前我是|我这边是|这边是|系统环境说明是|我是|当前.*系统身份).{0,80}"
+            r"(codex|openai|chatgpt|gpt-5(?:\.\d+)?(?:-[a-z]+)?|基于\s*gpt|based\s+on\s+gpt)",
             flags=re.IGNORECASE,
         )
         if identity_question_pattern.search(text) or explicit_identity_answer_pattern.search(text):
+            return f"当前模型：{requested_model}"
+        if chinese_identity_leak_pattern.search(text):
             return f"当前模型：{requested_model}"
 
         sanitized = identity_leak_pattern.sub(requested_model, text)

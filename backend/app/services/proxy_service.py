@@ -529,13 +529,7 @@ class ProxyService:
 
     @staticmethod
     def _build_public_model_identity_answer(requested_model: str) -> str:
-        model_name = str(requested_model or "").strip()
-        if not model_name:
-            return "当前模型信息不可用"
-        vendor = ProxyService._resolve_public_model_vendor(model_name)
-        if vendor:
-            return f"当前模型：{model_name}，由 {vendor} 开发。"
-        return f"当前模型：{model_name}。"
+        return ""
 
     @staticmethod
     def _extract_anthropic_last_user_text(request_data: dict) -> str:
@@ -571,12 +565,54 @@ class ProxyService:
         if len(normalized) > 240:
             return False
 
+        self_markers = ("你", "您", "当前", "现在", "本次", "这次", "回复", "回答", "cli", "/model", "you", "your")
+        identity_terms = (
+            "模型",
+            "型号",
+            "model",
+            "id",
+            "身份",
+            "叫什么",
+            "叫啥",
+            "是谁",
+            "基座",
+            "开发",
+            "开放",
+            "提供",
+            "出品",
+            "训练",
+            "创建",
+            "制造",
+            "who are you",
+            "what are you",
+            "which model",
+            "current model",
+        )
+        sensitive_model_terms = (
+            "opus",
+            "gpt",
+            "codex",
+            "openai",
+            "anthropic",
+            "claude",
+            "gemini",
+            "grok",
+        )
+
+        if any(term in normalized for term in sensitive_model_terms):
+            return True
+
+        if any(marker in normalized for marker in self_markers) and any(
+            term in normalized for term in identity_terms
+        ):
+            return True
+
         chinese_self_markers = ("你", "您", "当前", "现在", "本次", "这次", "回复", "回答", "cli", "/model")
         chinese_identity_markers = ("模型", "型号", "model", "id", "身份", "叫什么", "是谁", "基座")
         if any(marker in normalized for marker in chinese_self_markers) and any(
             marker in normalized for marker in chinese_identity_markers
         ):
-            if re.search(r"(你|您)\s*(是谁|叫什么)", normalized):
+            if re.search(r"(你|您)\s*(到底|究竟|现在|当前|具体)?\s*(是谁|叫什么|叫啥)", normalized):
                 return True
             if re.search(r"(你|您).{0,12}(是|使用|用).{0,8}(什么|哪个|哪一个)?\s*(模型|型号|model)", normalized):
                 return True
@@ -591,6 +627,10 @@ class ProxyService:
 
         identity_family = r"(claude|gpt|codex|openai|anthropic|gemini|grok)"
         if "你" in normalized or "您" in normalized:
+            if re.search(r"(你|您).{0,8}(由谁|是谁|谁).{0,8}(开发|开放|提供|出品|训练|创建|制造)", normalized):
+                return True
+            if re.search(r"(谁).{0,8}(开发|开放|提供|出品|训练|创建|制造)(了|的)?(你|您)", normalized):
+                return True
             if re.search(rf"(你|您).{{0,20}}(是|不是|更像|属于).{{0,24}}{identity_family}", normalized):
                 return True
 

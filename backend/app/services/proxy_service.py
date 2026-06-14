@@ -518,6 +518,226 @@ class ProxyService:
         return f"{public_identity}。\n{public_identity_en}.\n{identity_guard}"
 
     @staticmethod
+    def _build_public_model_identity_answer(requested_model: str) -> str:
+        model_name = str(requested_model or "").strip()
+        if not model_name:
+            return "当前模型信息不可用"
+        vendor = ProxyService._resolve_public_model_vendor(model_name)
+        if vendor:
+            return f"当前模型：{model_name}，由 {vendor} 开发。"
+        return f"当前模型：{model_name}。"
+
+    @staticmethod
+    def _extract_anthropic_last_user_text(request_data: dict) -> str:
+        messages = request_data.get("messages")
+        if not isinstance(messages, list):
+            return ""
+        for message in reversed(messages):
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role", "") or "") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts: list[str] = []
+                for item in content:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        item_type = str(item.get("type", "") or "")
+                        if item_type in {"text", "input_text"} and item.get("text") is not None:
+                            parts.append(str(item.get("text")))
+                return "\n".join(part for part in parts if part)
+            return ""
+        return ""
+
+    @staticmethod
+    def _is_current_model_identity_query(text: Any) -> bool:
+        normalized = re.sub(r"\s+", " ", str(text or "").strip()).lower()
+        if not normalized:
+            return False
+        if len(normalized) > 240:
+            return False
+
+        chinese_self_markers = ("你", "您", "当前", "现在", "本次", "这次", "回复", "回答", "cli", "/model")
+        chinese_identity_markers = ("模型", "型号", "model", "id", "身份", "叫什么", "是谁", "基座")
+        if any(marker in normalized for marker in chinese_self_markers) and any(
+            marker in normalized for marker in chinese_identity_markers
+        ):
+            if re.search(r"(你|您)\s*(是谁|叫什么)", normalized):
+                return True
+            if re.search(r"(你|您).{0,12}(是|使用|用).{0,8}(什么|哪个|哪一个)?\s*(模型|型号|model)", normalized):
+                return True
+            if re.search(r"(你|您).{0,12}(模型|型号|model|身份)", normalized):
+                return True
+            if re.search(r"(当前|现在|本次|这次).{0,20}(模型|型号|model|基座)", normalized):
+                return True
+            if re.search(r"(回复|回答).{0,20}(模型|型号|model)", normalized):
+                return True
+            if "/model" in normalized and re.search(r"(模型|型号|model|当前)", normalized):
+                return True
+
+        english_patterns = (
+            r"\bwhat\s+model\s+(are\s+you|is\s+this)\b",
+            r"\bwhich\s+model\s+(are\s+you|is\s+this)\b",
+            r"\bwho\s+are\s+you\b",
+            r"\byour\s+(model|model\s+id|identity)\b",
+            r"\bcurrent\s+model\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in english_patterns)
+
+    @staticmethod
+    def _should_short_circuit_model_identity_request(request_data: dict) -> bool:
+        return ProxyService._is_current_model_identity_query(
+            ProxyService._extract_anthropic_last_user_text(request_data)
+        )
+
+    @staticmethod
+    def _log_synthetic_success_request(
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_id: str,
+        requested_model: str,
+        client_ip: str,
+        is_stream: bool,
+        response_time_ms: int,
+        request_type: str = "chat",
+    ) -> None:
+        try:
+            with session_scope() as write_db:
+                if ProxyService._request_log_exists(write_db, request_id):
+                    return
+                write_db.add(
+                    RequestLog(
+                        request_id=request_id,
+                        user_id=ProxyService._safe_object_id(user),
+                        agent_id=getattr(user, "agent_id", None),
+                        user_api_key_id=ProxyService._safe_object_id(api_key_record),
+                        channel_id=None,
+                        channel_name="system",
+                        requested_model=requested_model,
+                        actual_model=requested_model,
+                        protocol_type="system",
+                        request_type=request_type,
+                        billing_type="free",
+                        is_stream=1 if is_stream else 0,
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        raw_input_tokens=0,
+                        raw_output_tokens=0,
+                        raw_total_tokens=0,
+                        response_time_ms=response_time_ms,
+                        status="success",
+                        error_message=None,
+                        client_ip=client_ip,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("Failed to log synthetic identity response request_id=%s error=%s", request_id, exc)
+
+    @staticmethod
+    def _build_anthropic_identity_json_response(
+        request_id: str,
+        requested_model: str,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content={
+                "id": f"msg_identity_{uuid.uuid4().hex[:24]}",
+                "type": "message",
+                "role": "assistant",
+                "model": requested_model,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": ProxyService._build_public_model_identity_answer(requested_model),
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            },
+            headers={"X-Request-ID": request_id},
+        )
+
+    @staticmethod
+    def _build_anthropic_identity_streaming_response(
+        request_id: str,
+        requested_model: str,
+    ) -> StreamingResponse:
+        async def event_source():
+            message_id = f"msg_identity_{uuid.uuid4().hex[:24]}"
+            text = ProxyService._build_public_model_identity_answer(requested_model)
+            events = [
+                (
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": message_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "model": requested_model,
+                            "content": [],
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "usage": {"input_tokens": 0, "output_tokens": 0},
+                        },
+                    },
+                ),
+                (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                ),
+                (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                        "usage": {"output_tokens": 0},
+                    },
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            ]
+            for event_name, payload in events:
+                yield f"event: {event_name}\n"
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_source(),
+            media_type="text/event-stream",
+            headers=ProxyService._stream_response_headers(request_id),
+        )
+
+    @staticmethod
+    def _build_anthropic_identity_response(
+        request_id: str,
+        requested_model: str,
+        is_stream: bool,
+    ):
+        if is_stream:
+            return ProxyService._build_anthropic_identity_streaming_response(
+                request_id,
+                requested_model,
+            )
+        return ProxyService._build_anthropic_identity_json_response(request_id, requested_model)
+
+    @staticmethod
     def _inject_model_identity(request_data: dict, requested_model: str, protocol: str) -> None:
         """Inject a model identity system prompt into the request body (in-place).
 
@@ -6589,6 +6809,23 @@ class ProxyService:
 
             # Validate context before quota precheck or upstream calls to avoid avoidable upstream cost.
             ProxyService._validate_request_length(db, request_data, unified_model, protocol="anthropic")
+
+            if ProxyService._should_short_circuit_model_identity_request(request_data):
+                ProxyService._log_synthetic_success_request(
+                    user,
+                    api_key_record,
+                    request_id,
+                    str(requested_model or ""),
+                    client_ip,
+                    bool(is_stream),
+                    0,
+                    request_type="chat",
+                )
+                return ProxyService._build_anthropic_identity_response(
+                    request_id,
+                    str(requested_model or ""),
+                    bool(is_stream),
+                )
 
             quota_precheck = ProxyService._build_text_quota_precheck(
                 db,

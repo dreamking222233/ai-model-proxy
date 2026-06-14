@@ -8696,7 +8696,7 @@ class ProxyService:
                         user_id=ProxyService._safe_object_id(user),
                         api_key_id=ProxyService._safe_object_id(api_key_record),
                         requested_model=requested_model,
-                        protocol_type="anthropic",
+                        protocol_type=getattr(channel, "protocol_type", None) or "anthropic",
                         client_ip=client_ip,
                         conversation_session_id=(
                             conversation_shadow_info or {}
@@ -9151,7 +9151,7 @@ class ProxyService:
                         user_id=ProxyService._safe_object_id(user),
                         api_key_id=ProxyService._safe_object_id(api_key_record),
                         requested_model=requested_model,
-                        protocol_type="anthropic",
+                        protocol_type=getattr(channel, "protocol_type", None) or "anthropic",
                         client_ip=client_ip,
                         conversation_session_id=(
                             conversation_shadow_info or {}

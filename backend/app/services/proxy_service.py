@@ -62,16 +62,30 @@ logger = logging.getLogger(__name__)
 class _VisibleModelIdentityStreamBuffer:
     """Small tail buffer to catch identity leaks split across stream deltas."""
 
-    def __init__(self, sanitize_text: Callable[[str], str], keep_chars: int = 256):
+    def __init__(self, sanitize_text: Callable[[str], str], keep_chars: int = 64):
         self._sanitize_text = sanitize_text
-        self._keep_chars = max(96, int(keep_chars or 256))
+        self._keep_chars = max(32, int(keep_chars or 64))
         self._buffer = ""
+
+    @staticmethod
+    def _has_identity_fragment(text: str) -> bool:
+        return bool(
+            re.search(
+                r"(cod|code|codex|open|openai|chat|chatgpt|gpt|based|模型|身份|当前|我是|我叫|底层|实际|上游|路由)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def feed(self, text: Any) -> str:
         chunk = str(text or "")
         if not chunk:
             return ""
         self._buffer += chunk
+        if not self._has_identity_fragment(self._buffer):
+            emit_text = self._buffer
+            self._buffer = ""
+            return self._sanitize_text(emit_text)
         if len(self._buffer) <= self._keep_chars:
             return ""
         emit_text = self._buffer[:-self._keep_chars]

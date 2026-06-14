@@ -1105,6 +1105,8 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('anthropic_prompt_cache_user_visible', 'false', 'boolean', '用户端是否显示 Anthropic Prompt Cache 读写详情'),
 ('anthropic_prompt_cache_billing_mode', 'logical', 'string', 'Anthropic Prompt Cache 计费口径：logical 或 actual_upstream'),
 ('anthropic_prompt_cache_override_min_logical_tokens', '10000', 'number', '覆盖低效用户 cache_control 的最小逻辑输入 token 阈值'),
+('anthropic_prompt_cache_override_quick_fail_consecutive', '2', 'number', '连续低命中多少次后立即覆盖用户 cache_control'),
+('anthropic_prompt_cache_override_recovery_hit_ratio', '0.50', 'number', '连续恢复命中率达到该值后才停止覆盖用户 cache_control'),
 ('conversation_state_compaction_enabled', 'false', 'boolean', '是否启用会话状态压缩'),
 ('conversation_state_compaction_stage', 'shadow', 'string', '会话状态压缩阶段：off/shadow/non_stream_active/stream_shadow/stream_active'),
 ('conversation_state_compaction_mode', 'safe_history', 'string', '会话状态压缩模式：off/safe_history/stateful_preferred'),

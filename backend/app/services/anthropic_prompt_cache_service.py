@@ -414,11 +414,23 @@ class AnthropicPromptCacheService:
             0.25,
         )
         low_hit_ratio = min(max(low_hit_ratio, 0.0), 1.0)
+        recovery_hit_ratio = AnthropicPromptCacheService._config_float(
+            db,
+            "anthropic_prompt_cache_override_recovery_hit_ratio",
+            0.50,
+        )
+        recovery_hit_ratio = min(max(recovery_hit_ratio, low_hit_ratio), 1.0)
         min_logical_tokens = AnthropicPromptCacheService._config_int(
             db,
             "anthropic_prompt_cache_override_min_logical_tokens",
             10000,
         )
+        quick_fail_count = AnthropicPromptCacheService._config_int(
+            db,
+            "anthropic_prompt_cache_override_quick_fail_consecutive",
+            2,
+        )
+        quick_fail_count = max(1, min(quick_fail_count, required_count))
         lookback_minutes = AnthropicPromptCacheService._config_int(
             db,
             "anthropic_prompt_cache_override_lookback_minutes",
@@ -478,9 +490,21 @@ class AnthropicPromptCacheService:
         if len(ratios) < required_count:
             return {"enabled": False, "reason": f"insufficient_large_recent_{scope}"}
 
-        for ratio in ratios:
-            if ratio >= low_hit_ratio:
-                return {"enabled": False, "reason": f"recent_hit_ratio_ok_{scope}"}
+        recent_fail_ratios = ratios[:quick_fail_count]
+        if len(recent_fail_ratios) >= quick_fail_count and all(
+            ratio < low_hit_ratio for ratio in recent_fail_ratios
+        ):
+            return {
+                "enabled": True,
+                "reason": (
+                    f"{scope}_latest_{quick_fail_count}_hit_ratio_below_"
+                    f"{low_hit_ratio:.2f}:"
+                    + ",".join(f"{ratio:.4f}" for ratio in recent_fail_ratios)
+                ),
+            }
+
+        if all(ratio >= recovery_hit_ratio for ratio in ratios[:required_count]):
+            return {"enabled": False, "reason": f"recent_hit_ratio_recovered_{scope}"}
 
         return {
             "enabled": True,

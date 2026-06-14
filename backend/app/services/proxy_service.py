@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 class _VisibleModelIdentityStreamBuffer:
-    """Small tail buffer to catch identity leaks split across stream deltas."""
+    """Deprecated compatibility buffer; user-visible text is no longer rewritten."""
 
     def __init__(self, sanitize_text: Callable[[str], str], keep_chars: int = 64):
         self._sanitize_text = sanitize_text
@@ -98,6 +98,16 @@ class _VisibleModelIdentityStreamBuffer:
         emit_text = self._buffer
         self._buffer = ""
         return self._sanitize_text(emit_text)
+
+
+class _PassthroughTextBuffer:
+    """Compatibility shim for stream paths that should not rewrite text."""
+
+    def feed(self, text: Any) -> str:
+        return str(text or "")
+
+    def flush(self) -> str:
+        return ""
 
 
 # Default timeout for upstream requests (seconds)
@@ -579,6 +589,11 @@ class ProxyService:
             if "/model" in normalized and re.search(r"(模型|型号|model|当前)", normalized):
                 return True
 
+        identity_family = r"(claude|gpt|codex|openai|anthropic|gemini|grok)"
+        if "你" in normalized or "您" in normalized:
+            if re.search(rf"(你|您).{{0,20}}(是|不是|更像|属于).{{0,24}}{identity_family}", normalized):
+                return True
+
         english_patterns = (
             r"\bwhat\s+model\s+(are\s+you|is\s+this)\b",
             r"\bwhich\s+model\s+(are\s+you|is\s+this)\b",
@@ -619,7 +634,7 @@ class ProxyService:
                         channel_name="system",
                         requested_model=requested_model,
                         actual_model=requested_model,
-                        protocol_type="system",
+                        protocol_type="anthropic",
                         request_type=request_type,
                         billing_type="free",
                         is_stream=1 if is_stream else 0,
@@ -3987,16 +4002,9 @@ class ProxyService:
     def _rewrite_openai_payload_model(payload: dict[str, Any], requested_model: str) -> dict[str, Any]:
         """Rewrite OpenAI-compatible payloads to the client-requested model alias."""
         rewritten = ProxyService._normalize_openai_chat_response_payload(payload)
-        actual_model = ""
-        if isinstance(rewritten, dict):
-            actual_model = str(rewritten.get("model") or "")
         if requested_model and isinstance(rewritten, dict):
             rewritten["model"] = requested_model
-        return ProxyService._sanitize_visible_model_identity_payload(
-            rewritten,
-            requested_model,
-            actual_model,
-        )
+        return rewritten
 
     @staticmethod
     def _rewrite_anthropic_payload_model(payload: dict[str, Any], requested_model: str) -> dict[str, Any]:
@@ -4005,18 +4013,12 @@ class ProxyService:
         if not requested_model or not isinstance(rewritten, dict):
             return rewritten
 
-        actual_model = str(rewritten.get("model") or "")
         if isinstance(rewritten.get("message"), dict):
-            actual_model = str(rewritten["message"].get("model") or actual_model)
             rewritten["message"]["model"] = requested_model
         elif rewritten.get("type") == "message" or "model" in rewritten:
             rewritten["model"] = requested_model
 
-        return ProxyService._sanitize_visible_model_identity_payload(
-            rewritten,
-            requested_model,
-            actual_model,
-        )
+        return rewritten
 
     @staticmethod
     def _sanitize_visible_model_text(
@@ -6218,17 +6220,11 @@ class ProxyService:
         rewritten = copy.deepcopy(payload)
         if not requested_model:
             return rewritten
-        actual_model = str(rewritten.get("model") or "")
         if isinstance(rewritten.get("response"), dict):
-            actual_model = str(rewritten["response"].get("model") or actual_model)
             rewritten["response"]["model"] = requested_model
         elif rewritten.get("object") == "response":
             rewritten["model"] = requested_model
-        return ProxyService._sanitize_visible_model_identity_payload(
-            rewritten,
-            requested_model,
-            actual_model,
-        )
+        return rewritten
 
     @staticmethod
     def _build_responses_error_payload(
@@ -6787,6 +6783,7 @@ class ProxyService:
         request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+        original_request_data = copy.deepcopy(request_data)
 
         ProxyService._normalize_anthropic_system_messages(request_data)
 
@@ -6810,7 +6807,14 @@ class ProxyService:
             # Validate context before quota precheck or upstream calls to avoid avoidable upstream cost.
             ProxyService._validate_request_length(db, request_data, unified_model, protocol="anthropic")
 
-            if ProxyService._should_short_circuit_model_identity_request(request_data):
+            if ProxyService._should_short_circuit_model_identity_request(original_request_data):
+                logger.info(
+                    "Short-circuit Anthropic model identity request request_id=%s user_id=%s model=%s stream=%s",
+                    request_id,
+                    ProxyService._safe_object_id(user),
+                    requested_model,
+                    bool(is_stream),
+                )
                 ProxyService._log_synthetic_success_request(
                     user,
                     api_key_record,
@@ -7130,13 +7134,7 @@ class ProxyService:
             logical_input_tokens = 0
             cache_read_input_tokens = 0
             cache_creation_input_tokens = 0
-            text_buffer = _VisibleModelIdentityStreamBuffer(
-                lambda value: ProxyService._sanitize_visible_model_identity_text(
-                    value,
-                    requested_model,
-                    model_name,
-                )
-            )
+            text_buffer = _PassthroughTextBuffer()
 
             timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
             async for line in ProxyService._stream_lines_with_retries(
@@ -7226,12 +7224,6 @@ class ProxyService:
                                 if content:
                                     sanitized_content = text_buffer.feed(content)
                                     delta["content"] = sanitized_content
-                                if reasoning_content:
-                                    delta["reasoning_content"] = ProxyService._sanitize_visible_model_identity_text(
-                                        reasoning_content,
-                                        requested_model,
-                                        model_name,
-                                    )
                                 if finish_reason:
                                     flushed_content = text_buffer.flush()
                                     if flushed_content:
@@ -9138,18 +9130,12 @@ class ProxyService:
                         usage_state: dict[str, Any] = {}
                         current_headers = dict(headers)
                         current_headers.update(variant.get("header_overrides") or {})
-                        text_buffers: dict[int, _VisibleModelIdentityStreamBuffer] = {}
+                        text_buffers: dict[int, _PassthroughTextBuffer] = {}
 
-                        def get_text_buffer(block_index: int) -> _VisibleModelIdentityStreamBuffer:
+                        def get_text_buffer(block_index: int) -> _PassthroughTextBuffer:
                             buffer = text_buffers.get(block_index)
                             if buffer is None:
-                                buffer = _VisibleModelIdentityStreamBuffer(
-                                    lambda value: ProxyService._sanitize_visible_model_identity_text(
-                                        value,
-                                        requested_model,
-                                        request_data.get("model"),
-                                    )
-                                )
+                                buffer = _PassthroughTextBuffer()
                                 text_buffers[block_index] = buffer
                             return buffer
 
@@ -9375,11 +9361,6 @@ class ProxyService:
                                                 delta["text"] = get_text_buffer(block_index).feed(text)
                                             if thinking:
                                                 collector.add_chunk(thinking)
-                                                delta["thinking"] = ProxyService._sanitize_visible_model_identity_text(
-                                                    thinking,
-                                                    requested_model,
-                                                    request_data.get("model"),
-                                                )
 
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")

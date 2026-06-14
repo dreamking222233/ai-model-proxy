@@ -8693,6 +8693,14 @@ class ProxyService:
                         db,
                         request_attempt["request_data"],
                         request_headers=request_headers,
+                        user_id=ProxyService._safe_object_id(user),
+                        api_key_id=ProxyService._safe_object_id(api_key_record),
+                        requested_model=requested_model,
+                        protocol_type="anthropic",
+                        client_ip=client_ip,
+                        conversation_session_id=(
+                            conversation_shadow_info or {}
+                        ).get("conversation_session_id"),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None
@@ -9140,6 +9148,14 @@ class ProxyService:
                         db,
                         request_payload,
                         request_headers=request_headers,
+                        user_id=ProxyService._safe_object_id(user),
+                        api_key_id=ProxyService._safe_object_id(api_key_record),
+                        requested_model=requested_model,
+                        protocol_type="anthropic",
+                        client_ip=client_ip,
+                        conversation_session_id=(
+                            conversation_shadow_info or {}
+                        ).get("conversation_session_id"),
                     )
                     release_session_connection(db)
                     prompt_fallback_reason: Optional[str] = None

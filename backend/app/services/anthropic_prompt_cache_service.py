@@ -8,10 +8,12 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.models.log import RequestLog
 from app.services.health_service import get_system_config
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,13 @@ class AnthropicPromptCacheService:
         db: Session,
         request_data: dict[str, Any],
         request_headers: Optional[dict[str, str]] = None,
+        *,
+        user_id: Optional[int] = None,
+        api_key_id: Optional[int] = None,
+        requested_model: Optional[str] = None,
+        protocol_type: Optional[str] = None,
+        client_ip: Optional[str] = None,
+        conversation_session_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Build request variants for prompt-cache main path and fallbacks."""
         base_variant = {
@@ -66,24 +75,69 @@ class AnthropicPromptCacheService:
                 "static_ttl": None,
                 "history_ttl": None,
                 "beta_header": None,
+                "overrode_user_cache_control": False,
+                "override_reason": None,
             },
         }
 
         if not AnthropicPromptCacheService.is_enabled(db):
             return [base_variant]
 
+        override_active = False
         if AnthropicPromptCacheService._has_existing_cache_control(request_data):
+            override_meta = AnthropicPromptCacheService._should_override_user_cache_control(
+                db,
+                user_id=user_id,
+                api_key_id=api_key_id,
+                requested_model=requested_model,
+                protocol_type=protocol_type,
+                client_ip=client_ip,
+                conversation_session_id=conversation_session_id,
+            )
+            if override_meta.get("enabled"):
+                override_active = True
+                request_data = copy.deepcopy(request_data)
+                removed_count = AnthropicPromptCacheService._remove_existing_cache_control(request_data)
+                base_variant["request_data"] = copy.deepcopy(request_data)
+                logger.info(
+                    "Overriding user cache_control after poor prompt-cache history user_id=%s model=%s "
+                    "protocol=%s session=%s client_ip=%s removed=%s reason=%s",
+                    user_id,
+                    requested_model,
+                    protocol_type,
+                    conversation_session_id,
+                    client_ip,
+                    removed_count,
+                    override_meta.get("reason"),
+                )
+            else:
+                base_variant["meta"] = {
+                    "attempted": False,
+                    "source": "user",
+                    "skip_reason": "user_cache_control_present",
+                    "applied_static_breakpoint": False,
+                    "applied_history_breakpoint": False,
+                    "static_ttl": None,
+                    "history_ttl": None,
+                    "beta_header": None,
+                    "overrode_user_cache_control": False,
+                    "override_reason": override_meta.get("reason"),
+                }
+                return [base_variant]
+
+        if override_active:
             base_variant["meta"] = {
                 "attempted": False,
-                "source": "user",
-                "skip_reason": "user_cache_control_present",
+                "source": "system_override",
+                "skip_reason": "fallback_no_cache",
                 "applied_static_breakpoint": False,
                 "applied_history_breakpoint": False,
                 "static_ttl": None,
                 "history_ttl": None,
                 "beta_header": None,
+                "overrode_user_cache_control": True,
+                "override_reason": "poor_recent_prompt_cache",
             }
-            return [base_variant]
 
         static_ttl = AnthropicPromptCacheService._normalize_ttl(
             get_system_config(db, "anthropic_prompt_cache_static_ttl", "5m")
@@ -107,6 +161,8 @@ class AnthropicPromptCacheService:
             beta_header=beta_header,
             label="full",
         )
+        if override_active:
+            AnthropicPromptCacheService._mark_override_variant(full_variant)
         if full_variant["meta"]["attempted"]:
             variants.append(full_variant)
 
@@ -120,6 +176,8 @@ class AnthropicPromptCacheService:
                     beta_header="",
                     label="fallback_5m",
                 )
+                if override_active:
+                    AnthropicPromptCacheService._mark_override_variant(fallback_variant)
                 if (
                     fallback_variant["meta"]["attempted"]
                     and AnthropicPromptCacheService._variant_signature(fallback_variant)
@@ -137,6 +195,8 @@ class AnthropicPromptCacheService:
             "static_ttl": None,
             "history_ttl": None,
             "beta_header": None,
+            "overrode_user_cache_control": override_active,
+            "override_reason": "poor_recent_prompt_cache" if override_active else None,
         }
         variants.append(no_cache_variant)
 
@@ -242,6 +302,8 @@ class AnthropicPromptCacheService:
             "beta_header": (attempt_meta or {}).get("beta_header"),
             "fallback_triggered": fallback_triggered,
             "fallback_reason": fallback_reason,
+            "overrode_user_cache_control": bool((attempt_meta or {}).get("overrode_user_cache_control")),
+            "override_reason": (attempt_meta or {}).get("override_reason"),
             "usage": usage_summary,
         }
         details["anthropic_prompt_cache"] = prompt_cache_details
@@ -307,8 +369,151 @@ class AnthropicPromptCacheService:
                 "history_ttl": history_ttl if applied_history else None,
                 "beta_header": beta_header if requires_beta and beta_header else None,
                 "label": label,
+                "overrode_user_cache_control": False,
+                "override_reason": None,
             },
         }
+
+    @staticmethod
+    def _mark_override_variant(variant: dict[str, Any]) -> None:
+        """Annotate a variant that replaced ineffective user cache controls."""
+        meta = variant.get("meta") or {}
+        meta["source"] = "system_override"
+        meta["overrode_user_cache_control"] = True
+        meta["override_reason"] = "poor_recent_prompt_cache"
+        variant["meta"] = meta
+
+    @staticmethod
+    def _should_override_user_cache_control(
+        db: Session,
+        *,
+        user_id: Optional[int],
+        api_key_id: Optional[int],
+        requested_model: Optional[str],
+        protocol_type: Optional[str],
+        client_ip: Optional[str],
+        conversation_session_id: Optional[str],
+    ) -> dict[str, Any]:
+        """Return whether recent same-session prompt-cache results justify overriding user controls."""
+        if not user_id or not requested_model:
+            return {"enabled": False, "reason": "missing_context"}
+
+        enabled = bool(get_system_config(db, "anthropic_prompt_cache_override_user_enabled", True))
+        if not enabled:
+            return {"enabled": False, "reason": "override_disabled"}
+
+        required_count = AnthropicPromptCacheService._config_int(
+            db,
+            "anthropic_prompt_cache_override_min_consecutive",
+            3,
+        )
+        required_count = max(1, min(required_count, 10))
+        low_hit_ratio = AnthropicPromptCacheService._config_float(
+            db,
+            "anthropic_prompt_cache_override_low_hit_ratio",
+            0.25,
+        )
+        low_hit_ratio = min(max(low_hit_ratio, 0.0), 1.0)
+        min_logical_tokens = AnthropicPromptCacheService._config_int(
+            db,
+            "anthropic_prompt_cache_override_min_logical_tokens",
+            50000,
+        )
+        lookback_minutes = AnthropicPromptCacheService._config_int(
+            db,
+            "anthropic_prompt_cache_override_lookback_minutes",
+            30,
+        )
+        lookback_minutes = max(1, min(lookback_minutes, 1440))
+
+        query = (
+            db.query(RequestLog)
+            .filter(RequestLog.user_id == user_id)
+            .filter(RequestLog.requested_model == str(requested_model))
+            .filter(RequestLog.status == "success")
+        )
+        if api_key_id:
+            query = query.filter(RequestLog.user_api_key_id == api_key_id)
+        if protocol_type:
+            query = query.filter(RequestLog.protocol_type == str(protocol_type))
+
+        if conversation_session_id:
+            query = query.filter(RequestLog.conversation_session_id == str(conversation_session_id))
+            scope = "conversation_session"
+        else:
+            since = datetime.utcnow() - timedelta(minutes=lookback_minutes)
+            query = query.filter(RequestLog.created_at >= since)
+            if client_ip:
+                query = query.filter(RequestLog.client_ip == str(client_ip))
+                scope = "client_ip_window"
+            else:
+                scope = "user_model_window"
+
+        recent_logs = query.order_by(RequestLog.id.desc()).limit(required_count).all()
+        if len(recent_logs) < required_count:
+            return {"enabled": False, "reason": f"insufficient_recent_{scope}"}
+
+        ratios: list[float] = []
+        for log in recent_logs:
+            cache_read = int(getattr(log, "upstream_cache_read_input_tokens", 0) or 0)
+            cache_create = int(getattr(log, "upstream_cache_creation_input_tokens", 0) or 0)
+            logical_tokens = int(getattr(log, "logical_input_tokens", 0) or 0)
+            if logical_tokens <= 0:
+                logical_tokens = (
+                    int(getattr(log, "upstream_input_tokens", 0) or 0)
+                    + cache_read
+                    + cache_create
+                )
+            if logical_tokens <= 0:
+                logical_tokens = (
+                    int(getattr(log, "input_tokens", 0) or 0)
+                    + cache_read
+                    + cache_create
+                )
+            if logical_tokens < min_logical_tokens:
+                return {"enabled": False, "reason": f"recent_request_too_small_{scope}"}
+            ratio = cache_read / logical_tokens if logical_tokens > 0 else 0.0
+            ratios.append(ratio)
+            if ratio >= low_hit_ratio:
+                return {"enabled": False, "reason": f"recent_hit_ratio_ok_{scope}"}
+
+        return {
+            "enabled": True,
+            "reason": (
+                f"{scope}_last_{required_count}_hit_ratio_below_"
+                f"{low_hit_ratio:.2f}:"
+                + ",".join(f"{ratio:.4f}" for ratio in ratios)
+            ),
+        }
+
+    @staticmethod
+    def _remove_existing_cache_control(value: Any) -> int:
+        """Remove cache_control recursively and return removed field count."""
+        removed = 0
+        if isinstance(value, dict):
+            if "cache_control" in value:
+                value.pop("cache_control", None)
+                removed += 1
+            for child in value.values():
+                removed += AnthropicPromptCacheService._remove_existing_cache_control(child)
+        elif isinstance(value, list):
+            for item in value:
+                removed += AnthropicPromptCacheService._remove_existing_cache_control(item)
+        return removed
+
+    @staticmethod
+    def _config_int(db: Session, key: str, default: int) -> int:
+        try:
+            return int(get_system_config(db, key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _config_float(db: Session, key: str, default: float) -> float:
+        try:
+            return float(get_system_config(db, key, default) or default)
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _has_existing_cache_control(request_data: dict[str, Any]) -> bool:

@@ -449,9 +449,7 @@ class AnthropicPromptCacheService:
             else:
                 scope = "user_model_window"
 
-        recent_logs = query.order_by(RequestLog.id.desc()).limit(required_count).all()
-        if len(recent_logs) < required_count:
-            return {"enabled": False, "reason": f"insufficient_recent_{scope}"}
+        recent_logs = query.order_by(RequestLog.id.desc()).limit(required_count * 5).all()
 
         ratios: list[float] = []
         for log in recent_logs:
@@ -471,9 +469,16 @@ class AnthropicPromptCacheService:
                     + cache_create
                 )
             if logical_tokens < min_logical_tokens:
-                return {"enabled": False, "reason": f"recent_request_too_small_{scope}"}
+                continue
             ratio = cache_read / logical_tokens if logical_tokens > 0 else 0.0
             ratios.append(ratio)
+            if len(ratios) >= required_count:
+                break
+
+        if len(ratios) < required_count:
+            return {"enabled": False, "reason": f"insufficient_large_recent_{scope}"}
+
+        for ratio in ratios:
             if ratio >= low_hit_ratio:
                 return {"enabled": False, "reason": f"recent_hit_ratio_ok_{scope}"}
 

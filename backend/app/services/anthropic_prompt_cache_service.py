@@ -417,7 +417,7 @@ class AnthropicPromptCacheService:
         min_logical_tokens = AnthropicPromptCacheService._config_int(
             db,
             "anthropic_prompt_cache_override_min_logical_tokens",
-            50000,
+            10000,
         )
         lookback_minutes = AnthropicPromptCacheService._config_int(
             db,

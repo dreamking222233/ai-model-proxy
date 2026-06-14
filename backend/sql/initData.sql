@@ -1103,6 +1103,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('anthropic_prompt_cache_beta_header', 'extended-cache-ttl-2025-04-11', 'string', 'Anthropic Prompt Cache 1h TTL beta header'),
 ('anthropic_prompt_cache_user_visible', 'false', 'boolean', '用户端是否显示 Anthropic Prompt Cache 读写详情'),
 ('anthropic_prompt_cache_billing_mode', 'logical', 'string', 'Anthropic Prompt Cache 计费口径：logical 或 actual_upstream'),
+('anthropic_prompt_cache_override_min_logical_tokens', '10000', 'number', '覆盖低效用户 cache_control 的最小逻辑输入 token 阈值'),
 ('conversation_state_compaction_enabled', 'false', 'boolean', '是否启用会话状态压缩'),
 ('conversation_state_compaction_stage', 'shadow', 'string', '会话状态压缩阶段：off/shadow/non_stream_active/stream_shadow/stream_active'),
 ('conversation_state_compaction_mode', 'safe_history', 'string', '会话状态压缩模式：off/safe_history/stateful_preferred'),

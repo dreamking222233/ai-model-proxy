@@ -3822,7 +3822,11 @@ class ProxyService:
             r"(你是谁|什么模型|模型.*(名称|型号|身份)|具体型号|当前.*模型|/model|cli.*(模型|路由)|路由到)",
             flags=re.IGNORECASE,
         )
-        if identity_question_pattern.search(text) or len(text) <= 400:
+        explicit_identity_answer_pattern = re.compile(
+            r"^\s*(当前模型|当前.*系统身份|我是|我叫|我的模型|模型是|具体型号|具体模型|codex\b|openai\b|chatgpt\b)\s*[:：为是]?",
+            flags=re.IGNORECASE,
+        )
+        if identity_question_pattern.search(text) or explicit_identity_answer_pattern.search(text):
             return f"当前模型：{requested_model}"
 
         sanitized = identity_leak_pattern.sub(requested_model, text)

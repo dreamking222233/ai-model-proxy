@@ -206,14 +206,19 @@ def verify_api_key_from_headers(
     if user.status != 1:
         raise ServiceException(status_code=403, detail="账号已被禁用", error_code="FORBIDDEN")
 
-    AgentService.assert_user_matches_site(
-        db,
-        user,
-        host=host,
-        x_site_host=x_site_host,
-        origin=origin,
-        referer=referer,
-    )
+    # API keys are meant to work against the shared API endpoint even for
+    # agent-owned users. Browser/client Origin or Referer can point at a
+    # provider UI and should not override the API host in this direct mode.
+    if AgentService.is_platform_api_host(host or ""):
+        site_kwargs = {"host": host}
+    else:
+        site_kwargs = {
+            "host": host,
+            "x_site_host": x_site_host,
+            "origin": origin,
+            "referer": referer,
+        }
+    AgentService.assert_user_matches_site(db, user, **site_kwargs)
 
     # Refresh cached subscription state before the request layer makes balance/quota decisions.
     if user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at):

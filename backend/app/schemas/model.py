@@ -1,6 +1,6 @@
 """Unified model, channel mapping, and override rule schemas."""
 
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from typing import Optional, List
 
@@ -17,6 +17,7 @@ class UnifiedModelCreate(BaseModel):
     model_name: str = Field(..., min_length=1, max_length=128)
     display_name: Optional[str] = Field(None, max_length=128)
     model_type: str = Field(default="chat", max_length=20)
+    model_series: str = Field(default="other", max_length=32)
     protocol_type: str = Field(default="openai", max_length=20)
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
@@ -35,6 +36,7 @@ class UnifiedModelUpdate(BaseModel):
     model_name: Optional[str] = Field(None, min_length=1, max_length=128)
     display_name: Optional[str] = Field(None, max_length=128)
     model_type: Optional[str] = Field(None, max_length=20)
+    model_series: Optional[str] = Field(None, max_length=32)
     protocol_type: Optional[str] = Field(None, max_length=20)
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Optional[Decimal] = Field(None, ge=0)
@@ -54,6 +56,7 @@ class UnifiedModelInfo(BaseModel):
     model_name: str
     display_name: Optional[str] = None
     model_type: str
+    model_series: str
     protocol_type: str
     max_tokens: Optional[int] = None
     input_price_per_million: Decimal
@@ -87,6 +90,57 @@ class ModelImageResolutionRuleInfo(BaseModel):
     credit_cost: Decimal
     is_default: int
     sort_order: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+# ===========================================================================
+# Price Adjustment Rules
+# ===========================================================================
+
+class ModelPriceAdjustmentRuleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    model_series: str = Field(default="all", max_length=32)
+    model_type: str = Field(default="all", max_length=20)
+    billing_type: str = Field(default="all", max_length=20)
+    multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    schedule_type: str = Field(default="always", max_length=20)
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: int = Field(default=100, ge=0)
+    enabled: int = Field(default=1, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class ModelPriceAdjustmentRuleUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    model_series: Optional[str] = Field(None, max_length=32)
+    model_type: Optional[str] = Field(None, max_length=20)
+    billing_type: Optional[str] = Field(None, max_length=20)
+    multiplier: Optional[Decimal] = Field(None, gt=0)
+    schedule_type: Optional[str] = Field(None, max_length=20)
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: Optional[int] = Field(None, ge=0)
+    enabled: Optional[int] = Field(None, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class ModelPriceAdjustmentRuleInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int
+    name: str
+    model_series: str
+    model_type: str
+    billing_type: str
+    multiplier: Decimal
+    schedule_type: str
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: int
+    enabled: int
+    description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

@@ -31,6 +31,10 @@
             <a-tag>{{ text || '-' }}</a-tag>
           </template>
 
+          <template slot="series" slot-scope="text">
+            <a-tag :color="getSeriesColor(text)">{{ getSeriesLabel(text) }}</a-tag>
+          </template>
+
           <template slot="billingType" slot-scope="text, record">
             <a-tag v-if="text === 'image_credit'" color="gold">
               {{ record.model_type === 'video' ? `媒体积分 ${record.image_credit_multiplier || 0.5}/秒` : `媒体积分 x${record.image_credit_multiplier || 1}` }}
@@ -253,6 +257,18 @@
             <a-select-option value="video">视频</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item label="模型系列">
+          <a-select v-model="modelForm.model_series" placeholder="选择模型系列">
+            <a-select-option
+              v-for="item in modelSeriesOptions"
+              :key="item.value"
+              :value="item.value"
+            >
+              {{ item.label }}
+            </a-select-option>
+          </a-select>
+          <div class="form-tip">用于价格调控规则匹配，可按 GPT、Claude、Grok、Gemini 等系列设置倍率。</div>
+        </a-form-item>
         <a-form-item label="协议">
           <a-select v-model="modelForm.protocol_type" placeholder="Select protocol">
             <a-select-option value="openai">OpenAI</a-select-option>
@@ -464,11 +480,20 @@ const IMAGE_RESOLUTION_RULE_PRESETS = {
   ]
 }
 
+const MODEL_SERIES_OPTIONS = [
+  { value: 'gpt', label: 'GPT', color: 'green' },
+  { value: 'claude', label: 'Claude', color: 'orange' },
+  { value: 'grok', label: 'Grok', color: 'black' },
+  { value: 'gemini', label: 'Gemini', color: 'blue' },
+  { value: 'other', label: '其他', color: 'default' }
+]
+
 export default {
   name: 'ModelManage',
   data() {
     return {
       activeTab: 'models',
+      modelSeriesOptions: MODEL_SERIES_OPTIONS,
 
       // Models
       modelLoading: false,
@@ -486,6 +511,7 @@ export default {
         { title: '模型名称', dataIndex: 'model_name', key: 'model_name' },
         { title: '显示名称', dataIndex: 'display_name', key: 'display_name' },
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 100, scopedSlots: { customRender: 'type' } },
+        { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 100, scopedSlots: { customRender: 'series' } },
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
         { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
         { title: '尺寸能力', dataIndex: 'image_size_capabilities', key: 'imageSizeCapabilities', width: 180, scopedSlots: { customRender: 'imageSizeCapabilities' } },
@@ -507,6 +533,7 @@ export default {
         model_name: '',
         display_name: '',
         model_type: 'chat',
+        model_series: 'other',
         protocol_type: 'openai',
         billing_type: 'token',
         request_price: 0,
@@ -635,6 +662,9 @@ export default {
   },
   watch: {
     'modelForm.model_name'() {
+      if (!this.isModelEdit) {
+        this.modelForm.model_series = this.inferModelSeries(this.modelForm.model_name)
+      }
       this.syncImageResolutionRules()
     },
     'modelForm.model_type'() {
@@ -654,6 +684,22 @@ export default {
     this.fetchChannelOptions()
   },
   methods: {
+    inferModelSeries(modelName) {
+      const name = String(modelName || '').trim().toLowerCase()
+      if (name.startsWith('gpt') || name.startsWith('o1') || name.startsWith('o3') || name.startsWith('o4')) return 'gpt'
+      if (name.startsWith('claude')) return 'claude'
+      if (name.startsWith('grok')) return 'grok'
+      if (name.startsWith('gemini')) return 'gemini'
+      return 'other'
+    },
+    getSeriesLabel(value) {
+      const item = MODEL_SERIES_OPTIONS.find(opt => opt.value === value)
+      return item ? item.label : '其他'
+    },
+    getSeriesColor(value) {
+      const item = MODEL_SERIES_OPTIONS.find(opt => opt.value === value)
+      return item ? item.color : 'default'
+    },
     syncVideoCreditRateDefault() {
       if (
         this.modelForm.model_type === 'video' &&
@@ -768,6 +814,7 @@ export default {
         model_name: '',
         display_name: '',
         model_type: 'chat',
+        model_series: 'other',
         protocol_type: 'openai',
         billing_type: 'token',
         request_price: 0,
@@ -792,6 +839,7 @@ export default {
           model_name: model.model_name,
           display_name: model.display_name || '',
           model_type: model.model_type || 'chat',
+          model_series: model.model_series || this.inferModelSeries(model.model_name),
           protocol_type: model.protocol_type || 'openai',
           billing_type: model.billing_type || 'token',
           request_price: Number(model.request_price || 0),

@@ -139,21 +139,21 @@
               <div class="card-glass"></div>
               <div class="card-content">
                 <div class="card-top">
-                  <div class="model-avatar" :style="{ background: `linear-gradient(135deg, ${getProviderColor(model.model_name)}, ${adjustColor(getProviderColor(model.model_name), -20)})` }">
+                  <div class="model-avatar" :style="{ background: `linear-gradient(135deg, ${getProviderColor(model)}, ${adjustColor(getProviderColor(model), -20)})` }">
                     <img
-                      v-if="getProvider(model.model_name).icon"
-                      :src="getProvider(model.model_name).icon"
-                      :alt="getProvider(model.model_name).label"
+                      v-if="getProvider(model).icon"
+                      :src="getProvider(model).icon"
+                      :alt="getProvider(model).label"
                       class="provider-icon"
                     >
-                    <span v-else class="initial-letter">{{ getProviderLetter(model.model_name) }}</span>
+                    <span v-else class="initial-letter">{{ getProviderLetter(model) }}</span>
                   </div>
                   <div class="model-info">
                     <div class="model-name-group">
                       <h3 class="model-name">{{ model.display_name || model.model_name }}</h3>
                       <div class="model-status-dot"></div>
                     </div>
-                    <div class="provider-label">{{ getProvider(model.model_name).label }}</div>
+                    <div class="provider-label">{{ getProvider(model).label }}</div>
                   </div>
                   <div class="card-actions">
                     <a-tooltip :title="copyingId === model.id ? '复制成功!' : '复制模型名称'">
@@ -284,7 +284,7 @@ export default {
     providerList() {
       const map = {}
       this.models.forEach(m => {
-        const p = this.getProvider(m.model_name)
+        const p = this.getProvider(m)
         if (!map[p.label]) {
           map[p.label] = { name: p.label, label: p.label, color: p.color, icon: p.icon, count: 0 }
         }
@@ -314,7 +314,7 @@ export default {
         )
       }
       if (this.selectedProvider) {
-        list = list.filter(m => this.getProvider(m.model_name).label === this.selectedProvider)
+        list = list.filter(m => this.getProvider(m).label === this.selectedProvider)
       }
       if (this.selectedType) {
         list = list.filter(m => (m.model_type || 'chat') === this.selectedType)
@@ -346,7 +346,22 @@ export default {
         this.loading = false
       }
     },
-    getProvider(modelName) {
+    getProvider(model) {
+      const series = typeof model === 'object' ? String(model.model_series || '').toLowerCase() : ''
+      const seriesMap = {
+        gpt: 'OpenAI',
+        claude: 'Anthropic',
+        gemini: 'Google',
+        grok: 'Grok'
+      }
+      if (seriesMap[series]) {
+        const label = seriesMap[series]
+        const matched = PROVIDER_RULES.find(rule => rule.label === label)
+        if (matched) {
+          return { label: matched.label, color: matched.color, icon: matched.icon || PROVIDER_ICON_MAP[matched.label] || null }
+        }
+      }
+      const modelName = typeof model === 'object' ? model.model_name : model
       const name = (modelName || '').toLowerCase()
       for (const rule of PROVIDER_RULES) {
         if (name.startsWith(rule.key)) {
@@ -355,11 +370,11 @@ export default {
       }
       return DEFAULT_PROVIDER
     },
-    getProviderColor(modelName) {
-      return this.getProvider(modelName).color
+    getProviderColor(model) {
+      return this.getProvider(model).color
     },
-    getProviderLetter(modelName) {
-      return this.getProvider(modelName).label.charAt(0).toUpperCase()
+    getProviderLetter(model) {
+      return this.getProvider(model).label.charAt(0).toUpperCase()
     },
     formatTokens(n) {
       if (n >= 1000000) return (n / 1000000).toFixed(0) + 'M'

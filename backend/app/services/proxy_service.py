@@ -49,6 +49,7 @@ from app.services.google_vertex_image_service import GoogleVertexImageService
 from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
 from app.services.health_service import get_system_config
+from app.services.price_adjustment_service import PriceAdjustmentService
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
@@ -2055,7 +2056,9 @@ class ProxyService:
             quota_precheck["estimated_total_tokens"] += Decimal(str(max(estimated_output_tokens, 0)))
 
         if unified_model is not None:
-            price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+            global_price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+            adjustment_price_multiplier = PriceAdjustmentService.resolve_multiplier(db, unified_model)
+            price_multiplier = global_price_multiplier * adjustment_price_multiplier
             billing_context = ProxyService._build_text_billing_context(protocol, request_data)
             fast_price_multiplier = ProxyService._get_fast_price_multiplier_decimal(billing_context)
             effective_price_multiplier = ProxyService._build_effective_price_multiplier(
@@ -10446,14 +10449,15 @@ class ProxyService:
             cache_read_input_tokens = int(raw_cache_read_input_tokens * token_multiplier)
             total_tokens = input_tokens + output_tokens + cache_read_input_tokens
 
-            price_multiplier = get_system_config(write_db, "price_multiplier", 1.0)
+            global_price_multiplier = Decimal(str(get_system_config(write_db, "price_multiplier", 1.0)))
+            adjustment_price_multiplier = PriceAdjustmentService.resolve_multiplier(write_db, unified_model)
+            price_multiplier_decimal = global_price_multiplier * adjustment_price_multiplier
             service_tier = ProxyService._normalize_service_tier(
                 (billing_context or {}).get("service_tier")
             )
             fast_price_multiplier_decimal = ProxyService._get_fast_price_multiplier_decimal(
                 billing_context
             )
-            price_multiplier_decimal = Decimal(str(price_multiplier))
             effective_price_multiplier_decimal = ProxyService._build_effective_price_multiplier(
                 price_multiplier_decimal,
                 fast_price_multiplier_decimal,
@@ -11569,6 +11573,28 @@ class ProxyService:
         return rate, total
 
     @staticmethod
+    def _apply_media_credit_price_adjustment(
+        db: Session,
+        unified_model: UnifiedModel,
+        base_multiplier: Decimal,
+    ) -> Decimal:
+        adjustment_multiplier = PriceAdjustmentService.resolve_multiplier(db, unified_model)
+        return (
+            Decimal(str(base_multiplier or 0)) * adjustment_multiplier
+        ).quantize(Decimal("0.001"))
+
+    @staticmethod
+    def _resolve_adjusted_video_credit_cost(
+        db: Session,
+        unified_model: UnifiedModel,
+        seconds: int,
+    ) -> tuple[Decimal, Decimal]:
+        rate, _ = ProxyService._resolve_video_credit_cost(unified_model, seconds)
+        adjusted_rate = ProxyService._apply_media_credit_price_adjustment(db, unified_model, rate)
+        total = (adjusted_rate * Decimal(int(seconds))).quantize(Decimal("0.001"))
+        return adjusted_rate, total
+
+    @staticmethod
     def _log_video_success(
         user: SysUser,
         api_key_record: UserApiKey,
@@ -11829,7 +11855,8 @@ class ProxyService:
         normalized_size = ProxyService._normalize_video_size(request_data.get("size"))
         normalized_resolution_name = ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
         normalized_preset = ProxyService._normalize_video_preset(request_data.get("preset"))
-        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_video_credit_cost(
+        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_adjusted_video_credit_cost(
+            db,
             unified_model,
             normalized_seconds,
         )
@@ -11971,7 +11998,8 @@ class ProxyService:
                 "当前视频模型仅支持图片积分或免费计费",
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
-        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_video_credit_cost(
+        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_adjusted_video_credit_cost(
+            db,
             unified_model,
             normalized_seconds,
         )
@@ -12590,7 +12618,8 @@ class ProxyService:
         }
         normalized_seconds = ProxyService._normalize_video_seconds(video_config.get("seconds"))
         normalized_size = ProxyService._normalize_video_size(video_config.get("size"))
-        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_video_credit_cost(
+        model_multiplier, resolved_video_credit_cost = ProxyService._resolve_adjusted_video_credit_cost(
+            db,
             unified_model,
             normalized_seconds,
         )
@@ -14567,6 +14596,11 @@ class ProxyService:
             )
 
         image_size, model_multiplier = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
+        model_multiplier = ProxyService._apply_media_credit_price_adjustment(
+            db,
+            unified_model,
+            model_multiplier,
+        )
         image_credit_cost = ProxyService._calculate_total_image_credits(
             model_multiplier,
             requested_image_count,
@@ -14751,6 +14785,11 @@ class ProxyService:
             )
 
         image_size, image_credit_cost = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
+        image_credit_cost = ProxyService._apply_media_credit_price_adjustment(
+            db,
+            unified_model,
+            image_credit_cost,
+        )
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
         channels = ModelService.get_available_channels(db, unified_model.id)

@@ -224,11 +224,13 @@ CREATE TABLE `unified_model` (
     `model_name` VARCHAR(128) NOT NULL COMMENT '统一模型名称,用户请求时使用',
     `display_name` VARCHAR(128) DEFAULT NULL,
     `model_type` ENUM('chat', 'embedding', 'image', 'video') NOT NULL DEFAULT 'chat',
+    `model_series` VARCHAR(32) NOT NULL DEFAULT 'other' COMMENT '模型系列:gpt/claude/grok/gemini/other',
     `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
     `max_tokens` INT DEFAULT NULL,
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
     `output_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输出Token单价(美元)',
-    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'token' COMMENT 'token/image_credit/free',
+    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'token' COMMENT 'token/request/image_credit/free',
+    `request_price` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '按请求次数计费的单次请求价格(美元)',
     `image_credit_multiplier` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '图片请求默认扣减倍率；视频模型表示每秒媒体积分单价',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `description` TEXT DEFAULT NULL,
@@ -237,8 +239,32 @@ CREATE TABLE `unified_model` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_model_name` (`model_name`),
     KEY `idx_model_type` (`model_type`),
+    KEY `idx_model_series` (`model_series`),
     KEY `idx_enabled` (`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统一模型定义表';
+
+-- ============================================================
+-- 4.1 model_price_adjustment_rule - 模型分类价格调控规则表
+-- ============================================================
+CREATE TABLE `model_price_adjustment_rule` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(128) NOT NULL,
+    `model_series` VARCHAR(32) NOT NULL DEFAULT 'all' COMMENT 'gpt/claude/grok/gemini/other/all',
+    `model_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'chat/image/video/embedding/completion/all',
+    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'token/request/image_credit/free/all',
+    `multiplier` DECIMAL(12, 6) NOT NULL DEFAULT 1 COMMENT '价格调控倍率',
+    `schedule_type` VARCHAR(20) NOT NULL DEFAULT 'always' COMMENT 'always/daily_time',
+    `start_time` TIME DEFAULT NULL COMMENT '每日开始时间，北京时间',
+    `end_time` TIME DEFAULT NULL COMMENT '每日结束时间，北京时间',
+    `priority` INT NOT NULL DEFAULT 100 COMMENT '优先级，数字小优先',
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `description` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_price_adjustment_match` (`enabled`, `model_series`, `model_type`, `billing_type`, `priority`),
+    KEY `idx_price_adjustment_schedule` (`schedule_type`, `start_time`, `end_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型分类价格调控规则表';
 
 -- ============================================================
 -- 5. model_channel_mapping - 模型-渠道映射表
@@ -830,53 +856,57 @@ VALUES (1, 0.000, 0.000, 0.000);
 
 -- 预置 Gemini 图片模型
 INSERT INTO `unified_model` (
-    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'google', NULL, 0, 0, 'image_credit', 1, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'),
-('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
-('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'google', NULL, 0, 0, 'image_credit', 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
+('gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 1, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'),
+('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
+('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
 
 INSERT INTO `unified_model` (
-    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('gpt-image-2', 'GPT Image 2', 'image', 'openai', NULL, 0, 0, 'image_credit', 0.5, 1, 'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）');
+('gpt-image-2', 'GPT Image 2', 'image', 'gpt', 'openai', NULL, 0, 0, 'image_credit', 0, 0.5, 1, 'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）');
 
 -- 预置 Grok 视频模型
 INSERT INTO `unified_model` (
-    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL, 0, 0, 'image_credit', 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),
+    `model_series` = VALUES(`model_series`),
     `protocol_type` = VALUES(`protocol_type`),
     `billing_type` = VALUES(`billing_type`),
+    `request_price` = VALUES(`request_price`),
     `image_credit_multiplier` = VALUES(`image_credit_multiplier`),
     `enabled` = VALUES(`enabled`),
     `description` = VALUES(`description`);
 
 -- 预置 Grok 文本模型
 INSERT INTO `unified_model` (
-    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `image_credit_multiplier`, `enabled`, `description`
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('grok-4.20-0309-non-reasoning', 'Grok 4.20 0309 Non-Reasoning', 'chat', 'openai', 128000, 2.000000, 6.000000, 'token', 1, 1, 'xAI Grok 4.20 0309 非推理版（官方定价 2/6）'),
-('grok-4.20-0309', 'Grok 4.20 0309', 'chat', 'openai', 128000, 2.000000, 6.000000, 'token', 1, 1, 'xAI Grok 4.20 0309（按 4.20 主档推断定价 2/6）'),
-('grok-4.20-0309-reasoning', 'Grok 4.20 0309 Reasoning', 'chat', 'openai', 128000, 2.000000, 6.000000, 'token', 1, 1, 'xAI Grok 4.20 0309 推理版（官方定价 2/6）'),
-('grok-4.20-fast', 'Grok 4.20 Fast', 'chat', 'openai', 128000, 0.200000, 0.500000, 'token', 1, 1, 'xAI Grok 4.20 Fast（参照 4.1 fast 档推断定价 0.2/0.5）'),
-('grok-4.20-auto', 'Grok 4.20 Auto', 'chat', 'openai', 128000, 2.000000, 6.000000, 'token', 1, 1, 'xAI Grok 4.20 Auto（按 4.20 主档推断定价 2/6）'),
-('grok-4.20-expert', 'Grok 4.20 Expert', 'chat', 'openai', 128000, 2.000000, 6.000000, 'token', 1, 1, 'xAI Grok 4.20 Expert（按 4.20 高阶档推断定价 2/6）')
+('grok-4.20-0309-non-reasoning', 'Grok 4.20 0309 Non-Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309 非推理版（官方定价 2/6）'),
+('grok-4.20-0309', 'Grok 4.20 0309', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309（按 4.20 主档推断定价 2/6）'),
+('grok-4.20-0309-reasoning', 'Grok 4.20 0309 Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309 推理版（官方定价 2/6）'),
+('grok-4.20-fast', 'Grok 4.20 Fast', 'chat', 'grok', 'openai', 128000, 0.200000, 0.500000, 'token', 0, 1, 1, 'xAI Grok 4.20 Fast（参照 4.1 fast 档推断定价 0.2/0.5）'),
+('grok-4.20-auto', 'Grok 4.20 Auto', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 Auto（按 4.20 主档推断定价 2/6）'),
+('grok-4.20-expert', 'Grok 4.20 Expert', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 Expert（按 4.20 高阶档推断定价 2/6）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),
+    `model_series` = VALUES(`model_series`),
     `protocol_type` = VALUES(`protocol_type`),
     `max_tokens` = VALUES(`max_tokens`),
     `input_price_per_million` = VALUES(`input_price_per_million`),
     `output_price_per_million` = VALUES(`output_price_per_million`),
     `billing_type` = VALUES(`billing_type`),
+    `request_price` = VALUES(`request_price`),
     `image_credit_multiplier` = VALUES(`image_credit_multiplier`),
     `enabled` = VALUES(`enabled`),
     `description` = VALUES(`description`);

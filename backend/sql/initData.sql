@@ -389,7 +389,8 @@ CREATE TABLE `unified_model` (
     `model_name` VARCHAR(128) NOT NULL COMMENT '统一模型名称,用户请求时使用',
     `display_name` VARCHAR(128) DEFAULT NULL,
     `model_type` ENUM('chat', 'embedding', 'image', 'video') NOT NULL DEFAULT 'chat',
-    `protocol_type` ENUM('openai', 'anthropic') NOT NULL DEFAULT 'openai',
+    `model_series` VARCHAR(32) NOT NULL DEFAULT 'other' COMMENT '模型系列:gpt/claude/grok/gemini/other',
+    `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
     `max_tokens` INT DEFAULT NULL,
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
     `output_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输出Token单价(美元)',
@@ -403,8 +404,32 @@ CREATE TABLE `unified_model` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_model_name` (`model_name`),
     KEY `idx_model_type` (`model_type`),
+    KEY `idx_model_series` (`model_series`),
     KEY `idx_enabled` (`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统一模型定义表';
+
+-- ============================================================
+-- 4.2 model_price_adjustment_rule - 模型分类价格调控规则表
+-- ============================================================
+CREATE TABLE `model_price_adjustment_rule` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(128) NOT NULL,
+    `model_series` VARCHAR(32) NOT NULL DEFAULT 'all' COMMENT 'gpt/claude/grok/gemini/other/all',
+    `model_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'chat/image/video/embedding/completion/all',
+    `billing_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'token/request/image_credit/free/all',
+    `multiplier` DECIMAL(12, 6) NOT NULL DEFAULT 1 COMMENT '价格调控倍率',
+    `schedule_type` VARCHAR(20) NOT NULL DEFAULT 'always' COMMENT 'always/daily_time',
+    `start_time` TIME DEFAULT NULL COMMENT '每日开始时间，北京时间',
+    `end_time` TIME DEFAULT NULL COMMENT '每日结束时间，北京时间',
+    `priority` INT NOT NULL DEFAULT 100 COMMENT '优先级，数字小优先',
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `description` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_price_adjustment_match` (`enabled`, `model_series`, `model_type`, `billing_type`, `priority`),
+    KEY `idx_price_adjustment_schedule` (`schedule_type`, `start_time`, `end_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型分类价格调控规则表';
 
 -- ============================================================
 -- 5. model_channel_mapping - 模型-渠道映射表
@@ -1054,13 +1079,14 @@ VALUES (1, 0.000, 0.000, 0.000);
 
 -- 预置 Grok 视频模型
 INSERT INTO `unified_model` (
-    `model_name`, `display_name`, `model_type`, `protocol_type`, `max_tokens`,
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
     `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
 ) VALUES
-('grok-imagine-video', 'Grok Imagine Video', 'video', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),
+    `model_series` = VALUES(`model_series`),
     `protocol_type` = VALUES(`protocol_type`),
     `billing_type` = VALUES(`billing_type`),
     `request_price` = VALUES(`request_price`),

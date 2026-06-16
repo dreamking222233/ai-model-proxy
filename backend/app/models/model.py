@@ -1,7 +1,7 @@
 """ORM models for unified_model, model_channel_mapping, and model_override_rule tables."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, func, UniqueConstraint,
+    Column, BigInteger, String, Integer, Text, DateTime, SmallInteger, DECIMAL, Time, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -16,6 +16,7 @@ class UnifiedModel(Base):
     model_name = Column(String(128), nullable=False, unique=True, comment="Unified model name for user requests")
     display_name = Column(String(128), nullable=True)
     model_type = Column(String(20), nullable=False, default="chat")
+    model_series = Column(String(32), nullable=False, default="other", comment="Model series: gpt/claude/grok/gemini/other")
     protocol_type = Column(String(20), nullable=False, default="openai")
     max_tokens = Column(Integer, nullable=True)
     input_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Input price per million tokens (USD)")
@@ -58,6 +59,27 @@ class ModelImageResolutionRule(Base):
     credit_cost = Column(DECIMAL(12, 3), nullable=False, default=1, comment="Image credits consumed for this resolution")
     is_default = Column(SmallInteger, nullable=False, default=0)
     sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ModelPriceAdjustmentRule(Base):
+    """Price multiplier rule by model series/type and Beijing-time schedule."""
+
+    __tablename__ = "model_price_adjustment_rule"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False)
+    model_series = Column(String(32), nullable=False, default="all", comment="gpt/claude/grok/gemini/other/all")
+    model_type = Column(String(20), nullable=False, default="all", comment="chat/image/video/embedding/completion/all")
+    billing_type = Column(String(20), nullable=False, default="all", comment="token/request/image_credit/free/all")
+    multiplier = Column(DECIMAL(12, 6), nullable=False, default=1)
+    schedule_type = Column(String(20), nullable=False, default="always", comment="always/daily_time")
+    start_time = Column(Time, nullable=True, comment="Daily start time in Asia/Shanghai")
+    end_time = Column(Time, nullable=True, comment="Daily end time in Asia/Shanghai")
+    priority = Column(Integer, nullable=False, default=100)
+    enabled = Column(SmallInteger, nullable=False, default=1)
+    description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

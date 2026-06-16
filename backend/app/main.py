@@ -28,6 +28,7 @@ from app.api.admin.system import router as admin_system_router
 from app.api.admin.redemption import router as admin_redemption_router
 from app.api.admin.subscription import router as admin_subscription_router
 from app.api.admin.promotion import router as admin_promotion_router
+from app.api.admin.price_adjustment import router as admin_price_adjustment_router
 from app.api.user.api_key import router as user_api_key_router
 from app.api.user.balance import router as user_balance_router
 from app.api.user.payment import router as user_payment_router
@@ -128,6 +129,7 @@ app.include_router(admin_redemption_router)
 app.include_router(admin_subscription_router)
 app.include_router(admin_payment_router)
 app.include_router(admin_promotion_router)
+app.include_router(admin_price_adjustment_router)
 
 # Register routers - User
 app.include_router(user_api_key_router)

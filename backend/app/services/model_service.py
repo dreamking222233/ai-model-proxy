@@ -27,6 +27,7 @@ class ModelService:
     """CRUD operations for models, mappings, override rules, and model resolution."""
 
     REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
+    MODEL_SERIES_VALUES = {"gpt", "claude", "grok", "gemini", "other"}
 
     GOOGLE_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "gemini-2.5-flash-image": ("1K",),
@@ -43,6 +44,28 @@ class ModelService:
         "grok-imagine-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
     }
     BILLING_TYPES = {"token", "request", "image_credit", "free"}
+
+    @staticmethod
+    def infer_model_series(model_name: object) -> str:
+        name = str(model_name or "").strip().lower()
+        if name.startswith(("gpt", "o1", "o3", "o4")):
+            return "gpt"
+        if name.startswith("claude"):
+            return "claude"
+        if name.startswith("grok"):
+            return "grok"
+        if name.startswith("gemini"):
+            return "gemini"
+        return "other"
+
+    @staticmethod
+    def normalize_model_series(value: object, model_name: object = None) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            normalized = ModelService.infer_model_series(model_name)
+        if normalized not in ModelService.MODEL_SERIES_VALUES:
+            raise ServiceException(400, "模型系列只能是 gpt、claude、grok、gemini、other", "INVALID_MODEL_SERIES")
+        return normalized
 
     @staticmethod
     def _decimal_to_float(value, default: float = 0.0) -> float:
@@ -281,6 +304,7 @@ class ModelService:
             "model_name": model.model_name,
             "display_name": model.display_name,
             "model_type": model.model_type,
+            "model_series": getattr(model, "model_series", None) or ModelService.infer_model_series(model.model_name),
             "protocol_type": model.protocol_type,
             "max_tokens": model.max_tokens,
             "input_price_per_million": ModelService._decimal_to_float(model.input_price_per_million),
@@ -393,6 +417,7 @@ class ModelService:
             model_name=d["model_name"],
             display_name=d.get("display_name"),
             model_type=d.get("model_type", "chat"),
+            model_series=ModelService.normalize_model_series(d.get("model_series"), d["model_name"]),
             protocol_type=d.get("protocol_type", "openai"),
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
@@ -423,6 +448,10 @@ class ModelService:
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         next_model_name = d.get("model_name", model.model_name)
         next_model_type = d.get("model_type", model.model_type)
+        next_model_series = ModelService.normalize_model_series(
+            d.get("model_series", getattr(model, "model_series", None)),
+            next_model_name,
+        )
         next_protocol_type = d.get("protocol_type", model.protocol_type)
         next_billing_type = ModelService._normalize_billing_type(d.get("billing_type", model.billing_type))
         next_request_price = ModelService._normalize_request_price(
@@ -431,6 +460,7 @@ class ModelService:
         )
         d["billing_type"] = next_billing_type
         d["request_price"] = next_request_price
+        d["model_series"] = next_model_series
         if "image_resolution_rules" in d:
             resolution_rules = ModelService._validate_resolution_rules(
                 next_model_name,
@@ -445,6 +475,7 @@ class ModelService:
             "model_name", "display_name", "model_type", "protocol_type",
             "max_tokens", "input_price_per_million", "output_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
+            "model_series",
         ]
         for field in updatable_fields:
             value = d.get(field)
@@ -502,6 +533,7 @@ class ModelService:
                 or_(
                     UnifiedModel.model_name.like(like_pattern),
                     UnifiedModel.display_name.like(like_pattern),
+                    UnifiedModel.model_series.like(like_pattern),
                     UnifiedModel.description.like(like_pattern),
                 )
             )

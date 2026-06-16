@@ -78,7 +78,7 @@
 
 <script>
 import { getAssetSourceRecords, getBalance } from '@/api/user'
-import { formatUtcDate } from '@/utils'
+import { formatBeijingTime } from '@/utils'
 
 export default {
   name: 'AssetSource',
@@ -172,7 +172,7 @@ export default {
       return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
     },
     formatTime(value) {
-      return value ? formatUtcDate(value) : '-'
+      return value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss') : '-'
     }
   }
 }

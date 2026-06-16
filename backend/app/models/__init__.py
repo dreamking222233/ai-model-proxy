@@ -17,7 +17,13 @@ from app.models.agent import (
     AgentSettlementBatchItem,
 )
 from app.models.channel import Channel
-from app.models.model import UnifiedModel, ModelChannelMapping, ModelImageResolutionRule, ModelOverrideRule
+from app.models.model import (
+    UnifiedModel,
+    ModelChannelMapping,
+    ModelImageResolutionRule,
+    ModelPriceAdjustmentRule,
+    ModelOverrideRule,
+)
 from app.models.log import (
     HealthCheckLog,
     RequestLog,
@@ -69,6 +75,7 @@ __all__ = [
     "UnifiedModel",
     "ModelChannelMapping",
     "ModelImageResolutionRule",
+    "ModelPriceAdjustmentRule",
     "ModelOverrideRule",
     "HealthCheckLog",
     "RequestLog",

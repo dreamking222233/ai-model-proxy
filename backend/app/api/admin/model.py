@@ -201,6 +201,7 @@ def get_channels_models(
                     "actual_model_name": _public_actual_model_name(um.model_name, mp.actual_model_name),
                     "api_type": api_type,
                     "model_type": um.model_type,
+                    "model_series": getattr(um, "model_series", None) or ModelService.infer_model_series(um.model_name),
                     "protocol_type": um.protocol_type,
                     "billing_type": um.billing_type,
                     "request_price": float(getattr(um, "request_price", 0) or 0),

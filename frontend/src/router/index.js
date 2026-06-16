@@ -129,6 +129,12 @@ const routes = [
         meta: { title: '系统配置' }
       },
       {
+        path: 'price-adjustments',
+        name: 'PriceAdjustmentManage',
+        component: () => import('@/views/admin/PriceAdjustmentManage.vue'),
+        meta: { title: '价格调控' }
+      },
+      {
         path: 'announcements',
         name: 'AnnouncementManage',
         component: () => import('@/views/admin/AnnouncementManage.vue'),

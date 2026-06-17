@@ -1144,7 +1144,21 @@ class ProxyService:
         )
 
     @staticmethod
-    def _get_context_price_multiplier_decimal(context_tokens: int = 0) -> Decimal:
+    def _is_long_context_billing_enabled(unified_model: Optional[UnifiedModel] = None) -> bool:
+        if unified_model is None:
+            return True
+        try:
+            return int(getattr(unified_model, "long_context_billing_enabled", 0) or 0) == 1
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _get_context_price_multiplier_decimal(
+        context_tokens: int = 0,
+        unified_model: Optional[UnifiedModel] = None,
+    ) -> Decimal:
+        if not ProxyService._is_long_context_billing_enabled(unified_model):
+            return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT
         if int(context_tokens or 0) > ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD:
             return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER
         return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT
@@ -2044,7 +2058,8 @@ class ProxyService:
             0,
         )
         context_price_multiplier = ProxyService._get_context_price_multiplier_decimal(
-            estimated_context_tokens
+            estimated_context_tokens,
+            unified_model,
         )
         quota_precheck: dict[str, Decimal] = {
             "estimated_total_tokens": Decimal(str(max(estimated_input_tokens, 0))),
@@ -2074,7 +2089,10 @@ class ProxyService:
             if billing_type == "request":
                 request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
                 request_context_price_multiplier = context_price_multiplier
-                if estimated_output_tokens is None:
+                if (
+                    estimated_output_tokens is None
+                    and ProxyService._is_long_context_billing_enabled(unified_model)
+                ):
                     # Output usage is unknown before the upstream call. Use the long-context
                     # multiplier as a conservative upper bound so exact fixed-price billing
                     # cannot pass precheck and fail local accounting after a successful call.
@@ -10439,7 +10457,8 @@ class ProxyService:
             )
             context_token_threshold_snapshot = ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
             context_price_multiplier_decimal = ProxyService._get_context_price_multiplier_decimal(
-                context_tokens_snapshot
+                context_tokens_snapshot,
+                unified_model,
             )
 
             token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)

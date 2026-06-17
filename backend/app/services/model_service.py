@@ -166,6 +166,19 @@ class ModelService:
         return amount
 
     @staticmethod
+    def _normalize_long_context_billing_enabled(
+        value: object,
+        model_series: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> int:
+        if value is None:
+            return 1 if ModelService.normalize_model_series(model_series, model_name) == "gpt" else 0
+        try:
+            return 1 if int(value) else 0
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
     def _resolution_rule_to_dict(rule: ModelImageResolutionRule) -> dict:
         return {
             "id": rule.id,
@@ -312,6 +325,7 @@ class ModelService:
             "billing_type": model.billing_type,
             "request_price": ModelService._decimal_to_float(getattr(model, "request_price", 0)),
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
+            "long_context_billing_enabled": int(getattr(model, "long_context_billing_enabled", 0) or 0),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
             "video_size_capabilities": list(ModelService.get_video_size_capabilities(model.model_name)),
@@ -404,6 +418,12 @@ class ModelService:
 
         billing_type = ModelService._normalize_billing_type(d.get("billing_type", "token"))
         request_price = ModelService._normalize_request_price(d.get("request_price", 0), billing_type)
+        model_series = ModelService.normalize_model_series(d.get("model_series"), d["model_name"])
+        long_context_billing_enabled = ModelService._normalize_long_context_billing_enabled(
+            d.get("long_context_billing_enabled"),
+            model_series,
+            d["model_name"],
+        )
 
         resolution_rules = ModelService._validate_resolution_rules(
             d["model_name"],
@@ -417,7 +437,7 @@ class ModelService:
             model_name=d["model_name"],
             display_name=d.get("display_name"),
             model_type=d.get("model_type", "chat"),
-            model_series=ModelService.normalize_model_series(d.get("model_series"), d["model_name"]),
+            model_series=model_series,
             protocol_type=d.get("protocol_type", "openai"),
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
@@ -425,6 +445,7 @@ class ModelService:
             billing_type=billing_type,
             request_price=request_price,
             image_credit_multiplier=d.get("image_credit_multiplier", 1),
+            long_context_billing_enabled=long_context_billing_enabled,
             enabled=d.get("enabled", 1),
             description=d.get("description"),
         )
@@ -461,6 +482,12 @@ class ModelService:
         d["billing_type"] = next_billing_type
         d["request_price"] = next_request_price
         d["model_series"] = next_model_series
+        if "long_context_billing_enabled" in d:
+            d["long_context_billing_enabled"] = ModelService._normalize_long_context_billing_enabled(
+                d.get("long_context_billing_enabled"),
+                next_model_series,
+                next_model_name,
+            )
         if "image_resolution_rules" in d:
             resolution_rules = ModelService._validate_resolution_rules(
                 next_model_name,
@@ -475,7 +502,7 @@ class ModelService:
             "model_name", "display_name", "model_type", "protocol_type",
             "max_tokens", "input_price_per_million", "output_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
-            "model_series",
+            "model_series", "long_context_billing_enabled",
         ]
         for field in updatable_fields:
             value = d.get(field)

@@ -46,6 +46,13 @@
             <a-tag v-else color="blue">Token</a-tag>
           </template>
 
+          <template slot="longContextBilling" slot-scope="text, record">
+            <a-tag v-if="supportsLongContextBilling(record)" :color="Number(text) ? 'red' : 'default'">
+              {{ Number(text) ? '256k x2' : '关闭' }}
+            </a-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+
           <template slot="enabled" slot-scope="text">
             <a-tag :color="text ? 'green' : 'red'">
               {{ text ? '已启用' : '已禁用' }}
@@ -284,9 +291,16 @@
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item v-if="supportsLongContextBilling(modelForm)" label="长上下文 256k 后 2 倍计费">
+          <a-switch
+            :checked="!!modelForm.long_context_billing_enabled"
+            @change="handleLongContextBillingChange"
+          />
+          <div class="form-tip">GPT 系列通常开启；Claude 等没有官方长上下文加价的模型可关闭。</div>
+        </a-form-item>
         <a-form-item v-if="modelForm.billing_type === 'request'" label="每次请求价格 ($)">
           <a-input-number v-model="modelForm.request_price" :min="0" :step="0.001" :precision="6" style="width: 100%;" />
-          <div class="form-tip">请求成功后按该固定美元价格计费；超过长上下文阈值时仍会叠加长上下文倍率。</div>
+          <div class="form-tip">请求成功后按该固定美元价格计费；开启长上下文倍率时，超过阈值会叠加计费。</div>
         </a-form-item>
         <a-form-item v-if="modelForm.billing_type === 'image_credit'" :label="modelForm.model_type === 'video' ? '每秒媒体积分' : '默认媒体积分倍率'">
           <a-input-number v-model="modelForm.image_credit_multiplier" :min="0.001" :step="0.001" :precision="3" style="width: 100%;" />
@@ -514,6 +528,7 @@ export default {
         { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 100, scopedSlots: { customRender: 'series' } },
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
         { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
+        { title: '长上下文', dataIndex: 'long_context_billing_enabled', key: 'longContextBilling', width: 110, scopedSlots: { customRender: 'longContextBilling' } },
         { title: '尺寸能力', dataIndex: 'image_size_capabilities', key: 'imageSizeCapabilities', width: 180, scopedSlots: { customRender: 'imageSizeCapabilities' } },
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
@@ -529,6 +544,7 @@ export default {
       modelModalLoading: false,
       isModelEdit: false,
       modelEditId: null,
+      longContextBillingTouched: false,
       modelForm: {
         model_name: '',
         display_name: '',
@@ -539,6 +555,7 @@ export default {
         request_price: 0,
         image_credit_multiplier: 1,
         image_resolution_rules: [],
+        long_context_billing_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
@@ -664,17 +681,25 @@ export default {
     'modelForm.model_name'() {
       if (!this.isModelEdit) {
         this.modelForm.model_series = this.inferModelSeries(this.modelForm.model_name)
+        this.syncLongContextBillingDefault()
       }
       this.syncImageResolutionRules()
     },
+    'modelForm.model_series'() {
+      if (!this.isModelEdit) {
+        this.syncLongContextBillingDefault()
+      }
+    },
     'modelForm.model_type'() {
       this.syncVideoCreditRateDefault()
+      this.syncLongContextBillingDefault()
       this.syncImageResolutionRules()
     },
     'modelForm.protocol_type'() {
       this.syncImageResolutionRules()
     },
     'modelForm.billing_type'() {
+      this.syncLongContextBillingDefault()
       this.syncVideoCreditRateDefault()
       this.syncImageResolutionRules()
     }
@@ -699,6 +724,25 @@ export default {
     getSeriesColor(value) {
       const item = MODEL_SERIES_OPTIONS.find(opt => opt.value === value)
       return item ? item.color : 'default'
+    },
+    supportsLongContextBilling(record) {
+      const billingType = String(record && record.billing_type || '').toLowerCase()
+      const modelType = String(record && record.model_type || '').toLowerCase()
+      return ['token', 'request'].includes(billingType) &&
+        ['chat', 'completion', 'embedding'].includes(modelType)
+    },
+    getLongContextBillingDefault() {
+      return this.modelForm.model_series === 'gpt' && this.supportsLongContextBilling(this.modelForm) ? 1 : 0
+    },
+    syncLongContextBillingDefault() {
+      if (this.isModelEdit || this.longContextBillingTouched) {
+        return
+      }
+      this.modelForm.long_context_billing_enabled = this.getLongContextBillingDefault()
+    },
+    handleLongContextBillingChange(checked) {
+      this.longContextBillingTouched = true
+      this.modelForm.long_context_billing_enabled = checked ? 1 : 0
     },
     syncVideoCreditRateDefault() {
       if (
@@ -810,6 +854,7 @@ export default {
     handleAddModel() {
       this.isModelEdit = false
       this.modelEditId = null
+      this.longContextBillingTouched = false
       this.modelForm = {
         model_name: '',
         display_name: '',
@@ -820,16 +865,19 @@ export default {
         request_price: 0,
         image_credit_multiplier: 1,
         image_resolution_rules: [],
+        long_context_billing_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         max_tokens: 4096,
         enabled: true
       }
+      this.syncLongContextBillingDefault()
       this.modelModalVisible = true
     },
     async handleEditModel(record) {
       this.isModelEdit = true
       this.modelEditId = record.id
+      this.longContextBillingTouched = true
       this.modelModalLoading = true
       try {
         const res = await getModel(record.id)
@@ -844,6 +892,7 @@ export default {
           billing_type: model.billing_type || 'token',
           request_price: Number(model.request_price || 0),
           image_credit_multiplier: Number(model.image_credit_multiplier || 1),
+          long_context_billing_enabled: Number(model.long_context_billing_enabled || 0),
           image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
             resolution_code: item.resolution_code,
             enabled: Number(item.enabled || 0),
@@ -902,8 +951,12 @@ export default {
 
       this.modelModalLoading = true
       try {
+        const longContextBillingEnabled = this.supportsLongContextBilling(this.modelForm)
+          ? Number(this.modelForm.long_context_billing_enabled || 0)
+          : 0
         const payload = {
           ...this.modelForm,
+          long_context_billing_enabled: longContextBillingEnabled,
           image_resolution_rules: this.showImageResolutionConfig
             ? this.modelForm.image_resolution_rules.map(item => ({
               resolution_code: item.resolution_code,

@@ -25,6 +25,7 @@ class UnifiedModelCreate(BaseModel):
     billing_type: str = Field(default="token", max_length=20)
     request_price: Decimal = Field(default=Decimal("0"), ge=0)
     image_credit_multiplier: Decimal = Field(default=Decimal("1"), ge=0)
+    long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
@@ -44,6 +45,7 @@ class UnifiedModelUpdate(BaseModel):
     billing_type: Optional[str] = Field(None, max_length=20)
     request_price: Optional[Decimal] = Field(None, ge=0)
     image_credit_multiplier: Optional[Decimal] = Field(None, ge=0)
+    long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
     enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
@@ -64,6 +66,7 @@ class UnifiedModelInfo(BaseModel):
     billing_type: str
     request_price: Decimal
     image_credit_multiplier: Decimal
+    long_context_billing_enabled: int
     enabled: int
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInfo"]] = None

@@ -1067,6 +1067,7 @@ CREATE TABLE `unified_model` (
   `billing_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'token' COMMENT 'token/request/image_credit/free',
   `request_price` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '按请求次数计费的单次请求价格(美元)',
   `image_credit_multiplier` decimal(12,3) NOT NULL DEFAULT '1.000' COMMENT '图片请求默认扣减倍率；视频模型表示每秒媒体积分单价',
+  `long_context_billing_enabled` tinyint NOT NULL DEFAULT '0' COMMENT '是否启用超过256k上下文2倍计费',
   `enabled` tinyint NOT NULL DEFAULT '1',
   `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,

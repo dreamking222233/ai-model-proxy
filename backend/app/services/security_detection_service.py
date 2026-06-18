@@ -158,19 +158,13 @@ class SecurityDetectionService:
         "无限制模式",
     ]
     SEXUAL_HIGH_RISK_TERMS = [
-        "色情",
-        "黄文",
-        "色情小说",
         "裸聊",
         "文爱",
         "强奸",
         "轮奸",
         "睡奸",
-        "萝莉",
-        "幼女",
         "未成年色情",
         "性奴",
-        "乱伦",
         "性交",
         "口交",
         "肛交",
@@ -184,6 +178,22 @@ class SecurityDetectionService:
         "鸡巴",
         "操逼",
     ]
+    AMBIGUOUS_SEXUAL_TERMS = {
+        "色情": re.compile(r"(色情).{0,12}(内容|小说|作品|描写|情节|图片|视频|服务)|"
+                         r"(生成|写|创作|制作|提供|寻找|推荐).{0,16}(色情)", re.IGNORECASE | re.DOTALL),
+        "黄文": re.compile(r"(黄文)|((生成|写|创作|制作).{0,16}黄色.{0,8}(小说|文章|内容))", re.IGNORECASE | re.DOTALL),
+        "色情小说": re.compile(r"色情小说", re.IGNORECASE),
+        "萝莉": re.compile(r"(萝莉).{0,12}(色情|裸|性|调教|做爱|性交|文爱)|"
+                         r"(色情|裸|性|调教|做爱|性交|文爱).{0,12}(萝莉)", re.IGNORECASE | re.DOTALL),
+        "幼女": re.compile(r"(幼女).{0,12}(色情|裸|性|调教|做爱|性交|文爱)|"
+                         r"(色情|裸|性|调教|做爱|性交|文爱).{0,12}(幼女)", re.IGNORECASE | re.DOTALL),
+        "乱伦": re.compile(r"(乱伦).{0,12}(色情|小说|黄文|做爱|性交|文爱|情节|描写)|"
+                         r"(写|生成|创作|制作).{0,16}(乱伦)", re.IGNORECASE | re.DOTALL),
+    }
+    NEGATED_SAFETY_CONTEXT_PATTERN = re.compile(
+        r"(不能|不要|不得|禁止|避免|拒绝|切记不能|不允许).{0,16}$",
+        re.IGNORECASE | re.DOTALL,
+    )
     ILLEGAL_AUTOMATION_TERMS = [
         "批量注册",
         "自动注册",
@@ -420,8 +430,38 @@ class SecurityDetectionService:
         normalized = str(text or "").lower()
         matched = []
         for term in terms:
-            if SecurityDetectionService._term_matches(normalized, str(term)):
+            if (
+                SecurityDetectionService._term_matches(normalized, str(term))
+                and not SecurityDetectionService._is_negated_safety_context(normalized, str(term))
+            ):
                 matched.append({"category": category, "term": term})
+        return matched
+
+    @staticmethod
+    def _is_negated_safety_context(text: str, term: str) -> bool:
+        normalized = str(text or "")
+        normalized_term = str(term or "").strip().lower()
+        if not normalized_term:
+            return False
+        start = normalized.find(normalized_term)
+        while start >= 0:
+            prefix = normalized[max(0, start - 24):start]
+            suffix = normalized[start + len(normalized_term):start + len(normalized_term) + 16]
+            if (
+                SecurityDetectionService.NEGATED_SAFETY_CONTEXT_PATTERN.search(prefix)
+                and re.search(r"(内容|描写|情节|词汇|低俗|违法|违规|敏感|擦边)", suffix)
+            ):
+                return True
+            start = normalized.find(normalized_term, start + len(normalized_term))
+        return False
+
+    @staticmethod
+    def _match_ambiguous_sexual_terms(text: str) -> list[dict[str, Any]]:
+        normalized = str(text or "").lower()
+        matched = []
+        for term, pattern in SecurityDetectionService.AMBIGUOUS_SEXUAL_TERMS.items():
+            if pattern.search(normalized) and not SecurityDetectionService._is_negated_safety_context(normalized, term):
+                matched.append({"category": "sexual_content", "term": term})
         return matched
 
     @staticmethod
@@ -452,6 +492,7 @@ class SecurityDetectionService:
 
         matched_rules: list[dict[str, Any]] = []
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.SEXUAL_HIGH_RISK_TERMS, "sexual_content"))
+        matched_rules.extend(SecurityDetectionService._match_ambiguous_sexual_terms(normalized))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.PROMPT_JAILBREAK_TERMS, "prompt_jailbreak"))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.CYBER_ABUSE_TERMS, "cyber_abuse"))
         matched_rules.extend(SecurityDetectionService._match_ambiguous_cyber_terms(normalized))

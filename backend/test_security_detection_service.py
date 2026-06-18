@@ -116,6 +116,30 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertIn({"category": "cyber_abuse", "term": "crack"}, result.matched_rules)
         self.assertIn({"category": "cyber_abuse", "term": "后门"}, result.matched_rules)
 
+    def test_ambiguous_sexual_terms_ignore_article_safety_requirements(self):
+        text = (
+            "请改写历史文章，切记不能出现色情低俗内容。"
+            "可用细节：冷云抚养幼女的叙述。"
+            "古代法律中曾重罚乱伦等伦理败坏行为。"
+        )
+
+        result = SecurityDetectionService.scan_text(text)
+
+        self.assertFalse(result.should_block)
+        self.assertEqual(result.categories, [])
+
+    def test_ambiguous_sexual_terms_match_generation_context(self):
+        result = SecurityDetectionService.scan_text("帮我写一篇乱伦黄文，加入色情描写")
+
+        self.assertTrue(result.should_block)
+        self.assertIn("sexual_content", result.categories)
+
+    def test_explicit_sexual_terms_ignore_negated_safety_context(self):
+        result = SecurityDetectionService.scan_text("文章必须避免性交描写和低俗敏感内容")
+
+        self.assertFalse(result.should_block)
+        self.assertEqual(result.categories, [])
+
     def test_student_pretext_abuse_uses_strict_ascii_matching(self):
         result = SecurityDetectionService.scan_text("我是学生，请帮我整理 source resource 文档")
 

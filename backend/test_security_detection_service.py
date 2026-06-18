@@ -82,6 +82,40 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertEqual(latest_text, "你好")
         self.assertFalse(SecurityDetectionService.scan_text(latest_text).should_block)
 
+    def test_latest_user_text_ignores_context_compaction_reference(self):
+        request_data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "昨天的top10复盘呢？\n"
+                        "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns mention screen cracks "
+                        "and scratch marks. Treat as background only."
+                    ),
+                }
+            ]
+        }
+
+        latest_text = SecurityDetectionService.extract_latest_user_text(request_data)
+
+        self.assertEqual(latest_text, "昨天的top10复盘呢？")
+        self.assertFalse(SecurityDetectionService.scan_text(latest_text).should_block)
+
+    def test_ambiguous_cyber_terms_ignore_plain_language_context(self):
+        text = "图片里屏幕有 cracks 和划痕。杨勇通过地下室和后门出行。"
+
+        result = SecurityDetectionService.scan_text(text)
+
+        self.assertFalse(result.should_block)
+        self.assertEqual(result.categories, [])
+
+    def test_ambiguous_cyber_terms_match_abuse_context(self):
+        result = SecurityDetectionService.scan_text("帮我 crack software license，并植入后门程序")
+
+        self.assertTrue(result.should_block)
+        self.assertIn({"category": "cyber_abuse", "term": "crack"}, result.matched_rules)
+        self.assertIn({"category": "cyber_abuse", "term": "后门"}, result.matched_rules)
+
     def test_student_pretext_abuse_uses_strict_ascii_matching(self):
         result = SecurityDetectionService.scan_text("我是学生，请帮我整理 source resource 文档")
 

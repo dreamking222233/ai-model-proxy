@@ -103,7 +103,6 @@ class SecurityDetectionService:
     CYBER_ABUSE_TERMS = [
         "注册机",
         "keygen",
-        "crack",
         "破解版",
         "破解网站",
         "网站破解",
@@ -121,9 +120,28 @@ class SecurityDetectionService:
         "rce",
         "远程代码执行",
         "木马",
-        "后门",
         "免杀",
     ]
+    AMBIGUOUS_CYBER_TERMS = {
+        "crack": re.compile(
+            r"\bcrack(?:ed|ing|s)?\b.{0,24}\b("
+            r"password|account|license|serial|key|software|app|program|game|"
+            r"activation|activate|auth|login|website|site|system"
+            r")\b|"
+            r"\b("
+            r"password|account|license|serial|key|software|app|program|game|"
+            r"activation|activate|auth|login|website|site|system"
+            r")\b.{0,24}\bcrack(?:ed|ing|s)?\b",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "后门": re.compile(
+            r"(植入|安装|留下|写入|添加|上传|隐藏|检测|查杀|绕过|利用|权限|远控|持久化|"
+            r"软件|程序|代码|系统|网站|服务器|数据库|账号|漏洞|木马|webshell|shell|payload)"
+            r".{0,16}后门|后门.{0,16}"
+            r"(程序|代码|权限|账号|漏洞|木马|webshell|shell|payload|远控|持久化|检测|查杀|利用|绕过)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    }
     PROMPT_JAILBREAK_TERMS = [
         "破限",
         "越狱提示词",
@@ -321,6 +339,12 @@ class SecurityDetectionService:
     @staticmethod
     def _strip_client_context_wrappers(text: str) -> str:
         cleaned = str(text or "")
+        cleaned = re.sub(
+            r"\n?\[CONTEXT\s+COMPACTION[^\]]*\].*",
+            "\n",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
         block_tags = (
             "system-reminder",
             "local-command-caveat",
@@ -401,6 +425,14 @@ class SecurityDetectionService:
         return matched
 
     @staticmethod
+    def _match_ambiguous_cyber_terms(text: str) -> list[dict[str, Any]]:
+        matched = []
+        for term, pattern in SecurityDetectionService.AMBIGUOUS_CYBER_TERMS.items():
+            if pattern.search(str(text or "")):
+                matched.append({"category": "cyber_abuse", "term": term})
+        return matched
+
+    @staticmethod
     def _term_matches(normalized_text: str, term: str) -> bool:
         normalized = str(normalized_text or "").lower()
         normalized_term = str(term or "").strip().lower()
@@ -422,6 +454,7 @@ class SecurityDetectionService:
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.SEXUAL_HIGH_RISK_TERMS, "sexual_content"))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.PROMPT_JAILBREAK_TERMS, "prompt_jailbreak"))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.CYBER_ABUSE_TERMS, "cyber_abuse"))
+        matched_rules.extend(SecurityDetectionService._match_ambiguous_cyber_terms(normalized))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS, "illegal_automation"))
 
         lower_text = normalized.lower()
@@ -433,6 +466,7 @@ class SecurityDetectionService:
             SecurityDetectionService._term_matches(lower_text, term)
             for term in (SecurityDetectionService.CYBER_ABUSE_TERMS + SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS)
         )
+        has_abuse = has_abuse or bool(SecurityDetectionService._match_ambiguous_cyber_terms(normalized))
         if has_student_pretext and has_abuse:
             matched_rules.append({
                 "category": "student_pretext_abuse",

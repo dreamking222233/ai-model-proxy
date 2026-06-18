@@ -37,7 +37,7 @@
             </template>
 
             <template slot="quota" slot-scope="text, record">
-              <span>{{ formatPlanQuota(record) }}</span>
+              <span>{{ formatTemplateQuota(record) }}</span>
             </template>
 
             <template slot="status" slot-scope="text">
@@ -683,6 +683,19 @@ export default {
       }
       return `${this.formatNumber(value)} Token/天`
     },
+    formatTemplateQuota(record) {
+      if (record.plan_kind === 'unlimited') {
+        return this.formatPlanQuota(record)
+      }
+      const metric = record.quota_metric || record.resolved_quota_metric
+      const value = record.quota_value !== undefined && record.quota_value !== null
+        ? record.quota_value
+        : record.resolved_quota_value
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}/天`
+      }
+      return `${this.formatNumber(value)} Token/天`
+    },
     getStatusBadge(status) {
       const map = { active: 'processing', expired: 'default', cancelled: 'error' }
       return map[status] || 'default'
@@ -773,8 +786,10 @@ export default {
           plan_kind: record.plan_kind,
           duration_mode: record.duration_mode,
           duration_days: record.duration_days,
-          quota_metric: record.resolved_quota_metric || record.quota_metric || 'total_tokens',
-          quota_value: record.resolved_quota_value || record.quota_value || 0,
+          quota_metric: record.quota_metric || record.resolved_quota_metric || 'total_tokens',
+          quota_value: record.quota_value !== undefined && record.quota_value !== null
+            ? record.quota_value
+            : (record.resolved_quota_value || 0),
           status: record.status,
           description: record.description
         }

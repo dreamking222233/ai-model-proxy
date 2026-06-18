@@ -36,6 +36,8 @@ class SubscriptionService:
     LEGACY_UNLIMITED_MONTHLY_DAILY_COST_LIMIT = Decimal("120")
     ENJOY_DAILY_COST_LIMIT = Decimal("50")
     LEGACY_ENJOY_DAILY_COST_LIMIT = Decimal("60")
+    LEGACY_ENJOY_DAILY_TOKEN_LIMIT = Decimal("10000000")
+    TEMPLATE_QUOTA_EDIT_CUTOVER_AT = datetime(2026, 6, 18, 14, 0, 0)
     UNLIMITED_DAILY_LIMIT_ERROR_CODE = "SUBSCRIPTION_UNLIMITED_DAILY_TOKEN_EXCEEDED"
     RETRYABLE_DB_ERROR_CODES = {1205, 1213}
     ENJOY_PLAN_CODES = frozenset({"daily-10m-token", "weekly-10m-token", "monthly-10m-token"})
@@ -233,16 +235,45 @@ class SubscriptionService:
         return False
 
     @staticmethod
-    def _is_enjoy_daily_quota_record(record: object) -> bool:
+    def _is_before_template_quota_edit_cutover(record: object) -> bool:
+        created_at = getattr(record, "created_at", None)
+        return isinstance(created_at, datetime) and created_at < SubscriptionService.TEMPLATE_QUOTA_EDIT_CUTOVER_AT
+
+    @staticmethod
+    def _is_legacy_enjoy_identity_record(record: object) -> bool:
         if SubscriptionService._get_record_plan_kind(record) != SubscriptionService.PLAN_KIND_DAILY_QUOTA:
             return False
 
-        plan_code = SubscriptionService._get_record_plan_code(record)
-        if plan_code in SubscriptionService.ENJOY_PLAN_CODES:
-            return True
+        return SubscriptionService._get_record_plan_code(record) in SubscriptionService.ENJOY_PLAN_CODES
 
-        plan_name = SubscriptionService._get_record_plan_name(record)
-        return "畅享" in plan_name
+    @staticmethod
+    def _is_legacy_enjoy_default_quota_record(record: object) -> bool:
+        if not SubscriptionService._is_legacy_enjoy_identity_record(record):
+            return False
+
+        quota_metric = SubscriptionService._normalized_text(getattr(record, "quota_metric", None))
+        if quota_metric != SubscriptionService.QUOTA_METRIC_TOKENS:
+            return False
+
+        quota_value = SubscriptionService._normalize_decimal(getattr(record, "quota_value", None))
+        return quota_value == SubscriptionService.LEGACY_ENJOY_DAILY_TOKEN_LIMIT
+
+    @staticmethod
+    def _is_legacy_enjoy_cost_snapshot_record(record: object) -> bool:
+        if not SubscriptionService._is_legacy_enjoy_identity_record(record):
+            return False
+        if not SubscriptionService._is_before_template_quota_edit_cutover(record):
+            return False
+
+        quota_metric = SubscriptionService._normalized_text(getattr(record, "quota_metric", None))
+        if quota_metric != SubscriptionService.QUOTA_METRIC_COST:
+            return False
+
+        quota_value = SubscriptionService._normalize_decimal(getattr(record, "quota_value", None))
+        return quota_value in {
+            SubscriptionService.ENJOY_DAILY_COST_LIMIT,
+            SubscriptionService.LEGACY_ENJOY_DAILY_COST_LIMIT,
+        }
 
     @staticmethod
     def _build_quota_strategy(
@@ -274,7 +305,7 @@ class SubscriptionService:
                 use_official_cost=True,
             )
 
-        if SubscriptionService._is_enjoy_daily_quota_record(subscription):
+        if SubscriptionService._is_legacy_enjoy_default_quota_record(subscription):
             limit = (
                 SubscriptionService.LEGACY_ENJOY_DAILY_COST_LIMIT
                 if SubscriptionService._is_record_created_before_quota_cutover(subscription)
@@ -283,6 +314,14 @@ class SubscriptionService:
             return SubscriptionService._build_quota_strategy(
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=limit,
+                hard_limit=False,
+                use_official_cost=True,
+            )
+
+        if SubscriptionService._is_legacy_enjoy_cost_snapshot_record(subscription):
+            return SubscriptionService._build_quota_strategy(
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=getattr(subscription, "quota_value", None) or SubscriptionService.ENJOY_DAILY_COST_LIMIT,
                 hard_limit=False,
                 use_official_cost=True,
             )
@@ -312,7 +351,7 @@ class SubscriptionService:
                 use_official_cost=True,
             )
 
-        if SubscriptionService._is_enjoy_daily_quota_record(plan):
+        if SubscriptionService._is_legacy_enjoy_default_quota_record(plan):
             return SubscriptionService._build_quota_strategy(
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=SubscriptionService.ENJOY_DAILY_COST_LIMIT,
@@ -334,6 +373,20 @@ class SubscriptionService:
             hard_limit=False,
             use_official_cost=False,
         )
+
+    @staticmethod
+    def _get_plan_subscription_quota_snapshot(plan: SubscriptionPlan) -> dict:
+        if SubscriptionService._is_legacy_enjoy_default_quota_record(plan):
+            return {
+                "quota_metric": plan.quota_metric,
+                "quota_limit": SubscriptionService._normalize_decimal(plan.quota_value),
+            }
+
+        plan_strategy = SubscriptionService._resolve_plan_quota_strategy(plan)
+        return {
+            "quota_metric": plan_strategy["quota_metric"],
+            "quota_limit": plan_strategy["quota_limit"],
+        }
 
     @staticmethod
     def _is_unlimited_subscription(subscription: UserSubscription) -> bool:
@@ -1432,7 +1485,7 @@ class SubscriptionService:
             current_active.status = "cancelled"
 
         end_time = start_time + timedelta(days=int(plan.duration_days))
-        plan_strategy = SubscriptionService._resolve_plan_quota_strategy(plan)
+        quota_snapshot = SubscriptionService._get_plan_subscription_quota_snapshot(plan)
         subscription = SubscriptionService._build_subscription_record(
             user_id=user_id,
             operator_id=operator_id,
@@ -1445,8 +1498,8 @@ class SubscriptionService:
             start_time=start_time,
             end_time=end_time,
             activation_mode=activation_mode,
-            quota_metric=plan_strategy["quota_metric"],
-            quota_value=plan_strategy["quota_limit"],
+            quota_metric=quota_snapshot["quota_metric"],
+            quota_value=quota_snapshot["quota_limit"],
             reset_period=plan.reset_period,
             reset_timezone=plan.reset_timezone,
             agent_id=agent_id if agent_id is not None else user.agent_id,

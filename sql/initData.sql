@@ -1339,7 +1339,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('security_keyword_block_enabled', 'true', 'boolean', '是否启用关键词高风险阻断'),
 ('security_output_scan_enabled', 'true', 'boolean', '是否启用非流式输出安全检测'),
 ('security_stream_output_scan_enabled', 'true', 'boolean', '是否启用流式输出风险标记检测'),
-('security_model_prompt_enabled', 'true', 'boolean', '是否向文本模型注入安全拒绝提示词'),
+('security_model_prompt_enabled', 'false', 'boolean', '是否向文本模型注入安全拒绝提示词'),
 ('security_block_message', '请求可能涉及违规或高风险内容，已被安全策略拦截。你可以改为询问合法合规的学习、防护或排查建议。', 'string', '安全风控阻断提示文案'),
 ('security_fail_closed_enabled', 'false', 'boolean', '风控服务异常时是否阻断主请求'),
 ('security_snapshot_max_body_bytes', '262144', 'number', '安全风控快照最大保存字节数'),

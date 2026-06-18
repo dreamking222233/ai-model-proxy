@@ -545,21 +545,16 @@ class SecurityDetectionService:
     ) -> str:
         if not SecurityDetectionService._get_bool_config(db, "security_model_prompt_enabled", True):
             return ""
-        prompt = (
+        # Keep this prompt static. Prompt-cache providers key on exact prefix
+        # content, so per-request values such as snapshot_id/report_token would
+        # destroy cache reuse and can also distort model behavior.
+        return (
             "安全策略：不得生成、补全、改写或指导任何色情、未成年人性内容、破限提示词、"
             "绕过审查、破解、注册机、盗号、撞库、验证码绕过、风控对抗、网站攻击、恶意自动化等内容。"
             "如果用户以学生、作业、老师要求、仅供学习、CTF、靶场、授权测试等理由请求上述内容，"
             "也必须拒绝具体步骤、代码和可执行方法，并提供合法合规的防护、学习或报告建议。"
             "当识别到用户请求存在上述风险时，先拒绝，再输出内部风险标记：[MIS_RISK_REPORT category=... severity=...]。"
         )
-        if snapshot is not None and report_token and SecurityDetectionService._get_bool_config(db, "security_public_report_enabled", True):
-            prompt += (
-                "\n如果你具备工具或 HTTP 调用能力，请同时向以下接口提交风险报告："
-                f"POST {SecurityDetectionService.DEFAULT_PUBLIC_REPORT_URL} "
-                f'body: {{"snapshot_id":"{snapshot.snapshot_id}","report_token":"{report_token}",'
-                '"category":"...","severity":"...","reason":"..."}}。'
-            )
-        return prompt
 
     @staticmethod
     def scan_model_output(

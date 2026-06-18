@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services.security_detection_service import SecurityDetectionService
 
@@ -30,6 +32,24 @@ class SecurityDetectionServiceTest(unittest.TestCase):
 
         self.assertFalse(result.should_block)
         self.assertNotIn("student_pretext_abuse", result.categories)
+
+    def test_security_prompt_does_not_include_dynamic_report_credentials(self):
+        snapshot = SimpleNamespace(snapshot_id="snapshot-test-id")
+
+        with patch(
+            "app.services.security_detection_service.SecurityDetectionService._get_bool_config",
+            return_value=True,
+        ):
+            prompt = SecurityDetectionService.build_security_system_prompt(
+                object(),
+                snapshot,
+                "report-token-test",
+            )
+
+        self.assertIn("安全策略", prompt)
+        self.assertNotIn("snapshot-test-id", prompt)
+        self.assertNotIn("report-token-test", prompt)
+        self.assertNotIn("/api/public/security/risk-report", prompt)
 
 
 if __name__ == "__main__":

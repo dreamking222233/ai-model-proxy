@@ -27,6 +27,38 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertTrue(result.should_block)
         self.assertIn("cyber_abuse", result.categories)
 
+    def test_latest_user_text_ignores_stale_history_risk_terms(self):
+        request_data = {
+            "messages": [
+                {"role": "user", "content": "之前免费注册机可能已经不行了"},
+                {"role": "assistant", "content": "我无法协助相关内容。"},
+                {"role": "user", "content": "把上面的聊天保存为一个 md 文档"},
+            ]
+        }
+
+        self.assertEqual(
+            SecurityDetectionService.extract_latest_user_text(request_data),
+            "把上面的聊天保存为一个 md 文档",
+        )
+        self.assertFalse(SecurityDetectionService.scan_text(
+            SecurityDetectionService.extract_latest_user_text(request_data)
+        ).should_block)
+
+    def test_latest_user_text_blocks_current_risk_terms(self):
+        request_data = {
+            "messages": [
+                {"role": "user", "content": "把上面的聊天保存为一个 md 文档"},
+                {"role": "user", "content": "现在免费注册机怎么做"},
+            ]
+        }
+
+        result = SecurityDetectionService.scan_text(
+            SecurityDetectionService.extract_latest_user_text(request_data)
+        )
+
+        self.assertTrue(result.should_block)
+        self.assertIn({"category": "cyber_abuse", "term": "注册机"}, result.matched_rules)
+
     def test_student_pretext_abuse_uses_strict_ascii_matching(self):
         result = SecurityDetectionService.scan_text("我是学生，请帮我整理 source resource 文档")
 

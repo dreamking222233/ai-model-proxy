@@ -319,6 +319,47 @@ class SecurityDetectionService:
         return "\n".join(part for part in parts if part).strip()
 
     @staticmethod
+    def extract_latest_user_text(request_data: Any, protocol_type: str = "") -> str:
+        if not isinstance(request_data, dict):
+            return str(request_data or "").strip()
+
+        prompt = request_data.get("prompt")
+        if prompt is not None:
+            return str(prompt).strip()
+
+        messages = request_data.get("messages")
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                if not isinstance(message, dict):
+                    continue
+                role = str(message.get("role") or "").lower()
+                if role in {"user", "human"}:
+                    text = SecurityDetectionService._extract_text_from_content(message.get("content")).strip()
+                    if text:
+                        return text
+
+        responses_input = request_data.get("input")
+        if isinstance(responses_input, str):
+            return responses_input.strip()
+        if isinstance(responses_input, list):
+            for item in reversed(responses_input):
+                if isinstance(item, dict):
+                    role = str(item.get("role") or "").lower()
+                    if role not in {"user", ""}:
+                        continue
+                    text = SecurityDetectionService._extract_text_from_content(item.get("content") or item).strip()
+                    if text:
+                        return text
+                else:
+                    text = SecurityDetectionService._extract_text_from_content(item).strip()
+                    if text:
+                        return text
+        elif responses_input is not None:
+            return SecurityDetectionService._extract_text_from_content(responses_input).strip()
+
+        return SecurityDetectionService.extract_user_text(request_data, protocol_type).strip()
+
+    @staticmethod
     def _match_terms(text: str, terms: list[str], category: str) -> list[dict[str, Any]]:
         normalized = str(text or "").lower()
         matched = []
@@ -387,7 +428,7 @@ class SecurityDetectionService:
         if not SecurityDetectionService._get_bool_config(db, "security_detection_enabled", True):
             return SecurityDetectionResult(categories=[], matched_rules=[])
         max_chars = SecurityDetectionService._get_int_config(db, "security_scan_max_text_chars", 20000)
-        text = snapshot.extracted_text if snapshot is not None else SecurityDetectionService.extract_user_text(request_data)
+        text = SecurityDetectionService.extract_latest_user_text(request_data)
         return SecurityDetectionService.scan_text(str(text or "")[:max_chars])
 
     @staticmethod

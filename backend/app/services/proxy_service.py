@@ -43,6 +43,7 @@ from app.models.log import (
     UserBalance,
     ConsumptionRecord,
     SystemConfig,
+    SecurityRequestSnapshot,
 )
 from app.services.channel_service import ChannelService
 from app.services.google_vertex_image_service import GoogleVertexImageService
@@ -53,6 +54,7 @@ from app.services.price_adjustment_service import PriceAdjustmentService
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
+from app.services.security_detection_service import SecurityDetectionService
 from app.core.exceptions import ServiceException
 from app.middleware.cache_middleware import CacheMiddleware
 from app.middleware.stream_cache_middleware import StreamCacheMiddleware
@@ -109,6 +111,92 @@ class _PassthroughTextBuffer:
 
     def flush(self) -> str:
         return ""
+
+
+class _SecurityRiskMarkerStreamBuffer:
+    """Filters internal risk-report markers from streamed user-visible text."""
+
+    _MARKER_PREFIX = "[MIS_RISK_REPORT"
+
+    def __init__(self, keep_chars: int = 32, max_marker_chars: int = 4096):
+        self._keep_chars = max(len(self._MARKER_PREFIX) - 1, int(keep_chars or 32))
+        self._max_marker_chars = max(256, int(max_marker_chars or 4096))
+        self._buffer = ""
+        self._marker_buffer = ""
+        self._inside_marker = False
+        self._visible_parts: list[str] = []
+        self._raw_parts: list[str] = []
+
+    def _append_visible(self, text: str) -> str:
+        if text:
+            self._visible_parts.append(text)
+        return text
+
+    def _consume_text(self, text: str, *, flush: bool = False) -> str:
+        output_parts: list[str] = []
+        marker_prefix_lower = self._MARKER_PREFIX.lower()
+
+        for char in text:
+            if self._inside_marker:
+                if char == "]":
+                    self._inside_marker = False
+                    self._marker_buffer = ""
+                elif len(self._marker_buffer) < self._max_marker_chars:
+                    self._marker_buffer += char
+                continue
+
+            self._buffer += char
+            lower_buffer = self._buffer.lower()
+            marker_index = lower_buffer.find(marker_prefix_lower)
+            if marker_index >= 0:
+                if marker_index > 0:
+                    output_parts.append(self._buffer[:marker_index])
+                self._marker_buffer = self._buffer[marker_index:]
+                self._buffer = ""
+                if "]" in self._marker_buffer:
+                    self._marker_buffer = self._marker_buffer.split("]", 1)[1]
+                    if self._marker_buffer:
+                        self._buffer = self._marker_buffer
+                    self._marker_buffer = ""
+                else:
+                    self._inside_marker = True
+                continue
+
+            if len(self._buffer) > self._keep_chars:
+                emit_len = len(self._buffer) - self._keep_chars
+                output_parts.append(self._buffer[:emit_len])
+                self._buffer = self._buffer[emit_len:]
+
+        if flush and not self._inside_marker and self._buffer:
+            output_parts.append(self._buffer)
+            self._buffer = ""
+
+        return self._append_visible("".join(output_parts))
+
+    def feed(self, text: Any) -> str:
+        chunk = str(text or "")
+        if not chunk:
+            return ""
+        self._raw_parts.append(chunk)
+        return self._consume_text(chunk)
+
+    def flush(self) -> str:
+        if self._inside_marker:
+            self._inside_marker = False
+            self._marker_buffer = ""
+        if not self._buffer:
+            return ""
+        cleaned_text = self._consume_text("", flush=True)
+        self._buffer = ""
+        return cleaned_text
+
+    @property
+    def raw_text(self) -> str:
+        return "".join(self._raw_parts)
+
+    @property
+    def visible_text(self) -> str:
+        return "".join(self._visible_parts)
 
 
 # Default timeout for upstream requests (seconds)
@@ -836,6 +924,190 @@ class ProxyService:
                 request_data["instructions"] = prompt + "\n\n" + existing
             else:
                 request_data["instructions"] = prompt
+
+    @staticmethod
+    def _create_security_snapshot(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_id: str,
+        request_data: dict,
+        protocol_type: str,
+        request_type: str,
+        requested_model: str,
+        client_ip: Optional[str],
+    ):
+        try:
+            return SecurityDetectionService.create_snapshot(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                request_data,
+                protocol_type,
+                request_type,
+                requested_model,
+                client_ip,
+            )
+        except Exception as exc:
+            logger.error("Security snapshot creation failed: %s", exc, exc_info=True)
+            if SecurityDetectionService._get_bool_config(db, "security_fail_closed_enabled", False):
+                raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
+            return None, None
+
+    @staticmethod
+    def _scan_security_request_or_raise(
+        db: Session,
+        snapshot,
+        request_data: dict,
+    ) -> None:
+        try:
+            SecurityDetectionService.ensure_allowed_or_raise(db, snapshot, request_data)
+        except ServiceException:
+            raise
+        except Exception as exc:
+            logger.error("Security request scan failed: %s", exc, exc_info=True)
+            if SecurityDetectionService._get_bool_config(db, "security_fail_closed_enabled", False):
+                raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
+
+    @staticmethod
+    def _inject_security_prompt(
+        db: Session,
+        request_data: dict,
+        protocol: str,
+        snapshot=None,
+        report_token: Optional[str] = None,
+    ) -> None:
+        prompt = SecurityDetectionService.build_security_system_prompt(db, snapshot, report_token)
+        if not prompt:
+            return
+        if protocol == "openai":
+            messages = request_data.get("messages")
+            if isinstance(messages, list):
+                messages.insert(0, {"role": "system", "content": prompt})
+        elif protocol == "anthropic":
+            existing = request_data.get("system")
+            if existing is None or existing == "":
+                request_data["system"] = prompt
+            elif isinstance(existing, str):
+                request_data["system"] = prompt + "\n\n" + existing
+            elif isinstance(existing, list):
+                request_data["system"] = [{"type": "text", "text": prompt}] + existing
+        elif protocol == "responses":
+            existing = str(request_data.get("instructions") or "")
+            request_data["instructions"] = prompt + ("\n\n" + existing if existing else "")
+
+    @staticmethod
+    def _extract_openai_response_text(response_body: Any) -> str:
+        if not isinstance(response_body, dict):
+            return ""
+        parts = []
+        for choice in response_body.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message") or {}
+            if isinstance(message, dict) and message.get("content"):
+                parts.append(str(message.get("content")))
+            delta = choice.get("delta") or {}
+            if isinstance(delta, dict) and delta.get("content"):
+                parts.append(str(delta.get("content")))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _replace_openai_response_text(response_body: Any, cleaned_text: str) -> Any:
+        if not isinstance(response_body, dict):
+            return response_body
+        for choice in response_body.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict) and message.get("content"):
+                message["content"] = cleaned_text
+                break
+        return response_body
+
+    @staticmethod
+    def _extract_anthropic_response_text(response_body: Any) -> str:
+        if not isinstance(response_body, dict):
+            return ""
+        parts = []
+        content = response_body.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item.get("text")))
+                elif isinstance(item, str):
+                    parts.append(item)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _replace_anthropic_response_text(response_body: Any, cleaned_text: str) -> Any:
+        if not isinstance(response_body, dict):
+            return response_body
+        content = response_body.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    item["text"] = cleaned_text
+                    break
+        return response_body
+
+    @staticmethod
+    def _extract_responses_response_text(response_body: Any) -> str:
+        if not isinstance(response_body, dict):
+            return ""
+        parts = []
+        for item in response_body.get("output", []) or []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict) and content.get("text"):
+                    parts.append(str(content.get("text")))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _replace_responses_response_text(response_body: Any, cleaned_text: str) -> Any:
+        if not isinstance(response_body, dict):
+            return response_body
+        for item in response_body.get("output", []) or []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict) and content.get("text"):
+                    content["text"] = cleaned_text
+                    return response_body
+        return response_body
+
+    @staticmethod
+    def _get_security_snapshot_for_request(db: Session, request_id: str):
+        if not request_id:
+            return None
+        try:
+            return db.query(SecurityRequestSnapshot).filter(
+                SecurityRequestSnapshot.request_id == request_id
+            ).order_by(SecurityRequestSnapshot.id.desc()).first()
+        except Exception as exc:
+            logger.debug("Failed to load security snapshot for request %s: %s", request_id, exc)
+            return None
+
+    @staticmethod
+    def _scan_stream_security_output(
+        db: Session,
+        request_id: str,
+        raw_text: str,
+        visible_text: str,
+    ) -> None:
+        if not raw_text:
+            return
+        try:
+            SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                raw_text,
+                config_key="security_stream_output_scan_enabled",
+            )
+        except Exception as exc:
+            logger.warning("Security stream output scan failed request_id=%s: %s", request_id, exc)
 
     @staticmethod
     def _normalize_anthropic_system_messages(request_data: dict) -> None:
@@ -4780,6 +5052,7 @@ class ProxyService:
         api_key_record: UserApiKey,
         request_data: dict,
         client_ip: str,
+        request_id: Optional[str] = None,
         request_headers: Optional[dict[str, str]] = None,
     ) -> tuple[dict, dict]:
         image_request = ProxyService._build_image_request_from_responses(db, request_data)
@@ -4790,6 +5063,7 @@ class ProxyService:
             image_request,
             client_ip,
             request_headers=request_headers,
+            request_id=request_id,
         )
         raw_body = getattr(image_response, "body", b"") or b""
         image_payload = json.loads(raw_body.decode("utf-8"))
@@ -4807,9 +5081,9 @@ class ProxyService:
         api_key_record: UserApiKey,
         request_data: dict,
         client_ip: str,
+        request_id: str,
         request_headers: Optional[dict[str, str]] = None,
     ):
-        request_id = str(uuid.uuid4())
         is_stream = bool(request_data.get("stream", True))
 
         if not is_stream:
@@ -4819,6 +5093,7 @@ class ProxyService:
                 api_key_record,
                 request_data,
                 client_ip,
+                request_id=request_id,
                 request_headers=request_headers,
             )
             return JSONResponse(
@@ -4851,6 +5126,7 @@ class ProxyService:
                     api_key_record,
                     request_data,
                     client_ip,
+                    request_id=request_id,
                     request_headers=request_headers,
                 )
                 response_body["id"] = response_id
@@ -4901,6 +5177,18 @@ class ProxyService:
         requested_model = str(client_request.get("model", "") or "")
         is_stream = bool(client_request.get("stream", True))
         client_request["stream"] = is_stream
+        security_snapshot, security_report_token = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            client_request,
+            "responses",
+            "responses",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, client_request)
 
         if ProxyService._is_responses_image_request(db, client_request):
             return await ProxyService._handle_responses_image_request(
@@ -4909,6 +5197,7 @@ class ProxyService:
                 api_key_record,
                 client_request,
                 client_ip,
+                request_id=request_id,
                 request_headers=request_headers,
             )
 
@@ -4943,6 +5232,13 @@ class ProxyService:
 
         # Inject model identity system prompt
         ProxyService._inject_model_identity(client_request, requested_model, "responses")
+        ProxyService._inject_security_prompt(
+            db,
+            client_request,
+            "responses",
+            security_snapshot,
+            security_report_token,
+        )
 
         try:
             unified_model, channels = ProxyService._prepare_responses_request_context(
@@ -5129,18 +5425,50 @@ class ProxyService:
                 ))
                 continue
 
-            last_request = copy.deepcopy(state_request)
-            last_response_output = []
-
             if is_prewarm:
+                last_request = copy.deepcopy(state_request)
+                last_response_output = []
                 for payload in ProxyService._build_responses_prewarm_payloads(state_request):
                     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
                 continue
 
             requested_model = str(state_request.get("model", "") or "")
+            security_snapshot, security_report_token = ProxyService._create_security_snapshot(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                normalized_request,
+                "responses_websocket",
+                "responses",
+                requested_model,
+                client_ip,
+            )
+            try:
+                ProxyService._scan_security_request_or_raise(db, security_snapshot, normalized_request)
+            except ServiceException as exc:
+                await websocket.send_text(json.dumps(
+                    ProxyService._build_responses_error_payload(
+                        exc.detail,
+                        status_code=exc.status_code,
+                        error_type="invalid_request_error",
+                    ),
+                    ensure_ascii=False,
+                ))
+                continue
+
+            last_request = copy.deepcopy(state_request)
+            last_response_output = []
 
             # Inject model identity system prompt for websocket requests
             ProxyService._inject_model_identity(normalized_request, requested_model, "responses")
+            ProxyService._inject_security_prompt(
+                db,
+                normalized_request,
+                "responses",
+                security_snapshot,
+                security_report_token,
+            )
             ProxyService._log_responses_request_json(
                 "websocket_normalized",
                 request_id,
@@ -5821,6 +6149,8 @@ class ProxyService:
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
 
+        security_text_buffer = _SecurityRiskMarkerStreamBuffer()
+
         async def upstream_call(collector, collected_usage):
             """上游 Responses API 流式调用"""
             input_tokens = 0
@@ -5865,6 +6195,12 @@ class ProxyService:
                         collected_usage["_upstream_cache_usage"] = usage_summary
                         # 记录结束
                         collector.add_chunk("", "stop")
+                        flushed_delta = security_text_buffer.flush()
+                        if flushed_delta:
+                            yield ProxyService._payload_to_sse({
+                                "type": "response.output_text.delta",
+                                "delta": flushed_delta,
+                            })
                     elif payload_type == "error":
                         saw_error = True
                         error_message = (
@@ -5880,6 +6216,11 @@ class ProxyService:
                             collector.add_chunk(delta)
                             if collected_usage.get("_first_stream_output_time") is None:
                                 collected_usage["_first_stream_output_time"] = time.time()
+                            cleaned_delta = security_text_buffer.feed(delta)
+                            if not cleaned_delta:
+                                continue
+                            payload = copy.deepcopy(payload)
+                            payload["delta"] = cleaned_delta
 
                     yield ProxyService._payload_to_sse(payload)
 
@@ -5999,6 +6340,12 @@ class ProxyService:
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
+                ProxyService._scan_stream_security_output(
+                    db,
+                    request_id,
+                    security_text_buffer.raw_text,
+                    security_text_buffer.visible_text,
+                )
 
         return ProxyService._build_streaming_response(event_generator(), request_id)
 
@@ -6583,6 +6930,15 @@ class ProxyService:
         )
 
         response_headers = {"X-Request-ID": request_id}
+        output_text = ProxyService._extract_responses_response_text(response_body)
+        if output_text:
+            cleaned_text, _ = SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                output_text,
+            )
+            if cleaned_text != output_text:
+                response_body = ProxyService._replace_responses_response_text(response_body, cleaned_text)
 
         return JSONResponse(
             content=response_body,
@@ -6624,6 +6980,18 @@ class ProxyService:
         request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+        security_snapshot, security_report_token = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "openai_chat",
+            "chat",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
 
         video_unified_model: UnifiedModel | None = None
         channels = []
@@ -6635,6 +7003,13 @@ class ProxyService:
             else:
                 # Inject model identity only for text chat. Video prompts must remain clean.
                 ProxyService._inject_model_identity(request_data, requested_model, "openai")
+                ProxyService._inject_security_prompt(
+                    db,
+                    request_data,
+                    "openai",
+                    security_snapshot,
+                    security_report_token,
+                )
 
                 # Validate context before quota precheck or upstream calls to avoid avoidable upstream cost.
                 ProxyService._validate_request_length(db, request_data, unified_model, protocol="openai")
@@ -6847,11 +7222,30 @@ class ProxyService:
         request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
+        security_snapshot, security_report_token = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "anthropic_messages",
+            "chat",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
 
         ProxyService._normalize_anthropic_system_messages(request_data)
 
         # Inject model identity system prompt
         ProxyService._inject_model_identity(request_data, requested_model, "anthropic")
+        ProxyService._inject_security_prompt(
+            db,
+            request_data,
+            "anthropic",
+            security_snapshot,
+            security_report_token,
+        )
 
         ProxyService._log_anthropic_runtime_debug(
             "entry",
@@ -7166,6 +7560,8 @@ class ProxyService:
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
 
+        security_text_buffer = _SecurityRiskMarkerStreamBuffer()
+
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
             input_tokens = 0
@@ -7193,6 +7589,9 @@ class ProxyService:
 
                     if data_str.strip() == "[DONE]":
                         flushed_content = text_buffer.flush()
+                        security_flushed_content = security_text_buffer.flush()
+                        if security_flushed_content:
+                            flushed_content = f"{flushed_content}{security_flushed_content}"
                         if flushed_content:
                             flush_payload = {
                                 "choices": [{
@@ -7261,10 +7660,13 @@ class ProxyService:
                                 if finish_reason:
                                     collector.add_chunk("", finish_reason)
                                 if content:
-                                    sanitized_content = text_buffer.feed(content)
+                                    sanitized_content = text_buffer.feed(security_text_buffer.feed(content))
                                     delta["content"] = sanitized_content
                                 if finish_reason:
                                     flushed_content = text_buffer.flush()
+                                    security_flushed_content = security_text_buffer.flush()
+                                    if security_flushed_content:
+                                        flushed_content = f"{flushed_content}{security_flushed_content}"
                                     if flushed_content:
                                         delta["content"] = str(delta.get("content") or "") + flushed_content
                     except (json.JSONDecodeError, TypeError):
@@ -7377,6 +7779,12 @@ class ProxyService:
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
+                ProxyService._scan_stream_security_output(
+                    db,
+                    request_id,
+                    security_text_buffer.raw_text,
+                    security_text_buffer.visible_text,
+                )
 
         return ProxyService._build_streaming_response(event_generator(), request_id)
 
@@ -7529,6 +7937,15 @@ class ProxyService:
         )
 
         response_headers = {"X-Request-ID": request_id}
+        output_text = ProxyService._extract_openai_response_text(response_body)
+        if output_text:
+            cleaned_text, _ = SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                output_text,
+            )
+            if cleaned_text != output_text:
+                response_body = ProxyService._replace_openai_response_text(response_body, cleaned_text)
 
         return JSONResponse(
             content=response_body,
@@ -7576,6 +7993,8 @@ class ProxyService:
             nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
+
+        security_text_buffer = _SecurityRiskMarkerStreamBuffer()
 
         async def upstream_call(collector, collected_usage):
             input_tokens = 0
@@ -7693,6 +8112,9 @@ class ProxyService:
                         collector.add_chunk(str(text_value))
                         if collected_usage.get("_first_stream_output_time") is None:
                             collected_usage["_first_stream_output_time"] = time.time()
+                        text_value = security_text_buffer.feed(text_value)
+                        if not text_value:
+                            continue
                         text_chunk = ProxyService._build_openai_stream_chunk(
                             chunk_id=message_id,
                             model_name=client_model_name,
@@ -7743,6 +8165,15 @@ class ProxyService:
                     continue
 
                 if chunk_type == "message_stop":
+                    flushed_text = security_text_buffer.flush()
+                    if flushed_text:
+                        text_chunk = ProxyService._build_openai_stream_chunk(
+                            chunk_id=message_id,
+                            model_name=client_model_name,
+                            created_at=created_at,
+                            delta={"content": flushed_text},
+                        )
+                        yield f"data: {text_chunk}\n\n"
                     final_chunk = ProxyService._build_openai_stream_chunk(
                         chunk_id=message_id,
                         model_name=client_model_name,
@@ -7864,6 +8295,12 @@ class ProxyService:
                         )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
+                ProxyService._scan_stream_security_output(
+                    db,
+                    request_id,
+                    security_text_buffer.raw_text,
+                    security_text_buffer.visible_text,
+                )
 
         return ProxyService._build_streaming_response(event_generator(), request_id)
 
@@ -7996,6 +8433,16 @@ class ProxyService:
             raise_on_failure=True,
         )
 
+        output_text = ProxyService._extract_openai_response_text(response_body)
+        if output_text:
+            cleaned_text, _ = SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                output_text,
+            )
+            if cleaned_text != output_text:
+                response_body = ProxyService._replace_openai_response_text(response_body, cleaned_text)
+
         return JSONResponse(
             content=response_body,
             headers={"X-Request-ID": request_id},
@@ -8056,6 +8503,8 @@ class ProxyService:
             nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
+
+        security_text_buffer = _SecurityRiskMarkerStreamBuffer()
 
         def record_upstream_event(event_name: str, detail: Optional[Any] = None) -> None:
             ProxyService._record_stream_debug_event(
@@ -8515,6 +8964,9 @@ class ProxyService:
                             collector.add_chunk(delta_value)
                             if collected_usage.get("_first_stream_output_time") is None:
                                 collected_usage["_first_stream_output_time"] = time.time()
+                            delta_value = security_text_buffer.feed(delta_value)
+                            if not delta_value:
+                                continue
                             yield build_client_event(
                                 "content_block_delta",
                                 {
@@ -8649,18 +9101,25 @@ class ProxyService:
                                         yield sse_line
                                     joined_text = "".join(text_content)
                                     collector.add_chunk(joined_text)
-                                    yield build_client_event(
-                                        "content_block_delta",
-                                        {
-                                            "type": "content_block_delta",
-                                            "index": text_block_index,
-                                            "delta": {
-                                                "type": "text_delta",
-                                                "text": joined_text,
+                                    joined_text = security_text_buffer.feed(joined_text)
+                                    if not joined_text:
+                                        joined_text = security_text_buffer.flush()
+                                    if not joined_text:
+                                        for sse_line in close_text_block():
+                                            yield sse_line
+                                    else:
+                                        yield build_client_event(
+                                            "content_block_delta",
+                                            {
+                                                "type": "content_block_delta",
+                                                "index": text_block_index,
+                                                "delta": {
+                                                    "type": "text_delta",
+                                                    "text": joined_text,
+                                                },
                                             },
-                                        },
-                                        detail="text_delta",
-                                    )
+                                            detail="text_delta",
+                                        )
                                     for sse_line in close_text_block():
                                         yield sse_line
 
@@ -8673,6 +9132,25 @@ class ProxyService:
                                         yield sse_line
 
                             for sse_line in emit_missing_final_tool_blocks(final_output):
+                                yield sse_line
+
+                        flushed_text = security_text_buffer.flush()
+                        if flushed_text:
+                            for sse_line in open_text_block():
+                                yield sse_line
+                            yield build_client_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": text_block_index,
+                                    "delta": {
+                                        "type": "text_delta",
+                                        "text": flushed_text,
+                                    },
+                                },
+                                detail="text_delta",
+                            )
+                            for sse_line in close_text_block():
                                 yield sse_line
 
                         final_stop_reason = resolve_final_stop_reason(final_output)
@@ -8842,6 +9320,12 @@ class ProxyService:
                     upstream_sequence=upstream_event_sequence,
                     upstream_counts=upstream_event_counts,
                     extra=stream_debug_extra,
+                )
+                ProxyService._scan_stream_security_output(
+                    db,
+                    request_id,
+                    security_text_buffer.raw_text,
+                    security_text_buffer.visible_text,
                 )
 
         return ProxyService._build_streaming_response(event_generator(), request_id)
@@ -9047,6 +9531,16 @@ class ProxyService:
             raise_on_failure=True,
         )
 
+        output_text = ProxyService._extract_anthropic_response_text(response_body)
+        if output_text:
+            cleaned_text, _ = SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                output_text,
+            )
+            if cleaned_text != output_text:
+                response_body = ProxyService._replace_anthropic_response_text(response_body, cleaned_text)
+
         return JSONResponse(
             content=response_body,
             headers={"X-Request-ID": request_id},
@@ -9123,6 +9617,8 @@ class ProxyService:
             nonlocal billing_input_tokens, billing_output_tokens
             billing_input_tokens = input_tok
             billing_output_tokens = output_tok
+
+        security_text_buffer = _SecurityRiskMarkerStreamBuffer()
 
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
@@ -9397,13 +9893,18 @@ class ProxyService:
                                                 if collected_usage.get("_first_stream_output_time") is None:
                                                     collected_usage["_first_stream_output_time"] = time.time()
                                                 block_index = int(chunk.get("index", 0) or 0)
-                                                delta["text"] = get_text_buffer(block_index).feed(text)
+                                                delta["text"] = get_text_buffer(block_index).feed(
+                                                    security_text_buffer.feed(text)
+                                                )
                                             if thinking:
                                                 collector.add_chunk(thinking)
 
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")
                                             stream_debug_extra["completed"] = True
+                                            security_flushed_text = security_text_buffer.flush()
+                                            if security_flushed_text:
+                                                get_text_buffer(0).feed(security_flushed_text)
                                             for flushed_chunk in flush_text_buffers():
                                                 yield f"data: {json.dumps(ProxyService._rewrite_anthropic_payload_model(flushed_chunk, requested_model), ensure_ascii=False)}\n\n"
 
@@ -9555,6 +10056,12 @@ class ProxyService:
                     event_sequence=stream_event_sequence,
                     event_counts=stream_event_counts,
                     extra=stream_debug_extra,
+                )
+                ProxyService._scan_stream_security_output(
+                    db,
+                    request_id,
+                    security_text_buffer.raw_text,
+                    security_text_buffer.visible_text,
                 )
 
         return ProxyService._build_streaming_response(event_generator(), request_id)
@@ -9826,6 +10333,15 @@ class ProxyService:
         )
 
         response_headers = {"X-Request-ID": request_id}
+        output_text = ProxyService._extract_anthropic_response_text(response_body)
+        if output_text:
+            cleaned_text, _ = SecurityDetectionService.scan_model_output(
+                db,
+                ProxyService._get_security_snapshot_for_request(db, request_id),
+                output_text,
+            )
+            if cleaned_text != output_text:
+                response_body = ProxyService._replace_anthropic_response_text(response_body, cleaned_text)
 
         return JSONResponse(
             content=response_body,
@@ -11854,6 +12370,18 @@ class ProxyService:
         prompt = str(request_data.get("prompt", "") or "").strip()
         if not prompt:
             raise ServiceException(400, "缺少必填字段：prompt", "INVALID_VIDEO_PROMPT")
+        security_snapshot, _ = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "video",
+            "video_generation",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
 
         unified_model = ProxyService._resolve_requested_model_or_raise(
             db,
@@ -12003,6 +12531,18 @@ class ProxyService:
         prompt = ProxyService._extract_video_prompt_from_chat_messages(request_data)
         if not prompt:
             raise ServiceException(400, "缺少视频生成提示词", "INVALID_VIDEO_PROMPT")
+        security_snapshot, _ = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "video_chat",
+            "video_generation",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
 
         video_config = ProxyService._video_config_from_chat_request(request_data)
         normalized_seconds = ProxyService._normalize_video_seconds(video_config.get("seconds"))
@@ -14581,8 +15121,9 @@ class ProxyService:
         request_data: dict,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        request_id: Optional[str] = None,
     ):
-        request_id = str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
         requested_model = str(request_data.get("model", "") or "")
         if not requested_model:
             raise ServiceException(400, "缺少必填字段：model", "IMAGE_MODEL_NOT_FOUND")
@@ -14590,6 +15131,18 @@ class ProxyService:
         prompt = str(request_data.get("prompt", "") or "").strip()
         if not prompt:
             raise ServiceException(400, "缺少必填字段：prompt", "INVALID_IMAGE_PROMPT")
+        security_snapshot, _ = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "image",
+            "image_generation",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
         if bool(request_data.get("stream")):
             raise ServiceException(400, "图片生成不支持流式请求", "IMAGE_STREAM_NOT_SUPPORTED")
         if request_data.get("response_format") not in (None, "b64_json"):
@@ -14770,6 +15323,18 @@ class ProxyService:
         prompt = str(request_data.get("prompt", "") or "").strip()
         if not prompt:
             raise ServiceException(400, "缺少必填字段：prompt", "INVALID_IMAGE_PROMPT")
+        security_snapshot, _ = ProxyService._create_security_snapshot(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            request_data,
+            "image_edit",
+            "image_edit",
+            requested_model,
+            client_ip,
+        )
+        ProxyService._scan_security_request_or_raise(db, security_snapshot, request_data)
         if bool(request_data.get("stream")):
             raise ServiceException(400, "图片编辑不支持流式请求", "IMAGE_STREAM_NOT_SUPPORTED")
         if request_data.get("response_format") not in (None, "b64_json"):

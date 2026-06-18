@@ -105,6 +105,12 @@ const routes = [
         meta: { title: '请求日志' }
       },
       {
+        path: 'security-risks',
+        name: 'SecurityRiskLog',
+        component: () => import('@/views/admin/SecurityRiskLog.vue'),
+        meta: { title: '安全风控' }
+      },
+      {
         path: 'agent-logs',
         name: 'AdminAgentRequestLog',
         component: () => import('@/views/admin/AgentRequestLog.vue'),

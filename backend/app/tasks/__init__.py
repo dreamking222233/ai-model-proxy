@@ -2,6 +2,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.database import SessionLocal, get_pool_status_snapshot
 from app.services.health_service import HealthService
 from app.services.subscription_service import SubscriptionService
+from app.services.security_detection_service import SecurityDetectionService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,19 @@ async def subscription_maintenance_job():
         db.close()
 
 
+async def security_snapshot_cleanup_job():
+    """Periodically purge expired temporary security request bodies."""
+    db = SessionLocal()
+    try:
+        purged = SecurityDetectionService.purge_expired_snapshots(db, limit=500)
+        if purged:
+            logger.info("Security snapshot cleanup completed: purged=%s", purged)
+    except Exception as e:
+        logger.error(f"Security snapshot cleanup job failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler(interval_seconds: int = 300):
     """Start background schedulers."""
     scheduler.add_job(
@@ -56,6 +70,14 @@ def start_scheduler(interval_seconds: int = 300):
         'interval',
         seconds=max(300, interval_seconds),
         id='subscription_maintenance',
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        security_snapshot_cleanup_job,
+        'interval',
+        seconds=60,
+        id='security_snapshot_cleanup',
         replace_existing=True,
         max_instances=1,
     )

@@ -160,3 +160,43 @@ export function listConsumptionRecords(params) {
     params
   })
 }
+
+// ==================== Security Risks ====================
+
+export function listSecurityRiskEvents(params) {
+  return request({
+    url: '/api/admin/security/events',
+    method: 'get',
+    params
+  })
+}
+
+export function getSecurityRiskEventDetail(eventId) {
+  return request({
+    url: `/api/admin/security/events/${eventId}`,
+    method: 'get'
+  })
+}
+
+export function getSecurityRiskStats() {
+  return request({
+    url: '/api/admin/security/stats',
+    method: 'get'
+  })
+}
+
+export function reviewSecurityRiskEvent(eventId, data) {
+  return request({
+    url: `/api/admin/security/events/${eventId}/review`,
+    method: 'put',
+    data
+  })
+}
+
+export function purgeSecuritySnapshots(params) {
+  return request({
+    url: '/api/admin/security/snapshots/purge',
+    method: 'post',
+    params
+  })
+}

@@ -92,6 +92,10 @@
             <a-icon type="file-text" />
             <span>请求日志</span>
           </a-menu-item>
+          <a-menu-item key="/admin/security-risks">
+            <a-icon type="safety" />
+            <span>安全风控</span>
+          </a-menu-item>
           <a-menu-item key="/admin/agent-logs">
             <a-icon type="cluster" />
             <span>代理日志</span>

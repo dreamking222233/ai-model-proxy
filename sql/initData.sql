@@ -931,6 +931,82 @@ CREATE TABLE `request_log` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='请求日志表';
 
 -- ----------------------------
+-- Table structure for security_request_snapshot
+-- ----------------------------
+DROP TABLE IF EXISTS `security_request_snapshot`;
+CREATE TABLE `security_request_snapshot` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `snapshot_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Security snapshot UUID',
+  `request_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Proxy request UUID',
+  `user_id` bigint unsigned DEFAULT NULL,
+  `agent_id` bigint unsigned DEFAULT NULL,
+  `user_api_key_id` bigint unsigned DEFAULT NULL,
+  `requested_model` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `protocol_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `request_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'chat',
+  `client_ip` varchar(45) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `request_hash` char(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `report_token_hash` char(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `request_preview` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `request_body_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `extracted_text` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `is_truncated` tinyint NOT NULL DEFAULT '0',
+  `body_size_bytes` int NOT NULL DEFAULT '0',
+  `retention_status` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'temporary',
+  `risk_level` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',
+  `risk_categories_json` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `expires_at` datetime DEFAULT NULL,
+  `purged_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_snapshot_id` (`snapshot_id`),
+  KEY `idx_security_snapshot_request_id` (`request_id`),
+  KEY `idx_security_snapshot_user_created` (`user_id`,`created_at`),
+  KEY `idx_security_snapshot_retention_expires` (`retention_status`,`expires_at`),
+  KEY `idx_security_snapshot_risk_level` (`risk_level`),
+  KEY `idx_security_snapshot_agent_id` (`agent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='安全风控请求快照表';
+
+-- ----------------------------
+-- Table structure for security_risk_event
+-- ----------------------------
+DROP TABLE IF EXISTS `security_risk_event`;
+CREATE TABLE `security_risk_event` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `event_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Security event UUID',
+  `snapshot_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `snapshot_db_id` bigint unsigned DEFAULT NULL,
+  `request_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_id` bigint unsigned DEFAULT NULL,
+  `agent_id` bigint unsigned DEFAULT NULL,
+  `requested_model` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `protocol_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `event_source` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'keyword',
+  `risk_level` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'medium',
+  `category` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `action` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'review',
+  `matched_rules_json` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `response_excerpt` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `status` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'open',
+  `reviewer_id` bigint unsigned DEFAULT NULL,
+  `review_note` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  `reviewed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_security_event_id` (`event_id`),
+  KEY `idx_security_event_snapshot_id` (`snapshot_id`),
+  KEY `idx_security_event_snapshot_db_id` (`snapshot_db_id`),
+  KEY `idx_security_event_request_id` (`request_id`),
+  KEY `idx_security_event_status_created` (`status`,`created_at`),
+  KEY `idx_security_event_level_created` (`risk_level`,`created_at`),
+  KEY `idx_security_event_category_created` (`category`,`created_at`),
+  KEY `idx_security_event_user_created` (`user_id`,`created_at`),
+  KEY `idx_security_event_agent_id` (`agent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='安全风控风险事件表';
+
+-- ----------------------------
 -- Table structure for subscription_plan
 -- ----------------------------
 DROP TABLE IF EXISTS `subscription_plan`;
@@ -1256,6 +1332,20 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('request_body_cache_ttl_seconds', '1800', 'number', '请求体缓存 TTL（秒）'),
 ('request_body_cache_min_chars', '256', 'number', '最小缓存片段字符数阈值'),
 ('request_body_cache_formats', 'anthropic_messages,openai_chat,responses', 'string', '启用请求体缓存分析的请求格式'),
+('security_detection_enabled', 'true', 'boolean', '是否启用安全风控输入检测'),
+('security_snapshot_enabled', 'true', 'boolean', '是否短期保存安全风控请求快照'),
+('security_snapshot_ttl_seconds', '1800', 'number', '无风险请求快照完整内容保留秒数'),
+('security_flagged_retention_days', '30', 'number', '风险请求快照保留天数'),
+('security_keyword_block_enabled', 'true', 'boolean', '是否启用关键词高风险阻断'),
+('security_output_scan_enabled', 'true', 'boolean', '是否启用非流式输出安全检测'),
+('security_stream_output_scan_enabled', 'true', 'boolean', '是否启用流式输出风险标记检测'),
+('security_model_prompt_enabled', 'true', 'boolean', '是否向文本模型注入安全拒绝提示词'),
+('security_block_message', '请求可能涉及违规或高风险内容，已被安全策略拦截。你可以改为询问合法合规的学习、防护或排查建议。', 'string', '安全风控阻断提示文案'),
+('security_fail_closed_enabled', 'false', 'boolean', '风控服务异常时是否阻断主请求'),
+('security_snapshot_max_body_bytes', '262144', 'number', '安全风控快照最大保存字节数'),
+('security_scan_max_text_chars', '20000', 'number', '安全风控最大扫描文本字符数'),
+('security_public_report_enabled', 'true', 'boolean', '是否启用公网免登录风险上报接口'),
+('security_public_report_rate_limit_per_minute', '60', 'number', '公网风险上报接口每 IP 每分钟限制'),
 ('anthropic_prompt_cache_enabled', 'false', 'boolean', '是否启用 Anthropic Prompt Cache'),
 ('anthropic_prompt_cache_history_enabled', 'true', 'boolean', '是否启用 Anthropic Prompt Cache 历史自动缓存'),
 ('anthropic_prompt_cache_static_ttl', '5m', 'string', 'Anthropic Prompt Cache 静态前缀 TTL（5m/1h）'),

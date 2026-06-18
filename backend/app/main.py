@@ -17,6 +17,7 @@ import app.models  # noqa: F401
 from app.api.auth import router as auth_router
 from app.api.public.site import router as public_site_router
 from app.api.public.payment import router as public_payment_router
+from app.api.public.security import router as public_security_router
 from app.api.admin.agent import router as admin_agent_router
 from app.api.admin.payment import router as admin_payment_router
 from app.api.admin.channel import router as admin_channel_router
@@ -25,6 +26,7 @@ from app.api.admin.user import router as admin_user_router
 from app.api.admin.log import router as admin_log_router
 from app.api.admin.health import router as admin_health_router
 from app.api.admin.system import router as admin_system_router
+from app.api.admin.security import router as admin_security_router
 from app.api.admin.redemption import router as admin_redemption_router
 from app.api.admin.subscription import router as admin_subscription_router
 from app.api.admin.promotion import router as admin_promotion_router
@@ -116,6 +118,7 @@ register_exception_handlers(app)
 app.include_router(auth_router)
 app.include_router(public_site_router)
 app.include_router(public_payment_router)
+app.include_router(public_security_router)
 
 # Register routers - Admin
 app.include_router(admin_channel_router)
@@ -125,6 +128,7 @@ app.include_router(admin_user_router)
 app.include_router(admin_log_router)
 app.include_router(admin_health_router)
 app.include_router(admin_system_router)
+app.include_router(admin_security_router)
 app.include_router(admin_redemption_router)
 app.include_router(admin_subscription_router)
 app.include_router(admin_payment_router)

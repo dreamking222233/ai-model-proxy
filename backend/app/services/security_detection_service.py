@@ -319,13 +319,35 @@ class SecurityDetectionService:
         return "\n".join(part for part in parts if part).strip()
 
     @staticmethod
+    def _strip_client_context_wrappers(text: str) -> str:
+        cleaned = str(text or "")
+        block_tags = (
+            "system-reminder",
+            "local-command-caveat",
+            "command-name",
+            "command-message",
+            "command-args",
+            "local-command-stdout",
+            "local-command-stderr",
+        )
+        for tag in block_tags:
+            cleaned = re.sub(
+                rf"<{tag}\b[^>]*>.*?</{tag}>",
+                "\n",
+                cleaned,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
     def extract_latest_user_text(request_data: Any, protocol_type: str = "") -> str:
         if not isinstance(request_data, dict):
-            return str(request_data or "").strip()
+            return SecurityDetectionService._strip_client_context_wrappers(str(request_data or ""))
 
         prompt = request_data.get("prompt")
         if prompt is not None:
-            return str(prompt).strip()
+            return SecurityDetectionService._strip_client_context_wrappers(str(prompt))
 
         messages = request_data.get("messages")
         if isinstance(messages, list):
@@ -334,30 +356,40 @@ class SecurityDetectionService:
                     continue
                 role = str(message.get("role") or "").lower()
                 if role in {"user", "human"}:
-                    text = SecurityDetectionService._extract_text_from_content(message.get("content")).strip()
+                    text = SecurityDetectionService._strip_client_context_wrappers(
+                        SecurityDetectionService._extract_text_from_content(message.get("content"))
+                    )
                     if text:
                         return text
 
         responses_input = request_data.get("input")
         if isinstance(responses_input, str):
-            return responses_input.strip()
+            return SecurityDetectionService._strip_client_context_wrappers(responses_input)
         if isinstance(responses_input, list):
             for item in reversed(responses_input):
                 if isinstance(item, dict):
                     role = str(item.get("role") or "").lower()
                     if role not in {"user", ""}:
                         continue
-                    text = SecurityDetectionService._extract_text_from_content(item.get("content") or item).strip()
+                    text = SecurityDetectionService._strip_client_context_wrappers(
+                        SecurityDetectionService._extract_text_from_content(item.get("content") or item)
+                    )
                     if text:
                         return text
                 else:
-                    text = SecurityDetectionService._extract_text_from_content(item).strip()
+                    text = SecurityDetectionService._strip_client_context_wrappers(
+                        SecurityDetectionService._extract_text_from_content(item)
+                    )
                     if text:
                         return text
         elif responses_input is not None:
-            return SecurityDetectionService._extract_text_from_content(responses_input).strip()
+            return SecurityDetectionService._strip_client_context_wrappers(
+                SecurityDetectionService._extract_text_from_content(responses_input)
+            )
 
-        return SecurityDetectionService.extract_user_text(request_data, protocol_type).strip()
+        return SecurityDetectionService._strip_client_context_wrappers(
+            SecurityDetectionService.extract_user_text(request_data, protocol_type)
+        )
 
     @staticmethod
     def _match_terms(text: str, terms: list[str], category: str) -> list[dict[str, Any]]:

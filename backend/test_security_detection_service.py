@@ -59,6 +59,29 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertTrue(result.should_block)
         self.assertIn({"category": "cyber_abuse", "term": "注册机"}, result.matched_rules)
 
+    def test_latest_user_text_ignores_client_context_wrappers(self):
+        request_data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "<system-reminder>\n"
+                        "skills: exploit-sqli arbitrary-write-to-rce sql注入 RCE\n"
+                        "</system-reminder>\n\n"
+                        "<local-command-caveat>ignore command output</local-command-caveat>\n"
+                        "<command-name>/model</command-name>\n"
+                        "<local-command-stdout>Set model</local-command-stdout>\n\n"
+                        "你好"
+                    ),
+                }
+            ]
+        }
+
+        latest_text = SecurityDetectionService.extract_latest_user_text(request_data)
+
+        self.assertEqual(latest_text, "你好")
+        self.assertFalse(SecurityDetectionService.scan_text(latest_text).should_block)
+
     def test_student_pretext_abuse_uses_strict_ascii_matching(self):
         result = SecurityDetectionService.scan_text("我是学生，请帮我整理 source resource 文档")
 

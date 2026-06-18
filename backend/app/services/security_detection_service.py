@@ -10,6 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from sqlalchemy import func
@@ -322,9 +323,21 @@ class SecurityDetectionService:
         normalized = str(text or "").lower()
         matched = []
         for term in terms:
-            if str(term).lower() in normalized:
+            if SecurityDetectionService._term_matches(normalized, str(term)):
                 matched.append({"category": category, "term": term})
         return matched
+
+    @staticmethod
+    def _term_matches(normalized_text: str, term: str) -> bool:
+        normalized = str(normalized_text or "").lower()
+        normalized_term = str(term or "").strip().lower()
+        if not normalized_term:
+            return False
+        if re.fullmatch(r"[a-z0-9][a-z0-9_\-\s]*", normalized_term):
+            escaped = re.escape(normalized_term)
+            escaped = re.sub(r"\\\s+", r"\\s+", escaped)
+            return bool(re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", normalized))
+        return normalized_term in normalized
 
     @staticmethod
     def scan_text(text: str) -> SecurityDetectionResult:
@@ -339,8 +352,14 @@ class SecurityDetectionService:
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS, "illegal_automation"))
 
         lower_text = normalized.lower()
-        has_student_pretext = any(term.lower() in lower_text for term in SecurityDetectionService.STUDENT_PRETEXT_TERMS)
-        has_abuse = any(term.lower() in lower_text for term in (SecurityDetectionService.CYBER_ABUSE_TERMS + SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS))
+        has_student_pretext = any(
+            SecurityDetectionService._term_matches(lower_text, term)
+            for term in SecurityDetectionService.STUDENT_PRETEXT_TERMS
+        )
+        has_abuse = any(
+            SecurityDetectionService._term_matches(lower_text, term)
+            for term in (SecurityDetectionService.CYBER_ABUSE_TERMS + SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS)
+        )
         if has_student_pretext and has_abuse:
             matched_rules.append({
                 "category": "student_pretext_abuse",
@@ -424,8 +443,32 @@ class SecurityDetectionService:
             write_db.refresh(snapshot)
             snapshot_id_value = snapshot.snapshot_id
 
-        # Return a lightweight object usable by the request-scoped session.
-        return db.query(SecurityRequestSnapshot).filter(SecurityRequestSnapshot.snapshot_id == snapshot_id_value).first(), report_token
+        # The request-scoped DB session may already hold a MySQL repeatable-read
+        # snapshot and fail to see the row committed by session_scope() above.
+        # Return the data the scanner needs directly instead of re-querying.
+        return SimpleNamespace(
+            id=None,
+            snapshot_id=snapshot_id_value,
+            request_id=request_id,
+            user_id=getattr(user, "id", None),
+            agent_id=getattr(user, "agent_id", None),
+            user_api_key_id=getattr(api_key_record, "id", None),
+            requested_model=requested_model,
+            protocol_type=protocol_type,
+            request_type=request_type,
+            client_ip=client_ip,
+            request_hash=request_hash,
+            report_token_hash=SecurityDetectionService._hash_text(report_token),
+            request_preview=preview,
+            request_body_json=body_json,
+            extracted_text=extracted_text,
+            is_truncated=1 if is_truncated else 0,
+            body_size_bytes=body_size_bytes,
+            retention_status="temporary",
+            risk_level="none",
+            risk_categories_json="[]",
+            expires_at=datetime.utcnow() + timedelta(seconds=max(ttl_seconds, 60)),
+        ), report_token
 
     @staticmethod
     def record_risk_event(

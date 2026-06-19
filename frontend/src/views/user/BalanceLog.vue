@@ -946,8 +946,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .billing-usage-page {
   position: relative;
   min-height: calc(100vh - 100px);
@@ -971,18 +969,17 @@ export default {
 
   .wallet-main-card, .image-credit-card, .package-card {
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border-radius: 24px;
     padding: 24px;
     position: relative;
     overflow: hidden;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.6);
-    transition: all 0.3s ease;
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
 
     &:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 15px 45px rgba(0, 0, 0, 0.08);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.05);
       border-color: rgba(102, 126, 234, 0.3);
     }
 
@@ -1051,12 +1048,12 @@ export default {
     font-weight: 700;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border: none;
-    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.25);
-    transition: all 0.3s;
+    box-shadow: 0 6px 16px rgba(102, 126, 234, 0.16);
+    transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
 
     &:hover {
       transform: scale(1.02);
-      box-shadow: 0 12px 28px rgba(102, 126, 234, 0.35);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.2);
       background: linear-gradient(135deg, #7b8ff0 0%, #8a5fb5 100%);
     }
   }
@@ -1071,7 +1068,6 @@ export default {
 
   .stat-mini-card {
     background: rgba(255, 255, 255, 0.82);
-    backdrop-filter: blur(10px);
     border-radius: 20px;
     padding: 16px 20px;
     display: flex;
@@ -1079,7 +1075,7 @@ export default {
     gap: 16px;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.6);
-    transition: all 0.3s;
+    transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
     
     &:hover {
       border-color: rgba(102, 126, 234, 0.2);
@@ -1202,7 +1198,6 @@ export default {
 
   .premium-table-card {
     background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(15px);
     border-radius: 20px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.6);
@@ -1409,7 +1404,7 @@ export default {
 
   .status-indicator {
     display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 12px;
-    cursor: pointer; transition: all 0.2s; background: rgba(247, 250, 252, 0.5);
+    cursor: pointer; transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s; background: rgba(247, 250, 252, 0.5);
     border: 1px solid transparent;
     
     .status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
@@ -1895,7 +1890,7 @@ export default {
 
     &:hover {
       color: #667eea;
-      transform: scale(1.12);
+      transform: scale(1.02);
     }
   }
 

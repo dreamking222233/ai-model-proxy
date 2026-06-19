@@ -164,8 +164,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .cache-stats-page {
   position: relative;
   min-height: calc(100vh - 100px);
@@ -184,7 +182,6 @@ export default {
     margin-bottom: 32px;
     .header-glass {
       background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(20px);
       border-radius: 24px;
       padding: 32px 40px;
       display: flex;
@@ -212,10 +209,10 @@ export default {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-bottom: 32px;
   }
   .stat-glass-card {
-    background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(15px); border-radius: 24px; padding: 24px;
+    background: rgba(255, 255, 255, 0.82); border-radius: 24px; padding: 24px;
     border: 1px solid rgba(255, 255, 255, 0.6); display: flex; align-items: center; gap: 20px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.02); transition: all 0.3s;
-    &:hover { transform: translateY(-5px); background: #fff; }
+    box-shadow: 0 10px 30px rgba(0,0,0,0.02); transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
+    &:hover { transform: translateY(-2px); background: #fff; }
 
     .stat-icon {
       width: 56px; height: 56px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 24px;
@@ -235,7 +232,7 @@ export default {
   /* ===== Details ===== */
   .detail-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   .glass-card {
-    background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px); border-radius: 28px; padding: 32px;
+    background: rgba(255, 255, 255, 0.75); border-radius: 28px; padding: 32px;
     border: 1px solid rgba(255, 255, 255, 0.6);
     
     .card-header { margin-bottom: 24px; h3 { font-size: 18px; font-weight: 800; color: #1a1a2e; margin: 0; display: flex; align-items: center; gap: 10px; } }

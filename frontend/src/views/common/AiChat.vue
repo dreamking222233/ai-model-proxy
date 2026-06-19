@@ -2776,9 +2776,8 @@ console.log(response.choices[0].message.content);`
   display: flex;
   flex-direction: column;
   background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(20px);
   border-right: 1px solid rgba(255, 255, 255, 0.5);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   z-index: 10;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.02);
@@ -2808,7 +2807,6 @@ console.log(response.choices[0].message.content);`
   justify-content: space-between;
   padding: 0 20px;
   background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(15px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.6);
   flex-shrink: 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
@@ -2827,7 +2825,7 @@ console.log(response.choices[0].message.content);`
   cursor: pointer;
   padding: 8px;
   border-radius: 8px;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
   background: rgba(0, 0, 0, 0.03);
 
   &:hover {
@@ -2998,7 +2996,6 @@ console.log(response.choices[0].message.content);`
   border-radius: 12px;
   color: #ff4d4f;
   font-size: 13px;
-  backdrop-filter: blur(5px);
   display: flex; align-items: center; gap: 8px;
 }
 
@@ -3006,7 +3003,6 @@ console.log(response.choices[0].message.content);`
 .chat-input-area {
   padding: 16px 24px 24px;
   background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(25px);
   border-top: 1px solid rgba(255, 255, 255, 0.7);
   flex-shrink: 0;
   position: relative;
@@ -3024,7 +3020,7 @@ console.log(response.choices[0].message.content);`
   padding: 10px 10px 10px 20px;
   border: 1px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 
   &:focus-within {
     border-color: #667eea;
@@ -3056,9 +3052,9 @@ console.log(response.choices[0].message.content);`
   width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
 
-  &:hover:not([disabled]) { transform: scale(1.05); box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4); }
+  &:hover:not([disabled]) { transform: scale(1.02); box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4); }
   &:disabled { background: #e0e4eb !important; color: #a4abb8 !important; box-shadow: none !important; cursor: not-allowed; }
   .anticon { font-size: 18px; }
 }
@@ -3170,7 +3166,7 @@ console.log(response.choices[0].message.content);`
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
 
   &:hover {
     color: #667eea;

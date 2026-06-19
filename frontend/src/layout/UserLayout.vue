@@ -78,6 +78,10 @@
             <a-icon type="rocket" />
             <span>快速开始</span>
           </a-menu-item>
+          <a-menu-item key="/user/dragon-boat-lottery">
+            <a-icon type="trophy" />
+            <span>端午抽奖</span>
+          </a-menu-item>
         </a-menu>
       </div>
 
@@ -272,13 +276,19 @@ export default {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width 0.2s ease;
   // 深色磨砂玻璃背景
   background: linear-gradient(180deg, #0d0d1a 0%, #131328 40%, #0f1225 100%) !important;
   border-right: 1px solid rgba(102, 126, 234, 0.08);
-  box-shadow:
-    2px 0 24px rgba(0, 0, 0, 0.3),
-    1px 0 0 rgba(102, 126, 234, 0.06);
+  box-shadow: 1px 0 12px rgba(0, 0, 0, 0.22);
+}
+
+/deep/ .user-sider .ant-layout-sider-children {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* =============================================
@@ -322,19 +332,7 @@ export default {
   flex-shrink: 0;
   position: relative;
   border: 1px solid rgba(102, 126, 234, 0.15);
-  transition: all 0.3s ease;
-
-  // 呼吸光效
-  &::before {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3));
-    opacity: 0;
-    animation: icon-breathe 3s ease-in-out infinite;
-    z-index: -1;
-  }
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .logo-img {
@@ -367,9 +365,11 @@ export default {
    ============================================= */
 .sider-menu-wrapper {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 0;
+  -webkit-overflow-scrolling: touch;
 
   // 自定义滚动条
   &::-webkit-scrollbar {
@@ -397,14 +397,14 @@ export default {
     border-radius: 10px;
     background: transparent !important;
     color: rgba(255, 255, 255, 0.5);
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
     border: 1px solid transparent;
     overflow: hidden;
 
     .anticon {
       font-size: 16px;
       color: rgba(255, 255, 255, 0.4);
-      transition: all 0.25s ease;
+      transition: color 0.2s ease;
       margin-right: 10px;
     }
 
@@ -488,7 +488,7 @@ export default {
   padding: 10px 12px;
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.25s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.04);
 
@@ -520,7 +520,7 @@ export default {
 .sider-arrow {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.25);
-  transition: all 0.25s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 /* =============================================
@@ -538,8 +538,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   z-index: 9;
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
@@ -551,7 +550,7 @@ export default {
       cursor: pointer;
       padding: 8px 12px;
       border-radius: 8px;
-      transition: all 0.25s ease;
+      transition: background-color 0.2s ease, color 0.2s ease;
       color: rgba(0, 0, 0, 0.55);
 
       &:hover {
@@ -577,7 +576,7 @@ export default {
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.25s ease;
+      transition: background-color 0.2s ease, color 0.2s ease;
 
       &:hover {
         background: rgba(102, 126, 234, 0.16);
@@ -590,7 +589,7 @@ export default {
       align-items: center;
       height: 64px;
       padding: 0 12px;
-      transition: all 0.25s ease;
+      transition: background-color 0.2s ease, color 0.2s ease;
       border-radius: 8px;
       color: rgba(0, 0, 0, 0.65);
 
@@ -666,11 +665,4 @@ export default {
   }
 }
 
-/* =============================================
-   动画
-   ============================================= */
-@keyframes icon-breathe {
-  0%, 100% { opacity: 0; }
-  50% { opacity: 0.6; }
-}
 </style>

@@ -223,8 +223,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .profile-page {
   position: relative;
   min-height: 100vh;
@@ -234,7 +232,7 @@ export default {
 
   @keyframes move {
     0% { transform: translate(0, 0) scale(1); }
-    100% { transform: translate(50px, 80px) scale(1.1); }
+    100% { transform: translate(50px, 80px) scale(1.02); }
   }
 
   .page-container { position: relative; z-index: 1; max-width: 1000px; margin: 0 auto; }
@@ -245,14 +243,14 @@ export default {
 
   /* ===== Identity Card ===== */
   .identity-card-glass {
-    background: rgba(255, 255, 255, 0.65); backdrop-filter: blur(25px); border-radius: 32px;
+    background: rgba(255, 255, 255, 0.65); border-radius: 32px;
     padding: 48px 32px; border: 1px solid rgba(255, 255, 255, 0.5); box-shadow: 0 15px 50px rgba(0,0,0,0.03);
     text-align: center;
     
     .avatar-box {
       position: relative; width: 120px; height: 120px; margin: 0 auto 24px;
       .avatar-inner {
-        position: relative; z-index: 2; width: 100%; height: 100%; border-radius: 50%; padding: 4px; background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px);
+        position: relative; z-index: 2; width: 100%; height: 100%; border-radius: 50%; padding: 4px; background: rgba(255, 255, 255, 0.8);
         .main-avatar {
           width: 100%; height: 100%; font-size: 40px; font-weight: 800; background: linear-gradient(135deg, #667eea, #764ba2);
           display: flex; align-items: center; justify-content: center; color: #fff;
@@ -263,7 +261,7 @@ export default {
         }
       }
       .avatar-glow {
-        position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #667eea; filter: blur(20px); opacity: 0.2; border-radius: 50%;
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #667eea; opacity: 0.2; border-radius: 50%;
       }
     }
 
@@ -278,8 +276,8 @@ export default {
     .detail-grid {
       margin-top: 40px; text-align: left; display: flex; flex-direction: column; gap: 20px;
       .detail-item {
-        display: flex; align-items: center; gap: 16px; padding: 12px; border-radius: 16px; transition: all 0.3s;
-        &:hover { background: rgba(255, 255, 255, 0.5); transform: translateX(5px); }
+        display: flex; align-items: center; gap: 16px; padding: 12px; border-radius: 16px; transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
+        &:hover { background: rgba(255, 255, 255, 0.5); transform: translateX(2px); }
         .d-icon {
           width: 40px; height: 40px; border-radius: 12px; background: rgba(255, 255, 255, 0.6); display: flex; align-items: center; justify-content: center; font-size: 18px; color: #667eea; border: 1px solid rgba(255, 255, 255, 0.5);
         }
@@ -292,7 +290,7 @@ export default {
 
   /* ===== Security Card ===== */
   .security-card-glass {
-    background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px); border-radius: 32px;
+    background: rgba(255, 255, 255, 0.6); border-radius: 32px;
     padding: 40px; border: 1px solid rgba(255, 255, 255, 0.5); box-shadow: 0 10px 40px rgba(0,0,0,0.02);
     margin-bottom: 24px;
 
@@ -314,11 +312,11 @@ export default {
   .glass-input {
     /deep/ .ant-input,
     /deep/ .ant-input-password {
-      height: 48px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(10px); transition: all 0.3s;
+      height: 48px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.4); transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
       &:focus { border-color: #667eea; box-shadow: 0 0 15px rgba(102, 126, 234, 0.1); }
     }
     /deep/ .ant-input-affix-wrapper {
-      height: 48px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(10px); transition: all 0.3s;
+      height: 48px; border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.4); transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
       &:hover { border-color: #667eea; }
       &.ant-input-affix-wrapper-focused { border-color: #667eea; box-shadow: 0 0 15px rgba(102, 126, 234, 0.1); }
       .ant-input { height: auto; border: none !important; }
@@ -330,14 +328,14 @@ export default {
   .premium-submit-btn {
     width: 100%; height: 52px; border-radius: 14px; font-size: 16px; font-weight: 800; background: #1a1a2e; border: none;
     display: flex; align-items: center; justify-content: center; gap: 12px;
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    &:hover { background: #333; transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+    transition: background-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    &:hover { background: #333; transform: translateY(-2px); box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
     &:active { transform: translateY(0); }
   }
 
   /* ===== Hint Card ===== */
   .hint-card-glass {
-    background: rgba(102, 126, 234, 0.05); backdrop-filter: blur(10px); border-radius: 20px; padding: 20px;
+    background: rgba(102, 126, 234, 0.05); border-radius: 20px; padding: 20px;
     border: 1px solid rgba(102, 126, 234, 0.1); display: flex; gap: 16px; align-items: flex-start;
     .hint-icon { font-size: 20px; color: #667eea; }
     .hint-text { font-size: 13px; color: #5c6780; line-height: 1.6; }

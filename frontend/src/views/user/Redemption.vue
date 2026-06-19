@@ -201,8 +201,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .redemption-page {
   position: relative;
   min-height: calc(100vh - 100px);
@@ -221,7 +219,6 @@ export default {
     margin-bottom: 32px;
     .header-glass {
       background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(20px);
       border-radius: 24px;
       padding: 32px 40px;
       display: flex;
@@ -267,15 +264,10 @@ export default {
         .pulse-ring {
           position: absolute; width: 100%; height: 100%;
           border: 2px solid #667eea; border-radius: 18px;
-          animation: pulse 2s infinite; opacity: 0;
+          opacity: 0.2;
         }
       }
     }
-  }
-
-  @keyframes pulse {
-    0% { transform: scale(0.95); opacity: 0.5; }
-    100% { transform: scale(1.4); opacity: 0; }
   }
 
   /* ===== Redemption Banner ===== */
@@ -286,7 +278,6 @@ export default {
     margin-bottom: 32px;
     padding: 24px 32px;
     background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(15px);
     border: 1px solid rgba(82, 196, 26, 0.3);
     border-radius: 24px;
     box-shadow: 0 8px 32px rgba(82, 196, 26, 0.1);
@@ -315,11 +306,10 @@ export default {
 
   .glass-card {
     background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(20px);
     border-radius: 28px;
     padding: 48px;
     border: 1px solid rgba(255, 255, 255, 0.6);
-    box-shadow: 0 15px 45px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
   }
 
   /* ===== Redemption Main ===== */
@@ -333,8 +323,8 @@ export default {
       margin: 0 auto 32px;
       display: flex; align-items: center; justify-content: center;
       font-size: 44px; color: #fff;
-      box-shadow: 0 20px 40px rgba(102, 126, 234, 0.3);
-      transition: all 0.5s;
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.18);
+      transition: background-color 0.5s, border-color 0.5s, color 0.5s, box-shadow 0.5s, transform 0.5s;
       
       &.is-locked {
         background: #f0f0f0; color: #bfbfbf;
@@ -358,9 +348,9 @@ export default {
       height: 60px; border-radius: 16px; font-size: 18px; font-weight: 700;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       border: none; box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
-      transition: all 0.3s;
+      transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
       
-      &:hover:not([disabled]) { transform: translateY(-3px); box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4); }
+      &:hover:not([disabled]) { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(102, 126, 234, 0.2); }
       &[disabled] { background: #e0e4eb; color: #a4abb8; box-shadow: none; }
     }
 

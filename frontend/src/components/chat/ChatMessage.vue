@@ -442,11 +442,11 @@ export default {
       background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
       color: #fff;
       border-radius: 22px 22px 4px 22px;
-      box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4);
+      box-shadow: 0 8px 20px -6px rgba(99, 102, 241, 0.24);
       border: 1px solid rgba(255, 255, 255, 0.1);
       
       &:hover {
-        box-shadow: 0 12px 30px -5px rgba(99, 102, 241, 0.5);
+        box-shadow: 0 8px 20px -6px rgba(99, 102, 241, 0.28);
         transform: translateY(-1px);
       }
     }
@@ -459,12 +459,11 @@ export default {
   &--assistant {
     .message-content {
       background: rgba(255, 255, 255, 0.6);
-      backdrop-filter: blur(16px);
       color: #1a1a2e;
       border-radius: 22px 22px 22px 4px;
       border: 1px solid rgba(255, 255, 255, 0.7);
       box-shadow: 0 8px 32px rgba(31, 38, 135, 0.05);
-      transition: all 0.3s ease;
+      transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
       
       &:hover {
         background: rgba(255, 255, 255, 0.75);
@@ -503,7 +502,7 @@ export default {
   line-height: 1.6;
   word-break: break-word;
   position: relative;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .message-text { white-space: pre-wrap; font-weight: 500; }
@@ -632,7 +631,7 @@ export default {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .message-action-chip--edit {
@@ -744,10 +743,8 @@ export default {
 .typing-cursor {
   display: inline-block; width: 2px; height: 16px; background: #667eea;
   margin-left: 2px; vertical-align: text-bottom;
-  animation: blink 1s steps(1) infinite;
+  opacity: 0.9;
 }
-
-@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
 .message-actions {
   display: flex; gap: 8px; margin-top: 6px;
@@ -829,7 +826,6 @@ export default {
   position: relative;
   width: 100%;
   background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(12px);
   border-radius: 24px;
   overflow: hidden;
   display: flex;
@@ -838,7 +834,7 @@ export default {
   box-shadow: 
     0 8px 32px rgba(0, 0, 0, 0.1),
     inset 0 0 0 1px rgba(255, 255, 255, 0.1);
-  transition: all 0.5s ease;
+  transition: background-color 0.5s ease, border-color 0.5s ease, color 0.5s ease, box-shadow 0.5s ease, transform 0.5s ease;
 }
 
 /* Frosted Glass Border Effect */
@@ -859,64 +855,19 @@ export default {
 
 /* Particle Effect */
 .particle-container {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  overflow: hidden;
+  display: none;
 }
 
 .particle {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 6px;
-  height: 6px;
-  background: #667eea;
-  border-radius: 50%;
-  filter: blur(1px);
-  opacity: 0;
-  box-shadow: 0 0 15px 2px #667eea;
+  display: none;
 }
-
-@keyframes diffuse {
-  0% {
-    transform: translate(-50%, -50%) scale(0);
-    opacity: 0;
-  }
-  20% {
-    opacity: 0.8;
-  }
-  100% {
-    transform: translate(var(--tx, 0), var(--ty, 0)) scale(2);
-    opacity: 0;
-  }
-}
-
-.particle-1 { --tx: 140px; --ty: -100px; animation: diffuse 4s infinite 0s; }
-.particle-2 { --tx: -120px; --ty: -150px; animation: diffuse 4.5s infinite 0.3s; }
-.particle-3 { --tx: 180px; --ty: 80px; animation: diffuse 3.8s infinite 0.7s; }
-.particle-4 { --tx: -190px; --ty: 60px; animation: diffuse 4.2s infinite 1.1s; }
-.particle-5 { --tx: 90px; --ty: 200px; animation: diffuse 4.6s infinite 1.5s; }
-.particle-6 { --tx: -80px; --ty: 180px; animation: diffuse 3.9s infinite 1.9s; }
-.particle-7 { --tx: 160px; --ty: -180px; animation: diffuse 4.1s infinite 2.3s; }
-.particle-8 { --tx: -200px; --ty: -80px; animation: diffuse 4.3s infinite 2.7s; }
-.particle-9 { --tx: 120px; --ty: 140px; animation: diffuse 4.4s infinite 3.1s; }
-.particle-10 { --tx: -150px; --ty: 190px; animation: diffuse 4s infinite 3.5s; }
-.particle-11 { --tx: 60px; --ty: -220px; animation: diffuse 4.7s infinite 3.8s; }
-.particle-12 { --tx: -170px; --ty: -130px; animation: diffuse 4.2s infinite 4.1s; }
 
 .glowing-core {
   position: absolute;
   width: 180px;
   height: 180px;
-  background: radial-gradient(circle, rgba(102, 126, 234, 0.4) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.22) 0%, transparent 70%);
   z-index: 2;
-  animation: core-glow 3s infinite alternate ease-in-out;
-}
-
-@keyframes core-glow {
-  0% { transform: scale(1); opacity: 0.5; }
-  100% { transform: scale(1.5); opacity: 0.8; }
 }
 
 .grid-overlay {
@@ -938,12 +889,6 @@ export default {
   align-items: center;
   gap: 24px;
   padding: 60px 40px;
-  animation: float-content 6s infinite alternate ease-in-out;
-}
-
-@keyframes float-content {
-  0% { transform: translateY(0px); }
-  100% { transform: translateY(-8px); }
 }
 
 .generating-icon-wrapper {
@@ -965,23 +910,12 @@ export default {
   height: 100px;
   border: 2px solid rgba(102, 126, 234, 0.3);
   border-radius: 50%;
-  animation: ring-expand 3s infinite cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes ring-expand {
-  0% { transform: scale(0.3); opacity: 1; border-width: 4px; }
-  100% { transform: scale(2.2); opacity: 0; border-width: 1px; }
+  opacity: 0.65;
 }
 
 .pulsing-icon {
   font-size: 48px;
   color: #667eea;
-  animation: icon-pulse 2s infinite ease-in-out;
-}
-
-@keyframes icon-pulse {
-  0%, 100% { transform: scale(1); opacity: 0.9; }
-  50% { transform: scale(1.15); opacity: 1; }
 }
 
 .generating-status {
@@ -1006,21 +940,15 @@ export default {
 }
 
 .progress-fill {
-  width: 30%;
+  width: 56%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, #667eea, transparent);
-  animation: progress-slide 1.5s infinite linear;
-}
-
-@keyframes progress-slide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(400%); }
+  background: linear-gradient(90deg, #667eea, #36cfc9);
 }
 
 .action-btn {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: 8px;
-  cursor: pointer; color: #bfbfbf; transition: all 0.2s;
+  cursor: pointer; color: #bfbfbf; transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
   background: rgba(255, 255, 255, 0.5); border: 1px solid rgba(255, 255, 255, 0.8);
   
   &:hover { background: #fff; color: #667eea; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05); }

@@ -371,9 +371,8 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(14px);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   color: #1a1a2e;
 }
 
@@ -477,7 +476,7 @@ export default {
   color: #4a5568;
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .filter-chip.active {
@@ -526,7 +525,7 @@ export default {
   background: #fbfcfe;
   cursor: pointer;
   text-align: left;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .model-option-item:hover,

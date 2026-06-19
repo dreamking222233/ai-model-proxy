@@ -92,6 +92,10 @@ coverage.xml
 
 # Sensitive data (keep .env out of version control)
 backend/.env
+ssl/
+*.key
+*.pem
+*.csr
 
 # Frontend build
 frontend/dist/

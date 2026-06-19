@@ -168,6 +168,13 @@ export default {
     2px 0 24px rgba(0, 0, 0, 0.3),
     1px 0 0 rgba(102, 126, 234, 0.06);
 }
+/deep/ .agent-sider .ant-layout-sider-children {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
 .logo {
   height: 64px;
   display: flex;
@@ -176,6 +183,8 @@ export default {
   padding: 0 20px;
   color: #fff;
   position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
   &::after {
     content: '';
     position: absolute;
@@ -211,12 +220,17 @@ export default {
   font-size: 11px;
   color: #a8b8ff;
   font-weight: 600;
+  flex-shrink: 0;
 }
 .sider-menu-wrapper {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px 0;
+  -webkit-overflow-scrolling: touch;
   &::-webkit-scrollbar { width: 3px; }
+  &::-webkit-scrollbar-track { background: transparent; }
   &::-webkit-scrollbar-thumb { background: rgba(102, 126, 234, 0.2); border-radius: 3px; }
 }
 /deep/ .ant-menu {

@@ -123,11 +123,9 @@
           </div>
         </div>
 
-        <!-- Model Cards Grid with Transition -->
+        <!-- Model Cards Grid -->
         <a-spin :spinning="loading" class="custom-spin">
-          <transition-group
-            name="list"
-            tag="div"
+          <div
             class="model-grid"
             v-if="filteredModels.length > 0"
           >
@@ -218,7 +216,7 @@
                 </div>
               </div>
             </div>
-          </transition-group>
+          </div>
           <div v-if="!loading && filteredModels.length === 0" class="empty-state">
             <a-empty description="未找到符合条件的 AI 模型" />
           </div>
@@ -435,8 +433,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .model-list-page {
   position: relative;
   min-height: calc(100vh - 100px);
@@ -463,10 +459,9 @@ export default {
   }
 
   .filter-card {
-    background: rgba(255, 255, 255, 0.82);
-    backdrop-filter: blur(15px);
+    background: rgba(255, 255, 255, 0.92);
     border-radius: 20px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
     padding: 28px;
     border: 1px solid rgba(255, 255, 255, 0.6);
   }
@@ -523,13 +518,13 @@ export default {
     padding: 10px 14px;
     border-radius: 12px;
     cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
     position: relative;
     overflow: hidden;
 
     &:hover {
       background: #f8fafc;
-      transform: translateX(4px);
+      transform: translateX(2px);
     }
 
     &.active {
@@ -613,7 +608,7 @@ export default {
     background: #f7fafc;
     border: 1px solid #edf2f7;
     cursor: pointer;
-    transition: all 0.3s;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 
     &:hover {
       border-color: #667eea;
@@ -649,10 +644,9 @@ export default {
         border: 2px solid #f0f0f0;
         padding-left: 50px;
         font-size: 16px;
-        background: rgba(255, 255, 255, 0.4);
-        backdrop-filter: blur(10px);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
-        transition: all 0.3s;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
         
         &:focus {
           border-color: #667eea;
@@ -664,7 +658,7 @@ export default {
     .search-icon {
       font-size: 20px;
       color: #cbd5e0;
-      transition: all 0.3s;
+      transition: color 0.2s ease;
     }
     
     &:focus-within .search-icon {
@@ -696,14 +690,13 @@ export default {
     position: relative;
     border-radius: 20px;
     overflow: hidden;
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.6);
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
     
     &:hover {
-      transform: translateY(-8px);
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
       border-color: rgba(102, 126, 234, 0.3);
       
       .card-glass {
@@ -711,7 +704,7 @@ export default {
       }
       
       .model-avatar {
-        transform: scale(1.1) rotate(5deg);
+        transform: scale(1.03);
       }
     }
 
@@ -751,7 +744,7 @@ export default {
       font-size: 20px;
       font-weight: 800;
       box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-      transition: all 0.4s;
+      transition: transform 0.2s ease;
       flex-shrink: 0;
 
       .provider-icon {
@@ -809,18 +802,18 @@ export default {
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s;
+      transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
       
       &:hover {
         background: #edf2f7;
         color: #667eea;
-        transform: rotate(15deg);
+        transform: translateY(-1px);
       }
       
       &.success {
         background: #48bb78;
         color: #fff;
-        transform: scale(1.1);
+        transform: scale(1.02);
       }
     }
 
@@ -911,23 +904,6 @@ export default {
     }
   }
 
-  /* ===== Transitions ===== */
-  .list-enter-active,
-  .list-leave-active {
-    transition: all 0.5s ease;
-  }
-  .list-enter {
-    opacity: 0;
-    transform: scale(0.9) translateY(20px);
-  }
-  .list-leave-to {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  .list-move {
-    transition: transform 0.5s;
-  }
-
   .custom-spin {
     /deep/ .ant-spin-dot-item {
       background-color: #667eea;
@@ -936,10 +912,9 @@ export default {
 
   .empty-state {
     padding: 80px 0;
-    background: rgba(255, 255, 255, 0.6);
-    backdrop-filter: blur(15px);
+    background: rgba(255, 255, 255, 0.92);
     border-radius: 20px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
   }
 
   /* ===== Responsive ===== */

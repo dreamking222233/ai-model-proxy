@@ -813,7 +813,6 @@ export default {
   justify-content: space-between;
   padding: 10px 16px;
   background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(10px);
   border-bottom: 1px solid rgba(0,0,0,0.05);
   z-index: 100;
 }
@@ -840,7 +839,7 @@ export default {
   border-radius: 12px;
   cursor: pointer;
   min-width: 0;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
   
   &:active {
     background: rgba(0, 0, 0, 0.08);
@@ -948,10 +947,9 @@ export default {
   position: absolute;
   bottom: 0; left: 0; right: 0;
   background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(20px);
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(0,0,0,0.05);
-  transition: all 0.3s;
+  transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
 }
 
 .image-mobile-toolbar {
@@ -1159,7 +1157,6 @@ export default {
     background: rgba(255, 255, 255, 0.2);
     border: 1px solid rgba(255, 255, 255, 0.3);
     color: #fff;
-    backdrop-filter: blur(10px);
     height: 40px;
     padding: 0 24px;
     

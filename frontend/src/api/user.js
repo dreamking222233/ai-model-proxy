@@ -159,6 +159,44 @@ export function getAssetSourceRecords(params) {
   })
 }
 
+// ==================== Dragon Boat Lottery ====================
+
+export function getDragonBoatLotteryStatus() {
+  return request({
+    url: '/api/user/dragon-boat-lottery/status',
+    method: 'get'
+  })
+}
+
+export function registerDragonBoatLottery() {
+  return request({
+    url: '/api/user/dragon-boat-lottery/register',
+    method: 'post'
+  })
+}
+
+export function getAdminDragonBoatLotterySummary() {
+  return request({
+    url: '/api/admin/dragon-boat-lottery/summary',
+    method: 'get'
+  })
+}
+
+export function listAdminDragonBoatLotteryEntries(params) {
+  return request({
+    url: '/api/admin/dragon-boat-lottery/entries',
+    method: 'get',
+    params
+  })
+}
+
+export function drawAdminDragonBoatLottery() {
+  return request({
+    url: '/api/admin/dragon-boat-lottery/draw',
+    method: 'post'
+  })
+}
+
 // ==================== User Profile ====================
 
 export function getProfile() {

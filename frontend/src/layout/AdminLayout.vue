@@ -116,6 +116,10 @@
             <a-icon type="notification" />
             <span>公告管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/dragon-boat-lottery">
+            <a-icon type="trophy" />
+            <span>端午抽奖</span>
+          </a-menu-item>
         </a-menu>
       </div>
 
@@ -245,6 +249,14 @@ export default {
     1px 0 0 rgba(102, 126, 234, 0.06);
 }
 
+/deep/ .admin-sider .ant-layout-sider-children {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* =============================================
    Logo 区域
    ============================================= */
@@ -340,6 +352,7 @@ export default {
   color: #a8b8ff;
   font-weight: 600;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
 
   /deep/ .anticon {
     font-size: 12px;
@@ -352,9 +365,11 @@ export default {
    ============================================= */
 .sider-menu-wrapper {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px 0;
+  -webkit-overflow-scrolling: touch;
 
   &::-webkit-scrollbar {
     width: 3px;

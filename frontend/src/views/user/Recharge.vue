@@ -761,7 +761,10 @@ export default {
   position: relative;
   overflow: hidden;
   border-radius: 16px;
-  background: #0f172a;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(102, 126, 234, 0.35), transparent 34%),
+    radial-gradient(circle at 80% 20%, rgba(45, 212, 191, 0.24), transparent 32%),
+    #0f172a;
   color: #fff;
   padding: 12px 20px;
   min-height: 100px;
@@ -779,8 +782,7 @@ export default {
   width: 100%;
   height: 100%;
   z-index: 1;
-  filter: blur(80px);
-  opacity: 0.6;
+  opacity: 0.35;
 }
 
 .hero-blob {
@@ -794,7 +796,6 @@ export default {
   background: var(--primary-color);
   top: -100px;
   left: -50px;
-  animation: blob-float 20s infinite alternate ease-in-out;
 }
 
 .blob-2 {
@@ -803,12 +804,6 @@ export default {
   background: #2dd4bf;
   bottom: -50px;
   right: 10%;
-  animation: blob-float 15s infinite alternate-reverse ease-in-out;
-}
-
-@keyframes blob-float {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(40px, 60px) scale(1.1); }
 }
 
 .hero-content {
@@ -847,9 +842,8 @@ export default {
     border-radius: 24px;
     overflow: hidden;
     background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
     border: 1px solid rgba(255, 255, 255, 0.6);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.05);
   }
 
   /deep/ .ant-modal-header {
@@ -997,18 +991,11 @@ export default {
   position: absolute;
   left: 12px;
   right: 12px;
+  top: 112px;
   height: 3px;
   background: linear-gradient(90deg, transparent, #07c160, transparent);
-  box-shadow: 0 0 8px #07c160;
-  animation: scan-animation 3s linear infinite;
+  opacity: 0.75;
   pointer-events: none;
-}
-
-@keyframes scan-animation {
-  0% { top: 12px; opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% { top: 212px; opacity: 0; }
 }
 
 .qr-corner {
@@ -1091,23 +1078,7 @@ export default {
   height: 8px;
   border-radius: 50%;
   background-color: #07c160;
-  box-shadow: 0 0 0 0 rgba(7, 193, 96, 0.4);
-  animation: pulse-animation 1.8s infinite;
-}
-
-@keyframes pulse-animation {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(7, 193, 96, 0.5);
-  }
-  70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(7, 193, 96, 0);
-  }
-  100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(7, 193, 96, 0);
-  }
+  box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12);
 }
 
 .wechat-pay-actions {
@@ -1122,7 +1093,7 @@ export default {
     border-radius: 12px;
     font-weight: 600;
     font-size: 14px;
-    transition: all 0.3s;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
   }
 
   .btn-cancel {
@@ -1155,7 +1126,6 @@ export default {
   display: inline-block;
   padding: 4px 12px;
   background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 100px;
   font-size: 11px;
@@ -1171,7 +1141,6 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 6px 12px;
   border-radius: 10px;
-  backdrop-filter: blur(10px);
 }
 
 .ratio-text {
@@ -1197,7 +1166,7 @@ export default {
   border-radius: 14px;
   background: #fff;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 .type-card .anticon {
@@ -1248,12 +1217,11 @@ export default {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 18px;
-  backdrop-filter: blur(20px);
-  transition: transform 0.3s ease;
+  transition: transform 0.2s ease, background-color 0.2s ease;
 }
 
 .glass-card:hover {
-  transform: translateY(-5px);
+  transform: translateY(-2px);
   background: rgba(255, 255, 255, 0.12);
 }
 
@@ -1377,7 +1345,7 @@ export default {
   border: 2px solid #f1f5f9;
   border-radius: 16px;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1389,8 +1357,8 @@ export default {
 .pricing-card:hover {
   background: #fff;
   border-color: var(--primary-color);
-  transform: translateY(-8px);
-  box-shadow: 0 20px 40px rgba(99, 102, 241, 0.1);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.08);
 }
 
 .pricing-card.active {
@@ -1448,7 +1416,7 @@ export default {
   color: #475569;
   font-weight: 600;
   font-size: 11px;
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
 }
 
 

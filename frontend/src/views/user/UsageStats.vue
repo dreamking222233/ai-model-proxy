@@ -39,7 +39,7 @@
                   <count-to
                     :start-val="0"
                     :end-val="card.value"
-                    :duration="1600"
+                    :duration="countDuration"
                     :decimals="card.decimals || 0"
                     class="val"
                   />
@@ -198,7 +198,9 @@ export default {
       ],
       pieInstance: null,
       barInstance: null,
-      trendInstance: null
+      trendInstance: null,
+      resizeTimer: null,
+      reduceMotion: false
     }
   },
   computed: {
@@ -235,14 +237,22 @@ export default {
           glow: 'rgba(250, 173, 20, 0.2)'
         }
       ]
+    },
+    countDuration() {
+      return this.reduceMotion ? 0 : 800
     }
   },
   mounted() {
+    this.reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     this.fetchStats()
     window.addEventListener('resize', this.handleResize)
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.handleResize)
+    if (this.resizeTimer) {
+      clearTimeout(this.resizeTimer)
+      this.resizeTimer = null
+    }
     this.disposeCharts()
   },
   methods: {
@@ -274,6 +284,9 @@ export default {
       if (this.pieInstance) this.pieInstance.dispose()
       if (this.barInstance) this.barInstance.dispose()
       if (this.trendInstance) this.trendInstance.dispose()
+      this.pieInstance = null
+      this.barInstance = null
+      this.trendInstance = null
     },
     renderPieChart() {
       if (!this.$refs.pieChart || this.byModel.length === 0) return
@@ -282,6 +295,7 @@ export default {
       const isNarrow = window.innerWidth < 1100
 
       this.pieInstance.setOption({
+        animation: !this.reduceMotion,
         tooltip: {
           trigger: 'item',
           backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -333,6 +347,7 @@ export default {
       
       const models = this.byModel.map(m => m.model_name)
       this.barInstance.setOption({
+        animation: !this.reduceMotion,
         tooltip: {
           trigger: 'axis',
           backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -388,6 +403,7 @@ export default {
       
       const dates = this.dailyTrend.map(d => d.date)
       this.trendInstance.setOption({
+        animation: !this.reduceMotion,
         tooltip: {
           trigger: 'axis',
           backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -455,12 +471,16 @@ export default {
       }, true)
     },
     handleResize() {
-      if (this.pieInstance) {
-        this.renderPieChart()
-        this.pieInstance.resize()
-      }
-      if (this.barInstance) this.barInstance.resize()
-      if (this.trendInstance) this.trendInstance.resize()
+      if (this.resizeTimer) clearTimeout(this.resizeTimer)
+      this.resizeTimer = setTimeout(() => {
+        this.resizeTimer = null
+        if (this.pieInstance) {
+          this.renderPieChart()
+          this.pieInstance.resize()
+        }
+        if (this.barInstance) this.barInstance.resize()
+        if (this.trendInstance) this.trendInstance.resize()
+      }, 120)
     },
     getRateColor(record) {
       if (record.request_count === 0) return '#f0f0f0'
@@ -488,8 +508,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .usage-stats-page {
   position: relative;
   min-height: 100vh;
@@ -502,9 +520,9 @@ export default {
   .page-header-section {
     margin-bottom: 32px;
     .header-glass {
-      background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); border-radius: 24px;
+      background: rgba(255, 255, 255, 0.92); border-radius: 24px;
       padding: 32px 40px; display: flex; justify-content: space-between; align-items: center;
-      border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 10px 40px rgba(0,0,0,0.03);
+      border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
 
       .header-badge {
         display: inline-block; padding: 2px 12px; background: rgba(102, 126, 234, 0.1); color: #667eea;
@@ -537,10 +555,10 @@ export default {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 32px;
   }
   .stat-mini-card {
-    background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(10px); border-radius: 24px; padding: 24px;
+    background: rgba(255, 255, 255, 0.94); border-radius: 24px; padding: 24px;
     border: 1px solid rgba(255, 255, 255, 0.6); position: relative; overflow: hidden;
-    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    &:hover { transform: translateY(-6px); background: #fff; box-shadow: 0 15px 35px rgba(0,0,0,0.04); }
+    transition: transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+    &:hover { transform: translateY(-2px); background: #fff; box-shadow: 0 8px 20px rgba(15,23,42,0.05); }
 
     .stat-mini-inner { display: flex; align-items: center; gap: 16px; position: relative; z-index: 2; }
     .stat-mini-icon {
@@ -552,14 +570,14 @@ export default {
       font-size: 24px; font-weight: 800; color: #1a1a2e; font-family: 'MonoLisa', monospace;
       .prefix { font-size: 16px; margin-right: 2px; }
     }
-    .stat-mini-glow { position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; opacity: 0.15; filter: blur(30px); pointer-events: none; }
+    .stat-mini-glow { position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; opacity: 0.08; pointer-events: none; }
   }
 
   /* ===== Charts Layout ===== */
   .charts-layout-row { display: grid; grid-template-columns: 1fr 1.6fr; gap: 24px; margin-bottom: 24px; }
   .chart-glass-card {
-    background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px); border-radius: 28px; padding: 24px;
-    border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 10px 40px rgba(0,0,0,0.02);
+    background: rgba(255, 255, 255, 0.94); border-radius: 28px; padding: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 8px 22px rgba(15,23,42,0.03);
     
     .chart-header { margin-bottom: 20px; }
     .chart-title { font-size: 17px; font-weight: 800; color: #1a1a2e; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
@@ -583,7 +601,7 @@ export default {
       }
     }
     .table-container-glass {
-      background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); border-radius: 24px; overflow: hidden;
+      background: rgba(255, 255, 255, 0.94); border-radius: 24px; overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.6);
     }
   }

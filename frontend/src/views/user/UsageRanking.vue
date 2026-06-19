@@ -229,7 +229,6 @@ export default {
     /deep/ .ant-radio-button-wrapper {
       background: rgba(255, 255, 255, 0.15);
       border: 1px solid rgba(255, 255, 255, 0.2);
-      backdrop-filter: blur(10px);
       color: #fff;
       height: 40px;
       line-height: 38px;
@@ -284,7 +283,6 @@ export default {
       .premium-avatar {
         border: 4px solid rgba(255, 255, 255, 0.5);
         background: rgba(255, 255, 255, 0.2);
-        backdrop-filter: blur(5px);
         font-size: 28px;
         font-weight: 700;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
@@ -322,7 +320,6 @@ export default {
         left: 50%;
         transform: translateX(-50%);
         font-size: 32px;
-        animation: rotate-float 3s ease-in-out infinite;
       }
     }
 
@@ -372,10 +369,9 @@ export default {
 
   .glass-card {
     background: rgba(255, 255, 255, 0.9);
-    backdrop-filter: blur(20px);
     border-radius: 30px;
     padding: 20px;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.6);
   }
 
@@ -391,7 +387,7 @@ export default {
     align-items: center;
     padding: 16px 20px;
     border-radius: 20px;
-    transition: all 0.3s ease;
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
     background: #fff;
     border: 1px solid #f0f4f8;
 
@@ -448,11 +444,6 @@ export default {
         letter-spacing: 0.5px;
       }
     }
-  }
-
-  @keyframes rotate-float {
-    0%, 100% { transform: translateX(-50%) translateY(0) rotate(0deg); }
-    50% { transform: translateX(-50%) translateY(-10px) rotate(5deg); }
   }
 
   @media (max-width: 768px) {

@@ -94,7 +94,7 @@ export default {
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   flex-shrink: 0;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
 
@@ -127,7 +127,7 @@ export default {
   border-radius: 12px;
   cursor: pointer;
   color: #595959;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -159,7 +159,7 @@ export default {
 .session-title { flex: 1; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .session-delete {
-  opacity: 0; flex-shrink: 0; font-size: 14px; color: #bfbfbf; padding: 4px; border-radius: 6px; transition: all 0.2s;
+  opacity: 0; flex-shrink: 0; font-size: 14px; color: #bfbfbf; padding: 4px; border-radius: 6px; transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
   &:hover { color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
 }
 
@@ -171,7 +171,7 @@ export default {
 .clear-all-btn {
   display: flex; align-items: center; gap: 8px; margin: 12px; padding: 10px 16px;
   border-radius: 10px; color: #8c8c8c; cursor: pointer; font-size: 12px; font-weight: 600;
-  transition: all 0.2s; flex-shrink: 0;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s; flex-shrink: 0;
   background: rgba(0, 0, 0, 0.02);
   
   &:hover { background: rgba(255, 77, 79, 0.05); color: #ff4d4f; }

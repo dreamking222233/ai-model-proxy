@@ -17,9 +17,6 @@ export default {
 </script>
 
 <style>
-/* Import Animate.css globally */
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 :root {
   --primary-color: #667eea;
   --primary-dark: #764ba2;
@@ -30,7 +27,7 @@ export default {
   --glass-bg: rgba(255, 255, 255, 0.7);
   --glass-border: rgba(255, 255, 255, 0.6);
   --card-radius: 16px;
-  --transition-normal: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   --sidebar-bg-start: #0d0d1a;
   --sidebar-bg-end: #0f1225;
   --success-color: #52c41a;
@@ -54,59 +51,18 @@ export default {
   right: 0;
   bottom: 0;
   z-index: -1;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(102, 126, 234, 0.14), transparent 30%),
+    radial-gradient(circle at 88% 16%, rgba(54, 207, 201, 0.12), transparent 28%),
+    radial-gradient(circle at 72% 78%, rgba(250, 140, 22, 0.08), transparent 26%),
+    linear-gradient(135deg, #f7f9fc 0%, #edf1f7 100%);
   overflow: hidden;
-  filter: blur(100px);
   opacity: 1;
   pointer-events: none;
 }
 
 .global-aurora-bg .blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(60px);
-}
-
-.global-aurora-bg .blob-1 {
-  width: 600px;
-  height: 600px;
-  background: rgba(102, 126, 234, 0.4);
-  top: -150px;
-  left: -150px;
-  animation: aurora-move-1 25s infinite alternate ease-in-out;
-}
-
-.global-aurora-bg .blob-2 {
-  width: 500px;
-  height: 500px;
-  background: rgba(54, 207, 201, 0.35);
-  bottom: -100px;
-  right: -100px;
-  animation: aurora-move-2 30s infinite alternate-reverse ease-in-out;
-}
-
-.global-aurora-bg .blob-3 {
-  width: 400px;
-  height: 400px;
-  background: rgba(250, 140, 22, 0.25);
-  top: 40%;
-  right: 15%;
-  animation: aurora-move-3 22s infinite alternate ease-in-out;
-}
-
-@keyframes aurora-move-1 {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(100px, 150px) scale(1.2); }
-}
-
-@keyframes aurora-move-2 {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(-120px, -80px) scale(1.1); }
-}
-
-@keyframes aurora-move-3 {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(-50px, 120px) scale(1.3); }
+  display: none;
 }
 
 /* Global utility classes */
@@ -125,6 +81,36 @@ export default {
 body {
   margin: 0;
   background-color: #f8fafc; /* 底层保底色 */
+}
+
+/* Lightweight local replacement for the Animate.css classes used by user pages. */
+.animate__animated {
+  animation-duration: 0.24s;
+  animation-fill-mode: both;
+}
+
+.animate__fadeIn,
+.animate__fadeInUp,
+.animate__fadeInDown,
+.animate__fadeInLeft,
+.animate__fadeInRight {
+  animation-name: codex-fade-in;
+}
+
+@keyframes codex-fade-in {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    animation-delay: 0ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
 </style>

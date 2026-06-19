@@ -257,8 +257,6 @@ export default {
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .usage-log-page {
   position: relative;
   min-height: calc(100vh - 100px);
@@ -278,7 +276,6 @@ export default {
   margin-bottom: 24px;
   .header-glass {
     background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(20px);
     border-radius: 24px;
     padding: 24px 32px;
     display: flex;
@@ -306,11 +303,11 @@ export default {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 24px;
 }
 .stat-glass-card {
-  background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(15px); border-radius: 20px; padding: 22px;
+  background: rgba(255, 255, 255, 0.75); border-radius: 20px; padding: 22px;
   border: 1px solid rgba(255, 255, 255, 0.6); display: flex; align-items: center; gap: 16px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.02); transition: all 0.3s;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.02); transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
   
-  &:hover { transform: translateY(-4px); background: #fff; }
+  &:hover { transform: translateY(-2px); background: #fff; }
 
   .stat-icon {
     width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px;
@@ -327,7 +324,7 @@ export default {
 
 /* ===== Glass Card Common ===== */
 .glass-card {
-  background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); border-radius: 24px; padding: 24px;
+  background: rgba(255, 255, 255, 0.7); border-radius: 24px; padding: 24px;
   border: 1px solid rgba(255, 255, 255, 0.6); margin-bottom: 24px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.03);
 
@@ -343,7 +340,7 @@ export default {
   .chart-bars { display: flex; align-items: flex-end; height: 160px; gap: 4px; }
   .chart-bar-group { width: 70px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; }
   .chart-bars-container { width: 100%; height: 120px; display: flex; align-items: flex-end; justify-content: center; gap: 4px; margin-bottom: 8px; }
-  .chart-bar { width: 12px; border-radius: 4px 4px 0 0; transition: all 0.3s;
+  .chart-bar { width: 12px; border-radius: 4px 4px 0 0; transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
     &.requests { background: linear-gradient(180deg, #667eea, rgba(102, 126, 234, 0.1)); }
     &.tokens { background: linear-gradient(180deg, #36cfc9, rgba(54, 207, 201, 0.1)); }
     &:hover { opacity: 0.8; transform: scaleX(1.1); }
@@ -393,7 +390,7 @@ export default {
       min-height: 2px;
       border-radius: 4px 4px 0 0;
       position: relative;
-      transition: all 0.3s;
+      transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
       display: flex;
       align-items: flex-start;
       justify-content: center;

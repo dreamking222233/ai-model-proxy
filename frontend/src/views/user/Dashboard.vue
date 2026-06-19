@@ -22,16 +22,37 @@
               </div>
             </div>
             <div class="hero-right">
-              <div class="glass-action-group">
-                <a-button class="glass-btn speed" @click="openSpeedTest">
-                  <a-icon type="thunderbolt" /> 线路测速
-                </a-button>
-                <a-button class="glass-btn secondary" @click="$router.push('/user/balance?tab=usage')">
-                  <a-icon type="audit" /> 账单明细
-                </a-button>
-                <a-button type="primary" class="glass-btn primary" @click="$router.push('/user/api-keys')">
-                  <a-icon type="key" /> 密钥管理
-                </a-button>
+              <div class="hero-quick-panel">
+                <div class="hero-panel-title">极速入口 <span>Links</span></div>
+                <div class="hero-quick-grid">
+                  <div
+                    v-for="link in quickLinks"
+                    :key="link.title"
+                    class="quick-card-mini hero-quick-card"
+                    @click="handleQuickLink(link)"
+                  >
+                    <div class="mini-icon" :style="{ background: link.gradient }">
+                      <a-icon :type="link.icon" />
+                    </div>
+                    <div class="mini-body">
+                      <div class="mini-title">{{ link.title }}</div>
+                    </div>
+                    <a-icon type="right" class="mini-arrow" />
+                  </div>
+
+                  <div
+                    class="quick-card-mini hero-quick-card special"
+                    @click="$router.push('/user/models')"
+                  >
+                    <div class="mini-icon market">
+                      <a-icon type="appstore" />
+                    </div>
+                    <div class="mini-body">
+                      <div class="mini-title">模型广场</div>
+                    </div>
+                    <a-icon type="right" class="mini-arrow" />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -64,7 +85,7 @@
                       <count-to
                         :start-val="0"
                         :end-val="card.value"
-                        :duration="1600"
+                        :duration="countDuration"
                         :decimals="card.decimals || 0"
                         separator=","
                         class="count-val"
@@ -85,78 +106,6 @@
       <div class="features-layout">
         <!-- Left: Activity & Redemption -->
         <div class="features-main">
-          <section class="section-block">
-            <div class="section-header">
-              <h2 class="section-title">权益管理 <span>Privilege</span></h2>
-            </div>
-            
-            <div class="feature-cards-wrap">
-              <!-- Redemption Card -->
-              <div class="glass-feature-card redemption-card animate__animated animate__fadeInLeft" style="animation-delay: 0.1s">
-                <div class="f-card-icon gift">
-                  <a-icon :type="hasRedeemed ? 'check-circle' : 'gift'" />
-                </div>
-                <div class="f-card-body">
-                  <h3 class="f-title">兑换码充值</h3>
-                  <p class="f-desc">当前剩余 {{ remainingRedeemCount }} 次兑换机会，到账后实时刷新账户余额。</p>
-                  
-                  <div v-if="hasRedeemed" class="status-box-success">
-                    <a-icon type="check-circle" theme="filled" />
-                    <span>当前兑换次数已用完，去查看 <a @click="$router.push('/user/balance')">账单记录</a></span>
-                  </div>
-                  <div v-else class="redeem-input-group">
-                    <a-input
-                      v-model="redemptionCode"
-                      placeholder="输入 32 位兑换码"
-                      class="premium-input"
-                      @pressEnter="handleRedeem"
-                    />
-                    <a-button type="primary" class="redeem-submit" :loading="redeemLoading" @click="handleRedeem">
-                      兑换
-                    </a-button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Subscription Status -->
-              <div v-if="userProfile.subscription_type === 'unlimited'" class="glass-feature-card subscription-card animate__animated animate__fadeInLeft" style="animation-delay: 0.2s">
-                <div class="f-card-icon crown">
-                  <a-icon type="crown" />
-                </div>
-                <div class="f-card-body">
-                  <h3 class="f-title">无限量套餐</h3>
-                  <p class="f-desc">您的账户当前处于有效期内的全模型无限使用模式。</p>
-                  
-                  <div class="subscription-timer" :class="{ warning: subscriptionStatus.daysRemaining <= 7 }">
-                    <div class="timer-main">
-                      <span class="timer-val">{{ subscriptionStatus.isExpired ? '已过期' : subscriptionStatus.daysRemaining }}</span>
-                      <span class="timer-unit">{{ subscriptionStatus.isExpired ? '' : '天后到期' }}</span>
-                    </div>
-                    <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div v-else-if="userProfile.subscription_type === 'quota'" class="glass-feature-card subscription-card animate__animated animate__fadeInLeft" style="animation-delay: 0.2s">
-                <div class="f-card-icon crown">
-                  <a-icon type="dashboard" />
-                </div>
-                <div class="f-card-body">
-                  <h3 class="f-title">{{ (userProfile.subscription_summary && userProfile.subscription_summary.plan_name) || '每日限额套餐' }}</h3>
-                  <p class="f-desc">当前套餐按每日额度刷新，额度用尽后次日自动重置。</p>
-
-                  <div class="subscription-timer">
-                    <div class="timer-main">
-                      <span class="timer-val">{{ quotaRemainingLabel }}</span>
-                      <span class="timer-unit">{{ quotaUnitLabel }}</span>
-                    </div>
-                    <div class="timer-date">截止至 {{ formatDate(userProfile.subscription_expires_at) }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
           <!-- Contact Section -->
           <section class="section-block">
             <div class="section-header">
@@ -184,48 +133,6 @@
           </section>
         </div>
 
-        <!-- Right: Quick Links -->
-        <aside class="features-sidebar">
-          <section class="section-block">
-            <div class="section-header">
-              <h2 class="section-title">极速入口 <span>Links</span></h2>
-            </div>
-            <div class="quick-links-stack">
-              <div 
-                v-for="(link, index) in quickLinks" 
-                :key="link.title"
-                class="quick-card-mini animate__animated animate__fadeInRight"
-                :style="{ animationDelay: `${index * 0.1}s` }"
-                @click="handleQuickLink(link)"
-              >
-                <div class="mini-icon" :style="{ background: link.gradient }">
-                  <a-icon :type="link.icon" />
-                </div>
-                <div class="mini-body">
-                  <div class="mini-title">{{ link.title }}</div>
-                  <div class="mini-desc">{{ link.description }}</div>
-                </div>
-                <a-icon type="right" class="mini-arrow" />
-              </div>
-
-              <!-- Extra Model Marketplace Link -->
-              <div 
-                class="quick-card-mini special animate__animated animate__fadeInRight" 
-                style="animation-delay: 0.4s"
-                @click="$router.push('/user/models')"
-              >
-                <div class="mini-icon market">
-                  <a-icon type="appstore" />
-                </div>
-                <div class="mini-body">
-                  <div class="mini-title">模型广场</div>
-                  <div class="mini-desc">探索并挑选适合您的 AI 集成方案。</div>
-                </div>
-                <a-icon type="right" class="mini-arrow" />
-              </div>
-            </div>
-          </section>
-        </aside>
       </div>
     </div>
   </div>
@@ -234,7 +141,6 @@
 <script>
 import CountTo from 'vue-count-to'
 import { getAnnouncements, getBalance, getUsageLogs, getProfile, getSiteConfig } from '@/api/user'
-import { redeemCode, getRedemptionStatus } from '@/api/redemption'
 import { getUser } from '@/utils/auth'
 import { formatDate } from '@/utils'
 
@@ -256,13 +162,8 @@ export default {
       },
       siteConfig: {},
       announcements: [],
-      redemptionCode: '',
-      redeemLoading: false,
-      hasRedeemed: false,
-      redeemedCount: 0,
-      allowedRedeemCount: 1,
-      remainingRedeemCount: 1,
-      speedTestUrl: 'https://www.tcptest.cn/http/https://api.xiaoleai.team'
+      speedTestUrl: 'https://www.tcptest.cn/http/https://api.xiaoleai.team',
+      reduceMotion: false
     }
   },
   computed: {
@@ -326,6 +227,9 @@ export default {
           description: '账户自注册以来累计处理的 Token 数'
         }
       ]
+    },
+    countDuration() {
+      return this.reduceMotion ? 0 : 800
     },
     quickLinks() {
       return [
@@ -392,6 +296,7 @@ export default {
     this.refreshData()
   },
   async mounted() {
+    this.reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     await this.fetchSiteConfig()
     await this.fetchAnnouncements()
     this.showAnnouncementQueue()
@@ -412,7 +317,6 @@ export default {
       this.fetchProfile()
       this.fetchBalance()
       this.fetchUsageSummary()
-      this.fetchRedemptionStatus()
       this.fetchSiteConfig()
     },
     showAnnouncementQueue(startIndex = 0) {
@@ -527,55 +431,12 @@ export default {
       } finally {
         this.usageLoading = false
       }
-    },
-    async handleRedeem() {
-      if (this.hasRedeemed) {
-        this.$message.warning('当前账户兑换次数已用完')
-        return
-      }
-      if (!this.redemptionCode.trim()) {
-        this.$message.warning('请输入有效的兑换码')
-        return
-      }
-      this.redeemLoading = true
-      try {
-        const res = await redeemCode({ code: this.redemptionCode.trim() })
-        const data = res.data || {}
-        this.$message.success(res.message || '账户额度已刷新')
-        this.redemptionCode = ''
-        this.redeemedCount = Number(data.redeemed_count || (this.redeemedCount + 1))
-        this.allowedRedeemCount = Number(data.allowed_redeem_count || this.allowedRedeemCount)
-        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
-        this.hasRedeemed = this.remainingRedeemCount <= 0
-        this.fetchBalance()
-      } catch (e) {
-        console.error('Redeem failed:', e)
-      } finally {
-        this.redeemLoading = false
-      }
-    },
-    async fetchRedemptionStatus() {
-      try {
-        const res = await getRedemptionStatus()
-        const data = res.data || {}
-        this.hasRedeemed = data.has_redeemed || false
-        this.redeemedCount = Number(data.redeemed_count || 0)
-        this.allowedRedeemCount = Number(data.allowed_redeem_count || 1)
-        this.remainingRedeemCount = Number(data.remaining_redeem_count || 0)
-      } catch (e) {
-        this.hasRedeemed = false
-        this.redeemedCount = 0
-        this.allowedRedeemCount = 1
-        this.remainingRedeemCount = 1
-      }
     }
   }
 }
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .user-dashboard {
   position: relative;
   min-height: 100vh;
@@ -588,10 +449,10 @@ export default {
   .dashboard-hero {
     margin-bottom: 32px;
     .hero-glass {
-      background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); border-radius: 32px;
+      background: rgba(255, 255, 255, 0.7); border-radius: 32px;
       padding: 48px 40px; border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 15px 50px rgba(0,0,0,0.03);
 
-      .hero-content { display: flex; justify-content: space-between; align-items: center; gap: 40px; }
+      .hero-content { display: grid; grid-template-columns: minmax(0, 1fr) 360px; align-items: center; gap: 32px; }
       
       .hero-badge {
         display: inline-block; padding: 4px 16px; background: rgba(102, 126, 234, 0.1); color: #667eea;
@@ -606,32 +467,58 @@ export default {
       .hero-summary-mini {
         display: flex; gap: 12px;
         .mini-tag {
-          padding: 6px 14px; background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px); border-radius: 12px; font-size: 13px; font-weight: 600; color: #595959;
+          padding: 6px 14px; background: rgba(255, 255, 255, 0.5); border-radius: 12px; font-size: 13px; font-weight: 600; color: #595959;
           display: flex; align-items: center; gap: 8px; border: 1px solid #f0f0f0;
           .anticon { color: #667eea; }
         }
       }
 
-      .glass-action-group {
-        display: flex; gap: 12px;
-        .glass-btn {
-          height: 48px; border-radius: 14px; font-weight: 700; padding: 0 24px; display: flex; align-items: center; gap: 10px; transition: all 0.3s;
-          &.primary {
-            background: linear-gradient(135deg, #667eea, #764ba2); border: none; box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
-            &:hover { transform: translateY(-3px); box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4); }
+      .hero-right { min-width: 0; }
+      .hero-quick-panel {
+        background: rgba(255, 255, 255, 0.52);
+        border: 1px solid rgba(255, 255, 255, 0.68);
+        border-radius: 22px;
+        padding: 18px;
+
+        .hero-panel-title {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          margin-bottom: 12px;
+          font-size: 15px;
+          font-weight: 800;
+          color: #1a1a2e;
+
+          span {
+            font-size: 12px;
+            font-weight: 600;
+            color: #94a3b8;
+            font-family: monospace;
+            text-transform: uppercase;
           }
-          &.speed {
-            background: linear-gradient(135deg, #ff9a44, #fc6076);
-            border: none;
-            color: #fff;
-            box-shadow: 0 10px 20px rgba(252, 96, 118, 0.22);
-            &:hover {
-              color: #fff;
-              transform: translateY(-3px);
-              box-shadow: 0 15px 30px rgba(252, 96, 118, 0.32);
-            }
+        }
+
+        .hero-quick-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .hero-quick-card {
+          padding: 12px;
+          border-radius: 14px;
+          gap: 10px;
+
+          .mini-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            font-size: 15px;
           }
-          &.secondary { background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.6); color: #595959; &:hover { background: rgba(255, 255, 255, 0.8); color: #667eea; } }
+
+          .mini-title {
+            font-size: 13px;
+          }
         }
       }
     }
@@ -653,9 +540,9 @@ export default {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px;
     
     .premium-stat-card {
-      position: relative; background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(10px); border-radius: 24px;
-      padding: 24px; border: 1px solid rgba(255, 255, 255, 0.6); overflow: hidden; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-      &:hover { transform: translateY(-8px); background: rgba(255, 255, 255, 0.9); box-shadow: 0 20px 40px rgba(0,0,0,0.06); }
+      position: relative; background: rgba(255, 255, 255, 0.82); border-radius: 24px;
+      padding: 24px; border: 1px solid rgba(255, 255, 255, 0.6); overflow: hidden; transition: background-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      &:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.9); box-shadow: 0 8px 20px rgba(0,0,0,0.04); }
 
       .stat-inner { position: relative; z-index: 2; display: flex; gap: 16px; align-items: center; }
       .stat-body { flex: 1; min-width: 0; }
@@ -676,19 +563,19 @@ export default {
       }
       .stat-footer-text { font-size: 11px; color: #bfbfbf; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       
-      .card-glow { position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; opacity: 0.15; filter: blur(30px); pointer-events: none; }
+      .card-glow { position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; opacity: 0.15; pointer-events: none; }
     }
   }
 
   /* ===== Feature Layout ===== */
-  .features-layout { display: grid; grid-template-columns: 1fr 320px; gap: 32px; }
+  .features-layout { display: block; }
 
   .feature-cards-wrap {
     display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
     .glass-feature-card {
-      background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(15px); border-radius: 24px; padding: 28px;
-      border: 1px solid rgba(255, 255, 255, 0.6); display: flex; gap: 20px; transition: all 0.3s;
-      &:hover { background: rgba(255, 255, 255, 0.9); box-shadow: 0 10px 30px rgba(0,0,0,0.03); }
+      background: rgba(255, 255, 255, 0.8); border-radius: 24px; padding: 28px;
+      border: 1px solid rgba(255, 255, 255, 0.6); display: flex; gap: 20px; transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
+      &:hover { background: rgba(255, 255, 255, 0.9); box-shadow: 0 6px 18px rgba(0,0,0,0.03); }
 
       .f-card-icon {
         width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;
@@ -713,7 +600,7 @@ export default {
   }
 
   .subscription-timer {
-    background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(10px); border-radius: 16px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.6); border-radius: 16px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.5);
     .timer-main { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
     .timer-val { font-size: 24px; font-weight: 800; color: #667eea; font-family: monospace; }
     .timer-unit { font-size: 13px; font-weight: 600; color: #8c8c8c; }
@@ -724,8 +611,7 @@ export default {
 
   /* ===== Contact Glass Card ===== */
   .contact-glass-card {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05));
-    backdrop-filter: blur(10px); border-radius: 24px; padding: 24px 32px; border: 1px solid rgba(102, 126, 234, 0.1);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05), rgba(118, 75, 162, 0.05)); border-radius: 24px; padding: 24px 32px; border: 1px solid rgba(102, 126, 234, 0.1);
     
     .contact-methods { display: flex; align-items: center; justify-content: center; gap: 40px; }
     .contact-divider { width: 1px; height: 40px; background: rgba(102, 126, 234, 0.1); }
@@ -741,35 +627,37 @@ export default {
     }
   }
 
-  /* ===== Quick Links Sidebar ===== */
+  /* ===== Quick Links ===== */
   .quick-links-stack {
     display: flex; flex-direction: column; gap: 12px;
-    
-    .quick-card-mini {
-      background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(10px); border-radius: 18px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.5); transition: all 0.3s;
-      display: flex; align-items: center; gap: 16px; cursor: pointer; position: relative; overflow: hidden;
-      
-      &:hover { border-color: #667eea; transform: translateX(5px); box-shadow: 0 8px 20px rgba(102, 126, 234, 0.06); }
-      
-      .mini-icon {
-        width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #fff; flex-shrink: 0;
-        &.market { background: linear-gradient(135deg, #fa709a, #fee140); }
-      }
-      .mini-body { flex: 1; min-width: 0; }
-      .mini-title { font-size: 14px; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
-      .mini-desc { font-size: 12px; color: #8c8c8c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .mini-arrow { font-size: 12px; color: #bfbfbf; }
-      
-      &.special { background: #fafbff; border: 1px dashed #667eea; &:hover { border-style: solid; background: #f0f3ff; } }
+  }
+
+  .quick-card-mini {
+    background: rgba(255, 255, 255, 0.62); border-radius: 18px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.58); transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
+    display: flex; align-items: center; gap: 16px; cursor: pointer; position: relative; overflow: hidden;
+
+    &:hover { border-color: #667eea; transform: translateX(2px); box-shadow: 0 6px 16px rgba(102, 126, 234, 0.05); }
+
+    .mini-icon {
+      width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #fff; flex-shrink: 0;
+      &.market { background: linear-gradient(135deg, #fa709a, #fee140); }
     }
+    .mini-body { flex: 1; min-width: 0; }
+    .mini-title { font-size: 14px; font-weight: 700; color: #1a1a2e; margin-bottom: 2px; }
+    .mini-desc { font-size: 12px; color: #8c8c8c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mini-arrow { font-size: 12px; color: #bfbfbf; }
+
+    &.special { background: #fafbff; border: 1px dashed #667eea; &:hover { border-style: solid; background: #f0f3ff; } }
   }
 
   @media (max-width: 1000px) {
-    .features-layout { grid-template-columns: 1fr; }
+    .hero-content { grid-template-columns: 1fr; }
     .feature-cards-wrap { grid-template-columns: 1fr; }
   }
   @media (max-width: 768px) {
-    .hero-content { flex-direction: column; text-align: center; .hero-summary-mini { justify-content: center; } .hero-subtitle { margin: 0 auto 24px; } }
+    .hero-content { text-align: center; .hero-summary-mini { justify-content: center; } .hero-subtitle { margin: 0 auto 24px; } }
+    .hero-quick-panel { text-align: left; }
+    .hero-quick-grid { grid-template-columns: 1fr; }
     .contact-methods { flex-direction: column; gap: 24px; }
     .contact-divider { width: 100%; height: 1px; }
   }

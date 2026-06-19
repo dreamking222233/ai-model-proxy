@@ -56,6 +56,7 @@ from app.models.promotion import (
     UserPromotionRelation,
     UserPromotionReward,
 )
+from app.models.activity import DragonBoatLotteryEntry
 
 __all__ = [
     "SysUser",
@@ -105,4 +106,5 @@ __all__ = [
     "UserPromotionLink",
     "UserPromotionRelation",
     "UserPromotionReward",
+    "DragonBoatLotteryEntry",
 ]

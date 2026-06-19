@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ChatGPT2API Image Studio</title>
+    <!-- 引入高质感现代字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <!-- 背景极光发光特效 -->
+    <div class="aurora-glow glow-1"></div>
+    <div class="aurora-glow glow-2"></div>
+
+    <div class="app-layout">
+      <!-- 现代化顶部导航栏 -->
+      <header class="app-header">
+        <div class="header-logo">
+          <div class="logo-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sparkle-svg"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275Z"/><path d="m5 3 1 2.5L8.5 6 6 7 5 9.5 4 7 1.5 6 4 5.5Z"/><path d="m19 17 1 2.5 2.5.5-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1Z"/></svg>
+          </div>
+          <div class="logo-text">
+            <h1 class="logo-title">Image Studio</h1>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <div class="quota-widget" title="只获取后端账号可用额度总和">
+            <div class="quota-copy">
+              <span class="quota-label">可用额度</span>
+              <span id="quotaDetail" class="quota-detail">未刷新</span>
+            </div>
+            <div class="quota-number">
+              <strong id="quotaValue">--</strong>
+              <span>次</span>
+            </div>
+          </div>
+
+          <button id="refreshQuotaBtn" class="btn btn-secondary" type="button" title="获取后端账号可用额度总和">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M21 21v-5h-5"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
+            <span>刷新额度</span>
+          </button>
+
+          <a id="moreExperienceLink" class="btn btn-primary" href="https://www.xiaoleai.team/" target="_blank" rel="noopener noreferrer" title="打开 AI 中转站">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+            <span>体验更多</span>
+          </a>
+
+        </div>
+      </header>
+
+      <div id="configSection" hidden>
+        <input id="baseUrlInput" type="hidden" value="http://43.128.147.93:3000">
+        <input id="apiKeyInput" type="hidden" value="chatgpt2api">
+      </div>
+
+      <!-- 主工作区 -->
+      <main class="workspace-layout">
+        <!-- 左侧输入/控制面板 -->
+        <form id="imageForm" class="control-sidebar panel-glass">
+          <div class="tab-container">
+            <div class="tabs-slider" role="tablist" aria-label="工作模式">
+              <div class="slider-indicator"></div>
+              <button class="tab active" type="button" data-mode="generate" role="tab" aria-selected="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                <span>生图模式</span>
+              </button>
+              <button class="tab" type="button" data-mode="edit" role="tab" aria-selected="false">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                <span>图编辑模式</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="model-select-panel">
+            <label class="field">
+              <span class="field-title">模型选择</span>
+              <div class="input-wrapper">
+                <select id="modelInput">
+                  <option value="codex-gpt-image-2">codex-gpt-image-2</option>
+                  <option value="gpt-image-2" selected>gpt-image-2</option>
+                  <option value="plus-codex-gpt-image-2">plus-codex-gpt-image-2</option>
+                </select>
+              </div>
+            </label>
+          </div>
+
+          <!-- 提示词区域 -->
+          <div class="field prompt-field-wrapper">
+            <div class="prompt-header">
+              <span id="promptLabel" class="field-title">生图提示词</span>
+              <span class="prompt-counter" id="charCounter">0 / 2000</span>
+            </div>
+            <div class="textarea-wrapper">
+              <textarea id="promptInput" rows="5" placeholder="例如：一张极简产品海报，白色背景，金属质感耳机，中文标题留白，商业摄影风格"></textarea>
+              <button type="button" class="clear-prompt-btn" id="clearPromptBtn" title="清空提示词" style="display: none;">×</button>
+            </div>
+          </div>
+
+          <!-- 参考图区域（编辑模式） -->
+          <div id="referenceSection" class="reference-card hidden">
+            <div class="reference-header">
+              <div>
+                <h3 class="field-title">参考图配置</h3>
+                <p class="field-desc">支持本地上传、拖拽、粘贴或添加图片 URL</p>
+              </div>
+              <label class="btn btn-secondary btn-sm file-pick">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                <span>上传</span>
+                <input id="fileInput" type="file" accept="image/*" multiple>
+              </label>
+            </div>
+            
+            <div id="dropZone" class="drop-zone-modern">
+              <svg xmlns="http://www.w3.org/2000/svg" class="upload-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+              <span>拖拽图片至此，或直接在此粘贴图片</span>
+            </div>
+            
+            <div class="url-input-group">
+              <input id="imageUrlInput" type="url" placeholder="输入参考图 URL 或 data:image Base64">
+              <button id="addUrlBtn" class="btn btn-primary btn-sm" type="button">添加</button>
+            </div>
+            
+            <div id="referenceList" class="reference-thumb-grid empty">
+              <span>暂无参考图</span>
+            </div>
+          </div>
+
+          <!-- 其它核心参数配置 -->
+          <div class="options-container">
+            <h3 class="group-title">图片参数</h3>
+            
+            <div class="options-grid-modern">
+              <label class="field">
+                <span class="field-title">生图数量</span>
+                <div class="input-wrapper">
+                  <input id="countInput" type="number" min="1" max="4" step="1" value="1">
+                </div>
+              </label>
+
+              <label class="field">
+                <span class="field-title">输出质量</span>
+                <div class="input-wrapper">
+                  <select id="qualityInput">
+                    <option value="auto">Auto (自动)</option>
+                    <option value="low">Low (低质量)</option>
+                    <option value="medium" selected>Medium (中等)</option>
+                    <option value="high">High (高清)</option>
+                  </select>
+                </div>
+              </label>
+              <input id="responseFormatInput" type="hidden" value="b64_json">
+            </div>
+
+            <!-- 可视化尺寸选择网格 -->
+            <div class="field wide-field ratio-field-wrapper">
+              <span class="field-title">尺寸比例</span>
+              <div class="ratio-selector-grid">
+                <button type="button" class="ratio-option active" data-value="">
+                  <div class="ratio-box-icon ratio-auto">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 3"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
+                  </div>
+                  <span class="ratio-option-label">默认</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1024x1024">
+                  <div class="ratio-box-icon ratio-1-1"></div>
+                  <span class="ratio-option-label">1:1 方图</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1920x1088">
+                  <div class="ratio-box-icon ratio-16-9"></div>
+                  <span class="ratio-option-label">16:9 横图</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1088x1920">
+                  <div class="ratio-box-icon ratio-9-16"></div>
+                  <span class="ratio-option-label">9:16 竖图</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1365x1024">
+                  <div class="ratio-box-icon ratio-4-3"></div>
+                  <span class="ratio-option-label">4:3 横图</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1024x1365">
+                  <div class="ratio-box-icon ratio-3-4"></div>
+                  <span class="ratio-option-label">3:4 竖图</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1536x1024">
+                  <div class="ratio-box-icon ratio-3-2"></div>
+                  <span class="ratio-option-label">3:2 风景</span>
+                </button>
+                <button type="button" class="ratio-option" data-value="1024x1536">
+                  <div class="ratio-box-icon ratio-2-3"></div>
+                  <span class="ratio-option-label">2:3 人像</span>
+                </button>
+              </div>
+              <!-- 数据流中转 -->
+              <select id="sizeInput" class="hidden">
+                <option value="">默认尺寸</option>
+                <option value="1024x1024">1:1 正方形 (1024x1024)</option>
+                <option value="1024x1536">2:3 人像 (1024x1536)</option>
+                <option value="1536x1024">3:2 风景 (1536x1024)</option>
+                <option value="1024x1365">3:4 壁纸 (1024x1365)</option>
+                <option value="1365x1024">4:3 展示 (1365x1024)</option>
+                <option value="1088x1920">9:16 竖屏 (1088x1920)</option>
+                <option value="1920x1088">16:9 宽屏 (1920x1088)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 提交控制 -->
+          <div class="submit-action-row">
+            <button id="submitBtn" class="btn btn-primary btn-large btn-glow" type="submit">
+              <svg xmlns="http://www.w3.org/2000/svg" class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+              <span>开始生成</span>
+            </button>
+            <button id="clearBtn" class="btn btn-ghost" type="button">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="m19 6-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="m10 11 1 5"/><path d="m14 11-1 5"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+              <span>清空结果</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- 右侧结果与状态看板 -->
+        <section class="results-viewer panel-glass">
+          <div class="panel-header">
+            <div class="status-summary">
+              <h2>创作结果</h2>
+              <div class="status-indicator">
+                <span class="status-dot"></span>
+                <span id="statusText">等待配置连接...</span>
+              </div>
+            </div>
+            <button id="copyResponseBtn" class="btn btn-secondary btn-sm" type="button">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              <span>复制响应</span>
+            </button>
+          </div>
+
+          <!-- 图片展示网格 -->
+          <div id="resultGrid" class="result-grid-modern empty">
+            <div class="empty-state-illustrate">
+              <div class="empty-state-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+              </div>
+              <p>生成后的艺术图像将呈现在此处</p>
+              <span class="empty-subtext">在左侧输入创意提示词并点击生成</span>
+            </div>
+          </div>
+
+          <!-- 原始数据响应区 -->
+          <details class="json-response-box">
+            <summary>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              <span>查看原始 API 响应数据</span>
+            </summary>
+            <div class="json-code-wrapper">
+              <pre id="rawResponse">{}</pre>
+            </div>
+          </details>
+        </section>
+      </main>
+    </div>
+
+    <!-- 吐司通知容器 -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- 现代风格图片卡片模板 -->
+    <template id="imageCardTemplate">
+      <article class="image-card-modern">
+        <div class="image-wrapper-ratio">
+          <button class="image-zoom-trigger" type="button" title="点击查看大图">
+            <img alt="生成艺术图" loading="lazy">
+          </button>
+          <!-- 悬浮毛玻璃操作栏 -->
+          <div class="card-glass-actions">
+            <a class="btn btn-primary btn-sm download-link" download>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              <span>下载</span>
+            </a>
+            <button class="btn btn-secondary btn-sm use-as-ref" type="button">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              <span>编辑</span>
+            </button>
+          </div>
+        </div>
+        <div class="card-info">
+          <span class="card-number">IMAGE #1</span>
+          <p class="card-description" title=""></p>
+        </div>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

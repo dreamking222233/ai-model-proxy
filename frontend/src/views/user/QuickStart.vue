@@ -4,30 +4,14 @@
       <!-- Hero Section -->
       <section class="hero-section animate__animated animate__fadeIn">
         <div class="hero-glass">
-          <div class="hero-badge">Documentation</div>
           <h1 class="hero-title">快速开始<span>指南</span></h1>
           <p class="hero-desc">只需 4 个简单环节，助您在任何现代 AI 开发环境（OpenAI / Anthropic 兼容协议）中快速起飞。</p>
           
         </div>
       </section>
 
-      <!-- Sticky Navigation Bar -->
-      <div class="sticky-nav-wrapper">
-        <div class="navigation-stepper">
-          <div 
-            v-for="(step, idx) in navigationSteps" 
-            :key="idx"
-            class="nav-step"
-            :class="{ active: activeSection === step.id }"
-            @click="scrollTo(step.id)"
-          >
-            <div class="nav-step-icon">
-              <a-icon :type="step.icon" />
-            </div>
-            <span class="nav-step-text">{{ step.name }}</span>
-          </div>
-        </div>
-      </div>
+      <div class="content-layout">
+        <main class="quickstart-main">
 
       <!-- Step 1: Authentication -->
       <section class="step-section animate__animated animate__fadeInUp" id="section-key" style="animation-delay: 0.1s">
@@ -59,7 +43,7 @@
               </div>
               <div class="config-row">
                 <div class="config-label">
-                  <a-icon type="safety" /> 认证方式
+                  <a-icon type="lock" /> 认证方式
                 </div>
                 <div class="config-value-group">
                   <div class="config-code"><code>Authorization: Bearer sk-xxxx</code></div>
@@ -119,6 +103,48 @@
                       />
                     </div>
                     <pre class="terminal-body"><code>{{ codexConfig }}</code></pre>
+                  </div>
+                </div>
+              </a-tab-pane>
+
+              <!-- CC Switch -->
+              <a-tab-pane key="cc-switch" tab="CC Switch">
+                <div class="tool-content">
+                  <div class="tool-meta">
+                    <a-icon type="swap" class="tool-meta-icon" />
+                    <span>手动配置 Claude Code 与 Codex 的供应商参数</span>
+                  </div>
+                  <a-alert
+                    type="warning"
+                    show-icon
+                    message="Codex 配置必须使用 custom provider"
+                    description="model_provider 必须填写 custom，不要写成 openai；base_url 必须使用带 /v1 的 OpenAI 兼容地址。Claude Code 则使用不带 /v1 的 Anthropic 地址。"
+                    class="mini-alert cc-switch-alert"
+                  />
+                  <div class="terminal-block">
+                    <div class="terminal-header">
+                      <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                      <span class="terminal-title">Claude Code settings.json</span>
+                      <a-icon
+                        :type="copyStates['cc-switch-claude'] ? 'check' : 'copy'"
+                        class="terminal-copy"
+                        @click="handleCopy(ccSwitchClaudeConfig, 'cc-switch-claude')"
+                      />
+                    </div>
+                    <pre class="terminal-body"><code>{{ ccSwitchClaudeConfig }}</code></pre>
+                  </div>
+
+                  <div class="terminal-block">
+                    <div class="terminal-header">
+                      <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                      <span class="terminal-title">Codex config.toml</span>
+                      <a-icon
+                        :type="copyStates['cc-switch-codex'] ? 'check' : 'copy'"
+                        class="terminal-copy"
+                        @click="handleCopy(ccSwitchCodexConfig, 'cc-switch-codex')"
+                      />
+                    </div>
+                    <pre class="terminal-body"><code>{{ ccSwitchCodexConfig }}</code></pre>
                   </div>
                 </div>
               </a-tab-pane>
@@ -210,7 +236,7 @@
 
               <a-tab-pane key="images" tab="图像 API">
                 <div class="protocol-box">
-                  <div class="api-doc-card">
+                  <div class="api-doc-card" id="section-image-generation">
                     <div class="api-doc-title">图片生成接口</div>
                     <div class="endpoint-line">
                       <span class="e-method green">POST</span>
@@ -289,7 +315,7 @@
                     </div>
                   </div>
 
-                  <div class="api-doc-card">
+                  <div class="api-doc-card" id="section-image-edit">
                     <div class="api-doc-title">图片编辑接口</div>
                     <div class="endpoint-line">
                       <span class="e-method gold">POST</span>
@@ -361,7 +387,13 @@
                     </div>
                   </div>
 
-                  <div class="api-doc-card">
+                  <a-alert message="注意" description="图像接口不支持 stream；图片生成和图片编辑都会在返回有效 b64_json 图片后按实际有效图片数计费。" type="warning" class="mini-alert" />
+                </div>
+              </a-tab-pane>
+
+              <a-tab-pane key="video" tab="视频 API">
+                <div class="protocol-box">
+                  <div class="api-doc-card" id="section-video">
                     <div class="api-doc-title">视频生成接口</div>
                     <div class="endpoint-line">
                       <span class="e-method green">POST</span>
@@ -403,7 +435,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="图像接口不支持 stream；视频接口使用 multipart/form-data，文生视频只传 prompt，图生视频额外上传 input_reference[]。视频按媒体积分计费，当前 grok-video 为 0.5 积分/秒。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="视频接口使用 multipart/form-data，文生视频只传 prompt，图生视频额外上传 input_reference[]。视频按媒体积分计费，当前 grok-video 为 0.5 积分/秒。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -437,7 +469,7 @@
       </section>
 
       <!-- FAQ -->
-      <section class="faq-section animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
+      <section class="faq-section animate__animated animate__fadeInUp" id="section-faq" style="animation-delay: 0.5s">
         <div class="section-header-centered">
           <h2 class="faq-title">常见问题 <span>FAQ</span></h2>
         </div>
@@ -452,6 +484,31 @@
           </a-collapse>
         </div>
       </section>
+        </main>
+
+        <aside class="quickstart-toc">
+          <div class="toc-card">
+            <div class="toc-eyebrow">目录</div>
+            <div class="toc-title">快速定位</div>
+            <div class="toc-groups">
+              <div v-for="group in tocGroups" :key="group.title" class="toc-group">
+                <div class="toc-group-title">{{ group.title }}</div>
+                <button
+                  v-for="item in group.children"
+                  :key="item.id"
+                  type="button"
+                  class="toc-link"
+                  :class="{ active: activeSection === item.id }"
+                  @click="handleTocClick(item)"
+                >
+                  <a-icon :type="item.icon" />
+                  <span>{{ item.name }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   </div>
 </template>
@@ -468,16 +525,78 @@ export default {
       activeSection: 'key',
       apiBase: '',
       copyStates: {},
-      navigationSteps: [
-        { id: 'key', name: '获取认证', icon: 'key' },
-        { id: 'config', name: '常用配置', icon: 'appstore' },
-        { id: 'protocol', name: '代码开发', icon: 'code' },
-        { id: 'test', name: '集成测试', icon: 'rocket' }
+      scrollRaf: null,
+      scrollContainer: null,
+      tocGroups: [
+        {
+          title: '接入准备',
+          children: [
+            { id: 'key', name: '认证凭据', icon: 'lock', section: 'key' }
+          ]
+        },
+        {
+          title: '工具配置',
+          children: [
+            { id: 'claude-code', name: 'Claude Code', icon: 'code', section: 'config', activeTab: 'claude-code' },
+            { id: 'codex', name: 'Codex CLI', icon: 'setting', section: 'config', activeTab: 'codex' },
+            { id: 'cc-switch', name: 'CC Switch', icon: 'swap', section: 'config', activeTab: 'cc-switch' },
+            { id: 'openclaw', name: 'OpenClaw', icon: 'appstore', section: 'config', activeTab: 'openclaw' }
+          ]
+        },
+        {
+          title: '协议与媒体',
+          children: [
+            { id: 'openai', name: 'OpenAI SDK', icon: 'api', section: 'protocol', protocolTab: 'openai' },
+            { id: 'anthropic', name: 'Anthropic SDK', icon: 'branches', section: 'protocol', protocolTab: 'anthropic' },
+            { id: 'image-generation', name: '图片生成', icon: 'picture', section: 'protocol', target: 'image-generation', protocolTab: 'images' },
+            { id: 'image-edit', name: '图片编辑', icon: 'edit', section: 'protocol', target: 'image-edit', protocolTab: 'images' },
+            { id: 'video', name: '视频生成', icon: 'video-camera', section: 'protocol', target: 'video', protocolTab: 'video' }
+          ]
+        },
+        {
+          title: '验证与排错',
+          children: [
+            { id: 'test', name: '连通测试', icon: 'rocket', section: 'test' },
+            { id: 'faq', name: '常见问题', icon: 'question-circle', section: 'faq' }
+          ]
+        }
       ]
     }
   },
   created() {
     this.fetchSiteConfig()
+  },
+  mounted() {
+    this.$nextTick(() => {
+      this.scrollContainer = this.$el.closest('.user-content') || window
+      this.updateActiveSection()
+      this.scrollContainer.addEventListener('scroll', this.handleScroll, { passive: true })
+    })
+  },
+  beforeDestroy() {
+    if (this.scrollContainer) {
+      this.scrollContainer.removeEventListener('scroll', this.handleScroll)
+    }
+    if (this.scrollRaf) {
+      cancelAnimationFrame(this.scrollRaf)
+      this.scrollRaf = null
+    }
+  },
+  watch: {
+    activeTab(value) {
+      if (this.activeSection === 'claude-code' || this.activeSection === 'codex' || this.activeSection === 'cc-switch' || this.activeSection === 'openclaw') {
+        this.activeSection = value
+      }
+    },
+    protocolTab(value) {
+      if (this.activeSection === 'openai' || this.activeSection === 'anthropic') {
+        this.activeSection = value
+      } else if (value === 'images' && !['image-generation', 'image-edit'].includes(this.activeSection)) {
+        this.activeSection = 'image-generation'
+      } else if (value === 'video') {
+        this.activeSection = 'video'
+      }
+    }
   },
   computed: {
     relayBase() {
@@ -503,6 +622,46 @@ claude`
   "model": "gpt-5.1-o1",
   "temperature": 0.5
 }`
+    },
+    ccSwitchClaudeConfig() {
+      return `{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-你的密钥",
+    "ANTHROPIC_BASE_URL": "${this.relayBase}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
+    "ANTHROPIC_MODEL": "claude-opus-4-8",
+    "ANTHROPIC_REASONING_MODEL": "claude-sonnet-4-5-thinking"
+  },
+  "includeCoAuthoredBy": false,
+  "model": "opus",
+  "enabledPlugins": {
+    "warp@claude-code-warp": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-code-warp": {
+      "source": {
+        "source": "github",
+        "repo": "warpdotdev/claude-code-warp"
+      }
+    }
+  },
+  "skipDangerousModePermissionPrompt": true
+}`
+    },
+    ccSwitchCodexConfig() {
+      return `# 必须使用 custom，不要写成 model_provider = "openai"
+# Codex 的 base_url 必须带 /v1
+model_provider = "custom"
+base_url = "${this.relayOpenaiBase}"
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+disable_response_storage = true
+
+model_context_window = 1000000
+model_auto_compact_token_limit = 1000000
+service_tier = "default"`
     },
     openclawAnthropicConfig() {
       return `{
@@ -952,20 +1111,73 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
       }
       document.body.removeChild(textarea)
     },
+    handleTocClick(item) {
+      if (item.activeTab) {
+        this.activeTab = item.activeTab
+      }
+      if (item.protocolTab) {
+        this.protocolTab = item.protocolTab
+      }
+      this.activeSection = item.id
+      this.$nextTick(() => {
+        this.scrollTo(item.target || item.section)
+      })
+    },
     scrollTo(section) {
-      this.activeSection = section
       const el = document.getElementById('section-' + section)
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth' })
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }
+    },
+    handleScroll() {
+      if (this.scrollRaf) return
+      this.scrollRaf = requestAnimationFrame(() => {
+        this.updateActiveSection()
+        this.scrollRaf = null
+      })
+    },
+    updateActiveSection() {
+      const sectionIds = ['key', 'config', 'protocol', 'test', 'faq']
+      const current = sectionIds
+        .map(id => {
+          const el = document.getElementById('section-' + id)
+          return el ? { id, top: Math.abs(el.getBoundingClientRect().top - 120) } : null
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.top - b.top)[0]
+
+      if (!current) return
+
+      if (current.id === 'config') {
+        this.activeSection = this.activeTab
+      } else if (current.id === 'protocol') {
+        if (this.protocolTab === 'images') {
+          this.activeSection = this.getActiveMediaSection()
+        } else if (this.protocolTab === 'video') {
+          this.activeSection = 'video'
+        } else {
+          this.activeSection = this.protocolTab
+        }
+      } else {
+        this.activeSection = current.id
+      }
+    },
+    getActiveMediaSection() {
+      const mediaIds = ['image-generation', 'image-edit']
+      const current = mediaIds
+        .map(id => {
+          const el = document.getElementById('section-' + id)
+          return el ? { id, top: Math.abs(el.getBoundingClientRect().top - 120) } : null
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.top - b.top)[0]
+      return current ? current.id : 'image-generation'
     }
   }
 }
 </script>
 
 <style lang="less" scoped>
-@import url('https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css');
-
 .quick-start-page {
   position: relative;
   min-height: 100vh;
@@ -975,42 +1187,119 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
   .page-container {
     position: relative;
     z-index: 1;
-    max-width: 1100px;
+    max-width: 1280px;
     margin: 0 auto;
+  }
+
+  .content-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    align-items: start;
+    gap: 24px;
+  }
+
+  .quickstart-main {
+    min-width: 0;
+  }
+
+  .quickstart-toc {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+  }
+
+  .toc-card {
+    padding: 18px;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 18px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  }
+
+  .toc-eyebrow {
+    color: #667eea;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .toc-title {
+    margin-top: 4px;
+    color: #1a1a2e;
+    font-size: 18px;
+    font-weight: 800;
+  }
+
+  .toc-groups {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .toc-group-title {
+    margin-bottom: 8px;
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .toc-link {
+    width: 100%;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+
+    & + .toc-link {
+      margin-top: 4px;
+    }
+
+    .anticon {
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    &:hover,
+    &.active {
+      background: #f5f7ff;
+      border-color: #dbe4ff;
+      color: #4f46e5;
+
+      .anticon {
+        color: #667eea;
+      }
+    }
   }
 
   /* ===== Hero Section ===== */
   .hero-section {
-    margin-bottom: 40px;
+    margin-bottom: 24px;
     
     .hero-glass {
       background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(20px);
-      border-radius: 32px;
-      padding: 60px 40px;
+      border-radius: 22px;
+      padding: 28px 32px;
       text-align: center;
       border: 1px solid rgba(255, 255, 255, 0.6);
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
-
-      .hero-badge {
-        display: inline-block;
-        padding: 4px 16px;
-        background: linear-gradient(90deg, #667eea, #764ba2);
-        color: #fff;
-        border-radius: 20px;
-        font-size: 13px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 24px;
-      }
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
 
       .hero-title {
-        font-size: 48px;
+        font-size: 36px;
         font-weight: 800;
         color: #1a1a2e;
-        margin-bottom: 16px;
-        letter-spacing: -1px;
+        margin-bottom: 10px;
         
         span {
           background: linear-gradient(135deg, #667eea, #764ba2);
@@ -1020,76 +1309,12 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
       }
 
       .hero-desc {
-        font-size: 18px;
+        font-size: 15px;
         color: #595959;
-        max-width: 700px;
-        margin: 0 auto 40px;
+        max-width: 760px;
+        margin: 0 auto;
         line-height: 1.6;
       }
-    }
-  }
-
-  .sticky-nav-wrapper {
-    position: sticky;
-    top: -24px;
-    z-index: 100;
-    margin: 0 -24px 24px -24px;
-    padding: 16px 24px;
-    background: rgba(255, 255, 255, 0.4);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  }
-
-  .navigation-stepper {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    max-width: 1200px;
-    margin: 0 auto;
-
-    .nav-step {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 20px;
-      background: rgba(255, 255, 255, 0.6);
-      backdrop-filter: blur(10px);
-      border-radius: 14px;
-      cursor: pointer;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      border: 1px solid rgba(255, 255, 255, 0.5);
-
-      &:hover {
-        transform: translateY(-2px);
-        background: rgba(255, 255, 255, 0.9);
-        border-color: #667eea;
-      }
-
-      &.active {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: #fff;
-        border-color: #667eea;
-        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
-
-        .nav-step-icon { background: rgba(255,255,255,0.2); color: #fff; }
-      }
-
-      .nav-step-icon {
-        width: 28px;
-        height: 28px;
-        border-radius: 8px;
-        background: #f5f7ff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #667eea;
-        font-size: 14px;
-        transition: all 0.3s;
-      }
-
-      .nav-step-text { font-size: 14px; font-weight: 700; }
     }
   }
 
@@ -1101,7 +1326,6 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
 
   .section-card-glass {
     background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(20px);
     border-radius: 28px;
     padding: 40px;
     border: 1px solid rgba(255, 255, 255, 0.6);
@@ -1153,7 +1377,16 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     background: rgba(102, 126, 234, 0.06);
     padding: 16px 20px;
     margin-bottom: 24px;
+    /deep/ .ant-alert-icon {
+      left: 20px;
+      top: 20px;
+      font-size: 22px;
+    }
     /deep/ .ant-alert-message { font-weight: 700; color: #1a1a2e; }
+    /deep/ .ant-alert-message,
+    /deep/ .ant-alert-description {
+      padding-left: 38px;
+    }
   }
 
   /* ===== Config Display ===== */
@@ -1189,7 +1422,6 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
         
         .config-code {
           background: rgba(255, 255, 255, 0.5);
-          backdrop-filter: blur(10px);
           padding: 6px 14px;
           border-radius: 10px;
           border: 1px solid #e2e8f0;
@@ -1222,6 +1454,23 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
       margin-bottom: 20px;
       span { font-size: 14px; font-weight: 600; color: #1a1a2e; }
       code { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+    }
+
+    .terminal-block + .terminal-block {
+      margin-top: 18px;
+    }
+  }
+
+  .tool-meta-icon {
+    color: #667eea;
+    font-size: 22px;
+  }
+
+  .cc-switch-alert {
+    margin-bottom: 18px;
+
+    /deep/ .ant-alert-icon {
+      top: 19px;
     }
   }
 
@@ -1322,8 +1571,8 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
         word-break: normal;
       }
       .editor-copy {
-        position: absolute; top: 16px; right: 16px; color: #484f58; cursor: pointer; transition: all 0.3s;
-        &:hover { color: #fff; transform: scale(1.1); }
+        position: absolute; top: 16px; right: 16px; color: #484f58; cursor: pointer; transition: background-color 0.3s, border-color 0.3s, color 0.3s, box-shadow 0.3s, transform 0.3s;
+        &:hover { color: #fff; transform: scale(1.02); }
       }
     }
   }
@@ -1442,7 +1691,6 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     background: transparent;
     /deep/ .ant-collapse-item {
       background: rgba(255, 255, 255, 0.5);
-      backdrop-filter: blur(10px);
       border-radius: 16px !important;
       margin-bottom: 12px;
       border: 1px solid #f0f0f0;
@@ -1454,9 +1702,82 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     }
   }
 
+  @media (max-width: 1180px) {
+    .content-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .quickstart-toc {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      order: -1;
+    }
+
+    .toc-card {
+      padding: 12px;
+      border-radius: 14px;
+    }
+
+    .toc-eyebrow,
+    .toc-title,
+    .toc-group-title {
+      display: none;
+    }
+
+    .toc-groups {
+      margin-top: 0;
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .toc-group {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 8px;
+    }
+
+    .toc-link {
+      width: auto;
+      min-width: max-content;
+
+      & + .toc-link {
+        margin-top: 0;
+      }
+    }
+  }
+
   @media (max-width: 900px) {
+    padding: 24px 12px;
+
     .section-card-glass { flex-direction: column; gap: 20px; padding: 24px; }
-    .hero-glass { padding: 40px 20px; .hero-title { font-size: 32px; } }
+    .hero-glass { padding: 24px 18px; .hero-title { font-size: 30px; } }
+
+    .config-display .config-row {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 10px;
+
+      .config-label {
+        width: auto;
+      }
+
+      .config-value-group {
+        width: 100%;
+
+        .config-code {
+          max-width: 100%;
+          overflow-x: auto;
+        }
+      }
+    }
+
+    .api-doc-row {
+      min-width: 640px;
+    }
   }
 }
 </style>

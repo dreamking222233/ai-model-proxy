@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.exceptions import ServiceException
 from app.models.agent import Agent
-from app.models.log import ConsumptionRecord, ImageCreditRecord, UserBalance, UserImageBalance
+from app.models.log import ConsumptionRecord, ImageCreditRecord, SystemConfig, UserBalance, UserImageBalance
 from app.models.payment import PaymentRechargeOrder
 from app.models.promotion import UserPromotionLink, UserPromotionRelation, UserPromotionReward
 from app.models.user import SysUser
@@ -42,6 +42,20 @@ class PromotionService:
     @staticmethod
     def _num(value, scale: Decimal = USD_SCALE) -> float:
         return float(PromotionService._decimal(value, scale))
+
+    @staticmethod
+    def _reward_rate(db: Session) -> Decimal:
+        config = db.query(SystemConfig.config_value).filter(SystemConfig.config_key == "promotion_reward_rate").first()
+        raw_value = str(config[0]).strip() if config and config[0] is not None else ""
+        try:
+            rate = Decimal(raw_value).quantize(PromotionService.USD_SCALE, rounding=ROUND_HALF_UP) if raw_value else PromotionService.REWARD_RATE
+        except Exception:
+            rate = PromotionService.REWARD_RATE
+        if rate < Decimal("0"):
+            return Decimal("0")
+        if rate > Decimal("1"):
+            return Decimal("1")
+        return rate
 
     @staticmethod
     def _serialize_dt(value, *, assume_utc: bool = False) -> str | None:
@@ -331,15 +345,19 @@ class PromotionService:
         if order_created_at and relation_created_at and order_created_at < relation_created_at:
             return
 
+        reward_rate = PromotionService._reward_rate(db)
+        if reward_rate <= 0:
+            return
+
         recharge_type = str(order.recharge_type or "balance").strip().lower()
         if recharge_type == "image_credit":
             reward_asset_type = "image_credit"
-            reward_amount = (PromotionService._decimal(order.credited_image_credits, PromotionService.IMAGE_SCALE) * PromotionService.REWARD_RATE).quantize(PromotionService.IMAGE_SCALE, rounding=ROUND_HALF_UP)
+            reward_amount = (PromotionService._decimal(order.credited_image_credits, PromotionService.IMAGE_SCALE) * reward_rate).quantize(PromotionService.IMAGE_SCALE, rounding=ROUND_HALF_UP)
             if reward_amount <= 0:
                 return
         else:
             reward_asset_type = "balance"
-            reward_amount = (PromotionService._decimal(order.credited_usd, PromotionService.USD_SCALE) * PromotionService.REWARD_RATE).quantize(PromotionService.USD_SCALE, rounding=ROUND_HALF_UP)
+            reward_amount = (PromotionService._decimal(order.credited_usd, PromotionService.USD_SCALE) * reward_rate).quantize(PromotionService.USD_SCALE, rounding=ROUND_HALF_UP)
             if reward_amount <= 0:
                 return
 
@@ -357,7 +375,7 @@ class PromotionService:
             credited_image_credits=PromotionService._decimal(order.credited_image_credits, PromotionService.IMAGE_SCALE),
             reward_asset_type=reward_asset_type,
             reward_amount=reward_amount,
-            reward_rate=PromotionService.REWARD_RATE,
+            reward_rate=reward_rate,
             status="applied",
         )
         if not PromotionService._insert_reward_once(db, reward):
@@ -379,7 +397,7 @@ class PromotionService:
                 change_amount=reward_amount,
                 balance_before=balance_before,
                 balance_after=image_balance.balance,
-                multiplier=PromotionService.REWARD_RATE,
+                multiplier=reward_rate,
                 action_type="promotion_reward",
                 operator_id=None,
                 remark=remark,

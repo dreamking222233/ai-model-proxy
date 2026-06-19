@@ -1117,6 +1117,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('max_context_tokens', '200000', 'number', '最大上下文Token数量限制'),
 ('max_message_length', '500000', 'number', '单条消息最大字符数限制'),
 ('price_multiplier', '1.0', 'number', '价格倍率（1.0=原价，2.0=2倍价格）'),
+('promotion_reward_rate', '0.2', 'number', '推广返利比例，小数形式：0.2=20%，0=关闭'),
 ('token_multiplier', '1.0', 'number', 'Token 统计倍率（1.0=原始Token）'),
 ('request_body_cache_enabled', 'false', 'boolean', '是否启用请求体分段缓存分析'),
 ('request_body_cache_user_visible', 'false', 'boolean', '用户端是否显示缓存读取/创建信息'),

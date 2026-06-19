@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.exceptions import ServiceException
 from app.database import Base
 from app.models.agent import Agent
-from app.models.log import ConsumptionRecord, ImageCreditRecord, UserBalance, UserImageBalance
+from app.models.log import ConsumptionRecord, ImageCreditRecord, SystemConfig, UserBalance, UserImageBalance
 from app.models.payment import PaymentRechargeOrder
 from app.models.promotion import UserPromotionLink, UserPromotionRelation, UserPromotionReward
 from app.models.user import SysUser
@@ -28,6 +28,7 @@ class UserPromotionTest(unittest.TestCase):
                 UserImageBalance.__table__,
                 ConsumptionRecord.__table__,
                 ImageCreditRecord.__table__,
+                SystemConfig.__table__,
                 PaymentRechargeOrder.__table__,
                 UserPromotionLink.__table__,
                 UserPromotionRelation.__table__,
@@ -140,6 +141,60 @@ class UserPromotionTest(unittest.TestCase):
         self.assertEqual(Decimal(str(balance.total_recharged)).quantize(Decimal("0.001")), Decimal("0.000"))
         record = self.db.query(ImageCreditRecord).filter(ImageCreditRecord.user_id == 1).first()
         self.assertEqual(record.action_type, "promotion_reward")
+
+    def test_promotion_reward_rate_config_controls_balance_reward(self):
+        self.db.add(SystemConfig(config_key="promotion_reward_rate", config_value="0.1", config_type="number", description="推广返利比例"))
+        self.create_relation()
+        order = PaymentRechargeOrder(
+            id=6,
+            order_no="ALP202606100006",
+            payment_channel="alipay",
+            recharge_type="balance",
+            user_id=2,
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            credited_image_credits=Decimal("0"),
+            status="paid",
+            paid_at=self.now,
+            subject="充值",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PromotionService.apply_recharge_reward(self.db, order)
+        self.db.commit()
+
+        reward = self.db.query(UserPromotionReward).first()
+        self.assertEqual(Decimal(str(reward.reward_rate)).quantize(Decimal("0.000001")), Decimal("0.100000"))
+        self.assertEqual(Decimal(str(reward.reward_amount)).quantize(Decimal("0.000001")), Decimal("5.000000"))
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("5.000000"))
+
+    def test_zero_promotion_reward_rate_disables_reward(self):
+        self.db.add(SystemConfig(config_key="promotion_reward_rate", config_value="0", config_type="number", description="推广返利比例"))
+        self.create_relation()
+        order = PaymentRechargeOrder(
+            id=7,
+            order_no="ALP202606100007",
+            payment_channel="alipay",
+            recharge_type="balance",
+            user_id=2,
+            amount_cny=Decimal("10.00"),
+            credited_usd=Decimal("50.000000"),
+            credited_image_credits=Decimal("0"),
+            status="paid",
+            paid_at=self.now,
+            subject="充值",
+        )
+        self.db.add(order)
+        self.db.commit()
+
+        PromotionService.apply_recharge_reward(self.db, order)
+        self.db.commit()
+
+        self.assertEqual(self.db.query(UserPromotionReward).count(), 0)
+        balance = self.db.query(UserBalance).filter(UserBalance.user_id == 1).first()
+        self.assertEqual(Decimal(str(balance.balance)).quantize(Decimal("0.000001")), Decimal("0.000000"))
 
     def test_manual_bind_relation(self):
         item = PromotionService.manual_bind_relation(self.db, promoter_user_id=1, invited_user_id=4)

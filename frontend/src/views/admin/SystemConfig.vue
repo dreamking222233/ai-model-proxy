@@ -117,7 +117,7 @@
       </a-row>
 
       <a-row :gutter="24" class="config-row">
-        <a-col :span="12">
+        <a-col :span="6">
           <div class="config-item">
             <div class="config-label">
               <a-icon type="disconnect" />
@@ -134,6 +134,28 @@
             <div class="config-hint">
               <a-icon type="bulb" />
               连续失败多少次后触发熔断
+            </div>
+          </div>
+        </a-col>
+        <a-col :span="6">
+          <div class="config-item">
+            <div class="config-label">
+              <a-icon type="gift" />
+              推广返利比例
+            </div>
+            <a-input-number
+              v-model="promotionRewardPercent"
+              :min="0"
+              :max="100"
+              :step="1"
+              :precision="2"
+              class="config-input"
+            >
+              <template slot="addonAfter">%</template>
+            </a-input-number>
+            <div class="config-hint">
+              <a-icon type="bulb" />
+              0 表示关闭推广返利，20 表示返利 20%
             </div>
           </div>
         </a-col>
@@ -660,6 +682,7 @@ export default {
       healthCheckMessage: '你好',
       priceMultiplier: 1.0,
       tokenMultiplier: 1.0,
+      promotionRewardPercent: 20,
       circuitBreakerThreshold: 5,
       circuitBreakerRecovery: 600,
       maxRetryCount: 3,
@@ -691,6 +714,7 @@ export default {
         'health_check_test_message': '测试消息',
         'price_multiplier': '价格倍率',
         'token_multiplier': '统一Token倍率',
+        'promotion_reward_rate': '推广返利比例',
         'max_retry_count': '上游失败重试次数',
         'max_message_length': '最大消息长度',
         'max_context_tokens': '最大上下文Token数',
@@ -782,6 +806,9 @@ export default {
             this.priceMultiplier = Number(config.config_value) || 1.0
           } else if (config.config_key === 'token_multiplier') {
             this.tokenMultiplier = Number(config.config_value) || 1.0
+          } else if (config.config_key === 'promotion_reward_rate') {
+            const rate = Number(config.config_value)
+            this.promotionRewardPercent = Number.isNaN(rate) ? 20 : Number((rate * 100).toFixed(2))
           } else if (config.config_key === 'circuit_breaker_threshold') {
             this.circuitBreakerThreshold = Number(config.config_value) || 5
           } else if (config.config_key === 'circuit_breaker_recovery') {
@@ -842,6 +869,7 @@ export default {
           { key: 'health_check_test_message', value: this.healthCheckMessage },
           { key: 'price_multiplier', value: this.priceMultiplier },
           { key: 'token_multiplier', value: this.tokenMultiplier },
+          { key: 'promotion_reward_rate', value: (Number(this.promotionRewardPercent || 0) / 100).toFixed(6) },
           { key: 'circuit_breaker_threshold', value: this.circuitBreakerThreshold },
           { key: 'max_retry_count', value: this.maxRetryCount },
           { key: 'circuit_breaker_recovery', value: this.circuitBreakerRecovery }

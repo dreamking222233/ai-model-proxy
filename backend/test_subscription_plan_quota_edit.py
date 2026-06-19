@@ -26,7 +26,7 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
 
         self.assertEqual(strategy["quota_metric"], SubscriptionService.QUOTA_METRIC_COST)
         self.assertEqual(strategy["quota_limit"], Decimal("50"))
-        self.assertTrue(strategy["use_official_cost"])
+        self.assertFalse(strategy["use_official_cost"])
 
     def test_builtin_default_plan_snapshot_preserves_raw_quota(self):
         snapshot = SubscriptionService._get_plan_subscription_quota_snapshot(self._record())
@@ -170,7 +170,7 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
         self.assertEqual(strategy["quota_metric"], SubscriptionService.QUOTA_METRIC_TOKENS)
         self.assertEqual(strategy["quota_limit"], Decimal("20000000"))
 
-    def test_legacy_cost_subscription_snapshot_keeps_official_cost(self):
+    def test_legacy_cost_subscription_snapshot_uses_billable_cost(self):
         strategy = SubscriptionService._resolve_subscription_quota_strategy(
             self._record(
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
@@ -181,9 +181,9 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
 
         self.assertEqual(strategy["quota_metric"], SubscriptionService.QUOTA_METRIC_COST)
         self.assertEqual(strategy["quota_limit"], Decimal("50"))
-        self.assertTrue(strategy["use_official_cost"])
+        self.assertFalse(strategy["use_official_cost"])
 
-    def test_legacy_cost_60_subscription_snapshot_keeps_official_cost(self):
+    def test_legacy_cost_60_subscription_snapshot_uses_billable_cost(self):
         strategy = SubscriptionService._resolve_subscription_quota_strategy(
             self._record(
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
@@ -194,7 +194,7 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
 
         self.assertEqual(strategy["quota_metric"], SubscriptionService.QUOTA_METRIC_COST)
         self.assertEqual(strategy["quota_limit"], Decimal("60"))
-        self.assertTrue(strategy["use_official_cost"])
+        self.assertFalse(strategy["use_official_cost"])
 
     def test_cost_snapshot_at_cutover_uses_saved_value(self):
         strategy = SubscriptionService._resolve_subscription_quota_strategy(
@@ -208,6 +208,47 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
         self.assertEqual(strategy["quota_metric"], SubscriptionService.QUOTA_METRIC_COST)
         self.assertEqual(strategy["quota_limit"], Decimal("50"))
         self.assertFalse(strategy["use_official_cost"])
+
+    def test_cost_quota_consumes_billable_total_cost_not_official_cost(self):
+        subscription = self._record(
+            plan_code="monthly-unlimited",
+            plan_code_snapshot="monthly-unlimited",
+            plan_name="月度无限包",
+            plan_kind=SubscriptionService.PLAN_KIND_UNLIMITED,
+            plan_kind_snapshot=SubscriptionService.PLAN_KIND_UNLIMITED,
+            quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+            quota_value=Decimal("100"),
+        )
+
+        consumed = SubscriptionService._get_quota_consumed_amount(
+            subscription,
+            raw_total_tokens=1000,
+            total_cost=0.20,
+            quota_cost=0.10,
+        )
+
+        self.assertEqual(consumed, Decimal("0.2"))
+
+    def test_cost_quota_precheck_uses_billable_estimated_cost(self):
+        subscription = self._record(
+            plan_code="monthly-unlimited",
+            plan_code_snapshot="monthly-unlimited",
+            plan_name="月度无限包",
+            plan_kind=SubscriptionService.PLAN_KIND_UNLIMITED,
+            plan_kind_snapshot=SubscriptionService.PLAN_KIND_UNLIMITED,
+            quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+            quota_value=Decimal("100"),
+        )
+
+        consumed = SubscriptionService._get_estimated_quota_consumption(
+            subscription,
+            {
+                "estimated_total_cost": Decimal("0.20"),
+                "estimated_quota_cost": Decimal("0.10"),
+            },
+        )
+
+        self.assertEqual(consumed, Decimal("0.20"))
 
 
 if __name__ == "__main__":

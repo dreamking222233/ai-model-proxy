@@ -302,7 +302,7 @@ class SubscriptionService:
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=limit,
                 hard_limit=True,
-                use_official_cost=True,
+                use_official_cost=False,
             )
 
         if SubscriptionService._is_legacy_enjoy_default_quota_record(subscription):
@@ -315,7 +315,7 @@ class SubscriptionService:
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=limit,
                 hard_limit=False,
-                use_official_cost=True,
+                use_official_cost=False,
             )
 
         if SubscriptionService._is_legacy_enjoy_cost_snapshot_record(subscription):
@@ -323,7 +323,7 @@ class SubscriptionService:
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=getattr(subscription, "quota_value", None) or SubscriptionService.ENJOY_DAILY_COST_LIMIT,
                 hard_limit=False,
-                use_official_cost=True,
+                use_official_cost=False,
             )
 
         if SubscriptionService._is_unlimited_subscription(subscription):
@@ -348,7 +348,7 @@ class SubscriptionService:
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT,
                 hard_limit=True,
-                use_official_cost=True,
+                use_official_cost=False,
             )
 
         if SubscriptionService._is_legacy_enjoy_default_quota_record(plan):
@@ -356,7 +356,7 @@ class SubscriptionService:
                 quota_metric=SubscriptionService.QUOTA_METRIC_COST,
                 quota_limit=SubscriptionService.ENJOY_DAILY_COST_LIMIT,
                 hard_limit=False,
-                use_official_cost=True,
+                use_official_cost=False,
             )
 
         if SubscriptionService._get_record_plan_kind(plan) == SubscriptionService.PLAN_KIND_UNLIMITED:

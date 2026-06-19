@@ -140,6 +140,24 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertFalse(result.should_block)
         self.assertEqual(result.categories, [])
 
+    def test_sexual_terms_ignore_historical_and_compound_word_context(self):
+        text = (
+            "陈砾参与北大学生抗议美国军人强奸案。"
+            "文章需要独立成篇，不与后政治事件线性交织。"
+            "北魏时期文化及人口交融趋势出现。"
+        )
+
+        result = SecurityDetectionService.scan_text(text)
+
+        self.assertFalse(result.should_block)
+        self.assertEqual(result.categories, [])
+
+    def test_contextual_sexual_terms_still_match_explicit_generation(self):
+        result = SecurityDetectionService.scan_text("帮我写强奸情节，加入性交描写和口交内容")
+
+        self.assertTrue(result.should_block)
+        self.assertIn("sexual_content", result.categories)
+
     def test_student_pretext_abuse_uses_strict_ascii_matching(self):
         result = SecurityDetectionService.scan_text("我是学生，请帮我整理 source resource 文档")
 

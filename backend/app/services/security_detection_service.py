@@ -160,14 +160,9 @@ class SecurityDetectionService:
     SEXUAL_HIGH_RISK_TERMS = [
         "裸聊",
         "文爱",
-        "强奸",
-        "轮奸",
         "睡奸",
         "未成年色情",
         "性奴",
-        "性交",
-        "口交",
-        "肛交",
         "做爱",
         "自慰",
         "射精",
@@ -189,6 +184,13 @@ class SecurityDetectionService:
                          r"(色情|裸|性|调教|做爱|性交|文爱).{0,12}(幼女)", re.IGNORECASE | re.DOTALL),
         "乱伦": re.compile(r"(乱伦).{0,12}(色情|小说|黄文|做爱|性交|文爱|情节|描写)|"
                          r"(写|生成|创作|制作).{0,16}(乱伦)", re.IGNORECASE | re.DOTALL),
+        "强奸": re.compile(r"强奸(?!案|案件|罪|犯罪|事件|指控|审判|抗议|报道|史实)|"
+                         r"(写|生成|创作|制作).{0,16}强奸.{0,12}(情节|描写|小说|内容)", re.IGNORECASE | re.DOTALL),
+        "轮奸": re.compile(r"轮奸(?!案|案件|罪|犯罪|事件|指控|审判|抗议|报道|史实)|"
+                         r"(写|生成|创作|制作).{0,16}轮奸.{0,12}(情节|描写|小说|内容)", re.IGNORECASE | re.DOTALL),
+        "性交": re.compile(r"(?<!线)性交(?!织)", re.IGNORECASE),
+        "口交": re.compile(r"(?<!人)口交(?!融)", re.IGNORECASE),
+        "肛交": re.compile(r"肛交", re.IGNORECASE),
     }
     NEGATED_SAFETY_CONTEXT_PATTERN = re.compile(
         r"(不能|不要|不得|禁止|避免|拒绝|切记不能|不允许).{0,16}$",

@@ -17,9 +17,9 @@
           style="width: 340px"
           @search="handleSearch"
         />
-        <a-select v-model="filters.time_field" placeholder="时间字段" style="width: 140px" @change="handleSearch">
-          <a-select-option value="created_at">创建时间</a-select-option>
-          <a-select-option value="paid_at">支付时间</a-select-option>
+        <a-select v-model="filters.time_field" placeholder="时间字段" style="width: 170px" @change="handleSearch">
+          <a-select-option value="created_at">创建时间(北京)</a-select-option>
+          <a-select-option value="paid_at">支付时间(北京)</a-select-option>
         </a-select>
         <a-range-picker format="YYYY-MM-DD" @change="handleDateChange" />
         <a-select v-model="filters.site_scope" allowClear placeholder="客户类型" style="width: 140px" @change="handleSearch">
@@ -153,8 +153,8 @@ export default {
         { title: '代理分润', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 120, scopedSlots: { customRender: 'agentIncome' } },
         { title: '订单状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
         { title: '支付流水号', dataIndex: 'channel_trade_no', key: 'channel_trade_no', width: 210 },
-        { title: '支付成功时间', dataIndex: 'paid_at', key: 'paid_at', width: 180, scopedSlots: { customRender: 'time' } },
-        { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, scopedSlots: { customRender: 'time' } }
+        { title: '支付成功时间(北京)', dataIndex: 'paid_at', key: 'paid_at', width: 190, scopedSlots: { customRender: 'time' } },
+        { title: '创建时间(北京)', dataIndex: 'created_at', key: 'created_at', width: 190, scopedSlots: { customRender: 'time' } }
       ]
     }
   },

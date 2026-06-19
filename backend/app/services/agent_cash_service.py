@@ -37,6 +37,23 @@ class AgentCashService:
             raise ServiceException(400, f"{field_name} 格式应为 YYYY-MM-DD", "INVALID_DATE_RANGE") from exc
 
     @staticmethod
+    def _beijing_date_bounds_for_payment_field(
+        start_date: str | None,
+        end_date: str | None,
+        time_field: str | None,
+    ) -> tuple[datetime | None, datetime | None]:
+        start_dt = AgentCashService._parse_date(start_date, "开始日期")
+        end_dt = AgentCashService._parse_date(end_date, "结束日期")
+        upper_dt = end_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1) if end_dt else None
+
+        if str(time_field or "created_at").strip() != "paid_at":
+            return start_dt, upper_dt
+
+        # paid_at is persisted as naive UTC; admin date filters are Beijing calendar days.
+        offset = timedelta(hours=8)
+        return (start_dt - offset if start_dt else None, upper_dt - offset if upper_dt else None)
+
+    @staticmethod
     def _normalize_money(value, code: str = "INVALID_AGENT_CASH_AMOUNT", allow_negative: bool = False) -> Decimal:
         try:
             amount = Decimal(str(value)).quantize(AgentCashService.MONEY_SCALE, rounding=ROUND_HALF_UP)
@@ -319,13 +336,17 @@ class AgentCashService:
                 return [], 0
             query = query.filter(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
 
-        date_field = PaymentRechargeOrder.paid_at if str(time_field or "created_at").strip() == "paid_at" else PaymentRechargeOrder.created_at
-        start_dt = AgentCashService._parse_date(start_date, "开始日期")
-        end_dt = AgentCashService._parse_date(end_date, "结束日期")
+        normalized_time_field = str(time_field or "created_at").strip()
+        date_field = PaymentRechargeOrder.paid_at if normalized_time_field == "paid_at" else PaymentRechargeOrder.created_at
+        start_dt, end_exclusive_dt = AgentCashService._beijing_date_bounds_for_payment_field(
+            start_date,
+            end_date,
+            normalized_time_field,
+        )
         if start_dt:
             query = query.filter(date_field >= start_dt)
-        if end_dt:
-            query = query.filter(date_field < (end_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)))
+        if end_exclusive_dt:
+            query = query.filter(date_field < end_exclusive_dt)
 
         if keyword:
             keyword_text = str(keyword).strip()

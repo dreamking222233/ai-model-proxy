@@ -19,6 +19,12 @@ def _event_payload(sse: str) -> dict:
 
 
 class StreamTextBufferingTest(unittest.TestCase):
+    def test_security_marker_buffer_passthrough_short_text_immediately(self):
+        buffer = _SecurityRiskMarkerStreamBuffer()
+
+        self.assertEqual(buffer.feed("好的。"), "好的。")
+        self.assertEqual(buffer.flush(), "")
+
     def test_security_marker_buffer_flushes_all_visible_text(self):
         buffer = _SecurityRiskMarkerStreamBuffer()
         text = "你好！我在，可以帮你看代码、修 bug、做方案或跑命令。你想先处理什么？"

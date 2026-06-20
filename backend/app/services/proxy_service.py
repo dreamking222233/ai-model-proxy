@@ -121,10 +121,9 @@ class _SecurityRiskMarkerStreamBuffer:
                     self._inside_marker = True
                 continue
 
-            if len(self._buffer) > self._keep_chars:
-                emit_len = len(self._buffer) - self._keep_chars
-                output_parts.append(self._buffer[:emit_len])
-                self._buffer = self._buffer[emit_len:]
+            if not marker_prefix_lower.startswith(lower_buffer):
+                output_parts.append(self._buffer)
+                self._buffer = ""
 
         if flush and not self._inside_marker and self._buffer:
             output_parts.append(self._buffer)

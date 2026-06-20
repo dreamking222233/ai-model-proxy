@@ -6,9 +6,9 @@
 -- 2. Ensure gpt-image-2 has 1K/2K/4K media-credit rules.
 -- 3. Keep the compatible mapping enabled so 1K requests can prefer this channel.
 
-SET @gpt_image_model = 'gpt-image-2';
-SET @chatgpt_image_channel_name = 'ChatGPT Image Compatible';
-SET @chatgpt_image_base_url = 'http://43.128.147.93:3000';
+SET @gpt_image_model = CONVERT('gpt-image-2' USING utf8mb4) COLLATE utf8mb4_unicode_ci;
+SET @chatgpt_image_channel_name = CONVERT('ChatGPT Image Compatible' USING utf8mb4) COLLATE utf8mb4_unicode_ci;
+SET @chatgpt_image_base_url = CONVERT('http://43.128.147.93:3000' USING utf8mb4) COLLATE utf8mb4_unicode_ci;
 -- Set this variable before executing in production if the stored API key also needs to be refreshed.
 -- Example: SET @chatgpt_image_api_key = 'your-compatible-api-key';
 SET @chatgpt_image_api_key = NULL;

@@ -30,6 +30,10 @@
             <a-icon type="message" />
             <span>AI 对话</span>
           </a-menu-item>
+          <a-menu-item key="/user/media-workbench">
+            <a-icon type="picture" />
+            <span>媒体工作台</span>
+          </a-menu-item>
           <a-menu-item key="/user/m-chat">
             <a-icon type="mobile" />
             <span>手机端对话</span>
@@ -208,10 +212,20 @@ export default {
     }
   },
   mounted() {
+    this.syncMobileCollapsed()
+    window.addEventListener('resize', this.syncMobileCollapsed)
     this.fetchSiteConfig()
     this.fetchAnnouncements()
   },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.syncMobileCollapsed)
+  },
   methods: {
+    syncMobileCollapsed() {
+      if (window.innerWidth <= 768) {
+        this.collapsed = true
+      }
+    },
     async fetchSiteConfig() {
       try {
         const res = await getSiteConfig()
@@ -662,6 +676,67 @@ export default {
     padding: 0;
     overflow: hidden;
     background: transparent;
+  }
+}
+
+@media (max-width: 768px) {
+  .user-sider {
+    width: 64px !important;
+    min-width: 64px !important;
+    max-width: 64px !important;
+    flex: 0 0 64px !important;
+  }
+
+  .main-layout {
+    margin-left: 64px !important;
+    min-width: 0;
+  }
+
+  .logo {
+    height: 56px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  /deep/ .ant-menu .ant-menu-item {
+    margin: 2px 6px !important;
+    padding-left: 18px !important;
+  }
+
+  .sider-footer {
+    display: none;
+  }
+
+  .user-header {
+    height: 56px;
+    line-height: 56px;
+    padding: 0 10px;
+
+    .header-left .trigger {
+      padding: 8px;
+    }
+
+    .header-right {
+      gap: 6px;
+
+      .header-icon-btn {
+        width: 34px;
+        height: 34px;
+      }
+
+      .user-dropdown {
+        height: 56px;
+        padding: 0 6px;
+
+        span:not(.ant-avatar) {
+          display: none;
+        }
+      }
+    }
+  }
+
+  .user-content {
+    padding: 0;
   }
 }
 

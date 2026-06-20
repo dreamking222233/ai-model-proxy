@@ -417,8 +417,9 @@ import ChatMessage from '@/components/chat/ChatMessage.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import { getChatModels, getChannelsModels } from '@/api/chat'
-import { listApiKeys, revealApiKey, createApiKey, getSiteConfig, getBalance } from '@/api/user'
+import { getSiteConfig, getBalance } from '@/api/user'
 import { getUser, getChatApiKeyStorageKey } from '@/utils/auth'
+import { prepareUserApiKey } from '@/utils/userApiKey'
 import { streamChat } from '@/utils/sse'
 import {
   getSessions,
@@ -1413,54 +1414,16 @@ console.log(response.choices[0].message.content);`
 
     loadApiKey: function () {
       var self = this
-      // Check sessionStorage first
-      var cached = sessionStorage.getItem(this.apiKeyStorageKey)
-      if (cached) {
-        self.apiKey = cached
+      prepareUserApiKey({
+        user: getUser(),
+        isAdmin: this.isAdmin,
+        storageKey: this.apiKeyStorageKey,
+        keyName: this.isAdmin ? 'Admin Chat Auto' : 'Chat Auto'
+      }).then(function (fullKey) {
+        self.apiKey = fullKey || ''
         self.hydrateSessionVideos(self.currentSession)
-        return
-      }
-
-      // Fetch user's API keys and try to get an active one
-      listApiKeys().then(function (res) {
-        var keys = res.data || []
-        var activeKey = keys.find(function (k) { return k.status === 'active' })
-        if (activeKey) {
-          // Try to reveal the full key
-          return revealApiKey(activeKey.id).then(function (revealRes) {
-            var fullKey = revealRes.data && revealRes.data.key
-            if (fullKey) {
-              self.apiKey = fullKey
-              sessionStorage.setItem(self.apiKeyStorageKey, fullKey)
-              self.hydrateSessionVideos(self.currentSession)
-            } else {
-              self._createChatApiKey()
-            }
-          }).catch(function () {
-            // reveal failed (key_full not stored), create a new key
-            self._createChatApiKey()
-          })
-        } else {
-          // No active key, auto-create one
-          self._createChatApiKey()
-        }
       }).catch(function (err) {
         console.error('Failed to load API keys:', err)
-      })
-    },
-
-    _createChatApiKey: function () {
-      var self = this
-      var keyName = self.isAdmin ? 'Admin Chat Auto' : 'Chat Auto'
-      createApiKey({ name: keyName }).then(function (res) {
-        var fullKey = res.data && res.data.key
-        if (fullKey) {
-          self.apiKey = fullKey
-          sessionStorage.setItem(self.apiKeyStorageKey, fullKey)
-          self.hydrateSessionVideos(self.currentSession)
-        }
-      }).catch(function (err) {
-        console.error('Failed to create API key:', err)
         if (!self.isAdmin) {
           self.$notification.warning({
             message: '无法获取 API Key',
@@ -1468,6 +1431,10 @@ console.log(response.choices[0].message.content);`
           })
         }
       })
+    },
+
+    _createChatApiKey: function () {
+      this.loadApiKey()
     },
     loadBalance: function () {
       var self = this

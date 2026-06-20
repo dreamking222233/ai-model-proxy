@@ -20,7 +20,7 @@ WHERE `model_name` = 'gpt-image-2';
 -- 可选：将下列变量改成真实值后执行，可自动创建 ChatGPT Image 渠道与映射。
 SET @chatgpt_image_api_key = NULL;
 SET @chatgpt_image_channel_name = 'ChatGPT Image Compatible';
-SET @chatgpt_image_base_url = 'http://43.156.153.12:3000';
+SET @chatgpt_image_base_url = 'http://43.128.147.93:3000';
 
 INSERT INTO `channel` (
   `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,

@@ -1106,7 +1106,7 @@ SET @vertex_base_url = NULL;
 -- 将 @chatgpt_image_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建渠道与映射。
 SET @chatgpt_image_api_key = NULL;
 SET @chatgpt_image_channel_name = 'ChatGPT Image Compatible';
-SET @chatgpt_image_base_url = 'http://43.156.153.12:3000';
+SET @chatgpt_image_base_url = 'http://43.128.147.93:3000';
 
 INSERT INTO `channel` (
     `name`, `base_url`, `api_key`, `protocol_type`, `provider_variant`, `auth_header_type`,

@@ -12513,7 +12513,7 @@ class ProxyService:
             ProxyService._apply_runtime_retry_config(db, channel)
             try:
                 protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
-                if protocol_type != "openai":
+                if protocol_type not in {"openai", "anthropic"}:
                     continue
                 upstream_model_name = actual_model_name or requested_model
                 return await ProxyService._non_stream_openai_video_request(
@@ -13207,10 +13207,11 @@ class ProxyService:
                 request_headers=request_headers,
             )
         except ServiceException as exc:
-            if exc.error_code in {"OPENAI_VIDEO_RETRIEVE_FAILED", "VIDEO_GENERATION_FAILED"}:
+            if exc.error_code in {"OPENAI_VIDEO_RETRIEVE_FAILED", "VIDEO_GENERATION_FAILED", "VIDEO_WAIT_TIMEOUT"}:
                 route = ProxyService._resolve_stored_video_route(db, user, video_id)
                 channel = route[0] if route else None
                 actual_model = route[2] if route else None
+                usage = response_body.get("usage") if isinstance(response_body.get("usage"), dict) else {}
                 ProxyService._log_failed_request(
                     db,
                     user,
@@ -13221,8 +13222,12 @@ class ProxyService:
                     False,
                     ProxyService._request_error_log_detail(exc),
                     channel=channel,
-                    request_type="video_wait",
+                    request_type="video_generation",
+                    billing_type=str(usage.get("billing_type") or "image_credit"),
                     actual_model=actual_model or None,
+                    image_credits_charged=0,
+                    image_count=0,
+                    image_size=usage.get("size"),
             )
             raise
         status = ProxyService._video_status_value(final_status)
@@ -13277,7 +13282,7 @@ class ProxyService:
                 False,
                 ProxyService._request_error_log_detail(exc),
                 channel=channel,
-                request_type="video_content",
+                request_type="video_generation",
                 billing_type=billing_type,
                 actual_model=actual_model or requested_model,
                 image_credits_charged=0,
@@ -15181,6 +15186,42 @@ class ProxyService:
         return filtered
 
     @staticmethod
+    def _prefer_openai_compatible_for_1k_image(
+        channels: list[tuple[Channel, str]],
+        image_size: Optional[str],
+    ) -> list[tuple[Channel, str]]:
+        if str(image_size or "").upper() != "1K":
+            return channels
+
+        def target_rank(item: tuple[Channel, str]) -> Optional[int]:
+            channel, _actual_model_name = item
+            protocol_type = str(getattr(channel, "protocol_type", "") or "").lower()
+            provider_variant = ChannelService._normalize_provider_variant(
+                getattr(channel, "protocol_type", None),
+                getattr(channel, "provider_variant", None),
+            )
+            if protocol_type != "openai":
+                return None
+            if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
+                return 0
+            if provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE:
+                return 1
+            return None
+
+        target_items = [item for item in channels if target_rank(item) is not None]
+        if len(target_items) < 2:
+            return channels
+        target_items = sorted(target_items, key=lambda item: target_rank(item))
+        target_iter = iter(target_items)
+        result: list[tuple[Channel, str]] = []
+        for item in channels:
+            if target_rank(item) is None:
+                result.append(item)
+            else:
+                result.append(next(target_iter))
+        return result
+
+    @staticmethod
     async def handle_image_request(
         db: Session,
         user: SysUser,
@@ -15252,6 +15293,7 @@ class ProxyService:
             unified_model,
             image_size,
         )
+        channels = ProxyService._prefer_openai_compatible_for_1k_image(channels, image_size)
         if not channels:
             if image_size:
                 raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")
@@ -15449,6 +15491,7 @@ class ProxyService:
             unified_model,
             image_size,
         )
+        channels = ProxyService._prefer_openai_compatible_for_1k_image(channels, image_size)
         if not channels:
             if image_size:
                 raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")

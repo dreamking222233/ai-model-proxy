@@ -188,6 +188,12 @@ const routes = [
         meta: { title: 'AI 对话', fullscreen: true }
       },
       {
+        path: 'media-workbench',
+        name: 'MediaWorkbench',
+        component: () => import('@/views/user/MediaWorkbench.vue'),
+        meta: { title: '媒体工作台' }
+      },
+      {
         path: 'dashboard',
         name: 'UserDashboard',
         component: () => import('@/views/user/Dashboard.vue'),

@@ -16,6 +16,8 @@ async def _parse_image_edit_form(request: Request) -> dict:
     image_files = [item for item in form.getlist("image") if hasattr(item, "read")]
     if not image_files:
         raise ServiceException(400, "缺少必填字段：image", "INVALID_IMAGE_FILE")
+    if len(image_files) > 7:
+        raise ServiceException(400, "参考图最多支持 7 张", "TOO_MANY_IMAGE_REFERENCES")
 
     parsed_images = []
     for image_file in image_files:

@@ -9840,6 +9840,44 @@ class ProxyService:
                                             )
                                             input_tokens = int(usage.get("input_tokens", 0) or 0)
 
+                                        elif chunk_type == "content_block_start":
+                                            content_block = chunk.get("content_block") or {}
+                                            block_index = int(chunk.get("index", 0) or 0)
+                                            start_text = content_block.get("text", "")
+                                            start_thinking = content_block.get("thinking", "")
+                                            if start_text:
+                                                content_block["text"] = ""
+                                            if start_thinking:
+                                                content_block["thinking"] = ""
+                                            yield build_anthropic_data_event(chunk)
+                                            if start_text:
+                                                collector.add_chunk(str(start_text))
+                                                if collected_usage.get("_first_stream_output_time") is None:
+                                                    collected_usage["_first_stream_output_time"] = time.time()
+                                                visible_text = get_text_buffer(block_index).feed(
+                                                    security_text_buffer.feed(start_text)
+                                                )
+                                                if visible_text:
+                                                    yield build_anthropic_data_event({
+                                                        "type": "content_block_delta",
+                                                        "index": block_index,
+                                                        "delta": {
+                                                            "type": "text_delta",
+                                                            "text": visible_text,
+                                                        },
+                                                    })
+                                            if start_thinking:
+                                                collector.add_chunk(str(start_thinking))
+                                                yield build_anthropic_data_event({
+                                                    "type": "content_block_delta",
+                                                    "index": block_index,
+                                                    "delta": {
+                                                        "type": "thinking_delta",
+                                                        "thinking": str(start_thinking),
+                                                    },
+                                                })
+                                            continue
+
                                         elif chunk_type == "message_delta":
                                             usage = chunk.get("usage", {})
                                             ProxyService._merge_anthropic_usage_snapshot(

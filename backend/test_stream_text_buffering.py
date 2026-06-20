@@ -61,6 +61,25 @@ class StreamTextBufferingTest(unittest.TestCase):
         self.assertEqual(payload["type"], "content_block_delta")
         self.assertEqual(payload["delta"]["text"], "尾部文本")
 
+    def test_content_block_start_embedded_text_can_be_reemitted_as_delta(self):
+        start_chunk = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
+        delta_chunk = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "好的。"},
+        }
+
+        start_sse = ProxyService._build_anthropic_sse_event("content_block_start", start_chunk)
+        delta_sse = ProxyService._build_anthropic_sse_event("content_block_delta", delta_chunk)
+
+        self.assertEqual(_event_name(start_sse), "content_block_start")
+        self.assertEqual(_event_name(delta_sse), "content_block_delta")
+        self.assertEqual(_event_payload(delta_sse)["delta"]["text"], "好的。")
+
 
 if __name__ == "__main__":
     unittest.main()

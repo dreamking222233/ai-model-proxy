@@ -69,6 +69,31 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
                     "调用失败，渠道异常，请稍后重试",
                 )
 
+    def test_upstream_pool_errors_do_not_trip_channel_circuit_breaker(self):
+        samples = [
+            'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available (providers=codex, model=gpt-5.4)"}}',
+            'Upstream returned HTTP 429: {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}',
+            '上游服务返回异常（HTTP 429）：{"error":{"code":"model_cooldown","message":"All credentials are cooling down via provider codex"}}',
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    ProxyService._classify_channel_failure(Exception(sample)),
+                    "upstream_pool",
+                )
+
+    def test_regular_gateway_errors_still_count_as_transient_channel_failures(self):
+        samples = [
+            'Upstream returned HTTP 502: {"error":{"message":"Bad gateway"}}',
+            "readerror while streaming upstream response",
+        ]
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    ProxyService._classify_channel_failure(Exception(sample)),
+                    "transient",
+                )
+
     def test_auth_unavailable_upstream_503_is_generic_for_user_but_kept_for_logs(self):
         raw_detail = (
             'Upstream returned HTTP 503: {"error":{"message":"auth_unavailable: no auth available '

@@ -179,6 +179,20 @@ _EMPTY_UPSTREAM_RESPONSE_VISIBLE_MESSAGE = "调用失败，渠道返回空响应
 _TRANSIENT_CHANNEL_FAILURE_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 _TRANSIENT_CHANNEL_FAILURE_RECOVERY_SECONDS_DEFAULT = 120
 _TRANSIENT_CHANNEL_FAILURE_THRESHOLD_DEFAULT = 7
+_UPSTREAM_POOL_FAILURE_MARKERS = (
+    "auth_unavailable",
+    "no auth available",
+    "usage_limit_reached",
+    "the usage limit has been reached",
+    "model_cooldown",
+    "all credentials",
+    "cooling down",
+    "account pool",
+    "no available credential",
+    "no available credentials",
+    "账号池",
+    "额度超",
+)
 _ACCOUNTING_RETRY_ATTEMPTS = 3
 _ACCOUNTING_RETRY_BASE_DELAY_SECONDS = 0.05
 
@@ -10713,6 +10727,9 @@ class ProxyService:
     def _classify_channel_failure(exc: Optional[Exception]) -> str:
         if exc is None:
             return "generic"
+        detail = str(exc).strip().lower()
+        if any(marker in detail for marker in _UPSTREAM_POOL_FAILURE_MARKERS):
+            return "upstream_pool"
         if isinstance(
             exc,
             (
@@ -10727,7 +10744,6 @@ class ProxyService:
         if isinstance(exc, ServiceException) and exc.status_code in _TRANSIENT_CHANNEL_FAILURE_STATUSES:
             return "transient"
 
-        detail = str(exc).strip().lower()
         if any(
             marker in detail
             for marker in (
@@ -10765,6 +10781,8 @@ class ProxyService:
         failure_kind = ProxyService._classify_channel_failure(exc)
         base_threshold = int(get_system_config(db, "circuit_breaker_threshold", 5) or 5)
         base_recovery = int(get_system_config(db, "circuit_breaker_recovery", 600) or 600)
+        if failure_kind == "upstream_pool":
+            return failure_kind, 0, 0, 0
         if failure_kind != "transient":
             return failure_kind, base_threshold, base_recovery, 10
 
@@ -10837,6 +10855,16 @@ class ProxyService:
                     write_db,
                     exc,
                 )
+                if failure_kind == "upstream_pool":
+                    persisted_channel.last_failure_at = datetime.utcnow()
+                    logger.info(
+                        "Ignored upstream pool failure for channel health channel=%s channel_id=%s error=%s",
+                        getattr(persisted_channel, "name", None),
+                        channel_id,
+                        str(exc)[:300],
+                    )
+                    return
+
                 persisted_channel.failure_count += 1
                 persisted_channel.last_failure_at = datetime.utcnow()
 

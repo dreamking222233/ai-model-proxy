@@ -62,47 +62,6 @@ from app.middleware.stream_cache_middleware import StreamCacheMiddleware
 logger = logging.getLogger(__name__)
 
 
-class _VisibleModelIdentityStreamBuffer:
-    """Deprecated compatibility buffer; user-visible text is no longer rewritten."""
-
-    def __init__(self, sanitize_text: Callable[[str], str], keep_chars: int = 64):
-        self._sanitize_text = sanitize_text
-        self._keep_chars = max(32, int(keep_chars or 64))
-        self._buffer = ""
-
-    @staticmethod
-    def _has_identity_fragment(text: str) -> bool:
-        return bool(
-            re.search(
-                r"(cod|code|codex|open|openai|chat|chatgpt|gpt|based|模型|身份|当前|我是|我叫|底层|实际|上游|路由)",
-                text,
-                flags=re.IGNORECASE,
-            )
-        )
-
-    def feed(self, text: Any) -> str:
-        chunk = str(text or "")
-        if not chunk:
-            return ""
-        self._buffer += chunk
-        if not self._has_identity_fragment(self._buffer):
-            emit_text = self._buffer
-            self._buffer = ""
-            return self._sanitize_text(emit_text)
-        if len(self._buffer) <= self._keep_chars:
-            return ""
-        emit_text = self._buffer[:-self._keep_chars]
-        self._buffer = self._buffer[-self._keep_chars:]
-        return self._sanitize_text(emit_text)
-
-    def flush(self) -> str:
-        if not self._buffer:
-            return ""
-        emit_text = self._buffer
-        self._buffer = ""
-        return self._sanitize_text(emit_text)
-
-
 class _PassthroughTextBuffer:
     """Compatibility shim for stream paths that should not rewrite text."""
 
@@ -8528,6 +8487,23 @@ class ProxyService:
             )
             return ProxyService._build_anthropic_sse_event(event_name, payload)
 
+        def flush_security_text_delta() -> list[str]:
+            flushed_text = security_text_buffer.flush()
+            if not flushed_text:
+                return []
+            return [build_client_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": text_block_index,
+                    "delta": {
+                        "type": "text_delta",
+                        "text": flushed_text,
+                    },
+                },
+                detail="text_delta",
+            )]
+
         async def upstream_call(collector, collected_usage):
             input_tokens = 0
             output_tokens = 0
@@ -8986,6 +8962,8 @@ class ProxyService:
                         if str(item.get("type", "") or "") == "function_call":
                             for sse_line in ensure_message_start():
                                 yield sse_line
+                            for sse_line in flush_security_text_delta():
+                                yield sse_line
                             for sse_line in close_text_block():
                                 yield sse_line
                             _, events = ensure_tool_use_block_started(item)
@@ -9002,6 +8980,8 @@ class ProxyService:
                         }
                         for sse_line in ensure_message_start():
                             yield sse_line
+                        for sse_line in flush_security_text_delta():
+                            yield sse_line
                         for sse_line in close_text_block():
                             yield sse_line
                         for sse_line in emit_tool_argument_delta(call_item, payload.get("delta")):
@@ -9016,6 +8996,8 @@ class ProxyService:
                             "name": payload.get("name"),
                         }
                         for sse_line in ensure_message_start():
+                            yield sse_line
+                        for sse_line in flush_security_text_delta():
                             yield sse_line
                         for sse_line in close_text_block():
                             yield sse_line
@@ -9033,6 +9015,8 @@ class ProxyService:
                         if item_type == "reasoning":
                             for sse_line in ensure_message_start():
                                 yield sse_line
+                            for sse_line in flush_security_text_delta():
+                                yield sse_line
                             for sse_line in close_text_block():
                                 yield sse_line
                             for sse_line in emit_reasoning_block(item):
@@ -9040,6 +9024,8 @@ class ProxyService:
                             continue
                         if item_type == "function_call":
                             for sse_line in ensure_message_start():
+                                yield sse_line
+                            for sse_line in flush_security_text_delta():
                                 yield sse_line
                             for sse_line in close_text_block():
                                 yield sse_line
@@ -9079,6 +9065,8 @@ class ProxyService:
                         )
                         collected_usage["_upstream_cache_usage"] = usage_summary
 
+                        for sse_line in flush_security_text_delta():
+                            yield sse_line
                         for sse_line in close_text_block():
                             yield sse_line
 
@@ -9132,25 +9120,6 @@ class ProxyService:
                                         yield sse_line
 
                             for sse_line in emit_missing_final_tool_blocks(final_output):
-                                yield sse_line
-
-                        flushed_text = security_text_buffer.flush()
-                        if flushed_text:
-                            for sse_line in open_text_block():
-                                yield sse_line
-                            yield build_client_event(
-                                "content_block_delta",
-                                {
-                                    "type": "content_block_delta",
-                                    "index": text_block_index,
-                                    "delta": {
-                                        "type": "text_delta",
-                                        "text": flushed_text,
-                                    },
-                                },
-                                detail="text_delta",
-                            )
-                            for sse_line in close_text_block():
                                 yield sse_line
 
                         final_stop_reason = resolve_final_stop_reason(final_output)
@@ -9690,6 +9659,13 @@ class ProxyService:
                                 })
                             return flushed_chunks
 
+                        def build_anthropic_data_event(chunk: dict[str, Any]) -> str:
+                            event_name = str(chunk.get("type") or "message")
+                            return (
+                                f"event: {event_name}\n"
+                                f"data: {json.dumps(ProxyService._rewrite_anthropic_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
+                            )
+
                         @asynccontextmanager
                         async def open_anthropic_stream_with_retries():
                             max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, None)
@@ -9825,7 +9801,6 @@ class ProxyService:
 
                                 if line.startswith("event: "):
                                     current_event = line[7:].strip()
-                                    yield f"{line}\n"
                                     continue
 
                                 if line.startswith("data: "):
@@ -9899,6 +9874,14 @@ class ProxyService:
                                             if thinking:
                                                 collector.add_chunk(thinking)
 
+                                        elif chunk_type == "content_block_stop":
+                                            block_index = int(chunk.get("index", 0) or 0)
+                                            security_flushed_text = security_text_buffer.flush()
+                                            if security_flushed_text:
+                                                get_text_buffer(block_index).feed(security_flushed_text)
+                                            for flushed_chunk in flush_text_buffers():
+                                                yield build_anthropic_data_event(flushed_chunk)
+
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")
                                             stream_debug_extra["completed"] = True
@@ -9906,13 +9889,13 @@ class ProxyService:
                                             if security_flushed_text:
                                                 get_text_buffer(0).feed(security_flushed_text)
                                             for flushed_chunk in flush_text_buffers():
-                                                yield f"data: {json.dumps(ProxyService._rewrite_anthropic_payload_model(flushed_chunk, requested_model), ensure_ascii=False)}\n\n"
+                                                yield build_anthropic_data_event(flushed_chunk)
 
                                     except (json.JSONDecodeError, TypeError):
                                         yield f"data: {data_str}\n\n"
                                         continue
 
-                                    yield f"data: {json.dumps(ProxyService._rewrite_anthropic_payload_model(chunk, requested_model), ensure_ascii=False)}\n\n"
+                                    yield build_anthropic_data_event(chunk)
 
                                     if current_event == "message_stop":
                                         break

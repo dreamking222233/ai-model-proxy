@@ -9634,6 +9634,7 @@ class ProxyService:
                         current_headers = dict(headers)
                         current_headers.update(variant.get("header_overrides") or {})
                         text_buffers: dict[int, _PassthroughTextBuffer] = {}
+                        pending_message_start_text: dict[int, str] = {}
 
                         def get_text_buffer(block_index: int) -> _PassthroughTextBuffer:
                             buffer = text_buffers.get(block_index)
@@ -9839,11 +9840,29 @@ class ProxyService:
                                                 usage,
                                             )
                                             input_tokens = int(usage.get("input_tokens", 0) or 0)
+                                            msg_content = msg.get("content")
+                                            if isinstance(msg_content, list):
+                                                for content_index, content_part in enumerate(msg_content):
+                                                    if not isinstance(content_part, dict):
+                                                        continue
+                                                    part_type = str(content_part.get("type", "") or "")
+                                                    if part_type == "text" and content_part.get("text"):
+                                                        pending_message_start_text[content_index] = str(
+                                                            content_part.get("text") or ""
+                                                        )
+                                                    elif part_type == "thinking" and content_part.get("thinking"):
+                                                        pending_message_start_text[content_index] = str(
+                                                            content_part.get("thinking") or ""
+                                                        )
+                                                msg["content"] = []
 
                                         elif chunk_type == "content_block_start":
                                             content_block = chunk.get("content_block") or {}
                                             block_index = int(chunk.get("index", 0) or 0)
-                                            start_text = content_block.get("text", "")
+                                            start_text = (
+                                                pending_message_start_text.pop(block_index, "")
+                                                + str(content_block.get("text", "") or "")
+                                            )
                                             start_thinking = content_block.get("thinking", "")
                                             if start_text:
                                                 content_block["text"] = ""

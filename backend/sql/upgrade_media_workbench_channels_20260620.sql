@@ -18,11 +18,18 @@ INSERT INTO `unified_model` (
   `input_price_per_million`, `output_price_per_million`, `billing_type`,
   `image_credit_multiplier`, `enabled`, `description`
 )
-SELECT * FROM (
-  SELECT @gpt_image_model, 'GPT Image 2', 'image', 'openai', NULL,
-         0, 0, 'image_credit', 0.5, 1,
-         'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）'
-) AS tmp
+SELECT
+  @gpt_image_model,
+  'GPT Image 2',
+  'image',
+  'openai',
+  NULL,
+  0,
+  0,
+  'image_credit',
+  0.5,
+  1,
+  'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）'
 WHERE NOT EXISTS (
   SELECT 1 FROM `unified_model` WHERE `model_name` = @gpt_image_model
 );

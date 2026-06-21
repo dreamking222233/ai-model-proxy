@@ -5,7 +5,7 @@
         <div class="hero-copy">
           <a-tag color="green" class="phase-tag">{{ phaseText }}</a-tag>
           <h1>端午节抽奖</h1>
-          <p>报名时间：北京时间 2026-06-19 00:00:00 至 2026-06-20 23:59:59</p>
+          <p>报名时间：北京时间 2026-06-19 00:00:00 至 2026-06-21 20:00:00</p>
           <p>开奖时间：北京时间 2026-06-23</p>
         </div>
         <div class="status-panel">

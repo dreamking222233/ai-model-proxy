@@ -23,7 +23,7 @@ class DragonBoatLotteryService:
     ACTIVITY_NAME = "端午节抽奖"
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     REGISTER_START = datetime(2026, 6, 19, 0, 0, 0)
-    REGISTER_END = datetime(2026, 6, 20, 23, 59, 59)
+    REGISTER_END = datetime(2026, 6, 21, 20, 0, 0)
     DRAW_START = datetime(2026, 6, 23, 0, 0, 0)
     QUALIFICATION_AMOUNT = Decimal("100")
     PRIZE_BY_RANK = {

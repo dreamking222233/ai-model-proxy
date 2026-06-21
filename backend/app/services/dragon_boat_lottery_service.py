@@ -24,7 +24,7 @@ class DragonBoatLotteryService:
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     REGISTER_START = datetime(2026, 6, 19, 0, 0, 0)
     REGISTER_END = datetime(2026, 6, 21, 20, 0, 0)
-    DRAW_START = datetime(2026, 6, 23, 0, 0, 0)
+    DRAW_START = datetime(2026, 6, 21, 23, 0, 0)
     QUALIFICATION_AMOUNT = Decimal("100")
     PRIZE_BY_RANK = {
         1: Decimal("300"),
@@ -357,7 +357,7 @@ class DragonBoatLotteryService:
     def draw(db: Session, operator: SysUser) -> dict:
         now = DragonBoatLotteryService.get_current_time()
         if now < DragonBoatLotteryService.DRAW_START:
-            raise ServiceException(400, "尚未到抽奖时间，2026-06-23 00:00:00 后可抽奖", "LOTTERY_DRAW_NOT_STARTED")
+            raise ServiceException(400, "尚未到抽奖时间，2026-06-21 23:00:00 后可抽奖", "LOTTERY_DRAW_NOT_STARTED")
 
         entries = (
             db.query(DragonBoatLotteryEntry)

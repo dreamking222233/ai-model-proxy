@@ -34,7 +34,7 @@
       </div>
       <div class="summary-item">
         <span>开奖时间</span>
-        <strong>北京时间 2026-06-23</strong>
+        <strong>北京时间 2026-06-21 23:00:00</strong>
       </div>
     </div>
 

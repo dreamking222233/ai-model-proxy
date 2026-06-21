@@ -80,6 +80,33 @@ class StreamTextBufferingTest(unittest.TestCase):
         self.assertEqual(_event_name(delta_sse), "content_block_delta")
         self.assertEqual(_event_payload(delta_sse)["delta"]["text"], "好的。")
 
+    def test_fallback_close_events_finish_open_anthropic_block(self):
+        events = ProxyService._build_anthropic_stream_close_events(
+            output_tokens=12,
+            stop_reason="end_turn",
+            block_index=0,
+        )
+
+        self.assertEqual([_event_name(event) for event in events], [
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ])
+        delta_payload = _event_payload(events[1])
+        self.assertEqual(delta_payload["delta"]["stop_reason"], "end_turn")
+        self.assertEqual(delta_payload["usage"]["output_tokens"], 12)
+
+    def test_fallback_close_events_do_not_emit_block_stop_when_block_closed(self):
+        events = ProxyService._build_anthropic_stream_close_events(
+            output_tokens=3,
+            block_index=None,
+        )
+
+        self.assertEqual([_event_name(event) for event in events], [
+            "message_delta",
+            "message_stop",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

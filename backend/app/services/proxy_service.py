@@ -4278,6 +4278,42 @@ class ProxyService:
         )
 
     @staticmethod
+    def _build_anthropic_stream_close_events(
+        *,
+        output_tokens: int = 0,
+        stop_reason: str = "end_turn",
+        block_index: Optional[int] = None,
+    ) -> list[str]:
+        """Build Anthropic terminal events used when an upstream stream ends abruptly."""
+        events: list[str] = []
+        if block_index is not None:
+            events.append(ProxyService._build_anthropic_sse_event(
+                "content_block_stop",
+                {
+                    "type": "content_block_stop",
+                    "index": int(block_index),
+                },
+            ))
+        events.append(ProxyService._build_anthropic_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": stop_reason,
+                    "stop_sequence": None,
+                },
+                "usage": {
+                    "output_tokens": int(output_tokens or 0),
+                },
+            },
+        ))
+        events.append(ProxyService._build_anthropic_sse_event(
+            "message_stop",
+            {"type": "message_stop"},
+        ))
+        return events
+
+    @staticmethod
     def _build_openai_stream_chunk(
         *,
         chunk_id: str,
@@ -9649,6 +9685,10 @@ class ProxyService:
                         current_headers.update(variant.get("header_overrides") or {})
                         text_buffers: dict[int, _PassthroughTextBuffer] = {}
                         pending_message_start_text: dict[int, str] = {}
+                        message_started = False
+                        message_completed = False
+                        open_content_blocks: set[int] = set()
+                        last_text_block_index: Optional[int] = None
 
                         def get_text_buffer(block_index: int) -> _PassthroughTextBuffer:
                             buffer = text_buffers.get(block_index)
@@ -9847,6 +9887,7 @@ class ProxyService:
                                         )
 
                                         if chunk_type == "message_start":
+                                            message_started = True
                                             msg = chunk.get("message", {})
                                             usage = msg.get("usage", {})
                                             ProxyService._merge_anthropic_usage_snapshot(
@@ -9873,6 +9914,7 @@ class ProxyService:
                                         elif chunk_type == "content_block_start":
                                             content_block = chunk.get("content_block") or {}
                                             block_index = int(chunk.get("index", 0) or 0)
+                                            open_content_blocks.add(block_index)
                                             start_text = (
                                                 pending_message_start_text.pop(block_index, "")
                                                 + str(content_block.get("text", "") or "")
@@ -9938,6 +9980,7 @@ class ProxyService:
                                                 if collected_usage.get("_first_stream_output_time") is None:
                                                     collected_usage["_first_stream_output_time"] = time.time()
                                                 block_index = int(chunk.get("index", 0) or 0)
+                                                last_text_block_index = block_index
                                                 delta["text"] = get_text_buffer(block_index).feed(
                                                     security_text_buffer.feed(text)
                                                 )
@@ -9946,6 +9989,7 @@ class ProxyService:
 
                                         elif chunk_type == "content_block_stop":
                                             block_index = int(chunk.get("index", 0) or 0)
+                                            open_content_blocks.discard(block_index)
                                             security_flushed_text = security_text_buffer.flush()
                                             if security_flushed_text:
                                                 get_text_buffer(block_index).feed(security_flushed_text)
@@ -9955,11 +9999,13 @@ class ProxyService:
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")
                                             stream_debug_extra["completed"] = True
+                                            message_completed = True
                                             security_flushed_text = security_text_buffer.flush()
                                             if security_flushed_text:
                                                 get_text_buffer(0).feed(security_flushed_text)
                                             for flushed_chunk in flush_text_buffers():
                                                 yield build_anthropic_data_event(flushed_chunk)
+                                            open_content_blocks.clear()
 
                                     except (json.JSONDecodeError, TypeError):
                                         yield f"data: {data_str}\n\n"
@@ -9971,6 +10017,37 @@ class ProxyService:
                                         break
                                 else:
                                     yield f"{line}\n"
+
+                            if message_started and not message_completed:
+                                fallback_block_index = max(open_content_blocks) if open_content_blocks else None
+                                security_flushed_text = security_text_buffer.flush()
+                                if security_flushed_text:
+                                    if fallback_block_index is None:
+                                        fallback_block_index = (
+                                            last_text_block_index
+                                            if last_text_block_index is not None
+                                            else 0
+                                        )
+                                    get_text_buffer(fallback_block_index).feed(security_flushed_text)
+                                for flushed_chunk in flush_text_buffers():
+                                    yield build_anthropic_data_event(flushed_chunk)
+                                for sse_line in ProxyService._build_anthropic_stream_close_events(
+                                    output_tokens=output_tokens,
+                                    stop_reason=stream_debug_extra.get("stop_reason") or "end_turn",
+                                    block_index=fallback_block_index,
+                                ):
+                                    yield sse_line
+                                collector.add_chunk("", stream_debug_extra.get("stop_reason") or "end_turn")
+                                stream_debug_extra["completed"] = True
+                                stream_debug_extra["completed_by"] = "fallback_stream_close"
+                                ProxyService._record_stream_debug_event(
+                                    stream_event_sequence,
+                                    stream_event_counts,
+                                    "message_stop",
+                                    "fallback",
+                                )
+                            elif not message_started:
+                                raise Exception("stream closed before message_start")
 
                             usage_summary = AnthropicPromptCacheService.extract_usage_summary(
                                 usage_state,

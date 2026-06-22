@@ -28,7 +28,7 @@
 
     <a-spin :spinning="loading" tip="加载中...">
       <a-row :gutter="16" class="stat-row">
-        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="24" :sm="12" :xl="8">
+        <a-col v-for="(card, index) in statCards" :key="card.title" :xs="12" :sm="12" :xl="8">
           <div
             class="stat-card-wrapper"
             :style="{ animationDelay: `${index * 0.08}s` }"
@@ -91,12 +91,14 @@
               </div>
             </template>
             <a-table
+              v-if="!isMobile"
               :columns="requestStatsColumns"
               :data-source="requestStats"
               :pagination="false"
               :loading="statsLoading"
               :row-key="getRowKey"
               size="middle"
+              :scroll="{ x: 720 }"
               :row-class-name="(_, index) => index % 2 === 0 ? 'table-row-light' : 'table-row-dark'"
             >
               <template slot="date" slot-scope="text">
@@ -112,6 +114,36 @@
                 <a-tag class="cost-tag">{{ formatUsd(text) }}</a-tag>
               </template>
             </a-table>
+
+            <div v-else class="mobile-stats-list">
+              <a-spin v-if="statsLoading" />
+              <template v-else-if="requestStats.length">
+                <div
+                  v-for="record in requestStats"
+                  :key="getRowKey(record)"
+                  class="mobile-stat-row"
+                >
+                  <div class="mobile-stat-date">
+                    <a-tag :color="selectedRange === 'today' ? 'cyan' : 'blue'">{{ record.label || record.date }}</a-tag>
+                  </div>
+                  <div class="mobile-stat-grid">
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">请求次数</span>
+                      <span class="mobile-stat-value total">{{ formatNumber(record.total_requests) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">使用 Token</span>
+                      <span class="mobile-stat-value token">{{ formatNumber(record.total_tokens) }}</span>
+                    </div>
+                    <div class="mobile-stat-item full">
+                      <span class="mobile-stat-label">消耗金额</span>
+                      <span class="mobile-stat-value cost">{{ formatUsd(record.total_cost) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="mobile-empty">暂无统计数据</div>
+            </div>
           </a-card>
         </a-col>
       </a-row>
@@ -141,6 +173,7 @@ export default {
       autoRefresh: false,
       refreshTimer: null,
       resizeHandler: null,
+      isMobile: false,
       selectedRange: '7d',
       stats: {},
       requestStats: [],
@@ -234,6 +267,7 @@ export default {
     }
   },
   mounted() {
+    this.updateViewport()
     this.initCharts()
     this.refreshAll()
   },
@@ -249,6 +283,9 @@ export default {
     }
   },
   methods: {
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 767
+    },
     formatNumber(value) {
       return Number(value || 0).toLocaleString('zh-CN')
     },
@@ -321,6 +358,11 @@ export default {
 
         if (!this.resizeHandler) {
           this.resizeHandler = () => {
+            const previous = this.isMobile
+            this.updateViewport()
+            if (previous !== this.isMobile) {
+              this.updateRequestChart()
+            }
             this.requestChart && this.requestChart.resize()
           }
           window.addEventListener('resize', this.resizeHandler)
@@ -352,13 +394,19 @@ export default {
         },
         legend: {
           top: 0,
+          left: this.isMobile ? 0 : 'center',
+          itemWidth: this.isMobile ? 12 : 25,
+          itemHeight: this.isMobile ? 8 : 14,
+          textStyle: {
+            fontSize: this.isMobile ? 11 : 12
+          },
           data: ['请求次数', '使用 Token', '消耗金额']
         },
         grid: {
-          left: '3%',
-          right: '5%',
-          bottom: '3%',
-          top: 48,
+          left: this.isMobile ? 4 : '3%',
+          right: this.isMobile ? 8 : '5%',
+          bottom: this.isMobile ? 36 : '3%',
+          top: this.isMobile ? 64 : 48,
           containLabel: true
         },
         xAxis: {
@@ -368,20 +416,21 @@ export default {
           axisTick: { alignWithLabel: true },
           axisLabel: {
             color: '#64748b',
-            rotate: this.selectedRange === '30d' ? 35 : 0
+            interval: this.isMobile ? 'auto' : 0,
+            rotate: this.isMobile ? 35 : (this.selectedRange === '30d' ? 35 : 0)
           }
         },
         yAxis: [
           {
             type: 'value',
-            name: '次数 / Token',
+            name: this.isMobile ? '' : '次数 / Token',
             axisLine: { show: false },
             splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
             axisLabel: { color: '#64748b' }
           },
           {
             type: 'value',
-            name: 'USD',
+            name: this.isMobile ? '' : 'USD',
             axisLine: { show: false },
             splitLine: { show: false },
             axisLabel: {
@@ -726,6 +775,10 @@ export default {
       font-family: 'MonoLisa', monospace;
     }
   }
+
+  .mobile-stats-list {
+    display: none;
+  }
 }
 
 @keyframes slideInUp {
@@ -767,35 +820,240 @@ export default {
 
 @media (max-width: 767px) {
   .dashboard-page {
-    padding: 24px 16px;
+    padding: 12px 0;
+    min-height: calc(100vh - 56px);
 
     .dashboard-header {
-      padding: 20px;
+      margin-bottom: 12px;
+      padding: 14px;
+      border-radius: 10px;
+
+      .page-title {
+        font-size: 20px;
+
+        .title-icon {
+          margin-right: 8px;
+          font-size: 22px;
+        }
+      }
 
       .header-actions {
         width: 100%;
-        justify-content: space-between;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 10px;
+
+        .refresh-btn {
+          flex: 1;
+          min-width: 150px;
+        }
       }
     }
 
-    .stat-row .stat-card {
-      height: auto;
-      min-height: 148px;
+    .stat-row {
+      margin-bottom: 8px;
+
+      /deep/ .ant-col {
+        margin-bottom: 12px;
+      }
+
+      .stat-card {
+        height: 136px;
+        min-height: 0;
+        border-radius: 10px;
+
+        &:hover {
+          transform: none;
+        }
+
+        /deep/ .ant-card-body {
+          height: 100%;
+          padding: 14px;
+        }
+
+        .stat-card-content {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .stat-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          font-size: 17px;
+        }
+
+        .stat-info {
+          width: 100%;
+          min-width: 0;
+
+          .stat-title {
+            margin-bottom: 4px;
+            font-size: 12px;
+          }
+
+          .stat-value {
+            margin-bottom: 4px;
+            font-size: 22px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+
+            &.amount-value {
+              font-size: 18px;
+            }
+          }
+
+          .stat-desc {
+            font-size: 11px;
+          }
+        }
+
+        .stat-card-bg {
+          width: 110px;
+          height: 110px;
+        }
+      }
     }
 
     .chart-card,
     .table-card {
+      border-radius: 10px;
+
       /deep/ .ant-card-head {
         min-height: auto;
-        padding-top: 16px;
-        padding-bottom: 16px;
+        padding: 12px 14px;
         align-items: flex-start;
       }
 
       /deep/ .ant-card-head-wrapper {
         flex-direction: column;
         align-items: flex-start;
-        gap: 12px;
+        gap: 10px;
+        width: 100%;
+      }
+
+      /deep/ .ant-card-extra {
+        width: 100%;
+
+        .ant-radio-group {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          width: 100%;
+
+          .ant-radio-button-wrapper {
+            padding: 0 6px;
+            text-align: center;
+          }
+        }
+      }
+
+      /deep/ .ant-card-body {
+        padding: 14px;
+      }
+    }
+
+    .chart-row,
+    .table-row {
+      margin-top: 12px;
+    }
+
+    .chart-row .chart-card {
+      min-height: 360px;
+    }
+
+    .chart {
+      height: 260px;
+    }
+
+    .card-title-main {
+      font-size: 15px;
+    }
+
+    .card-title-sub {
+      font-size: 11px;
+    }
+
+    .mobile-stats-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mobile-stat-row {
+      padding: 12px;
+      background: rgba(248, 250, 252, 0.78);
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+    }
+
+    .mobile-stat-date {
+      margin-bottom: 10px;
+    }
+
+    .mobile-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mobile-stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+
+      &.full {
+        grid-column: 1 / -1;
+      }
+    }
+
+    .mobile-stat-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-stat-value {
+      font-family: 'MonoLisa', monospace;
+      font-size: 14px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+
+      &.total {
+        color: #1d4ed8;
+      }
+
+      &.token {
+        color: #7c2d12;
+      }
+
+      &.cost {
+        color: #c2410c;
+      }
+    }
+
+    .mobile-empty {
+      padding: 36px 12px;
+      color: #8c8c8c;
+      text-align: center;
+      background: #fafafa;
+      border-radius: 8px;
+    }
+  }
+}
+
+@media (max-width: 380px) {
+  .dashboard-page {
+    .stat-row .stat-card {
+      height: 128px;
+
+      .stat-info .stat-value {
+        font-size: 20px;
+
+        &.amount-value {
+          font-size: 16px;
+        }
       }
     }
   }

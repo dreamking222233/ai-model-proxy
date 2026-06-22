@@ -31,6 +31,9 @@ class SubscriptionPlanRequest(BaseModel):
     reset_timezone: Optional[str] = Field("Asia/Shanghai", description="刷新时区")
     sort_order: Optional[int] = Field(0, description="排序")
     status: Optional[str] = Field("active", description="状态")
+    sale_price_cny: Optional[float] = Field(0, ge=0, description="用户在线购买售价 RMB")
+    agent_cost_price_cny: Optional[float] = Field(0, ge=0, description="代理拿货价 RMB")
+    online_sale_enabled: Optional[int] = Field(0, ge=0, le=1, description="是否允许前台购买")
     description: Optional[str] = Field(None, max_length=255, description="描述")
 
 

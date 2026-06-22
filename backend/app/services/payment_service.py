@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.core.exceptions import ServiceException
-from app.models.log import ConsumptionRecord, ImageCreditRecord, UserBalance, UserImageBalance
+from app.models.log import ConsumptionRecord, ImageCreditRecord, SubscriptionPlan, UserBalance, UserImageBalance
 from app.models.payment import (
     AgentCashBalance,
     AgentCashLedger,
@@ -37,6 +37,7 @@ from app.models.payment import (
 )
 from app.models.user import SysUser
 from app.services.agent_service import AgentService, AgentSiteContext
+from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,14 @@ class PaymentService:
     ORDER_EXPIRE_MINUTES = 30
     DEFAULT_CHANNEL = "alipay"
     PAYMENT_CHANNELS = {"alipay", "wechat"}
-    RECHARGE_TYPES = {"balance", "image_credit"}
+    RECHARGE_TYPES = {"balance", "image_credit", "subscription"}
     ALIPAY_ACCEPTED_TRADE_STATUSES = {"TRADE_SUCCESS", "TRADE_FINISHED"}
     WECHAT_PENDING_STATES = {"NOTPAY", "USERPAYING"}
     WECHAT_SUCCESS_STATES = {"SUCCESS"}
     WECHAT_CLOSED_STATES = {"CLOSED", "REVOKED"}
     WECHAT_FAILED_STATES = {"PAYERROR"}
     PAYMENT_CHANNEL_TEXT = {"alipay": "支付宝", "wechat": "微信"}
-    RECHARGE_TYPE_TEXT = {"balance": "余额", "image_credit": "图片积分"}
+    RECHARGE_TYPE_TEXT = {"balance": "余额", "image_credit": "图片积分", "subscription": "套餐"}
 
     @staticmethod
     def _serialize_dt(dt: datetime | None, *, assume_utc: bool) -> str | None:
@@ -290,11 +291,21 @@ class PaymentService:
         raise ServiceException(400, "不支持的支付渠道", "PAYMENT_CHANNEL_INVALID")
 
     @staticmethod
-    def assert_recharge_enabled_for_site(site_context: AgentSiteContext | None = None, payment_channel: str | None = None) -> None:
+    def assert_recharge_enabled_for_site(
+        site_context: AgentSiteContext | None = None,
+        payment_channel: str | None = None,
+        recharge_type: str | None = None,
+    ) -> None:
         channel = PaymentService._normalize_payment_channel(payment_channel)
         PaymentService._validate_payment_config(channel)
         if site_context and not AgentService.is_online_recharge_enabled(site_context):
             raise ServiceException(403, "当前站点未开启在线充值", "AGENT_ONLINE_RECHARGE_DISABLED")
+        if (
+            PaymentService._normalize_recharge_type(recharge_type) == "subscription"
+            and site_context
+            and not AgentService.is_subscription_online_recharge_enabled(site_context)
+        ):
+            raise ServiceException(403, "当前站点未开启套餐在线充值", "AGENT_SUBSCRIPTION_ONLINE_RECHARGE_DISABLED")
 
     @staticmethod
     def _build_alipay_client():
@@ -331,12 +342,24 @@ class PaymentService:
         return prefix + datetime.utcnow().strftime("%Y%m%d%H%M%S") + secrets.token_hex(3).upper()
 
     @staticmethod
-    def _build_subject(recharge_type: str = "balance") -> str:
+    def _build_subject(recharge_type: str = "balance", plan_name: str | None = None) -> str:
+        normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+        if normalized_type == "subscription":
+            name = str(plan_name or "").strip()
+            if name:
+                return f"AI 平台套餐购买 - {name}"
+            return "AI 平台套餐购买"
         return f"AI 平台{PaymentService._recharge_type_text(recharge_type)}充值"
 
     @staticmethod
-    def _build_body(recharge_type: str = "balance") -> str:
-        if PaymentService._normalize_recharge_type(recharge_type) == "image_credit":
+    def _build_body(recharge_type: str = "balance", plan_name: str | None = None) -> str:
+        normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+        if normalized_type == "subscription":
+            name = str(plan_name or "").strip()
+            if name:
+                return f"用户在线购买套餐：{name}"
+            return "用户在线购买套餐"
+        if normalized_type == "image_credit":
             return "用户在线充值图片积分"
         return "用户在线充值美元余额"
 
@@ -359,6 +382,8 @@ class PaymentService:
     @staticmethod
     def _calculate_amounts(amount_cny: Decimal, agent_id: int | None, recharge_type: str = "balance") -> tuple[Decimal, Decimal, Decimal, Decimal]:
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+        if normalized_type == "subscription":
+            return Decimal("0.000000"), Decimal("0.000"), Decimal("0.000000"), Decimal("0.00")
         if normalized_type == "image_credit":
             user_rate = PaymentService._settings_decimal(
                 settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE,
@@ -391,19 +416,63 @@ class PaymentService:
         return credited_usd, Decimal("0.000"), agent_rate, agent_income_cny
 
     @staticmethod
+    def _load_subscription_plan_for_purchase(db: Session, user: SysUser, plan_id: int | None) -> tuple[SubscriptionPlan, Decimal, Decimal, Decimal]:
+        if not plan_id:
+            raise ServiceException(400, "请选择要购买的套餐", "SUBSCRIPTION_PLAN_REQUIRED")
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.id == plan_id).first()
+        if not plan:
+            raise ServiceException(404, "套餐模板不存在", "PLAN_NOT_FOUND")
+        if plan.status != "active" or int(getattr(plan, "online_sale_enabled", 0) or 0) != 1:
+            raise ServiceException(400, "套餐暂不支持在线购买", "PLAN_ONLINE_SALE_DISABLED")
+
+        sale_price = PaymentService._normalize_cny(getattr(plan, "sale_price_cny", 0), "INVALID_PLAN_SALE_PRICE")
+        agent_cost = PaymentService._quantize(
+            getattr(plan, "agent_cost_price_cny", 0) or 0,
+            PaymentService.CNY_SCALE,
+            "INVALID_PLAN_AGENT_COST_PRICE",
+            allow_zero=True,
+        )
+        if sale_price <= Decimal("0"):
+            raise ServiceException(400, "套餐售价未配置", "PLAN_SALE_PRICE_REQUIRED")
+        if user.agent_id:
+            if agent_cost <= Decimal("0"):
+                raise ServiceException(400, "该套餐未配置代理拿货价，暂不支持代理用户在线购买", "PLAN_AGENT_COST_REQUIRED")
+            if agent_cost > sale_price:
+                raise ServiceException(400, "套餐代理拿货价配置错误", "PLAN_AGENT_COST_INVALID")
+            rebate = (sale_price - agent_cost).quantize(PaymentService.CNY_SCALE, rounding=ROUND_HALF_UP)
+        else:
+            rebate = Decimal("0.00")
+        return plan, sale_price, agent_cost, rebate
+
+    @staticmethod
     def create_recharge_order(
         db: Session,
         user: SysUser,
         amount_cny,
         payment_channel: str = DEFAULT_CHANNEL,
         recharge_type: str = "balance",
+        subscription_plan_id: int | None = None,
         site_context: AgentSiteContext | None = None,
     ) -> dict:
         channel = PaymentService._normalize_payment_channel(payment_channel)
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
-        PaymentService.assert_recharge_enabled_for_site(site_context, channel)
-        amount_decimal = PaymentService._normalize_cny(amount_cny)
-        credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(amount_decimal, user.agent_id, normalized_type)
+        PaymentService.assert_recharge_enabled_for_site(site_context, channel, normalized_type)
+        subscription_plan = None
+        subscription_rebate_cny = Decimal("0.00")
+        if normalized_type == "subscription":
+            subscription_plan, amount_decimal, subscription_agent_cost_cny, subscription_rebate_cny = (
+                PaymentService._load_subscription_plan_for_purchase(db, user, subscription_plan_id)
+            )
+            credited_usd = Decimal("0.000000")
+            credited_image_credits = Decimal("0.000")
+            agent_rate = Decimal("0.000000")
+            agent_income_cny = Decimal("0.00")
+            quota_snapshot = SubscriptionService._get_plan_subscription_quota_snapshot(subscription_plan)
+        else:
+            amount_decimal = PaymentService._normalize_cny(amount_cny)
+            credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(amount_decimal, user.agent_id, normalized_type)
+            subscription_agent_cost_cny = Decimal("0.00")
+            quota_snapshot = None
         order = PaymentRechargeOrder(
             order_no=PaymentService._generate_order_no(channel),
             payment_channel=channel,
@@ -417,9 +486,20 @@ class PaymentService:
             credited_image_credits=credited_image_credits,
             agent_settlement_rate=agent_rate,
             agent_income_cny=agent_income_cny,
+            subscription_plan_id=subscription_plan.id if subscription_plan else None,
+            plan_code_snapshot=subscription_plan.plan_code if subscription_plan else None,
+            plan_name_snapshot=subscription_plan.plan_name if subscription_plan else None,
+            plan_kind_snapshot=subscription_plan.plan_kind if subscription_plan else None,
+            duration_days_snapshot=int(subscription_plan.duration_days) if subscription_plan else None,
+            quota_metric_snapshot=quota_snapshot["quota_metric"] if quota_snapshot else None,
+            quota_value_snapshot=quota_snapshot["quota_limit"] if quota_snapshot else None,
+            subscription_activation_mode="append",
+            subscription_sale_price_cny=amount_decimal if subscription_plan else Decimal("0.00"),
+            subscription_agent_cost_cny=subscription_agent_cost_cny,
+            subscription_agent_rebate_cny=subscription_rebate_cny,
             status="pending",
-            subject=PaymentService._build_subject(normalized_type),
-            body=PaymentService._build_body(normalized_type),
+            subject=PaymentService._build_subject(normalized_type, subscription_plan.plan_name if subscription_plan else None),
+            body=PaymentService._build_body(normalized_type, subscription_plan.plan_name if subscription_plan else None),
             expired_at=datetime.utcnow() + timedelta(minutes=PaymentService.ORDER_EXPIRE_MINUTES),
         )
         order.return_url_snapshot = PaymentService.build_order_return_url(order, site_context)
@@ -946,16 +1026,24 @@ class PaymentService:
 
     @staticmethod
     def _credit_user_order_asset(db: Session, order: PaymentRechargeOrder) -> None:
-        if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit":
+        normalized_type = PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None))
+        if normalized_type == "balance":
+            PaymentService._credit_user_balance(db, order)
+            return
+        if normalized_type == "image_credit":
             PaymentService._credit_user_image_credits(db, order)
             return
-        PaymentService._credit_user_balance(db, order)
+        if normalized_type == "subscription":
+            PaymentService._activate_subscription_order(db, order)
+            return
+        raise ServiceException(400, "不支持的充值类型", "RECHARGE_TYPE_INVALID")
 
     @staticmethod
     def _settlement_asset_type(order: PaymentRechargeOrder) -> str:
-        if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "image_credit":
-            return "image_credit"
-        return "balance"
+        normalized_type = PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None))
+        if normalized_type in {"balance", "image_credit", "subscription"}:
+            return normalized_type
+        raise ServiceException(400, "不支持的充值类型", "RECHARGE_TYPE_INVALID")
 
     @staticmethod
     def _is_duplicate_settlement_integrity_error(exc: IntegrityError) -> bool:
@@ -1096,6 +1184,8 @@ class PaymentService:
 
     @staticmethod
     def _credit_agent_cash_balance(db: Session, order: PaymentRechargeOrder) -> None:
+        if PaymentService._normalize_recharge_type(getattr(order, "recharge_type", None)) == "subscription":
+            return
         if not order.agent_id:
             return
         income = PaymentService._try_normalize_cny(order.agent_income_cny)
@@ -1137,6 +1227,29 @@ class PaymentService:
         ))
 
     @staticmethod
+    def _activate_subscription_order(db: Session, order: PaymentRechargeOrder) -> None:
+        if not order.subscription_plan_id:
+            raise ServiceException(400, "套餐订单缺少套餐模板", "SUBSCRIPTION_ORDER_PLAN_MISSING")
+        if order.subscription_id:
+            return
+
+        subscription = SubscriptionService.activate_plan_subscription(
+            db,
+            user_id=int(order.user_id),
+            plan_id=int(order.subscription_plan_id),
+            operator_id=None,
+            activation_mode="append",
+            auto_commit=False,
+            agent_id=int(order.agent_id) if order.agent_id else None,
+        )
+        order.subscription_id = subscription.get("id")
+
+        if order.agent_id:
+            from app.services.agent_subscription_sale_service import AgentSubscriptionSaleService
+
+            AgentSubscriptionSaleService.create_from_paid_order(db, order)
+
+    @staticmethod
     def _apply_paid_order(db: Session, order_no: str, payload: dict, source: str = "notify") -> dict:
         locked = PaymentService._get_order_for_update(db, order_no)
         if locked.status == "paid":
@@ -1166,8 +1279,9 @@ class PaymentService:
         if is_new_settlement:
             PaymentService._credit_user_order_asset(db, locked)
             PaymentService._credit_agent_cash_balance(db, locked)
-            from app.services.promotion_service import PromotionService
-            PromotionService.apply_recharge_reward(db, locked)
+            if PaymentService._normalize_recharge_type(getattr(locked, "recharge_type", None)) != "subscription":
+                from app.services.promotion_service import PromotionService
+                PromotionService.apply_recharge_reward(db, locked)
             settlement.status = "applied"
             settlement.applied_at = datetime.utcnow()
 
@@ -1286,6 +1400,18 @@ class PaymentService:
             "credited_usd": float(order.credited_usd or 0),
             "credited_image_credits": float(order.credited_image_credits or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
+            "subscription_plan_id": order.subscription_plan_id,
+            "subscription_id": order.subscription_id,
+            "plan_code_snapshot": order.plan_code_snapshot,
+            "plan_name_snapshot": order.plan_name_snapshot,
+            "plan_kind_snapshot": order.plan_kind_snapshot,
+            "duration_days_snapshot": order.duration_days_snapshot,
+            "quota_metric_snapshot": order.quota_metric_snapshot,
+            "quota_value_snapshot": float(order.quota_value_snapshot or 0),
+            "subscription_activation_mode": order.subscription_activation_mode,
+            "subscription_sale_price_cny": float(order.subscription_sale_price_cny or 0),
+            "subscription_agent_cost_cny": float(order.subscription_agent_cost_cny or 0),
+            "subscription_agent_rebate_cny": float(order.subscription_agent_rebate_cny or 0),
             "status": order.status,
             "trade_status": order.trade_status,
             "payment_channel_text": PaymentService._payment_channel_text(order.payment_channel),

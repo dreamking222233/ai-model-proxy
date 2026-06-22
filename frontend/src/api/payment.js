@@ -30,6 +30,13 @@ export function syncUserRechargeOrder(orderNo) {
   })
 }
 
+export function listUserSubscriptionPlans() {
+  return request({
+    url: '/api/user/payment/subscription-plans',
+    method: 'get'
+  })
+}
+
 export function listAdminAgentCashSummary(params) {
   return request({
     url: '/api/admin/payments/agent-cash/summary',
@@ -96,6 +103,22 @@ export function listAgentPaymentOrders(params) {
 export function listAgentPaymentWithdrawals(params) {
   return request({
     url: '/api/agent/payments/withdrawals',
+    method: 'get',
+    params
+  })
+}
+
+export function getAgentSubscriptionSaleSummary(params) {
+  return request({
+    url: '/api/agent/subscription-sales/summary',
+    method: 'get',
+    params
+  })
+}
+
+export function listAgentSubscriptionSales(params) {
+  return request({
+    url: '/api/agent/subscription-sales',
     method: 'get',
     params
   })

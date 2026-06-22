@@ -25,6 +25,7 @@ class AgentCreate(BaseModel):
     quickstart_api_base_url: Optional[str] = Field(None, max_length=512)
     allow_self_register: Optional[int] = Field(1, ge=0, le=1)
     online_recharge_enabled: Optional[int] = Field(1, ge=0, le=1)
+    subscription_online_recharge_enabled: Optional[int] = Field(1, ge=0, le=1)
     theme_config_json: Optional[str] = None
 
 
@@ -44,6 +45,7 @@ class AgentUpdate(BaseModel):
     quickstart_api_base_url: Optional[str] = Field(None, max_length=512)
     allow_self_register: Optional[int] = Field(None, ge=0, le=1)
     online_recharge_enabled: Optional[int] = Field(None, ge=0, le=1)
+    subscription_online_recharge_enabled: Optional[int] = Field(None, ge=0, le=1)
     theme_config_json: Optional[str] = None
 
 

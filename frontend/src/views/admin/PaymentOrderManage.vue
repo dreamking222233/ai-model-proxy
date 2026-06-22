@@ -33,6 +33,7 @@
         <a-select v-model="filters.recharge_type" allowClear placeholder="充值类型" style="width: 140px" @change="handleSearch">
           <a-select-option value="balance">余额</a-select-option>
           <a-select-option value="image_credit">图片积分</a-select-option>
+          <a-select-option value="subscription">套餐</a-select-option>
         </a-select>
         <a-select v-model="filters.status" allowClear placeholder="订单状态" style="width: 140px" @change="handleSearch">
           <a-select-option value="pending">待支付</a-select-option>
@@ -77,7 +78,7 @@
           </a-tag>
         </template>
         <template slot="rechargeType" slot-scope="text">
-          <a-tag :color="text === 'image_credit' ? 'cyan' : 'blue'">{{ rechargeTypeText(text) }}</a-tag>
+          <a-tag :color="text === 'subscription' ? 'purple' : (text === 'image_credit' ? 'cyan' : 'blue')">{{ rechargeTypeText(text) }}</a-tag>
         </template>
         <template slot="userInfo" slot-scope="text, record">
           <div class="stack-text">
@@ -176,12 +177,15 @@ export default {
       return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
     },
     rechargeTypeText(type) {
-      const map = { balance: '余额', image_credit: '图片积分' }
+      const map = { balance: '余额', image_credit: '图片积分', subscription: '套餐' }
       return map[type || 'balance'] || type || '-'
     },
     orderCreditText(record) {
       if ((record && record.recharge_type) === 'image_credit') {
         return `${this.formatCredits(record.credited_image_credits)} 积分`
+      }
+      if ((record && record.recharge_type) === 'subscription') {
+        return `${record.plan_name_snapshot || '套餐'} / ${record.duration_days_snapshot || 0} 天`
       }
       return `$${this.formatUsd(record && record.credited_usd)}`
     },
@@ -235,6 +239,7 @@ export default {
           site_scope: this.filters.site_scope || undefined,
           payment_channel: this.filters.payment_channel || undefined,
           recharge_type: this.filters.recharge_type || undefined,
+          include_subscription: 1,
           status: this.filters.status || undefined,
           agent_keyword: this.filters.agent_keyword || undefined,
           source_host: this.filters.source_host || undefined

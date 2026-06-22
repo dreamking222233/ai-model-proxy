@@ -28,6 +28,7 @@ class Agent(Base):
     quickstart_api_base_url = Column(String(512), nullable=True)
     allow_self_register = Column(SmallInteger, nullable=False, default=1)
     online_recharge_enabled = Column(SmallInteger, nullable=False, default=1)
+    subscription_online_recharge_enabled = Column(SmallInteger, nullable=False, default=1)
     theme_config_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
@@ -245,3 +246,35 @@ class AgentSettlementBatchItem(Base):
     settlement_record_id = Column(BigInteger, nullable=False, index=True)
     settled_quantity = Column(DECIMAL(20, 6), nullable=False, default=0)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class AgentSubscriptionSaleRecord(Base):
+    """Paid user subscription purchase that may require offline agent rebate settlement."""
+
+    __tablename__ = "agent_subscription_sale_record"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uk_agent_subscription_sale_order"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    order_id = Column(BigInteger, nullable=False, index=True)
+    order_no = Column(String(64), nullable=False, index=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    subscription_id = Column(BigInteger, nullable=True, index=True)
+    plan_id = Column(BigInteger, nullable=True, index=True)
+    plan_code_snapshot = Column(String(64), nullable=True)
+    plan_name_snapshot = Column(String(128), nullable=False)
+    plan_kind_snapshot = Column(String(32), nullable=True)
+    duration_days_snapshot = Column(Integer, nullable=True)
+    sale_price_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    agent_cost_price_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    agent_rebate_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    payment_channel = Column(String(32), nullable=False)
+    payment_status = Column(String(16), nullable=False, default="paid", index=True)
+    rebate_status = Column(String(16), nullable=False, default="pending", index=True)
+    settled_at = Column(DateTime, nullable=True)
+    settled_by = Column(BigInteger, nullable=True, index=True)
+    settlement_remark = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

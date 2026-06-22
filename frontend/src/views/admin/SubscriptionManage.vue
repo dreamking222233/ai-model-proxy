@@ -40,6 +40,20 @@
               <span>{{ formatTemplateQuota(record) }}</span>
             </template>
 
+            <template slot="price" slot-scope="text, record">
+              <div class="sub-text">
+                <div>售价：￥{{ formatMoney(record.sale_price_cny) }}</div>
+                <div>拿货：￥{{ formatMoney(record.agent_cost_price_cny) }}</div>
+              </div>
+            </template>
+
+            <template slot="online_sale" slot-scope="text, record">
+              <div>
+                <a-badge :status="record.online_sale_enabled ? 'processing' : 'default'" :text="record.online_sale_enabled ? '可购买' : '未上架'" />
+                <div v-if="record.online_sale_enabled" class="sub-text">返现 ￥{{ formatMoney(record.agent_rebate_cny_preview) }}</div>
+              </div>
+            </template>
+
             <template slot="status" slot-scope="text">
               <a-badge :status="text === 'active' ? 'success' : 'default'" :text="text === 'active' ? '启用' : '停用'" />
             </template>
@@ -295,6 +309,16 @@
               </div>
             </template>
 
+            <template slot="subscription_source" slot-scope="text, record">
+              <div>
+                <a-tag :color="getSubscriptionSourceColor(record.subscription_source)">
+                  {{ record.subscription_source_text || '历史记录' }}
+                </a-tag>
+                <div v-if="record.source_order_no" class="sub-text">{{ record.source_order_no }}</div>
+                <div v-else-if="record.source_operator_name" class="sub-text">{{ record.source_operator_name }}</div>
+              </div>
+            </template>
+
             <template slot="time_range" slot-scope="text, record">
               <div class="sub-text">
                 <div>开始：{{ formatDate(record.start_time) }}</div>
@@ -370,12 +394,17 @@
           </a-col>
         </a-row>
         <a-row :gutter="12">
-          <a-col :span="12">
+          <a-col :span="8">
             <a-form-item label="时长（天）">
               <a-input-number v-model="planForm.duration_days" :min="1" :max="3650" style="width: 100%" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="8">
+            <a-form-item label="排序值（小靠前）">
+              <a-input-number v-model="planForm.sort_order" :min="0" :max="999999" style="width: 100%" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
             <a-form-item label="状态">
               <a-select v-model="planForm.status">
                 <a-select-option value="active">启用</a-select-option>
@@ -401,6 +430,26 @@
             </a-col>
           </a-row>
         </template>
+        <a-row :gutter="12">
+          <a-col :span="8">
+            <a-form-item label="用户售价（元）">
+              <a-input-number v-model="planForm.sale_price_cny" :min="0" :precision="2" style="width: 100%" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="代理拿货价（元）">
+              <a-input-number v-model="planForm.agent_cost_price_cny" :min="0" :precision="2" style="width: 100%" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="前台购买">
+              <a-switch v-model="planForm.online_sale_enabled" :checked-value="1" :un-checked-value="0" checked-children="开启" un-checked-children="关闭" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <div class="price-preview">
+          代理用户购买后待返现金额：￥{{ formatMoney(planAgentRebatePreview) }}
+        </div>
         <a-form-item label="描述">
           <a-input v-model="planForm.description" />
         </a-form-item>
@@ -523,7 +572,11 @@ const defaultPlanForm = () => ({
   duration_days: 1,
   quota_metric: 'total_tokens',
   quota_value: 10000000,
+  sort_order: 0,
   status: 'active',
+  sale_price_cny: 0,
+  agent_cost_price_cny: 0,
+  online_sale_enabled: 0,
   description: ''
 })
 
@@ -600,12 +653,16 @@ export default {
         { title: '模式', key: 'plan_kind', width: 120, scopedSlots: { customRender: 'plan_kind' } },
         { title: '时长', key: 'duration', width: 100, scopedSlots: { customRender: 'duration' } },
         { title: '额度', key: 'quota', width: 220, scopedSlots: { customRender: 'quota' } },
+        { title: '价格', key: 'price', width: 150, scopedSlots: { customRender: 'price' } },
+        { title: '前台购买', key: 'online_sale', width: 140, scopedSlots: { customRender: 'online_sale' } },
+        { title: '排序', dataIndex: 'sort_order', key: 'sort_order', width: 90 },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
         { title: '操作', key: 'actions', width: 100, scopedSlots: { customRender: 'actions' } }
       ],
       columns: [
         { title: '用户信息', key: 'user_info', width: 150, scopedSlots: { customRender: 'user_info' } },
         { title: '套餐信息', key: 'plan_info', width: 190, scopedSlots: { customRender: 'plan_info' } },
+        { title: '套餐来源', key: 'subscription_source', width: 150, scopedSlots: { customRender: 'subscription_source' } },
         { title: '时间范围', key: 'time_range', width: 220, scopedSlots: { customRender: 'time_range' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 100, scopedSlots: { customRender: 'status' } },
         { title: '当前周期', key: 'cycle', width: 180, scopedSlots: { customRender: 'cycle' } },
@@ -632,6 +689,11 @@ export default {
   computed: {
     activePlans() {
       return this.planList.filter(plan => plan.status === 'active')
+    },
+    planAgentRebatePreview() {
+      const sale = Number(this.planForm.sale_price_cny || 0)
+      const cost = Number(this.planForm.agent_cost_price_cny || 0)
+      return Math.max(sale - cost, 0)
     }
   },
   mounted() {
@@ -654,6 +716,9 @@ export default {
     },
     formatCost(value, precision = 4) {
       return `$${Number(value || 0).toFixed(precision)}`
+    },
+    formatMoney(value) {
+      return Number(value || 0).toFixed(2)
     },
     formatCycle(value, metric) {
       if (metric === 'cost_usd') {
@@ -703,6 +768,16 @@ export default {
     getStatusText(status) {
       const map = { active: '生效中', expired: '已过期', cancelled: '已取消' }
       return map[status] || status
+    },
+    getSubscriptionSourceColor(source) {
+      const map = {
+        online_recharge: 'green',
+        agent_grant: 'blue',
+        admin_grant: 'purple',
+        manual_grant: 'cyan',
+        legacy: 'default'
+      }
+      return map[source] || 'default'
     },
     formatRemainingTime(record) {
       const seconds = Number(record && record.remaining_seconds || 0)
@@ -790,7 +865,11 @@ export default {
           quota_value: record.quota_value !== undefined && record.quota_value !== null
             ? record.quota_value
             : (record.resolved_quota_value || 0),
+          sort_order: record.sort_order || 0,
           status: record.status,
+          sale_price_cny: record.sale_price_cny || 0,
+          agent_cost_price_cny: record.agent_cost_price_cny || 0,
+          online_sale_enabled: Number(record.online_sale_enabled || 0),
           description: record.description
         }
         : defaultPlanForm()
@@ -803,6 +882,14 @@ export default {
       }
       if (this.planForm.plan_kind === 'daily_quota' && (!this.planForm.quota_value || Number(this.planForm.quota_value) <= 0)) {
         this.$message.warning('请填写有效的每日额度值')
+        return
+      }
+      if (Number(this.planForm.online_sale_enabled || 0) === 1 && Number(this.planForm.sale_price_cny || 0) <= 0) {
+        this.$message.warning('开启前台购买时必须设置用户售价')
+        return
+      }
+      if (Number(this.planForm.agent_cost_price_cny || 0) > Number(this.planForm.sale_price_cny || 0)) {
+        this.$message.warning('代理拿货价不能高于用户售价')
         return
       }
       this.planSaving = true
@@ -1017,6 +1104,16 @@ export default {
 
   .grant-card {
     background: #fafafa;
+  }
+
+  .price-preview {
+    margin: -4px 0 16px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #f6ffed;
+    border: 1px solid #b7eb8f;
+    color: #237804;
+    font-size: 13px;
   }
 
   /deep/ .grant-card .ant-select {

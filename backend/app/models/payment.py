@@ -1,7 +1,7 @@
 """ORM models for online recharge orders and agent cash ledger."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, DateTime, DECIMAL, Text, func, UniqueConstraint,
+    Column, BigInteger, String, Integer, DateTime, DECIMAL, Text, func, UniqueConstraint,
 )
 
 from app.database import Base
@@ -26,6 +26,18 @@ class PaymentRechargeOrder(Base):
     credited_image_credits = Column(DECIMAL(12, 3), nullable=False, default=0)
     agent_settlement_rate = Column(DECIMAL(12, 6), nullable=False, default=0)
     agent_income_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    subscription_plan_id = Column(BigInteger, nullable=True, index=True)
+    subscription_id = Column(BigInteger, nullable=True, index=True)
+    plan_code_snapshot = Column(String(64), nullable=True)
+    plan_name_snapshot = Column(String(128), nullable=True)
+    plan_kind_snapshot = Column(String(32), nullable=True)
+    duration_days_snapshot = Column(Integer, nullable=True)
+    quota_metric_snapshot = Column(String(32), nullable=True)
+    quota_value_snapshot = Column(DECIMAL(20, 6), nullable=True)
+    subscription_activation_mode = Column(String(20), nullable=False, default="append")
+    subscription_sale_price_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    subscription_agent_cost_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
+    subscription_agent_rebate_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
     status = Column(String(16), nullable=False, default="pending", index=True)
     subject = Column(String(128), nullable=False)
     body = Column(Text, nullable=True)

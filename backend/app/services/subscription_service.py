@@ -18,6 +18,7 @@ from app.models.log import (
     SubscriptionUsageCycle,
     UserSubscription,
 )
+from app.models.payment import PaymentRechargeOrder
 from app.models.user import SysUser
 
 
@@ -575,12 +576,47 @@ class SubscriptionService:
         if "status" in payload and payload["status"] not in {"active", "inactive"}:
             raise ServiceException(400, "套餐状态不合法", "INVALID_PLAN_STATUS")
 
-        if "reset_period" not in payload or not payload.get("reset_period"):
+        if not is_update or "sale_price_cny" in payload:
+            payload["sale_price_cny"] = SubscriptionService._normalize_decimal(payload.get("sale_price_cny"), "0")
+            if payload["sale_price_cny"] < 0:
+                raise ServiceException(400, "套餐价格不能小于 0", "INVALID_PLAN_PRICE")
+        if not is_update or "agent_cost_price_cny" in payload:
+            payload["agent_cost_price_cny"] = SubscriptionService._normalize_decimal(payload.get("agent_cost_price_cny"), "0")
+            if payload["agent_cost_price_cny"] < 0:
+                raise ServiceException(400, "套餐价格不能小于 0", "INVALID_PLAN_PRICE")
+        if not is_update or "online_sale_enabled" in payload:
+            online_sale_enabled = int(payload.get("online_sale_enabled") or 0)
+            if online_sale_enabled not in {0, 1}:
+                raise ServiceException(400, "前台购买开关不合法", "INVALID_ONLINE_SALE_STATUS")
+            payload["online_sale_enabled"] = online_sale_enabled
+
+        if not is_update:
+            SubscriptionService._validate_plan_sale_config(
+                payload.get("sale_price_cny"),
+                payload.get("agent_cost_price_cny"),
+                payload.get("online_sale_enabled"),
+            )
+
+        if (not is_update and "reset_period" not in payload) or ("reset_period" in payload and not payload.get("reset_period")):
             payload["reset_period"] = SubscriptionService.DEFAULT_RESET_PERIOD
-        if "reset_timezone" not in payload or not payload.get("reset_timezone"):
+        if (not is_update and "reset_timezone" not in payload) or ("reset_timezone" in payload and not payload.get("reset_timezone")):
             payload["reset_timezone"] = SubscriptionService.DEFAULT_TIMEZONE
 
         return payload
+
+    @staticmethod
+    def _validate_plan_sale_config(sale_price, agent_cost_price, online_sale_enabled) -> None:
+        sale = SubscriptionService._normalize_decimal(sale_price, "0")
+        cost = SubscriptionService._normalize_decimal(agent_cost_price, "0")
+        online_enabled = int(online_sale_enabled or 0)
+        if sale < 0 or cost < 0:
+            raise ServiceException(400, "套餐价格不能小于 0", "INVALID_PLAN_PRICE")
+        if online_enabled not in {0, 1}:
+            raise ServiceException(400, "前台购买开关不合法", "INVALID_ONLINE_SALE_STATUS")
+        if online_enabled and sale <= 0:
+            raise ServiceException(400, "开启前台购买时必须设置用户售价", "PLAN_SALE_PRICE_REQUIRED")
+        if online_enabled and cost > sale:
+            raise ServiceException(400, "代理拿货价不能高于用户售价", "PLAN_AGENT_COST_INVALID")
 
     @staticmethod
     def ensure_default_plans(db: Session) -> None:
@@ -631,6 +667,16 @@ class SubscriptionService:
             "reset_timezone": plan.reset_timezone,
             "sort_order": plan.sort_order,
             "status": plan.status,
+            "sale_price_cny": float(getattr(plan, "sale_price_cny", 0) or 0),
+            "agent_cost_price_cny": float(getattr(plan, "agent_cost_price_cny", 0) or 0),
+            "agent_rebate_cny_preview": float(
+                max(
+                    SubscriptionService._normalize_decimal(getattr(plan, "sale_price_cny", 0))
+                    - SubscriptionService._normalize_decimal(getattr(plan, "agent_cost_price_cny", 0)),
+                    Decimal("0"),
+                )
+            ),
+            "online_sale_enabled": int(getattr(plan, "online_sale_enabled", 0) or 0),
             "description": plan.description,
             "created_at": plan.created_at.isoformat() if plan.created_at else None,
             "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
@@ -675,6 +721,9 @@ class SubscriptionService:
             reset_timezone=payload.get("reset_timezone") or SubscriptionService.DEFAULT_TIMEZONE,
             sort_order=int(payload.get("sort_order") or 0),
             status=payload.get("status") or "active",
+            sale_price_cny=payload.get("sale_price_cny") or Decimal("0"),
+            agent_cost_price_cny=payload.get("agent_cost_price_cny") or Decimal("0"),
+            online_sale_enabled=int(payload.get("online_sale_enabled") or 0),
             description=payload.get("description"),
         )
         db.add(plan)
@@ -694,6 +743,12 @@ class SubscriptionService:
             if duplicate:
                 raise ServiceException(400, "套餐编码已存在", "DUPLICATE_PLAN_CODE")
 
+        SubscriptionService._validate_plan_sale_config(
+            payload["sale_price_cny"] if "sale_price_cny" in payload else getattr(plan, "sale_price_cny", 0),
+            payload["agent_cost_price_cny"] if "agent_cost_price_cny" in payload else getattr(plan, "agent_cost_price_cny", 0),
+            payload["online_sale_enabled"] if "online_sale_enabled" in payload else getattr(plan, "online_sale_enabled", 0),
+        )
+
         for field in (
             "plan_code",
             "plan_name",
@@ -706,6 +761,9 @@ class SubscriptionService:
             "reset_timezone",
             "sort_order",
             "status",
+            "sale_price_cny",
+            "agent_cost_price_cny",
+            "online_sale_enabled",
             "description",
         ):
             if field in payload and payload[field] is not None:
@@ -714,6 +772,31 @@ class SubscriptionService:
         db.commit()
         db.refresh(plan)
         return SubscriptionService._serialize_plan(plan)
+
+    @staticmethod
+    def list_public_purchasable_plans(db: Session, user: SysUser) -> list[dict]:
+        SubscriptionService.ensure_default_plans(db)
+        query = (
+            db.query(SubscriptionPlan)
+            .filter(
+                SubscriptionPlan.status == "active",
+                SubscriptionPlan.online_sale_enabled == 1,
+                SubscriptionPlan.sale_price_cny > 0,
+            )
+        )
+        if user.agent_id:
+            query = query.filter(
+                SubscriptionPlan.agent_cost_price_cny > 0,
+                SubscriptionPlan.agent_cost_price_cny <= SubscriptionPlan.sale_price_cny,
+            )
+        plans = query.order_by(SubscriptionPlan.sort_order.asc(), SubscriptionPlan.id.asc()).all()
+        items = []
+        for plan in plans:
+            item = SubscriptionService._serialize_plan(plan)
+            item.pop("agent_cost_price_cny", None)
+            item.pop("agent_rebate_cny_preview", None)
+            items.append(item)
+        return items
 
     @staticmethod
     def _serialize_cycle(cycle: Optional[SubscriptionUsageCycle], quota_limit: Decimal | None = None) -> Optional[dict]:
@@ -741,6 +824,7 @@ class SubscriptionService:
         user: Optional[SysUser] = None,
         usage_summary: Optional[dict] = None,
         current_cycle: Optional[object] = None,
+        source_info: Optional[dict] = None,
     ) -> dict:
         effective_quota_metric = (
             SubscriptionService._get_effective_quota_metric(subscription)
@@ -782,10 +866,100 @@ class SubscriptionService:
                 effective_quota_value,
             ),
         }
+        result.update(source_info or SubscriptionService._default_subscription_source_info(subscription))
         if user is not None:
             result["username"] = user.username
             result["email"] = user.email
         return result
+
+    @staticmethod
+    def _default_subscription_source_info(subscription: UserSubscription) -> dict:
+        created_by = getattr(subscription, "created_by", None)
+        return {
+            "subscription_source": "legacy",
+            "subscription_source_text": "历史记录",
+            "source_order_no": None,
+            "source_payment_channel": None,
+            "source_amount_cny": None,
+            "source_operator_id": created_by,
+            "source_operator_role": None,
+            "source_operator_name": None,
+        }
+
+    @staticmethod
+    def _build_subscription_source_map(db: Session, subscriptions: list[UserSubscription]) -> dict[int, dict]:
+        subscription_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
+        if not subscription_ids:
+            return {}
+
+        source_map = {
+            sub.id: SubscriptionService._default_subscription_source_info(sub)
+            for sub in subscriptions
+            if getattr(sub, "id", None)
+        }
+
+        paid_orders = (
+            db.query(PaymentRechargeOrder)
+            .filter(
+                PaymentRechargeOrder.subscription_id.in_(subscription_ids),
+                PaymentRechargeOrder.recharge_type == "subscription",
+                PaymentRechargeOrder.status == "paid",
+            )
+            .order_by(PaymentRechargeOrder.id.desc())
+            .all()
+        )
+        for order in paid_orders:
+            if order.subscription_id in source_map and source_map[order.subscription_id]["subscription_source"] != "online_recharge":
+                source_map[order.subscription_id] = {
+                    "subscription_source": "online_recharge",
+                    "subscription_source_text": "线上充值",
+                    "source_order_no": order.order_no,
+                    "source_payment_channel": order.payment_channel,
+                    "source_amount_cny": float(SubscriptionService._normalize_decimal(order.amount_cny)),
+                    "source_operator_id": None,
+                    "source_operator_role": None,
+                    "source_operator_name": None,
+                }
+
+        created_by_ids = [
+            sub.created_by
+            for sub in subscriptions
+            if getattr(sub, "created_by", None) and source_map.get(sub.id, {}).get("subscription_source") != "online_recharge"
+        ]
+        if not created_by_ids:
+            return source_map
+
+        operators = {
+            user.id: user
+            for user in db.query(SysUser).filter(SysUser.id.in_(list(set(created_by_ids)))).all()
+        }
+        for sub in subscriptions:
+            if source_map.get(sub.id, {}).get("subscription_source") == "online_recharge":
+                continue
+            operator = operators.get(sub.created_by)
+            if not operator:
+                continue
+            role = str(operator.role or "")
+            if role == "agent":
+                source = "agent_grant"
+                source_text = "代理端直充"
+            elif role == "admin":
+                source = "admin_grant"
+                source_text = "管理端直充"
+            else:
+                source = "manual_grant"
+                source_text = "人工发放"
+            source_map[sub.id] = {
+                "subscription_source": source,
+                "subscription_source_text": source_text,
+                "source_order_no": None,
+                "source_payment_channel": None,
+                "source_amount_cny": None,
+                "source_operator_id": operator.id,
+                "source_operator_role": role,
+                "source_operator_name": operator.username,
+            }
+        return source_map
 
     @staticmethod
     def _subscription_usage_filter(subscription: UserSubscription):
@@ -1186,13 +1360,6 @@ class SubscriptionService:
         now: Optional[datetime] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
-        if SubscriptionService._is_effectively_active(subscription, usage_now):
-            cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now)
-            return SubscriptionService._serialize_cycle(
-                cycle,
-                SubscriptionService._get_effective_quota_limit(subscription),
-            )
-
         cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
             usage_now,
             subscription.reset_timezone,
@@ -1558,6 +1725,7 @@ class SubscriptionService:
             .all()
         )
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
+        source_map = SubscriptionService._build_subscription_source_map(db, subscriptions)
         usage_now = SubscriptionService.get_current_time()
         result = []
         for subscription in subscriptions:
@@ -1570,6 +1738,7 @@ class SubscriptionService:
                     subscription,
                     usage_summary=usage_summary_map.get(subscription.id),
                     current_cycle=current_cycle,
+                    source_info=source_map.get(subscription.id),
                 )
             )
         return result, total
@@ -1614,6 +1783,7 @@ class SubscriptionService:
         )
         subscriptions = [sub for sub, _ in rows]
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
+        source_map = SubscriptionService._build_subscription_source_map(db, subscriptions)
         usage_now = SubscriptionService.get_current_time()
         result = []
         for subscription, user in rows:
@@ -1627,6 +1797,7 @@ class SubscriptionService:
                     user=user,
                     usage_summary=usage_summary_map.get(subscription.id),
                     current_cycle=current_cycle,
+                    source_info=source_map.get(subscription.id),
                 )
             )
         return result, total
@@ -1693,6 +1864,7 @@ class SubscriptionService:
         )
         subscriptions = [sub for sub, _ in rows]
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
+        source_map = SubscriptionService._build_subscription_source_map(db, subscriptions)
         result = []
         for subscription, user in rows:
             current_cycle = None
@@ -1703,6 +1875,7 @@ class SubscriptionService:
                 user=user,
                 usage_summary=usage_summary_map.get(subscription.id),
                 current_cycle=current_cycle,
+                source_info=source_map.get(subscription.id),
             )
             remaining_seconds = max(
                 0,
@@ -1750,6 +1923,7 @@ class SubscriptionService:
         )
         subscriptions = [sub for sub, _ in rows]
         usage_summary_map = SubscriptionService._build_usage_summary_map(db, subscriptions)
+        source_map = SubscriptionService._build_subscription_source_map(db, subscriptions)
         usage_now = SubscriptionService.get_current_time()
         result = []
         for subscription, user in rows:
@@ -1763,6 +1937,7 @@ class SubscriptionService:
                     user=user,
                     usage_summary=usage_summary_map.get(subscription.id),
                     current_cycle=current_cycle,
+                    source_info=source_map.get(subscription.id),
                 )
             )
         return result, total
@@ -1788,6 +1963,7 @@ class SubscriptionService:
             subscription.id,
             SubscriptionService._empty_usage_summary(),
         )
+        source_map = SubscriptionService._build_subscription_source_map(db, [subscription])
         current_cycle = None
         if SubscriptionService._requires_daily_cycle(subscription):
             usage_now = SubscriptionService.get_current_time()
@@ -1812,6 +1988,7 @@ class SubscriptionService:
                 user=user,
                 usage_summary=usage_summary,
                 current_cycle=current_cycle,
+                source_info=source_map.get(subscription.id),
             ),
             "summary": usage_summary,
             "records": [SubscriptionService._serialize_consumption_record(record) for record in records],

@@ -15,21 +15,17 @@
     </div>
     <template v-else>
     <div class="recharge-hero">
-      <div class="hero-aurora">
-        <div class="hero-blob blob-1"></div>
-        <div class="hero-blob blob-2"></div>
-      </div>
       <div class="hero-content">
         <div class="hero-text">
-          <h1 class="animate__animated animate__fadeInLeft">在线充值</h1>
-          <p class="animate__animated animate__fadeInLeft" style="animation-delay: 0.1s">
-            {{ siteName }} 当前支持余额和图片积分在线充值，支付成功后会自动到账。
+          <h1>在线充值</h1>
+          <p>
+            {{ siteName }} 当前支持余额、图片积分{{ subscriptionOnlineRechargeEnabled ? '和套餐在线购买' : '' }}，支付成功后会自动到账。
           </p>
-          <div class="ratio-simple animate__animated animate__fadeInUp" style="animation-delay: 0.2s">
+          <div class="ratio-simple">
             <span class="ratio-text">{{ currentRateText }}</span>
           </div>
         </div>
-        <div class="hero-cards animate__animated animate__fadeInRight">
+        <div class="hero-cards">
           <div class="glass-card balance-card">
             <div class="card-icon"><a-icon type="wallet" /></div>
             <div class="card-info">
@@ -59,72 +55,135 @@
         <a-card class="premium-card" :bordered="false">
           <div class="panel-head">
             <div class="title-group">
-              <h3>选择充值套餐</h3>
+              <h3>选择充值方式</h3>
               <p>即时到账 • 安全支付 • 无需激活码</p>
             </div>
           </div>
 
-          <div class="recharge-type-switch">
-            <div class="type-card" :class="{ active: form.recharge_type === 'balance' }" @click="selectRechargeType('balance')">
-              <a-icon type="wallet" />
-              <div>
-                <strong>余额充值</strong>
-                <span>1人民币 = 5美刀</span>
+          <!-- 支付大类模式切换 -->
+          <div class="pay-mode-switch">
+            <div class="mode-tab" :class="{ active: activePayMode === 'volume' }" @click="changePayMode('volume')">
+              <a-icon type="database" class="mode-icon" />
+              <div class="mode-info">
+                <span class="mode-title">按量付费</span>
+                <span class="mode-desc">充值余额或图片积分，随充随用</span>
               </div>
             </div>
-            <div class="type-card" :class="{ active: form.recharge_type === 'image_credit' }" @click="selectRechargeType('image_credit')">
-              <a-icon type="picture" />
-              <div>
-                <strong>图片积分充值</strong>
-                <span>1人民币 = 5积分</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="pricing-grid">
             <div
-              v-for="(item, index) in pricingPackages"
-              :key="index"
-              class="pricing-card"
-              :class="{ active: Number(form.amount_cny) === item.amount, popular: item.popular }"
-              @click="selectAmount(item.amount)"
+              v-if="subscriptionOnlineRechargeEnabled"
+              class="mode-tab"
+              :class="{ active: activePayMode === 'package' }"
+              @click="changePayMode('package')"
             >
-              <div v-if="item.popular" class="popular-badge">最受欢迎</div>
-              <div class="pkg-price">
-                <span class="currency">￥</span>
-                <span class="amount">{{ item.amount }}</span>
+              <a-icon type="crown" class="mode-icon" />
+              <div class="mode-info">
+                <span class="mode-title">套餐付费</span>
+                <span class="mode-desc">购买订阅套餐，立享超值优惠</span>
               </div>
-              <div class="pkg-value">到账 {{ estimateAmountText(item.amount) }}</div>
-              <div class="pkg-action">
-                <div class="select-btn">{{ Number(form.amount_cny) === item.amount ? '已选择' : '点击选择' }}</div>
-              </div>
-
             </div>
           </div>
 
-          <div class="custom-section">
-            <div class="section-title">或输入自定义金额</div>
-            <div class="custom-input-wrapper">
-              <div class="input-container">
-                <span class="prefix">￥</span>
-                <a-input-number
-                  v-model="form.amount_cny"
-                  :min="1"
-                  :step="0.01"
-                  :precision="2"
-                  placeholder="0.00"
-                  class="custom-input"
-                />
+          <!-- 统一的内容承载区，设置统一的最小高度 -->
+          <div class="recharge-content-wrapper">
+            <div v-if="activePayMode === 'volume'" class="volume-content-panel">
+              <!-- 按量付费二级细类切换 -->
+              <transition name="fade">
+                <div class="volume-sub-switch">
+                  <div class="sub-type-card" :class="{ active: form.recharge_type === 'balance' }" @click="selectRechargeType('balance')">
+                    <div class="sub-icon-box">
+                      <a-icon type="wallet" />
+                    </div>
+                    <div class="sub-info">
+                      <strong>余额充值</strong>
+                      <span>1人民币 = 5美刀</span>
+                    </div>
+                  </div>
+                  <div class="sub-type-card" :class="{ active: form.recharge_type === 'image_credit' }" @click="selectRechargeType('image_credit')">
+                    <div class="sub-icon-box">
+                      <a-icon type="picture" />
+                    </div>
+                    <div class="sub-info">
+                      <strong>图片积分充值</strong>
+                      <span>1人民币 = 5积分</span>
+                    </div>
+                  </div>
+                </div>
+              </transition>
+
+              <!-- 快捷包网格 -->
+              <div class="pricing-grid">
+                <div
+                  v-for="(item, index) in pricingPackages"
+                  :key="index"
+                  class="pricing-card"
+                  :class="{ active: Number(form.amount_cny) === item.amount, popular: item.popular }"
+                  @click="selectAmount(item.amount)"
+                >
+                  <div v-if="item.popular" class="popular-badge">最受欢迎</div>
+                  <div class="pkg-price">
+                    <span class="currency">￥</span>
+                    <span class="amount">{{ item.amount }}</span>
+                  </div>
+                  <div class="pkg-value">到账 {{ estimateAmountText(item.amount) }}</div>
+                  <div class="pkg-action">
+                    <div class="select-btn">{{ Number(form.amount_cny) === item.amount ? '已选择' : '点击选择' }}</div>
+                  </div>
+                </div>
               </div>
-              <div class="conversion-arrow">
-                <a-icon type="arrow-right" />
-              </div>
-              <div class="result-display">
-                <span class="label">到账</span>
-                <span class="value">{{ estimatedAmountText }}</span>
+
+              <!-- 自定义金额 -->
+              <div class="custom-section">
+                <div class="section-title">或输入自定义金额</div>
+                <div class="custom-input-wrapper">
+                  <div class="input-container">
+                    <span class="prefix">￥</span>
+                    <a-input-number
+                      v-model="form.amount_cny"
+                      :min="1"
+                      :step="0.01"
+                      :precision="2"
+                      placeholder="0.00"
+                      class="custom-input"
+                    />
+                  </div>
+                  <div class="conversion-arrow">
+                    <a-icon type="arrow-right" />
+                  </div>
+                  <div class="result-display">
+                    <span class="label">到账</span>
+                    <span class="value">{{ estimatedAmountText }}</span>
+                  </div>
+                </div>
               </div>
             </div>
 
+            <!-- 套餐付费面板 -->
+            <div v-else class="package-content-panel">
+              <div class="subscription-grid">
+                <div
+                  v-for="plan in subscriptionPlans"
+                  :key="plan.id"
+                  class="subscription-card"
+                  :class="{ active: Number(form.subscription_plan_id) === Number(plan.id) }"
+                  @click="selectSubscriptionPlan(plan)"
+                >
+                  <div class="subscription-card-head">
+                    <a-tag :color="plan.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
+                      {{ plan.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
+                    </a-tag>
+                    <strong>￥{{ formatMoney(plan.sale_price_cny) }}</strong>
+                  </div>
+                  <div class="subscription-name">{{ plan.plan_name }}</div>
+                  <div class="subscription-meta">
+                    <span>{{ plan.duration_days }} 天</span>
+                    <span>{{ formatPlanQuota(plan) }}</span>
+                  </div>
+                  <div class="subscription-select">{{ Number(form.subscription_plan_id) === Number(plan.id) ? '已选择' : '点击选择' }}</div>
+                </div>
+                <a-empty v-if="!subscriptionPlansLoading && !subscriptionPlans.length" description="暂无可在线购买的套餐" />
+                <a-spin v-if="subscriptionPlansLoading" />
+              </div>
+            </div>
           </div>
 
           <div class="pay-actions">
@@ -249,7 +308,7 @@
           </div>
         </template>
         <template slot="rechargeType" slot-scope="text">
-          <a-tag :color="text === 'image_credit' ? 'cyan' : 'blue'">{{ rechargeTypeText(text) }}</a-tag>
+          <a-tag :color="text === 'subscription' ? 'purple' : (text === 'image_credit' ? 'cyan' : 'blue')">{{ rechargeTypeText(text) }}</a-tag>
         </template>
         <template slot="status" slot-scope="text">
           <div class="status-badge" :class="text">
@@ -350,7 +409,13 @@
 </template>
 
 <script>
-import { createUserRechargeOrder, getUserRechargeOrder, listUserRechargeOrders, syncUserRechargeOrder } from '@/api/payment'
+import {
+  createUserRechargeOrder,
+  getUserRechargeOrder,
+  listUserRechargeOrders,
+  listUserSubscriptionPlans,
+  syncUserRechargeOrder
+} from '@/api/payment'
 import { getSiteConfig, getBalance } from '@/api/user'
 import { formatBeijingTime } from '@/utils'
 
@@ -366,6 +431,8 @@ export default {
       autoSyncRemaining: 0,
       userBalance: 0,
       imageCreditBalance: 0,
+      subscriptionPlans: [],
+      subscriptionPlansLoading: false,
       pricingPackages: [
         { amount: 10, popular: false },
         { amount: 20, popular: false },
@@ -375,10 +442,12 @@ export default {
         { amount: 500, popular: false }
       ],
       quickAmounts: [10, 20, 50, 100, 200, 500],
+      activePayMode: 'volume',
       form: {
         amount_cny: 10,
         payment_channel: 'alipay',
-        recharge_type: 'balance'
+        recharge_type: 'balance',
+        subscription_plan_id: null
       },
 
       currentOrder: {},
@@ -418,13 +487,23 @@ export default {
       return this.formatCredits((Number(this.form.amount_cny || 0) || 0) * 5)
     },
     estimatedAmountText() {
+      if (this.form.recharge_type === 'subscription') {
+        const plan = this.selectedSubscriptionPlan
+        return plan ? `${plan.plan_name} / ${plan.duration_days} 天` : '请选择套餐'
+      }
       if (this.form.recharge_type === 'image_credit') {
         return `${this.estimatedCredits} 积分`
       }
       return `$${this.estimatedUsd}`
     },
     currentRateText() {
+      if (this.form.recharge_type === 'subscription') {
+        return '套餐购买后自动顺延当前有效期'
+      }
       return this.form.recharge_type === 'image_credit' ? '1人民币 = 5图片积分' : '1人民币 = 5美刀'
+    },
+    selectedSubscriptionPlan() {
+      return this.subscriptionPlans.find(item => Number(item.id) === Number(this.form.subscription_plan_id)) || null
     },
     wechatQrImageUrl() {
       const codeUrl = this.currentOrder.wechat_code_url || this.currentOrder.code_url
@@ -442,6 +521,9 @@ export default {
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
     },
+    subscriptionOnlineRechargeEnabled() {
+      return Boolean(this.siteConfig.subscription_online_recharge_enabled)
+    },
     supportWechat() {
       return this.siteConfig.support_wechat || '未配置'
     },
@@ -454,7 +536,16 @@ export default {
     if (!this.onlineRechargeEnabled) {
       return
     }
-    await Promise.all([this.fetchOrders(), this.fetchBalance()])
+    if (!this.subscriptionOnlineRechargeEnabled && this.form.recharge_type === 'subscription') {
+      this.form.recharge_type = 'balance'
+      this.activePayMode = 'volume'
+    }
+    await Promise.all([this.fetchOrders(), this.fetchBalance(), this.fetchSubscriptionPlans()])
+    if (this.form.recharge_type === 'subscription') {
+      this.activePayMode = 'package'
+    } else {
+      this.activePayMode = 'volume'
+    }
     if (this.$route.query.order_no) {
       this.currentOrder = { order_no: this.$route.query.order_no, status: this.$route.query.trade_status || 'pending' }
       await this.fetchCurrentOrder()
@@ -478,6 +569,19 @@ export default {
       const num = Number(value || 0)
       return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
     },
+    formatNumber(value) {
+      return Number(value || 0).toLocaleString('zh-CN')
+    },
+    formatPlanQuota(plan) {
+      const metric = plan.resolved_quota_metric || plan.quota_metric
+      const value = plan.resolved_quota_value !== undefined && plan.resolved_quota_value !== null
+        ? plan.resolved_quota_value
+        : plan.quota_value
+      if (metric === 'cost_usd') {
+        return `$${Number(value || 0).toFixed(2)}/天`
+      }
+      return `${this.formatNumber(value)} Token/天`
+    },
     estimateAmountText(amount) {
       if (this.form.recharge_type === 'image_credit') {
         return `${this.formatCredits(Number(amount || 0) * 5)} 积分`
@@ -485,6 +589,9 @@ export default {
       return `$${this.formatUsd(Number(amount || 0) * 5)}`
     },
     orderCreditText(record) {
+      if ((record && record.recharge_type) === 'subscription') {
+        return `${record.plan_name_snapshot || '套餐'} / ${record.duration_days_snapshot || 0} 天`
+      }
       if ((record && record.recharge_type) === 'image_credit') {
         return `${this.formatCredits(record.credited_image_credits)} 积分`
       }
@@ -493,7 +600,8 @@ export default {
     rechargeTypeText(type) {
       const map = {
         balance: '余额',
-        image_credit: '图片积分'
+        image_credit: '图片积分',
+        subscription: '套餐'
       }
       return map[type || 'balance'] || type || '-'
     },
@@ -529,7 +637,37 @@ export default {
       this.form.payment_channel = channel
     },
     selectRechargeType(type) {
+      if (type === 'subscription' && !this.subscriptionOnlineRechargeEnabled) {
+        this.$message.warning('当前站点未开启套餐在线充值')
+        return
+      }
       this.form.recharge_type = type
+      if (type === 'subscription') {
+        this.activePayMode = 'package'
+        if (!this.form.subscription_plan_id && this.subscriptionPlans.length) {
+          this.form.subscription_plan_id = this.subscriptionPlans[0].id
+        }
+      } else {
+        this.activePayMode = 'volume'
+      }
+    },
+    changePayMode(mode) {
+      if (mode === 'package' && !this.subscriptionOnlineRechargeEnabled) {
+        this.$message.warning('当前站点未开启套餐在线充值')
+        return
+      }
+      this.activePayMode = mode
+      if (mode === 'package') {
+        this.form.recharge_type = 'subscription'
+        if (!this.form.subscription_plan_id && this.subscriptionPlans.length) {
+          this.form.subscription_plan_id = this.subscriptionPlans[0].id
+        }
+      } else {
+        this.form.recharge_type = 'balance'
+      }
+    },
+    selectSubscriptionPlan(plan) {
+      this.form.subscription_plan_id = plan.id
     },
     async fetchBalance() {
       try {
@@ -562,6 +700,24 @@ export default {
         this.loading = false
       }
     },
+    async fetchSubscriptionPlans() {
+      if (!this.subscriptionOnlineRechargeEnabled) {
+        this.subscriptionPlans = []
+        this.form.subscription_plan_id = null
+        return
+      }
+      this.subscriptionPlansLoading = true
+      try {
+        const res = await listUserSubscriptionPlans()
+        const data = res.data || {}
+        this.subscriptionPlans = data.list || []
+        if (!this.form.subscription_plan_id && this.subscriptionPlans.length) {
+          this.form.subscription_plan_id = this.subscriptionPlans[0].id
+        }
+      } finally {
+        this.subscriptionPlansLoading = false
+      }
+    },
     handleTableChange(pagination) {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
@@ -588,14 +744,31 @@ export default {
         this.$message.warning('当前站点未开启在线充值')
         return
       }
+      if (this.form.recharge_type === 'subscription' && !this.subscriptionOnlineRechargeEnabled) {
+        this.$message.warning('当前站点未开启套餐在线充值')
+        return
+      }
       const amount = Number(this.form.amount_cny || 0)
-      if (amount < 1) {
+      if (this.form.recharge_type === 'subscription' && !this.form.subscription_plan_id) {
+        this.$message.warning('请选择要购买的套餐')
+        return
+      }
+      if (this.form.recharge_type !== 'subscription' && amount < 1) {
         this.$message.warning('充值金额最低为 1 元')
         return
       }
       this.creating = true
       try {
-        const res = await createUserRechargeOrder({ amount_cny: amount, payment_channel: this.form.payment_channel, recharge_type: this.form.recharge_type })
+        const payloadData = {
+          payment_channel: this.form.payment_channel,
+          recharge_type: this.form.recharge_type
+        }
+        if (this.form.recharge_type === 'subscription') {
+          payloadData.subscription_plan_id = this.form.subscription_plan_id
+        } else {
+          payloadData.amount_cny = amount
+        }
+        const res = await createUserRechargeOrder(payloadData)
         const payload = res.data || {}
         this.currentOrder = payload.order || {}
         await this.fetchOrders()
@@ -669,7 +842,8 @@ export default {
         this.currentOrder = res.data || this.currentOrder
         if (this.currentOrder.status === 'paid') {
           if (!silent) {
-            this.$message.success(`充值成功，${this.rechargeTypeText(this.currentOrder.recharge_type)}已到账`)
+            const actionText = this.currentOrder.recharge_type === 'subscription' ? '套餐已开通' : `${this.rechargeTypeText(this.currentOrder.recharge_type)}已到账`
+            this.$message.success(`支付成功，${actionText}`)
           }
           this.stopAutoSyncPolling()
           this.wechatModalVisible = false
@@ -697,6 +871,7 @@ export default {
         }
         if (normalizedCode === 'INVALID_RECHARGE_AMOUNT' || normalizedMessage.includes('金额必须大于 0')) {
           this.stopAutoSyncPolling()
+
           return
         }
         if (!silent) {
@@ -761,49 +936,12 @@ export default {
   position: relative;
   overflow: hidden;
   border-radius: 16px;
-  background:
-    radial-gradient(circle at 10% 0%, rgba(102, 126, 234, 0.35), transparent 34%),
-    radial-gradient(circle at 80% 20%, rgba(45, 212, 191, 0.24), transparent 32%),
-    #0f172a;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
   color: #fff;
-  padding: 12px 20px;
-  min-height: 100px;
+  padding: 16px 24px;
   display: flex;
   align-items: center;
-}
-
-
-
-
-.hero-aurora {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  opacity: 0.35;
-}
-
-.hero-blob {
-  position: absolute;
-  border-radius: 50%;
-}
-
-.blob-1 {
-  width: 400px;
-  height: 400px;
-  background: var(--primary-color);
-  top: -100px;
-  left: -50px;
-}
-
-.blob-2 {
-  width: 300px;
-  height: 300px;
-  background: #2dd4bf;
-  bottom: -50px;
-  right: 10%;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.08);
 }
 
 .hero-content {
@@ -813,7 +951,13 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 40px;
+  gap: 24px;
+  flex-wrap: nowrap;
+}
+
+.hero-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .hero-text h1 {
@@ -826,7 +970,6 @@ export default {
 
 .hero-text p {
   font-size: 13px;
-
   color: rgba(255, 255, 255, 0.7);
   max-width: 440px;
   margin-bottom: 8px;
@@ -1150,78 +1293,188 @@ export default {
   letter-spacing: 0.5px;
 }
 
-.recharge-type-switch {
+/* --- New Premium Pay Mode Switcher (Performance Optimized) --- */
+.pay-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.mode-tab {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border: 2px solid #e2e8f0;
+  border-radius: 16px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.mode-tab:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.mode-icon {
+  font-size: 22px;
+  color: #64748b;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: #f1f5f9;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.mode-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mode-title {
+  display: block;
+  font-size: 15.5px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.mode-desc {
+  display: block;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+/* 按量付费激活 */
+.mode-tab:first-child.active {
+  border-color: #0f766e;
+  background: rgba(15, 118, 110, 0.02);
+
+  .mode-icon {
+    color: #0f766e;
+    background: #ccfbf1;
+  }
+}
+
+/* 套餐付费激活 */
+.mode-tab:last-child.active {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.02);
+
+  .mode-icon {
+    color: #7c3aed;
+    background: #f3e8ff;
+  }
+}
+
+/* --- 按量细分充值类型选择器 --- */
+.volume-sub-switch {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
+  background: #f8fafc;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px dashed #e2e8f0;
 }
 
-.type-card {
+.sub-type-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  background: #fff;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
-.type-card .anticon {
-  width: 34px;
-  height: 34px;
+.sub-icon-box {
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  color: #0f766e;
-  background: #ccfbf1;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 14px;
+  transition: color 0.2s ease, background-color 0.2s ease;
 }
 
-.type-card strong,
-.type-card span {
-  display: block;
+.sub-info {
+  display: flex;
+  flex-direction: column;
 }
 
-.type-card strong {
-  color: #0f172a;
-  font-size: 15px;
+.sub-info strong {
+  font-size: 13.5px;
+  color: #334155;
+  font-weight: 700;
+  transition: color 0.2s ease;
 }
 
-.type-card span {
+.sub-info span {
+  font-size: 11px;
   color: #64748b;
-  font-size: 12px;
 }
 
-.type-card.active {
-  border-color: #0f766e;
-  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.12);
+/* 子激活状态 */
+.sub-type-card.active {
+  background: #ffffff;
+  border-color: #e2e8f0;
+}
+
+.sub-type-card:first-child.active {
+  .sub-icon-box {
+    background: #e0f2fe;
+    color: #0284c7;
+  }
+  strong {
+    color: #0284c7;
+  }
+}
+
+.sub-type-card:last-child.active {
+  .sub-icon-box {
+    background: #ccfbf1;
+    color: #0d9488;
+  }
+  strong {
+    color: #0d9488;
+  }
 }
 
 
 
 .hero-cards {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 12px;
-  min-width: 240px;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .glass-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: 10px;
+  padding: 10px 14px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 18px;
+  border-radius: 14px;
   transition: transform 0.2s ease, background-color 0.2s ease;
 }
 
 .glass-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.12);
 }
 
@@ -1312,6 +1565,17 @@ export default {
 }
 
 
+/* --- Content Wrapper (Unified Height) --- */
+.recharge-content-wrapper {
+  min-height: 380px;
+}
+
+@media (max-width: 992px) {
+  .recharge-content-wrapper {
+    min-height: auto;
+  }
+}
+
 /* --- Pricing Cards --- */
 .pricing-grid {
   display: grid;
@@ -1326,7 +1590,15 @@ export default {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .recharge-type-switch {
+  .pay-mode-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .volume-sub-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .subscription-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1340,12 +1612,12 @@ export default {
 
 .pricing-card {
   position: relative;
-  padding: 12px 10px;
+  padding: 14px 10px;
   background: #f8fafc;
-  border: 2px solid #f1f5f9;
+  border: 2px solid #e2e8f0;
   border-radius: 16px;
   cursor: pointer;
-  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1357,14 +1629,11 @@ export default {
 .pricing-card:hover {
   background: #fff;
   border-color: var(--primary-color);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.08);
 }
 
 .pricing-card.active {
   background: #fff;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
 }
 
 .pricing-card.popular {
@@ -1423,6 +1692,80 @@ export default {
 .pricing-card.active .select-btn {
   background: var(--primary-gradient);
   color: #fff;
+}
+
+.subscription-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.subscription-card {
+  padding: 14px;
+  border: 2px solid #e2e8f0;
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.subscription-card:hover,
+.subscription-card.active {
+  border-color: #7c3aed;
+  background: #faf5ff;
+}
+
+.subscription-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.subscription-card-head strong {
+  color: #7c3aed;
+  font-size: 18px;
+}
+
+.subscription-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.subscription-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 42px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.subscription-select {
+  margin-top: 10px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #475569;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.subscription-card.active .subscription-select {
+  background: #7c3aed;
+  color: #fff;
+}
+
+
+@media (max-width: 992px) {
+  .subscription-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* --- Custom Amount Section --- */
@@ -1615,7 +1958,7 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .step-item {
@@ -1638,17 +1981,17 @@ export default {
 }
 
 .step-text {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #475569;
-  line-height: 1.4;
+  line-height: 1.6;
 }
 
 .arrival-reminder {
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid #fde68a;
-  border-radius: 16px;
-  background: #fffbeb;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(217, 119, 6, 0.15);
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.03);
 }
 
 .reminder-head {
@@ -1656,16 +1999,16 @@ export default {
   align-items: center;
   gap: 6px;
   margin-bottom: 6px;
-  color: #92400e;
+  color: #b45309;
   font-size: 13px;
   font-weight: 800;
 }
 
 .arrival-reminder p {
   margin: 0 0 8px;
-  color: #78350f;
+  color: #b45309;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .reminder-contact {
@@ -1823,6 +2166,8 @@ export default {
 
   .hero-cards {
     width: 100%;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .pay-actions {

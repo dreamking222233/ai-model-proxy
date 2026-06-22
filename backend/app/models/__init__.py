@@ -15,6 +15,7 @@ from app.models.agent import (
     AgentSettlementRecord,
     AgentSettlementBatch,
     AgentSettlementBatchItem,
+    AgentSubscriptionSaleRecord,
 )
 from app.models.channel import Channel
 from app.models.model import (
@@ -74,6 +75,7 @@ __all__ = [
     "AgentSettlementRecord",
     "AgentSettlementBatch",
     "AgentSettlementBatchItem",
+    "AgentSubscriptionSaleRecord",
     "Channel",
     "UnifiedModel",
     "ModelChannelMapping",

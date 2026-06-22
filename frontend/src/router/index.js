@@ -165,6 +165,12 @@ const routes = [
         meta: { title: '套餐管理' }
       },
       {
+        path: 'subscription-sales',
+        name: 'AdminAgentSubscriptionSales',
+        component: () => import('@/views/admin/AgentSubscriptionSales.vue'),
+        meta: { title: '代理套餐销售' }
+      },
+      {
         path: 'profile',
         name: 'AdminProfile',
         component: () => import('@/views/user/Profile.vue'),
@@ -318,6 +324,12 @@ const routes = [
         name: 'AgentSubscriptionManage',
         component: () => import('@/views/agent/SubscriptionManage.vue'),
         meta: { title: '套餐管理' }
+      },
+      {
+        path: 'subscription-sales',
+        name: 'AgentSubscriptionSales',
+        component: () => import('@/views/agent/SubscriptionSales.vue'),
+        meta: { title: '套餐销售' }
       },
       {
         path: 'logs',

@@ -81,6 +81,8 @@ CREATE TABLE `agent` (
     `support_qq` VARCHAR(64) DEFAULT NULL,
     `quickstart_api_base_url` VARCHAR(512) DEFAULT NULL,
     `allow_self_register` TINYINT NOT NULL DEFAULT 1,
+    `online_recharge_enabled` SMALLINT NOT NULL DEFAULT 1 COMMENT '代理站在线充值开关 1=开启 0=关闭',
+    `subscription_online_recharge_enabled` SMALLINT NOT NULL DEFAULT 1 COMMENT '代理站套餐在线充值开关 1=开启 0=关闭',
     `theme_config_json` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -315,6 +317,42 @@ CREATE TABLE `agent_settlement_record` (
     KEY `idx_agent_settlement_resource` (`resource_type`, `plan_id`),
     KEY `idx_agent_settlement_user` (`target_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理授信销售待结算记录';
+
+-- ============================================================
+-- 10.3.1 agent_subscription_sale_record - 代理套餐销售返现核销记录
+-- ============================================================
+CREATE TABLE `agent_subscription_sale_record` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `order_id` BIGINT UNSIGNED NOT NULL,
+    `order_no` VARCHAR(64) NOT NULL,
+    `agent_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `subscription_id` BIGINT UNSIGNED DEFAULT NULL,
+    `plan_id` BIGINT UNSIGNED DEFAULT NULL,
+    `plan_code_snapshot` VARCHAR(64) DEFAULT NULL,
+    `plan_name_snapshot` VARCHAR(128) NOT NULL,
+    `plan_kind_snapshot` VARCHAR(32) DEFAULT NULL,
+    `duration_days_snapshot` INT DEFAULT NULL,
+    `sale_price_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `agent_cost_price_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `agent_rebate_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `payment_channel` VARCHAR(32) NOT NULL,
+    `payment_status` VARCHAR(16) NOT NULL DEFAULT 'paid',
+    `rebate_status` VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/settled/void',
+    `settled_at` DATETIME DEFAULT NULL,
+    `settled_by` BIGINT UNSIGNED DEFAULT NULL,
+    `settlement_remark` VARCHAR(255) DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_agent_subscription_sale_order` (`order_no`),
+    KEY `idx_agent_subscription_sale_agent_status` (`agent_id`, `rebate_status`),
+    KEY `idx_agent_subscription_sale_created` (`created_at`),
+    KEY `idx_agent_subscription_sale_plan` (`plan_id`),
+    KEY `idx_agent_subscription_sale_user` (`user_id`),
+    KEY `idx_agent_subscription_sale_subscription` (`subscription_id`),
+    KEY `idx_agent_subscription_sale_settled_by` (`settled_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理套餐销售返现核销记录表';
 
 -- ============================================================
 -- 10.4 agent_settlement_batch - 代理结算批次
@@ -818,6 +856,89 @@ CREATE TABLE `image_credit_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='图片积分流水表';
 
 -- ============================================================
+-- 14.0.1 payment_recharge_order - 在线充值订单表
+-- ============================================================
+CREATE TABLE `payment_recharge_order` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `order_no` VARCHAR(64) NOT NULL,
+    `payment_channel` VARCHAR(32) NOT NULL DEFAULT 'alipay',
+    `recharge_type` VARCHAR(32) NOT NULL DEFAULT 'balance' COMMENT '充值类型: balance/image_credit/subscription',
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `agent_id` BIGINT UNSIGNED DEFAULT NULL,
+    `site_scope` VARCHAR(16) NOT NULL DEFAULT 'platform',
+    `source_host` VARCHAR(255) DEFAULT NULL,
+    `return_url_snapshot` VARCHAR(512) DEFAULT NULL,
+    `amount_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '用户支付人民币金额',
+    `credited_usd` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '用户到账美元余额',
+    `credited_image_credits` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '到账图片积分',
+    `agent_settlement_rate` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
+    `agent_income_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '代理现金分润人民币',
+    `subscription_plan_id` BIGINT UNSIGNED DEFAULT NULL,
+    `subscription_id` BIGINT UNSIGNED DEFAULT NULL,
+    `plan_code_snapshot` VARCHAR(64) DEFAULT NULL,
+    `plan_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `plan_kind_snapshot` VARCHAR(32) DEFAULT NULL,
+    `duration_days_snapshot` INT DEFAULT NULL,
+    `quota_metric_snapshot` VARCHAR(32) DEFAULT NULL,
+    `quota_value_snapshot` DECIMAL(20, 6) DEFAULT NULL,
+    `subscription_activation_mode` VARCHAR(20) NOT NULL DEFAULT 'append',
+    `subscription_sale_price_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `subscription_agent_cost_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `subscription_agent_rebate_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    `status` VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/closed/failed',
+    `subject` VARCHAR(128) NOT NULL,
+    `body` TEXT DEFAULT NULL,
+    `alipay_trade_no` VARCHAR(64) DEFAULT NULL,
+    `wechat_transaction_id` VARCHAR(64) DEFAULT NULL,
+    `wechat_code_url` TEXT DEFAULT NULL,
+    `trade_status` VARCHAR(32) DEFAULT NULL,
+    `buyer_logon_id` VARCHAR(128) DEFAULT NULL,
+    `buyer_user_id` VARCHAR(64) DEFAULT NULL,
+    `expired_at` DATETIME DEFAULT NULL,
+    `closed_at` DATETIME DEFAULT NULL,
+    `paid_at` DATETIME DEFAULT NULL,
+    `notify_raw` TEXT DEFAULT NULL,
+    `return_raw` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_payment_recharge_order_no` (`order_no`),
+    UNIQUE KEY `uk_payment_recharge_alipay_trade_no` (`alipay_trade_no`),
+    UNIQUE KEY `uk_payment_recharge_wechat_transaction_id` (`wechat_transaction_id`),
+    KEY `idx_payment_recharge_type` (`recharge_type`),
+    KEY `idx_payment_recharge_user_status` (`user_id`, `status`),
+    KEY `idx_payment_recharge_agent_status` (`agent_id`, `status`),
+    KEY `idx_payment_recharge_subscription_plan` (`subscription_plan_id`),
+    KEY `idx_payment_recharge_subscription_id` (`subscription_id`),
+    KEY `idx_payment_recharge_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线充值订单表';
+
+-- ============================================================
+-- 14.0.2 payment_recharge_settlement - 在线充值入账幂等表
+-- ============================================================
+CREATE TABLE `payment_recharge_settlement` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `order_id` BIGINT UNSIGNED NOT NULL,
+    `order_no` VARCHAR(64) NOT NULL,
+    `asset_type` VARCHAR(32) NOT NULL DEFAULT 'balance' COMMENT '入账资产: balance/image_credit/subscription',
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `agent_id` BIGINT UNSIGNED DEFAULT NULL,
+    `amount_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '用户支付人民币金额',
+    `credited_usd` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '到账美元余额',
+    `credited_image_credits` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '到账图片积分',
+    `status` VARCHAR(16) NOT NULL DEFAULT 'settling' COMMENT 'settling/applied',
+    `applied_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_payment_recharge_settlement_order_asset` (`order_no`, `asset_type`),
+    KEY `idx_payment_recharge_settlement_order_id` (`order_id`),
+    KEY `idx_payment_recharge_settlement_user_id` (`user_id`),
+    KEY `idx_payment_recharge_settlement_agent_id` (`agent_id`),
+    KEY `idx_payment_recharge_settlement_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线充值入账幂等表';
+
+-- ============================================================
 -- 14.1 user_promotion_link - 用户推广链接表
 -- ============================================================
 CREATE TABLE `user_promotion_link` (
@@ -922,6 +1043,9 @@ CREATE TABLE `subscription_plan` (
     `quota_value` DECIMAL(20, 6) DEFAULT 0,
     `reset_period` VARCHAR(20) NOT NULL DEFAULT 'day',
     `reset_timezone` VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
+    `sale_price_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '用户在线购买售价 RMB',
+    `agent_cost_price_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '代理拿货价 RMB',
+    `online_sale_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否允许用户前台在线购买',
     `sort_order` INT NOT NULL DEFAULT 0,
     `status` VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/inactive',
     `description` VARCHAR(255) DEFAULT NULL,
@@ -929,6 +1053,7 @@ CREATE TABLE `subscription_plan` (
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_subscription_plan_code` (`plan_code`),
+    KEY `idx_subscription_plan_online_sale` (`online_sale_enabled`, `status`),
     KEY `idx_subscription_plan_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐模板表';
 

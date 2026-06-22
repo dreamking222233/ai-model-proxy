@@ -29,6 +29,7 @@ from app.api.admin.system import router as admin_system_router
 from app.api.admin.security import router as admin_security_router
 from app.api.admin.redemption import router as admin_redemption_router
 from app.api.admin.subscription import router as admin_subscription_router
+from app.api.admin.subscription_sale import router as admin_subscription_sale_router
 from app.api.admin.promotion import router as admin_promotion_router
 from app.api.admin.price_adjustment import router as admin_price_adjustment_router
 from app.api.admin.dragon_boat_lottery import router as admin_dragon_boat_lottery_router
@@ -48,6 +49,7 @@ from app.api.agent.log import router as agent_log_router
 from app.api.agent.stats import router as agent_stats_router
 from app.api.agent.system import router as agent_system_router
 from app.api.agent.subscription import router as agent_subscription_router
+from app.api.agent.subscription_sale import router as agent_subscription_sale_router
 from app.api.agent.redemption import router as agent_redemption_router
 from app.api.agent.promotion import router as agent_promotion_router
 from app.api.proxy.openai_proxy import router as openai_proxy_router
@@ -134,6 +136,7 @@ app.include_router(admin_system_router)
 app.include_router(admin_security_router)
 app.include_router(admin_redemption_router)
 app.include_router(admin_subscription_router)
+app.include_router(admin_subscription_sale_router)
 app.include_router(admin_payment_router)
 app.include_router(admin_promotion_router)
 app.include_router(admin_price_adjustment_router)
@@ -158,6 +161,7 @@ app.include_router(agent_log_router)
 app.include_router(agent_stats_router)
 app.include_router(agent_system_router)
 app.include_router(agent_subscription_router)
+app.include_router(agent_subscription_sale_router)
 app.include_router(agent_redemption_router)
 app.include_router(agent_promotion_router)
 

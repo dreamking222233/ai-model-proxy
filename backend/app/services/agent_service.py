@@ -203,6 +203,7 @@ class AgentService:
             "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
             "allow_self_register": bool(agent.allow_self_register),
             "online_recharge_enabled": bool(agent.online_recharge_enabled),
+            "subscription_online_recharge_enabled": bool(getattr(agent, "subscription_online_recharge_enabled", 1)),
             "theme_config_json": agent.theme_config_json,
             "balance": float(balance.balance) if balance else 0.0,
             "image_credit_balance": float(image_balance.balance) if image_balance else 0.0,
@@ -217,6 +218,14 @@ class AgentService:
         if context.site_scope != "agent" or not context.agent:
             return True
         return bool(getattr(context.agent, "online_recharge_enabled", 1))
+
+    @staticmethod
+    def is_subscription_online_recharge_enabled(context: AgentSiteContext) -> bool:
+        if not AgentService.is_online_recharge_enabled(context):
+            return False
+        if context.site_scope != "agent" or not context.agent:
+            return True
+        return bool(getattr(context.agent, "subscription_online_recharge_enabled", 1))
 
     @staticmethod
     def get_site_context(
@@ -311,6 +320,7 @@ class AgentService:
                 "allow_register": bool(agent.allow_self_register),
                 "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
                 "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
+                "subscription_online_recharge_enabled": AgentService.is_subscription_online_recharge_enabled(context),
                 "theme_config": agent.theme_config_json,
                 "frontend_domain": agent.frontend_domain,
                 "api_domain": agent.api_domain,
@@ -331,6 +341,7 @@ class AgentService:
             "allow_register": str(config_map["platform_allow_register"]).lower() in {"1", "true", "yes"},
             "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
             "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
+            "subscription_online_recharge_enabled": AgentService.is_subscription_online_recharge_enabled(context),
             "theme_config": None,
             "frontend_domain": None,
             "api_domain": None,
@@ -510,6 +521,7 @@ class AgentService:
             quickstart_api_base_url=payload.get("quickstart_api_base_url") or AgentService.get_shared_api_base_url(),
             allow_self_register=int(payload.get("allow_self_register", 1)),
             online_recharge_enabled=int(payload.get("online_recharge_enabled", 1)),
+            subscription_online_recharge_enabled=int(payload.get("subscription_online_recharge_enabled", 1)),
             theme_config_json=payload.get("theme_config_json"),
         )
         db.add(agent)
@@ -600,6 +612,8 @@ class AgentService:
             agent.allow_self_register = int(payload["allow_self_register"])
         if "online_recharge_enabled" in payload and payload["online_recharge_enabled"] is not None:
             agent.online_recharge_enabled = int(payload["online_recharge_enabled"])
+        if "subscription_online_recharge_enabled" in payload and payload["subscription_online_recharge_enabled"] is not None:
+            agent.subscription_online_recharge_enabled = int(payload["subscription_online_recharge_enabled"])
 
         if "owner_user_id" in payload and payload.get("owner_user_id") is not None:
             owner = db.query(SysUser).filter(SysUser.id == payload["owner_user_id"]).first()

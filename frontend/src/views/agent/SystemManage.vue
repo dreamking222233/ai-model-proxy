@@ -62,6 +62,14 @@
                 </div>
                 <a-switch v-model="allowRegisterBool" size="large" />
               </div>
+
+              <div class="switch-item">
+                <div class="switch-info">
+                  <div class="switch-title">套餐在线充值</div>
+                  <div class="switch-desc">开启后，当前站点用户可在充值页在线购买套餐</div>
+                </div>
+                <a-switch v-model="subscriptionOnlineRechargeBool" size="large" />
+              </div>
             </a-card>
 
             <a-card class="glass-card section-card announcement-card" :bordered="false">
@@ -153,7 +161,8 @@ export default {
         announcement_content: '',
         support_wechat: '',
         support_qq: '',
-        allow_self_register: 1
+        allow_self_register: 1,
+        subscription_online_recharge_enabled: 1
       }
     }
   },
@@ -164,6 +173,14 @@ export default {
       },
       set(val) {
         this.form.allow_self_register = val ? 1 : 0
+      }
+    },
+    subscriptionOnlineRechargeBool: {
+      get() {
+        return this.form.subscription_online_recharge_enabled === 1
+      },
+      set(val) {
+        this.form.subscription_online_recharge_enabled = val ? 1 : 0
       }
     }
   },
@@ -182,7 +199,8 @@ export default {
         announcement_content: data.announcement_content || '',
         support_wechat: data.support_wechat || '',
         support_qq: data.support_qq || '',
-        allow_self_register: data.allow_register ? 1 : 0
+        allow_self_register: data.allow_register ? 1 : 0,
+        subscription_online_recharge_enabled: data.subscription_online_recharge_enabled === false ? 0 : 1
       }
     },
     async save() {
@@ -195,7 +213,8 @@ export default {
           announcement_content: this.form.announcement_content,
           support_wechat: this.form.support_wechat,
           support_qq: this.form.support_qq,
-          allow_self_register: this.form.allow_self_register
+          allow_self_register: this.form.allow_self_register,
+          subscription_online_recharge_enabled: this.form.subscription_online_recharge_enabled
         }
         await updateAgentSiteConfig(payload)
         this.$message.success('系统配置已更新')

@@ -84,6 +84,10 @@
             <a-icon type="crown" />
             <span>套餐管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/subscription-sales">
+            <a-icon type="pay-circle" />
+            <span>套餐销售</span>
+          </a-menu-item>
           <a-menu-item key="/admin/health">
             <a-icon type="heart" />
             <span>健康监控</span>

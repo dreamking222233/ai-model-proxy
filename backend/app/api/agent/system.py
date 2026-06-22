@@ -42,6 +42,7 @@ def update_site_config(
             "support_wechat",
             "support_qq",
             "allow_self_register",
+            "subscription_online_recharge_enabled",
             "theme_config_json",
         },
     )

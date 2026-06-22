@@ -8,7 +8,9 @@ from app.database import get_db
 from app.models.user import SysUser
 from app.schemas.common import ResponseModel
 from app.schemas.payment import UserRechargeOrderCreateRequest
+from app.services.agent_service import AgentService
 from app.services.payment_service import PaymentService
+from app.services.subscription_service import SubscriptionService
 
 router = APIRouter(prefix="/api/user/payment", tags=["用户-在线充值"])
 
@@ -34,9 +36,23 @@ def create_recharge_order(
         amount_cny=data.amount_cny,
         payment_channel=data.payment_channel,
         recharge_type=data.recharge_type,
+        subscription_plan_id=data.subscription_plan_id,
         site_context=agent_context,
     )
     return ResponseModel(data=result, message="充值订单创建成功")
+
+
+@router.get("/subscription-plans", response_model=ResponseModel)
+def list_subscription_plans(
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+    agent_context=Depends(get_current_agent_context),
+):
+    user = _require_end_user(current_user)
+    if not AgentService.is_subscription_online_recharge_enabled(agent_context):
+        return ResponseModel(data={"list": [], "total": 0})
+    items = SubscriptionService.list_public_purchasable_plans(db, user)
+    return ResponseModel(data={"list": items, "total": len(items)})
 
 
 @router.get("/recharge-orders", response_model=ResponseModel)

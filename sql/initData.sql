@@ -32,6 +32,7 @@ CREATE TABLE `agent` (
   `quickstart_api_base_url` varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `allow_self_register` tinyint NOT NULL DEFAULT '1',
   `online_recharge_enabled` smallint NOT NULL DEFAULT '1' COMMENT '代理站在线充值开关 1=开启 0=关闭',
+  `subscription_online_recharge_enabled` smallint NOT NULL DEFAULT '1' COMMENT '代理站套餐在线充值开关 1=开启 0=关闭',
   `theme_config_json` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -307,6 +308,43 @@ CREATE TABLE `agent_settlement_record` (
   KEY `idx_agent_settlement_resource` (`resource_type`,`plan_id`),
   KEY `idx_agent_settlement_user` (`target_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理授信销售待结算记录';
+
+-- ----------------------------
+-- Table structure for agent_subscription_sale_record
+-- ----------------------------
+DROP TABLE IF EXISTS `agent_subscription_sale_record`;
+CREATE TABLE `agent_subscription_sale_record` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `order_id` bigint unsigned NOT NULL,
+  `order_no` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `agent_id` bigint unsigned NOT NULL,
+  `user_id` bigint unsigned NOT NULL,
+  `subscription_id` bigint unsigned DEFAULT NULL,
+  `plan_id` bigint unsigned DEFAULT NULL,
+  `plan_code_snapshot` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `plan_name_snapshot` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `plan_kind_snapshot` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `duration_days_snapshot` int DEFAULT NULL,
+  `sale_price_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `agent_cost_price_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `agent_rebate_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `payment_channel` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `payment_status` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'paid',
+  `rebate_status` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending' COMMENT 'pending/settled/void',
+  `settled_at` datetime DEFAULT NULL,
+  `settled_by` bigint unsigned DEFAULT NULL,
+  `settlement_remark` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_agent_subscription_sale_order` (`order_no`),
+  KEY `idx_agent_subscription_sale_agent_status` (`agent_id`,`rebate_status`),
+  KEY `idx_agent_subscription_sale_created` (`created_at`),
+  KEY `idx_agent_subscription_sale_plan` (`plan_id`),
+  KEY `idx_agent_subscription_sale_user` (`user_id`),
+  KEY `idx_agent_subscription_sale_subscription` (`subscription_id`),
+  KEY `idx_agent_subscription_sale_settled_by` (`settled_by`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理套餐销售返现核销记录表';
 
 -- ----------------------------
 -- Table structure for agent_subscription_inventory
@@ -681,7 +719,7 @@ CREATE TABLE `payment_recharge_order` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `order_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
   `payment_channel` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'alipay',
-  `recharge_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance' COMMENT '充值类型: balance/image_credit',
+  `recharge_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance' COMMENT '充值类型: balance/image_credit/subscription',
   `user_id` bigint unsigned NOT NULL,
   `agent_id` bigint unsigned DEFAULT NULL,
   `site_scope` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'platform',
@@ -692,6 +730,18 @@ CREATE TABLE `payment_recharge_order` (
   `credited_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT '到账图片积分',
   `agent_settlement_rate` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
   `agent_income_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '代理现金分润人民币',
+  `subscription_plan_id` bigint unsigned DEFAULT NULL,
+  `subscription_id` bigint unsigned DEFAULT NULL,
+  `plan_code_snapshot` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `plan_name_snapshot` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `plan_kind_snapshot` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `duration_days_snapshot` int DEFAULT NULL,
+  `quota_metric_snapshot` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `quota_value_snapshot` decimal(20,6) DEFAULT NULL,
+  `subscription_activation_mode` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'append',
+  `subscription_sale_price_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `subscription_agent_cost_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `subscription_agent_rebate_cny` decimal(12,2) NOT NULL DEFAULT '0.00',
   `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending' COMMENT 'pending/paid/closed/failed',
   `subject` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,
   `body` text COLLATE utf8mb4_unicode_ci,
@@ -715,8 +765,36 @@ CREATE TABLE `payment_recharge_order` (
   KEY `idx_payment_recharge_type` (`recharge_type`),
   KEY `idx_payment_recharge_user_status` (`user_id`,`status`),
   KEY `idx_payment_recharge_agent_status` (`agent_id`,`status`),
+  KEY `idx_payment_recharge_subscription_plan` (`subscription_plan_id`),
+  KEY `idx_payment_recharge_subscription_id` (`subscription_id`),
   KEY `idx_payment_recharge_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线充值订单表';
+
+-- ----------------------------
+-- Table structure for payment_recharge_settlement
+-- ----------------------------
+DROP TABLE IF EXISTS `payment_recharge_settlement`;
+CREATE TABLE `payment_recharge_settlement` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `order_id` bigint unsigned NOT NULL,
+  `order_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `asset_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'balance' COMMENT '入账资产: balance/image_credit/subscription',
+  `user_id` bigint unsigned NOT NULL,
+  `agent_id` bigint unsigned DEFAULT NULL,
+  `amount_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '用户支付人民币金额',
+  `credited_usd` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '到账美元余额',
+  `credited_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT '到账图片积分',
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'settling' COMMENT 'settling/applied',
+  `applied_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_payment_recharge_settlement_order_asset` (`order_no`,`asset_type`),
+  KEY `idx_payment_recharge_settlement_order_id` (`order_id`),
+  KEY `idx_payment_recharge_settlement_user_id` (`user_id`),
+  KEY `idx_payment_recharge_settlement_agent_id` (`agent_id`),
+  KEY `idx_payment_recharge_settlement_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线充值入账幂等表';
 
 -- ----------------------------
 -- Table structure for user_promotion_link
@@ -1053,6 +1131,9 @@ CREATE TABLE `subscription_plan` (
   `quota_value` decimal(20,6) DEFAULT '0.000000',
   `reset_period` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'day',
   `reset_timezone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Asia/Shanghai',
+  `sale_price_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '用户在线购买售价 RMB',
+  `agent_cost_price_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '代理拿货价 RMB',
+  `online_sale_enabled` tinyint NOT NULL DEFAULT '0' COMMENT '是否允许用户前台在线购买',
   `sort_order` int NOT NULL DEFAULT '0',
   `status` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active' COMMENT 'active/inactive',
   `description` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -1060,6 +1141,7 @@ CREATE TABLE `subscription_plan` (
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_subscription_plan_code` (`plan_code`),
+  KEY `idx_subscription_plan_online_sale` (`online_sale_enabled`,`status`),
   KEY `idx_subscription_plan_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套餐模板表';
 

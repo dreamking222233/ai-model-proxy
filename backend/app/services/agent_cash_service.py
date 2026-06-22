@@ -111,6 +111,12 @@ class AgentCashService:
             "credited_usd": float(order.credited_usd or 0),
             "credited_image_credits": float(order.credited_image_credits or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
+            "subscription_plan_id": order.subscription_plan_id,
+            "subscription_id": order.subscription_id,
+            "plan_name_snapshot": order.plan_name_snapshot,
+            "duration_days_snapshot": order.duration_days_snapshot,
+            "subscription_sale_price_cny": float(order.subscription_sale_price_cny or 0),
+            "subscription_agent_rebate_cny": float(order.subscription_agent_rebate_cny or 0),
             "status": order.status,
             "trade_status": order.trade_status,
             "subject": order.subject,
@@ -217,6 +223,7 @@ class AgentCashService:
             .filter(
                 PaymentRechargeOrder.agent_id.in_(agent_ids),
                 PaymentRechargeOrder.status == "paid",
+                PaymentRechargeOrder.recharge_type.in_(["balance", "image_credit"]),
             )
             .group_by(PaymentRechargeOrder.agent_id)
             .all()
@@ -296,6 +303,7 @@ class AgentCashService:
         time_field: str | None = "created_at",
         agent_keyword: str | None = None,
         source_host: str | None = None,
+        include_subscription: bool = False,
     ) -> tuple[list[dict], int]:
         query = db.query(PaymentRechargeOrder)
         if agent_id is not None:
@@ -309,6 +317,8 @@ class AgentCashService:
         if recharge_type:
             normalized_type = PaymentService._normalize_recharge_type(recharge_type)
             query = query.filter(PaymentRechargeOrder.recharge_type == normalized_type)
+        elif not include_subscription:
+            query = query.filter(PaymentRechargeOrder.recharge_type.in_(["balance", "image_credit"]))
         if site_scope == "platform":
             query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
         elif site_scope == "agent":
@@ -540,6 +550,7 @@ class AgentCashService:
             .filter(
                 PaymentRechargeOrder.agent_id == agent_id,
                 PaymentRechargeOrder.status == "paid",
+                PaymentRechargeOrder.recharge_type.in_(["balance", "image_credit"]),
             )
             .first()
         )

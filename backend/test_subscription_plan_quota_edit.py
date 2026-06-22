@@ -250,6 +250,58 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
 
         self.assertEqual(consumed, Decimal("0.20"))
 
+    def test_summary_cycle_does_not_create_missing_cycle(self):
+        class QueryStub:
+            def filter(self, *args, **kwargs):
+                return self
+
+            def first(self):
+                return None
+
+        class SessionStub:
+            def __init__(self):
+                self.begin_nested_called = False
+                self.flush_called = False
+
+            def query(self, *args, **kwargs):
+                return QueryStub()
+
+            def begin_nested(self):
+                self.begin_nested_called = True
+                raise AssertionError("summary should not create usage cycles")
+
+            def flush(self):
+                self.flush_called = True
+                raise AssertionError("summary should not flush writes")
+
+        db = SessionStub()
+        now = datetime(2026, 6, 22, 10, 0, 0)
+        subscription = self._record(
+            id=19,
+            user_id=2,
+            status="active",
+            start_time=datetime(2026, 6, 22, 9, 0, 0),
+            end_time=datetime(2026, 6, 29, 9, 0, 0),
+            reset_timezone="Asia/Shanghai",
+            quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+            quota_value=Decimal("200"),
+        )
+
+        summary = SubscriptionService._get_cycle_for_summary(db, subscription, now)
+
+        self.assertFalse(db.begin_nested_called)
+        self.assertFalse(db.flush_called)
+        self.assertIsNone(summary["id"])
+        self.assertEqual(summary["quota_metric"], SubscriptionService.QUOTA_METRIC_COST)
+        self.assertEqual(summary["quota_limit"], 200.0)
+        self.assertEqual(summary["used_amount"], 0.0)
+        self.assertEqual(summary["remaining_amount"], 200.0)
+
+    def test_plan_sort_update_does_not_default_purchase_fields(self):
+        payload = SubscriptionService._validate_plan_payload({"sort_order": 30}, is_update=True)
+
+        self.assertEqual(payload, {"sort_order": 30})
+
 
 if __name__ == "__main__":
     unittest.main()

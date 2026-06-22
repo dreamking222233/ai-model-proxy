@@ -87,3 +87,35 @@ export function checkExpiredSubscriptions() {
     method: 'post'
   })
 }
+
+export function getAdminSubscriptionSaleSummary(params) {
+  return request({
+    url: '/api/admin/subscription-sales/summary',
+    method: 'get',
+    params
+  })
+}
+
+export function listAdminSubscriptionSales(params) {
+  return request({
+    url: '/api/admin/subscription-sales',
+    method: 'get',
+    params
+  })
+}
+
+export function settleAdminSubscriptionSale(saleId, data) {
+  return request({
+    url: `/api/admin/subscription-sales/${saleId}/settle`,
+    method: 'post',
+    data
+  })
+}
+
+export function batchSettleAdminSubscriptionSales(data) {
+  return request({
+    url: '/api/admin/subscription-sales/batch-settle',
+    method: 'post',
+    data
+  })
+}

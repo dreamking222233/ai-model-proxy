@@ -41,6 +41,7 @@ def list_agent_cash_orders(
     time_field: str = Query("created_at"),
     agent_keyword: str = Query(None),
     source_host: str = Query(None),
+    include_subscription: int = Query(0),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
@@ -60,6 +61,7 @@ def list_agent_cash_orders(
         time_field,
         agent_keyword,
         source_host,
+        bool(include_subscription),
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
 

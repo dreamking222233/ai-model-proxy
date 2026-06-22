@@ -82,10 +82,6 @@
             <a-icon type="rocket" />
             <span>快速开始</span>
           </a-menu-item>
-          <a-menu-item key="/user/dragon-boat-lottery">
-            <a-icon type="trophy" />
-            <span>端午抽奖</span>
-          </a-menu-item>
         </a-menu>
       </div>
 

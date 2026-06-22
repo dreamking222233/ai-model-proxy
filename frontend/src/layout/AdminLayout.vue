@@ -120,10 +120,6 @@
             <a-icon type="notification" />
             <span>公告管理</span>
           </a-menu-item>
-          <a-menu-item key="/admin/dragon-boat-lottery">
-            <a-icon type="trophy" />
-            <span>端午抽奖</span>
-          </a-menu-item>
         </a-menu>
       </div>
 

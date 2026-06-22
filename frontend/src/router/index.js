@@ -147,12 +147,6 @@ const routes = [
         meta: { title: '公告管理' }
       },
       {
-        path: 'dragon-boat-lottery',
-        name: 'AdminDragonBoatLottery',
-        component: () => import('@/views/admin/DragonBoatLotteryManage.vue'),
-        meta: { title: '端午抽奖' }
-      },
-      {
         path: 'redemption',
         name: 'RedemptionManage',
         component: () => import('@/views/admin/RedemptionManage.vue'),
@@ -259,12 +253,6 @@ const routes = [
         name: 'QuickStart',
         component: () => import('@/views/user/QuickStart.vue'),
         meta: { title: '快速开始' }
-      },
-      {
-        path: 'dragon-boat-lottery',
-        name: 'DragonBoatLottery',
-        component: () => import('@/views/user/DragonBoatLottery.vue'),
-        meta: { title: '端午抽奖' }
       },
       {
         path: 'redemption',

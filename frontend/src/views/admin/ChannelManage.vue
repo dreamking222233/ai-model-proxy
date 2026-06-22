@@ -71,7 +71,7 @@
     </div>
 
     <a-table
-      v-else-if="filteredChannelList.length > 0 || loading"
+      v-else-if="!isMobile && (filteredChannelList.length > 0 || loading)"
       :columns="columns"
       :data-source="filteredChannelList"
       :loading="loading && channelList.length > 0"
@@ -79,6 +79,7 @@
       :row-selection="{ selectedRowKeys: selectedRowKeys, onChange: onSelectChange }"
       row-key="id"
       class="channel-table"
+      :scroll="{ x: 1500 }"
       @change="handleTableChange"
     >
       <template slot="protocol_type" slot-scope="text">
@@ -162,6 +163,88 @@
       </template>
     </a-table>
 
+    <div v-else-if="filteredChannelList.length > 0 || loading" class="mobile-channel-list">
+      <div
+        v-for="record in filteredChannelList"
+        :key="record.id"
+        class="mobile-channel-card"
+      >
+        <div class="mobile-card-header">
+          <a-checkbox
+            :checked="selectedRowKeys.includes(record.id)"
+            @change="event => toggleMobileSelection(record.id, event.target.checked)"
+          />
+          <div class="mobile-channel-title">
+            <div class="mobile-channel-name">{{ record.name || '-' }}</div>
+            <div class="mobile-channel-id">ID {{ record.id }}</div>
+          </div>
+          <div class="mobile-card-actions">
+            <a @click="handleEdit(record)">编辑</a>
+            <a-popconfirm
+              title="确定要删除此渠道吗？"
+              ok-text="确定"
+              cancel-text="取消"
+              @confirm="handleDelete(record.id)"
+            >
+              <a class="action-link danger">删除</a>
+            </a-popconfirm>
+          </div>
+        </div>
+
+        <div class="mobile-base-url">{{ record.base_url || '-' }}</div>
+
+        <div class="mobile-tag-row">
+          <a-tag :color="getProtocolColor(record.protocol_type)" class="protocol-tag">
+            {{ getProtocolLabel(record.protocol_type) }}
+          </a-tag>
+          <a-tag :color="getProviderVariantColor(record.protocol_type, record.provider_variant)" class="protocol-tag">
+            {{ getProviderVariantLabel(record.protocol_type, record.provider_variant) }}
+          </a-tag>
+          <a-tag :color="record.health_check_enabled ? 'blue' : 'default'" class="protocol-tag">
+            {{ record.health_check_enabled ? '监控开启' : '不监控' }}
+          </a-tag>
+        </div>
+
+        <div class="mobile-card-grid">
+          <div class="mobile-field">
+            <span class="mobile-field-label">优先级</span>
+            <span>{{ record.priority }}</span>
+          </div>
+          <div class="mobile-field">
+            <span class="mobile-field-label">健康</span>
+            <a-badge
+              :status="record.is_healthy ? 'success' : 'error'"
+              :text="record.is_healthy ? '健康' : '异常'"
+            />
+          </div>
+          <div class="mobile-field">
+            <span class="mobile-field-label">分数</span>
+            <span :class="getScoreClass(record.health_score)">{{ record.health_score != null ? record.health_score : '-' }}</span>
+          </div>
+          <div class="mobile-field mobile-switch-field">
+            <span class="mobile-field-label">状态</span>
+            <a-switch
+              :checked="Boolean(record.enabled)"
+              :loading="Boolean(switchLoadingMap[record.id])"
+              checked-children="启用"
+              un-checked-children="禁用"
+              @change="checked => handleToggleEnabled(record, checked)"
+            />
+          </div>
+        </div>
+      </div>
+
+      <a-pagination
+        v-if="pagination.total > pagination.pageSize"
+        class="mobile-pagination"
+        simple
+        :current="pagination.current"
+        :page-size="pagination.pageSize"
+        :total="pagination.total"
+        @change="handleMobilePageChange"
+      />
+    </div>
+
     <!-- Empty state -->
     <div v-else class="empty-state">
       <div class="empty-illustration">
@@ -181,7 +264,7 @@
       :confirm-loading="modalLoading"
       @ok="handleModalOk"
       @cancel="handleModalCancel"
-      :width="600"
+      :width="modalWidth"
       :class="{ 'modal-enter': modalVisible }"
       class="channel-modal"
     >
@@ -343,6 +426,7 @@ export default {
       selectedRowKeys: [],
       switchLoadingMap: {},
       showSuccessAnimation: false,
+      isMobile: false,
       pagination: {
         current: 1,
         pageSize: 10,
@@ -447,6 +531,9 @@ export default {
     modalTitle() {
       return this.isEdit ? '编辑渠道' : '添加渠道'
     },
+    modalWidth() {
+      return this.isMobile ? 'calc(100vw - 24px)' : 600
+    },
     filteredChannelList() {
       if (this.filterStatus === 'all') {
         return this.channelList
@@ -464,9 +551,17 @@ export default {
     }
   },
   mounted() {
+    this.updateViewport()
+    window.addEventListener('resize', this.updateViewport)
     this.fetchList()
   },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.updateViewport)
+  },
   methods: {
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 768
+    },
     getProtocolLabel(protocol) {
       const map = {
         openai: 'OpenAI',
@@ -536,6 +631,13 @@ export default {
     },
     onSelectChange(selectedRowKeys) {
       this.selectedRowKeys = selectedRowKeys
+    },
+    toggleMobileSelection(id, checked) {
+      if (checked) {
+        this.selectedRowKeys = Array.from(new Set([...this.selectedRowKeys, id]))
+      } else {
+        this.selectedRowKeys = this.selectedRowKeys.filter(key => key !== id)
+      }
     },
     handleBatchDelete() {
       this.$confirm({
@@ -640,6 +742,11 @@ export default {
     handleTableChange(pagination) {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
+      this.fetchList()
+    },
+    handleMobilePageChange(page, pageSize) {
+      this.pagination.current = page
+      this.pagination.pageSize = pageSize
       this.fetchList()
     },
     handleAdd() {
@@ -1032,6 +1139,10 @@ export default {
     }
   }
 
+  .mobile-channel-list {
+    display: none;
+  }
+
   // Empty state
   .empty-state {
     text-align: center;
@@ -1223,6 +1334,179 @@ export default {
   .success-fade-enter,
   .success-fade-leave-to {
     opacity: 0;
+  }
+
+  @media (max-width: 768px) {
+    min-height: calc(100vh - 80px);
+
+    .table-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 14px;
+      border-radius: 10px;
+
+      &:hover {
+        transform: none;
+      }
+
+      .toolbar-left,
+      .toolbar-right {
+        width: 100%;
+      }
+
+      .toolbar-left {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+
+      .toolbar-right {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+
+      .search-input {
+        width: 100%;
+      }
+
+      .quick-filters {
+        flex-wrap: wrap;
+        gap: 6px;
+
+        .filter-btn {
+          flex: 1 1 calc(50% - 6px);
+          min-width: 0;
+        }
+      }
+    }
+
+    .mobile-channel-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .mobile-channel-card {
+      background: #fff;
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    .mobile-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .mobile-channel-title {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .mobile-channel-name {
+      color: #1f2937;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-channel-id {
+      color: #8c8c8c;
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .mobile-card-actions {
+      display: flex;
+      flex-shrink: 0;
+      gap: 10px;
+      font-weight: 500;
+    }
+
+    .mobile-base-url {
+      margin-top: 10px;
+      padding: 8px 10px;
+      color: #5f6b7a;
+      font-size: 12px;
+      line-height: 1.5;
+      background: #f8fafc;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+
+      .protocol-tag {
+        margin-right: 0;
+        max-width: 100%;
+        white-space: normal;
+      }
+    }
+
+    .mobile-card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+    }
+
+    .mobile-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      color: #262626;
+      font-size: 13px;
+    }
+
+    .mobile-field-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-switch-field {
+      align-items: flex-start;
+    }
+
+    .mobile-pagination {
+      display: flex;
+      justify-content: center;
+      margin-top: 4px;
+      padding: 12px 0 2px;
+    }
+
+    .empty-state {
+      padding: 48px 16px;
+      border-radius: 8px;
+    }
+
+    .channel-modal {
+      /deep/ .ant-modal {
+        max-width: calc(100vw - 24px);
+        margin: 12px auto;
+      }
+
+      /deep/ .ant-modal-body {
+        padding: 16px;
+        max-height: calc(100vh - 180px);
+      }
+
+      /deep/ .ant-modal-header,
+      /deep/ .ant-modal-footer {
+        padding: 14px 16px;
+      }
+    }
   }
 }
 </style>

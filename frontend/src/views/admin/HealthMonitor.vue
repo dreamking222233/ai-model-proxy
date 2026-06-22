@@ -10,7 +10,7 @@
 
     <!-- Summary Cards -->
     <a-row :gutter="16" class="stat-row">
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card stat-card-1" :class="{ 'card-animate': cardAnimated }">
           <div class="card-gradient card-gradient-1"></div>
           <div class="card-icon">
@@ -19,7 +19,7 @@
           <a-statistic title="渠道总数" :value="healthList.length" />
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card stat-card-2" :class="{ 'card-animate': cardAnimated }">
           <div class="card-gradient card-gradient-2"></div>
           <div class="card-icon card-icon-success">
@@ -28,7 +28,7 @@
           <a-statistic title="健康渠道" :value="healthyCount" :value-style="{ color: '#52c41a' }" />
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card stat-card-3" :class="{ 'card-animate': cardAnimated }">
           <div class="card-gradient card-gradient-3"></div>
           <div class="card-icon card-icon-warning" :class="{ 'pulse-animation': unhealthyCount > 0 }">
@@ -37,7 +37,7 @@
           <a-statistic title="异常渠道" :value="unhealthyCount" :value-style="{ color: unhealthyCount > 0 ? '#f5222d' : '#52c41a' }" />
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card stat-card-4" :class="{ 'card-animate': cardAnimated }">
           <div class="card-gradient card-gradient-4"></div>
           <div class="card-icon card-icon-heart">
@@ -85,13 +85,14 @@
       </div>
 
       <a-table
-        v-else
+        v-else-if="!isMobile"
         :columns="healthColumns"
         :data-source="healthList"
         :loading="healthLoading"
         :pagination="false"
         row-key="channel_id"
         class="health-table"
+        :scroll="{ x: 1050 }"
       >
         <template slot="channelName" slot-scope="text, record">
           <div class="channel-info">
@@ -169,6 +170,89 @@
           </div>
         </template>
       </a-table>
+
+      <div v-else class="mobile-health-list">
+        <div
+          v-for="record in healthList"
+          :key="record.channel_id"
+          class="mobile-health-card"
+        >
+          <div class="mobile-card-header">
+            <div class="mobile-channel-info">
+              <a-badge :status="record.is_healthy ? 'success' : 'error'" :class="{ 'status-pulse': !record.is_healthy }" />
+              <div class="mobile-channel-title">
+                <div class="mobile-channel-name">{{ record.channel_name || '-' }}</div>
+                <a-tag size="small" class="protocol-tag">{{ record.protocol_type || '-' }}</a-tag>
+              </div>
+            </div>
+            <a-badge
+              :count="record.failure_count || 0"
+              :number-style="record.failure_count > 0 ? { backgroundColor: '#f5222d' } : { backgroundColor: '#d9d9d9', color: '#999' }"
+              :overflow-count="99"
+              show-zero
+            />
+          </div>
+
+          <div class="mobile-score-row">
+            <span class="mobile-field-label">健康分数</span>
+            <div class="score-cell">
+              <a-progress
+                :percent="record.health_score != null ? Number(record.health_score) : 0"
+                :status="record.health_score >= 80 ? 'success' : record.health_score >= 50 ? 'normal' : 'exception'"
+                :stroke-width="8"
+                :show-info="false"
+                :stroke-color="getScoreGradient(record.health_score)"
+                class="score-progress"
+              />
+              <span class="score-text" :class="{ good: record.health_score >= 80, warn: record.health_score >= 50 && record.health_score < 80, bad: record.health_score < 50 }">
+                {{ record.health_score != null ? record.health_score : 0 }}
+              </span>
+            </div>
+          </div>
+
+          <div class="mobile-model-editor">
+            <span class="mobile-field-label">测试模型</span>
+            <a-auto-complete
+              :value="record._healthCheckModelDraft"
+              :data-source="getChannelModelOptions(record.channel_id)"
+              placeholder="输入或选择测试模型"
+              class="model-editor-input"
+              @change="value => handleHealthCheckModelChange(record, value)"
+            />
+            <div class="model-editor-hint" :class="{ 'is-dirty': isHealthCheckModelDirty(record) }">
+              {{ getHealthCheckModelHint(record) }}
+            </div>
+          </div>
+
+          <div class="mobile-meta-row">
+            <div class="mobile-field">
+              <span class="mobile-field-label">最后检查</span>
+              <span v-if="record.last_check_time" class="time-text">{{ formatDate(record.last_check_time) }}</span>
+              <span v-else class="time-text muted">从未检查</span>
+            </div>
+          </div>
+
+          <div class="mobile-action-row">
+            <a-button
+              size="small"
+              :loading="record._savingModel"
+              :disabled="!isHealthCheckModelDirty(record)"
+              @click="handleSaveHealthCheckModel(record)"
+            >
+              保存模型
+            </a-button>
+            <a-button
+              type="primary"
+              size="small"
+              :loading="record._checking"
+              @click="handleCheckSingle(record)"
+              icon="reload"
+            >
+              检查
+            </a-button>
+          </div>
+        </div>
+      </div>
     </a-card>
 
     <!-- Health Logs Card -->
@@ -182,7 +266,7 @@
           v-model="logChannelFilter"
           placeholder="筛选渠道"
           allowClear
-          style="width: 200px;"
+          class="log-filter-select"
           @change="handleLogFilterChange"
         >
           <a-select-option
@@ -196,6 +280,7 @@
       </div>
 
       <a-table
+        v-if="!isMobile"
         :columns="logColumns"
         :data-source="logList"
         :loading="logLoading"
@@ -203,6 +288,7 @@
         row-key="id"
         @change="handleLogTableChange"
         size="middle"
+        :scroll="{ x: 980 }"
       >
         <template slot="status" slot-scope="text">
           <a-badge :status="text === 'success' ? 'success' : 'error'" :text="text === 'success' ? '成功' : '失败'" />
@@ -224,6 +310,40 @@
           <span class="time-text">{{ text ? formatDate(text) : '-' }}</span>
         </template>
       </a-table>
+
+      <div v-else class="mobile-log-list">
+        <a-spin v-if="logLoading" />
+        <template v-else-if="logList.length > 0">
+          <div
+            v-for="record in logList"
+            :key="record.id"
+            class="mobile-log-card"
+          >
+            <div class="mobile-card-header">
+              <div class="mobile-log-title">
+                <div class="mobile-channel-name">{{ record.channel_name || '-' }}</div>
+                <div class="mobile-log-model">{{ record.model || '-' }}</div>
+              </div>
+              <a-badge :status="record.status === 'success' ? 'success' : 'error'" :text="record.status === 'success' ? '成功' : '失败'" />
+            </div>
+            <div class="mobile-log-meta">
+              <span v-if="record.response_time != null" class="time-value" :class="{ slow: record.response_time > 3000 }">{{ record.response_time }} ms</span>
+              <span v-else class="time-text muted">-</span>
+              <span class="time-text">{{ record.checked_at ? formatDate(record.checked_at) : '-' }}</span>
+            </div>
+            <div v-if="record.error_message" class="mobile-log-error">{{ record.error_message }}</div>
+          </div>
+          <a-pagination
+            class="mobile-pagination"
+            simple
+            :current="logPagination.current"
+            :page-size="logPagination.pageSize"
+            :total="logPagination.total"
+            @change="handleLogMobilePageChange"
+          />
+        </template>
+        <div v-else class="mobile-empty">暂无检查日志</div>
+      </div>
     </a-card>
   </div>
 </template>
@@ -246,6 +366,7 @@ export default {
       autoRefresh: false,
       autoRefreshTimer: null,
       showUpdateNotification: false,
+      isMobile: false,
       healthColumns: [
         { title: '渠道', dataIndex: 'channel_name', key: 'channelName', scopedSlots: { customRender: 'channelName' } },
         {
@@ -343,6 +464,8 @@ export default {
     }
   },
   mounted() {
+    this.updateViewport()
+    window.addEventListener('resize', this.updateViewport)
     this.fetchHealthStatus()
     this.fetchChannelModelOptions()
     this.fetchHealthLogs()
@@ -352,10 +475,14 @@ export default {
     }, 100)
   },
   beforeDestroy() {
+    window.removeEventListener('resize', this.updateViewport)
     this.clearAutoRefresh()
   },
   methods: {
     formatDate,
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 768
+    },
     normalizeHealthCheckModel(value) {
       if (value == null) return ''
       return String(value).trim()
@@ -567,6 +694,11 @@ export default {
       this.logPagination.current = pagination.current
       this.logPagination.pageSize = pagination.pageSize
       this.fetchHealthLogs()
+    },
+    handleLogMobilePageChange(page, pageSize) {
+      this.logPagination.current = page
+      this.logPagination.pageSize = pageSize
+      this.fetchHealthLogs()
     }
   }
 }
@@ -759,6 +891,10 @@ export default {
       }
     }
 
+    .log-filter-select {
+      width: 200px;
+    }
+
     .empty-state {
       text-align: center;
       padding: 60px 20px;
@@ -895,6 +1031,11 @@ export default {
     gap: 4px;
   }
 
+  .mobile-health-list,
+  .mobile-log-list {
+    display: none;
+  }
+
   .health-table {
     /deep/ .ant-table {
       border-radius: 8px;
@@ -938,6 +1079,256 @@ export default {
 
   /deep/ .ant-switch-checked {
     background-color: #52c41a;
+  }
+
+  @media (max-width: 768px) {
+    .update-notification {
+      top: 64px;
+      right: 12px;
+      padding: 10px 14px;
+    }
+
+    .stat-row {
+      margin-bottom: 12px;
+
+      /deep/ .ant-col {
+        margin-bottom: 12px;
+      }
+
+      .stat-card {
+        border-radius: 8px;
+
+        &:hover {
+          transform: none;
+        }
+
+        /deep/ .ant-card-body {
+          padding: 14px;
+        }
+
+        .card-icon {
+          top: 12px;
+          right: 12px;
+          width: 34px;
+          height: 34px;
+          border-radius: 8px;
+          font-size: 18px;
+        }
+
+        /deep/ .ant-statistic-title {
+          margin-bottom: 8px;
+          font-size: 12px;
+        }
+
+        /deep/ .ant-statistic-content {
+          font-size: 20px;
+        }
+      }
+    }
+
+    .section-card {
+      border-radius: 8px;
+
+      &:hover {
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      }
+
+      /deep/ .ant-card-body {
+        padding: 14px;
+      }
+
+      .section-header {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 14px;
+
+        .section-title {
+          font-size: 15px;
+        }
+
+        .header-actions {
+          flex-wrap: wrap;
+          gap: 8px;
+
+          .auto-refresh-label {
+            margin-right: 4px;
+          }
+
+          .check-all-btn {
+            margin-left: auto;
+          }
+        }
+      }
+
+      .log-filter-select {
+        width: 100%;
+      }
+    }
+
+    .health-table {
+      display: none;
+    }
+
+    .mobile-health-list,
+    .mobile-log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .mobile-health-card,
+    .mobile-log-card {
+      background: #fff;
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    .mobile-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mobile-channel-info {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .mobile-channel-title,
+    .mobile-log-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .mobile-channel-name {
+      color: #1f2937;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-channel-title .protocol-tag {
+      margin-top: 6px;
+      margin-left: 0;
+      max-width: 100%;
+      white-space: normal;
+    }
+
+    .mobile-field-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-score-row,
+    .mobile-model-editor,
+    .mobile-meta-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    .score-cell {
+      width: 100%;
+
+      .score-progress {
+        flex: 1;
+        width: auto;
+      }
+    }
+
+    .mobile-model-editor {
+      .model-editor-input {
+        width: 100%;
+      }
+
+      .model-editor-hint {
+        font-size: 12px;
+        line-height: 1.4;
+        color: #8c8c8c;
+
+        &.is-dirty {
+          color: #fa8c16;
+        }
+      }
+    }
+
+    .mobile-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .mobile-action-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+    }
+
+    .mobile-log-model {
+      margin-top: 4px;
+      color: #5f6b7a;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-log-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .mobile-log-error {
+      margin-top: 10px;
+      padding: 8px 10px;
+      color: #f5222d;
+      font-size: 12px;
+      line-height: 1.5;
+      background: #fff1f0;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-pagination {
+      display: flex;
+      justify-content: center;
+      padding: 4px 0 2px;
+    }
+
+    .mobile-empty {
+      padding: 36px 12px;
+      color: #8c8c8c;
+      text-align: center;
+      background: #fafafa;
+      border-radius: 8px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .stat-row /deep/ .ant-col {
+      width: 100%;
+    }
+
+    .section-card .section-header .header-actions {
+      .check-all-btn {
+        width: 100%;
+        margin-left: 0;
+      }
+    }
   }
 }
 </style>

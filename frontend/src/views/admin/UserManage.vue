@@ -2,28 +2,28 @@
   <div class="user-manage-page">
     <!-- Summary Cards -->
     <a-row :gutter="16" class="stat-row">
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card">
           <a-statistic title="用户总数" :value="pagination.total || 0">
             <template slot="prefix"><a-icon type="team" /></template>
           </a-statistic>
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card">
           <a-statistic title="正常用户" :value="activeCount" :value-style="{ color: '#52c41a' }">
             <template slot="prefix"><a-icon type="check-circle" /></template>
           </a-statistic>
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card">
           <a-statistic title="管理员" :value="adminCount" :value-style="{ color: '#667eea' }">
             <template slot="prefix"><a-icon type="safety-certificate" /></template>
           </a-statistic>
         </a-card>
       </a-col>
-      <a-col :span="6">
+      <a-col :xs="12" :sm="12" :md="6">
         <a-card class="stat-card">
           <a-statistic title="余额总计 ($)" :value="totalBalance" :precision="2" :value-style="{ color: '#fa8c16' }">
             <template slot="prefix"><a-icon type="dollar" /></template>
@@ -39,13 +39,14 @@
         <a-input-search
           v-model="searchKeyword"
           placeholder="搜索用户名或邮箱..."
-          style="width: 280px"
+          class="search-input"
           @search="handleSearch"
           allowClear
         />
       </div>
 
       <a-table
+        v-if="!isMobile"
         :columns="columns"
         :data-source="userList"
         :loading="loading"
@@ -196,6 +197,156 @@
           </a-space>
         </template>
       </a-table>
+
+      <div v-else class="mobile-user-list">
+        <a-spin v-if="loading" />
+        <template v-else-if="userList.length > 0">
+          <div
+            v-for="record in userList"
+            :key="record.id"
+            class="mobile-user-card"
+          >
+            <div class="mobile-user-header">
+              <div class="mobile-user-main">
+                <a-avatar :style="{ background: record.role === 'admin' ? '#667eea' : '#87d068' }">
+                  {{ (record.username || '?').charAt(0).toUpperCase() }}
+                </a-avatar>
+                <div class="mobile-user-title">
+                  <a class="mobile-user-name" @click="viewUserLogs(record)">{{ record.username || '-' }}</a>
+                  <div class="mobile-user-email">{{ record.email || '未设置邮箱' }}</div>
+                </div>
+              </div>
+              <a-badge :status="record.status === 1 ? 'success' : 'error'" :text="record.status === 1 ? '正常' : '已禁用'" />
+            </div>
+
+            <div class="mobile-tag-row">
+              <a-tag :color="record.role === 'admin' ? 'purple' : 'blue'">
+                {{ record.role === 'admin' ? '管理员' : record.role === 'agent' ? '代理' : '用户' }}
+              </a-tag>
+              <a-tag v-if="record.role === 'admin'" color="purple">平台管理</a-tag>
+              <a-tag v-else-if="record.agent_id" color="geekblue">{{ record.agent_name || `代理 #${record.agent_id}` }}</a-tag>
+              <a-tag v-else color="green">平台直营</a-tag>
+            </div>
+
+            <div class="mobile-field-grid">
+              <div class="mobile-field">
+                <span class="mobile-field-label">ID</span>
+                <span>{{ record.id }}</span>
+              </div>
+              <div class="mobile-field">
+                <span class="mobile-field-label">余额</span>
+                <span class="balance-text">$ {{ record.balance != null ? parseFloat(record.balance).toFixed(4) : '0.0000' }}</span>
+              </div>
+              <div class="mobile-field">
+                <span class="mobile-field-label">图片积分</span>
+                <span class="image-credit-text">{{ formatImageCredits(record.image_credit_balance) }} 积分</span>
+              </div>
+              <div class="mobile-field">
+                <span class="mobile-field-label">最后登录</span>
+                <span v-if="record.last_login" class="time-text">{{ formatUtcDate(record.last_login) }}</span>
+                <span v-else class="time-text muted">从未登录</span>
+              </div>
+            </div>
+
+            <div class="mobile-field mobile-full-field">
+              <span class="mobile-field-label">注册来源</span>
+              <span v-if="record.source_domain" class="source-domain">{{ record.source_domain }}</span>
+              <span v-else-if="record.agent_frontend_domain" class="source-domain">{{ record.agent_frontend_domain }}</span>
+              <span v-else class="time-text muted">平台默认</span>
+            </div>
+
+            <div class="mobile-subscription">
+              <span class="mobile-field-label">计费模式</span>
+              <div v-if="record.subscription_type === 'unlimited'" class="mobile-subscription-content">
+                <a-tag color="purple">
+                  <a-icon type="crown" />
+                  时间套餐
+                </a-tag>
+                <span v-if="record.subscription_summary && record.subscription_summary.plan_name">{{ record.subscription_summary.plan_name }}</span>
+                <span v-if="record.subscription_expires_at">{{ getSubscriptionStatus(record.subscription_expires_at) }}</span>
+              </div>
+              <div v-else-if="record.subscription_type === 'quota'" class="mobile-subscription-content">
+                <a-tag color="blue">
+                  <a-icon type="dashboard" />
+                  每日限额套餐
+                </a-tag>
+                <span v-if="record.subscription_summary && record.subscription_summary.plan_name">{{ record.subscription_summary.plan_name }}</span>
+                <span v-if="record.subscription_summary && record.subscription_summary.current_cycle">
+                  剩余 {{ formatSubscriptionCycle(record.subscription_summary.current_cycle.remaining_amount, record.subscription_summary.quota_metric) }}
+                </span>
+                <span v-if="record.subscription_expires_at">{{ getSubscriptionStatus(record.subscription_expires_at) }}</span>
+              </div>
+              <a-tag v-else color="blue">
+                <a-icon type="dollar" />
+                按量计费
+              </a-tag>
+            </div>
+
+            <div class="mobile-action-grid">
+              <a-button size="small" @click="handleEdit(record)">
+                <a-icon type="edit" />
+                编辑
+              </a-button>
+              <a-button size="small" style="color: #fa8c16" @click="handleRecharge(record, 'balance')">
+                <a-icon type="dollar" />
+                余额
+              </a-button>
+              <a-button
+                v-if="record.subscription_type !== 'balance'"
+                size="small"
+                style="color: #722ed1"
+                @click="goToSubscription(record)"
+              >
+                <a-icon type="crown" />
+                套餐
+              </a-button>
+              <a-button size="small" style="color: #722ed1" @click="handleRecharge(record, 'image_credit')">
+                <a-icon type="picture" />
+                图片积分
+              </a-button>
+              <a-popconfirm
+                :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="handleToggleStatus(record)"
+              >
+                <a-button
+                  size="small"
+                  :style="{ color: record.status === 1 ? '#f5222d' : '#52c41a' }"
+                >
+                  <a-icon :type="record.status === 1 ? 'stop' : 'check-circle'" />
+                  {{ record.status === 1 ? '禁用' : '启用' }}
+                </a-button>
+              </a-popconfirm>
+              <a-popconfirm
+                :disabled="record.id === currentUser.id"
+                title="确定删除此用户？删除后将清理其账户数据。"
+                ok-text="确定"
+                cancel-text="取消"
+                @confirm="handleDeleteUser(record)"
+              >
+                <a-button
+                  size="small"
+                  :disabled="record.id === currentUser.id"
+                  :style="{ color: record.id === currentUser.id ? '#d9d9d9' : '#f5222d' }"
+                >
+                  <a-icon type="delete" />
+                  删除
+                </a-button>
+              </a-popconfirm>
+            </div>
+          </div>
+          <a-pagination
+            class="mobile-pagination"
+            simple
+            :current="pagination.current"
+            :page-size="pagination.pageSize"
+            :total="pagination.total"
+            @change="handleMobilePageChange"
+          />
+        </template>
+        <div v-else class="mobile-empty">暂无用户数据</div>
+      </div>
     </a-card>
 
     <!-- Edit User Modal -->
@@ -205,7 +356,7 @@
       :confirm-loading="editModalLoading"
       @ok="handleEditOk"
       @cancel="editModalVisible = false"
-      :width="480"
+      :width="modalWidth(480)"
     >
       <a-form layout="vertical">
         <a-form-item label="用户名">
@@ -236,7 +387,7 @@
       :confirm-loading="rechargeModalLoading"
       @ok="handleRechargeOk"
       @cancel="rechargeModalVisible = false"
-      :width="420"
+      :width="modalWidth(420)"
     >
       <a-form layout="vertical">
         <a-form-item label="操作类型">
@@ -299,6 +450,7 @@ export default {
       searchKeyword: '',
       sortField: 'id',
       sortOrder: 'desc',
+      isMobile: false,
       pagination: {
         current: 1,
         pageSize: 10,
@@ -360,11 +512,22 @@ export default {
     }
   },
   mounted() {
+    this.updateViewport()
+    window.addEventListener('resize', this.updateViewport)
     this.fetchList()
+  },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.updateViewport)
   },
   methods: {
     formatDate,
     formatUtcDate,
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 768
+    },
+    modalWidth(width) {
+      return this.isMobile ? 'calc(100vw - 24px)' : width
+    },
     async fetchList() {
       this.loading = true
       try {
@@ -398,6 +561,11 @@ export default {
         this.sortField = sorter.field === 'lastLogin' ? 'last_login' : sorter.field
         this.sortOrder = sorter.order === 'ascend' ? 'asc' : 'desc'
       }
+      this.fetchList()
+    },
+    handleMobilePageChange(page, pageSize) {
+      this.pagination.current = page
+      this.pagination.pageSize = pageSize
       this.fetchList()
     },
     handleEdit(record) {
@@ -598,16 +766,20 @@ export default {
     border-radius: 12px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
 
-    .table-toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
+      .table-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
 
       .toolbar-title {
         font-size: 16px;
         font-weight: 600;
         color: #1a1a2e;
+      }
+
+      .search-input {
+        width: 280px;
       }
     }
   }
@@ -723,6 +895,224 @@ export default {
     }
     &::-webkit-scrollbar-track {
       background: transparent;
+    }
+  }
+
+  .mobile-user-list {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    .stat-row {
+      margin-bottom: 12px;
+
+      /deep/ .ant-col {
+        margin-bottom: 12px;
+      }
+
+      .stat-card {
+        border-radius: 8px;
+
+        &:hover {
+          transform: none;
+        }
+
+        /deep/ .ant-card-body {
+          padding: 14px;
+        }
+
+        /deep/ .ant-statistic-title {
+          margin-bottom: 8px;
+          font-size: 12px;
+        }
+
+        /deep/ .ant-statistic-content {
+          font-size: 20px;
+        }
+      }
+    }
+
+    .table-card {
+      border-radius: 8px;
+
+      /deep/ .ant-card-body {
+        padding: 14px;
+      }
+
+      .table-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+        margin-bottom: 14px;
+
+        .search-input {
+          width: 100%;
+        }
+      }
+    }
+
+    .mobile-user-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .mobile-user-card {
+      background: #fff;
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    .mobile-user-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mobile-user-main {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .mobile-user-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .mobile-user-name {
+      display: block;
+      color: #667eea;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-user-email {
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+
+      /deep/ .ant-tag {
+        margin-right: 0;
+        max-width: 100%;
+        white-space: normal;
+      }
+    }
+
+    .mobile-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+    }
+
+    .mobile-field,
+    .mobile-subscription {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      color: #262626;
+      font-size: 13px;
+    }
+
+    .mobile-field-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-full-field,
+    .mobile-subscription {
+      margin-top: 10px;
+    }
+
+    .mobile-full-field .source-domain {
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
+    .mobile-subscription-content {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      color: #64748b;
+      font-size: 12px;
+
+      /deep/ .ant-tag {
+        margin-right: 0;
+      }
+    }
+
+    .mobile-action-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+
+      /deep/ .ant-btn {
+        width: 100%;
+        min-width: 0;
+        padding: 0 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    .mobile-pagination {
+      display: flex;
+      justify-content: center;
+      padding: 4px 0 2px;
+    }
+
+    .mobile-empty {
+      padding: 36px 12px;
+      color: #8c8c8c;
+      text-align: center;
+      background: #fafafa;
+      border-radius: 8px;
+    }
+
+    /deep/ .ant-modal {
+      max-width: calc(100vw - 24px);
+      margin: 12px auto;
+    }
+
+    /deep/ .ant-modal-body {
+      padding: 16px;
+      max-height: calc(100vh - 180px);
+      overflow-y: auto;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .stat-row /deep/ .ant-col {
+      width: 100%;
+    }
+
+    .mobile-field-grid,
+    .mobile-action-grid {
+      grid-template-columns: 1fr;
     }
   }
 }

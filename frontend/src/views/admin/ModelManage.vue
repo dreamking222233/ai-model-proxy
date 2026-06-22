@@ -7,7 +7,7 @@
           <a-input-search
             v-model="modelSearch"
             placeholder="搜索模型..."
-            style="width: 300px"
+            class="toolbar-search"
             @search="handleModelSearch"
             allowClear
           />
@@ -18,6 +18,7 @@
         </div>
 
         <a-table
+          v-if="!isMobile"
           :columns="modelColumns"
           :data-source="modelList"
           :loading="modelLoading"
@@ -26,6 +27,7 @@
           :row-class-name="getModelRowClass"
           :custom-row="modelCustomRow"
           @change="handleModelTableChange"
+          :scroll="{ x: 1600 }"
         >
           <template slot="type" slot-scope="text">
             <a-tag>{{ text || '-' }}</a-tag>
@@ -116,6 +118,115 @@
           </template>
         </a-table>
 
+        <div v-else class="mobile-card-list">
+          <a-spin v-if="modelLoading" />
+          <template v-else-if="modelList.length > 0">
+            <div
+              v-for="record in modelList"
+              :key="record.id"
+              class="mobile-model-card"
+              :class="{ selected: selectedModel && selectedModel.id === record.id }"
+              @click="selectModel(record)"
+            >
+              <div class="mobile-card-header">
+                <div class="mobile-card-title">
+                  <div class="mobile-model-name">{{ record.model_name || '-' }}</div>
+                  <div class="mobile-model-display">{{ record.display_name || record.model_name || '-' }}</div>
+                </div>
+                <a-tag :color="record.enabled ? 'green' : 'red'">
+                  {{ record.enabled ? '已启用' : '已禁用' }}
+                </a-tag>
+              </div>
+
+              <div class="mobile-tag-row">
+                <a-tag>{{ record.model_type || '-' }}</a-tag>
+                <a-tag :color="getSeriesColor(record.model_series)">{{ getSeriesLabel(record.model_series) }}</a-tag>
+                <a-tag>{{ record.protocol_type || '-' }}</a-tag>
+                <a-tag v-if="record.billing_type === 'image_credit'" color="gold">
+                  {{ record.model_type === 'video' ? `媒体积分 ${record.image_credit_multiplier || 0.5}/秒` : `媒体积分 x${record.image_credit_multiplier || 1}` }}
+                </a-tag>
+                <a-tag v-else-if="record.billing_type === 'request'" color="purple">
+                  按次 ${{ formatPrice(record.request_price) }}
+                </a-tag>
+                <a-tag v-else-if="record.billing_type === 'free'" color="green">免费</a-tag>
+                <a-tag v-else color="blue">Token</a-tag>
+              </div>
+
+              <div class="mobile-field-grid">
+                <div class="mobile-field">
+                  <span class="mobile-field-label">ID</span>
+                  <span>{{ record.id }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">长上下文</span>
+                  <span v-if="supportsLongContextBilling(record)">{{ Number(record.long_context_billing_enabled) ? '256k x2' : '关闭' }}</span>
+                  <span v-else class="muted-text">-</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">输入价格</span>
+                  <span>{{ record.billing_type === 'token' && record.input_price_per_million != null ? record.input_price_per_million : '-' }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">输出价格</span>
+                  <span>{{ record.billing_type === 'token' && record.output_price_per_million != null ? record.output_price_per_million : '-' }}</span>
+                </div>
+              </div>
+
+              <div class="mobile-field mobile-full-field">
+                <span class="mobile-field-label">尺寸能力</span>
+                <div v-if="record.model_type === 'image'" class="capability-tags">
+                  <a-tag
+                    v-for="size in record.image_size_capabilities || []"
+                    :key="`${record.id}-mobile-size-${size}`"
+                    color="blue"
+                  >
+                    {{ size }}
+                  </a-tag>
+                  <span v-if="!(record.image_size_capabilities || []).length" class="muted-text">-</span>
+                </div>
+                <div v-else-if="record.model_type === 'video'" class="capability-tags">
+                  <a-tag
+                    v-for="size in record.video_size_capabilities || []"
+                    :key="`${record.id}-mobile-video-size-${size}`"
+                    color="purple"
+                  >
+                    {{ size }}
+                  </a-tag>
+                  <span v-if="!(record.video_size_capabilities || []).length" class="muted-text">-</span>
+                </div>
+                <span v-else class="muted-text">-</span>
+              </div>
+
+              <div class="mobile-action-row">
+                <a-button size="small" @click.stop="handleEditModel(record)">
+                  <a-icon type="edit" />
+                  编辑
+                </a-button>
+                <a-popconfirm
+                  title="确定要删除此模型吗？"
+                  ok-text="确定"
+                  cancel-text="取消"
+                  @confirm="handleDeleteModel(record.id)"
+                >
+                  <a-button size="small" type="danger" ghost @click.stop>
+                    <a-icon type="delete" />
+                    删除
+                  </a-button>
+                </a-popconfirm>
+              </div>
+            </div>
+            <a-pagination
+              class="mobile-pagination"
+              simple
+              :current="modelPagination.current"
+              :page-size="modelPagination.pageSize"
+              :total="modelPagination.total"
+              @change="handleModelMobilePageChange"
+            />
+          </template>
+          <div v-else class="mobile-empty">暂无模型数据</div>
+        </div>
+
         <!-- Channel Mappings for selected model -->
         <div v-if="selectedModel" class="mapping-section">
           <a-card :title="'渠道映射: ' + selectedModel.model_name" size="small">
@@ -129,12 +240,14 @@
               添加映射
             </a-button>
             <a-table
+              v-if="!isMobile"
               :columns="mappingColumns"
               :data-source="mappingList"
               :loading="mappingLoading"
               :pagination="false"
               row-key="id"
               size="small"
+              :scroll="{ x: 1050 }"
             >
               <template slot="enabled" slot-scope="text">
                 <a-tag :color="text ? 'green' : 'red'">
@@ -188,6 +301,70 @@
                 </a-popconfirm>
               </template>
             </a-table>
+
+            <div v-else class="mobile-card-list compact">
+              <a-spin v-if="mappingLoading" />
+              <template v-else-if="mappingList.length > 0">
+                <div
+                  v-for="record in mappingList"
+                  :key="record.id"
+                  class="mobile-mapping-card"
+                >
+                  <div class="mobile-card-header">
+                    <div class="mobile-card-title">
+                      <div class="mobile-model-name">{{ record.channel_name || '-' }}</div>
+                      <div class="mobile-model-display">{{ record.actual_model_name || '-' }}</div>
+                    </div>
+                    <a-tag :color="record.enabled ? 'green' : 'red'">
+                      {{ record.enabled ? '已启用' : '已禁用' }}
+                    </a-tag>
+                  </div>
+                  <div class="mobile-tag-row">
+                    <a-tag :color="getChannelVariantColor(record.channel_protocol_type, record.channel_provider_variant)">
+                      {{ getChannelVariantLabel(record.channel_protocol_type, record.channel_provider_variant) }}
+                    </a-tag>
+                    <a-tag :color="record.supports_image_edit ? 'green' : 'default'">
+                      {{ record.supports_image_edit ? '支持编辑图' : '不支持编辑图' }}
+                    </a-tag>
+                    <a-tag v-if="record.default_reasoning_effort" color="purple">
+                      {{ record.default_reasoning_effort }}
+                    </a-tag>
+                  </div>
+                  <div class="mobile-field mobile-full-field">
+                    <span class="mobile-field-label">分辨率能力</span>
+                    <div class="capability-tags">
+                      <template v-if="record.channel_protocol_type === 'google'">
+                        <a-tag color="cyan">跟随模型</a-tag>
+                      </template>
+                      <template v-else-if="(record.supported_image_sizes || []).length">
+                        <a-tag
+                          v-for="size in record.supported_image_sizes"
+                          :key="`${record.id}-mobile-mapping-size-${size}`"
+                          color="blue"
+                        >
+                          {{ size }}
+                        </a-tag>
+                      </template>
+                      <span v-else class="muted-text">-</span>
+                    </div>
+                  </div>
+                  <div class="mobile-action-row">
+                    <a-popconfirm
+                      title="确定要删除此映射吗？"
+                      ok-text="确定"
+                      cancel-text="取消"
+                      @confirm="handleDeleteMapping(record.id)"
+                    >
+                      <a-button size="small" type="danger" ghost>
+                        <a-icon type="delete" />
+                        删除映射
+                      </a-button>
+                    </a-popconfirm>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="mobile-empty">暂无渠道映射</div>
+            </div>
           </a-card>
         </div>
       </a-tab-pane>
@@ -210,12 +387,14 @@
         </div>
 
         <a-table
+          v-if="!isMobile"
           :columns="ruleColumns"
           :data-source="ruleList"
           :loading="ruleLoading"
           :pagination="rulePagination"
           row-key="id"
           @change="handleRuleTableChange"
+          :scroll="{ x: 980 }"
         >
           <template slot="enabled" slot-scope="text">
             <a-tag :color="text ? 'green' : 'red'">
@@ -236,6 +415,71 @@
             </a-popconfirm>
           </template>
         </a-table>
+
+        <div v-else class="mobile-card-list">
+          <a-spin v-if="ruleLoading" />
+          <template v-else-if="ruleList.length > 0">
+            <div
+              v-for="record in ruleList"
+              :key="record.id"
+              class="mobile-rule-card"
+            >
+              <div class="mobile-card-header">
+                <div class="mobile-card-title">
+                  <div class="mobile-model-name">{{ record.name || '-' }}</div>
+                  <div class="mobile-model-display">{{ record.source_pattern || '-' }}</div>
+                </div>
+                <a-tag :color="record.enabled ? 'green' : 'red'">
+                  {{ record.enabled ? '已启用' : '已禁用' }}
+                </a-tag>
+              </div>
+              <div class="mobile-field-grid">
+                <div class="mobile-field">
+                  <span class="mobile-field-label">ID</span>
+                  <span>{{ record.id }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">规则类型</span>
+                  <span>{{ record.rule_type || '-' }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">优先级</span>
+                  <span>{{ record.priority }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">目标模型</span>
+                  <span>{{ record.target_model_name || '-' }}</span>
+                </div>
+              </div>
+              <div class="mobile-action-row">
+                <a-button size="small" @click="handleEditRule(record)">
+                  <a-icon type="edit" />
+                  编辑
+                </a-button>
+                <a-popconfirm
+                  title="确定要删除此规则吗？"
+                  ok-text="确定"
+                  cancel-text="取消"
+                  @confirm="handleDeleteRule(record.id)"
+                >
+                  <a-button size="small" type="danger" ghost>
+                    <a-icon type="delete" />
+                    删除
+                  </a-button>
+                </a-popconfirm>
+              </div>
+            </div>
+            <a-pagination
+              class="mobile-pagination"
+              simple
+              :current="rulePagination.current"
+              :page-size="rulePagination.pageSize"
+              :total="rulePagination.total"
+              @change="handleRuleMobilePageChange"
+            />
+          </template>
+          <div v-else class="mobile-empty">暂无覆盖规则</div>
+        </div>
       </a-tab-pane>
     </a-tabs>
 
@@ -246,7 +490,7 @@
       :confirm-loading="modelModalLoading"
       @ok="handleModelModalOk"
       @cancel="modelModalVisible = false"
-      :width="600"
+      :width="modalWidth(600)"
     >
       <a-form layout="vertical">
         <a-form-item label="模型名称">
@@ -364,7 +608,7 @@
       :confirm-loading="mappingModalLoading"
       @ok="handleMappingModalOk"
       @cancel="mappingModalVisible = false"
-      :width="500"
+      :width="modalWidth(500)"
     >
       <a-form layout="vertical">
         <a-form-item label="渠道">
@@ -421,7 +665,7 @@
       :confirm-loading="ruleModalLoading"
       @ok="handleRuleModalOk"
       @cancel="ruleModalVisible = false"
-      :width="600"
+      :width="modalWidth(600)"
     >
       <a-form layout="vertical">
         <a-form-item label="名称">
@@ -508,6 +752,7 @@ export default {
     return {
       activeTab: 'models',
       modelSeriesOptions: MODEL_SERIES_OPTIONS,
+      isMobile: false,
 
       // Models
       modelLoading: false,
@@ -705,10 +950,21 @@ export default {
     }
   },
   mounted() {
+    this.updateViewport()
+    window.addEventListener('resize', this.updateViewport)
     this.fetchModels()
     this.fetchChannelOptions()
   },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.updateViewport)
+  },
   methods: {
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 768
+    },
+    modalWidth(width) {
+      return this.isMobile ? 'calc(100vw - 24px)' : width
+    },
     inferModelSeries(modelName) {
       const name = String(modelName || '').trim().toLowerCase()
       if (name.startsWith('gpt') || name.startsWith('o1') || name.startsWith('o3') || name.startsWith('o4')) return 'gpt'
@@ -838,6 +1094,11 @@ export default {
       this.modelPagination.pageSize = pagination.pageSize
       this.fetchModels()
     },
+    handleModelMobilePageChange(page, pageSize) {
+      this.modelPagination.current = page
+      this.modelPagination.pageSize = pageSize
+      this.fetchModels()
+    },
     getModelRowClass(record) {
       return this.selectedModel && this.selectedModel.id === record.id ? 'selected-row' : ''
     },
@@ -845,11 +1106,14 @@ export default {
       return {
         on: {
           click: () => {
-            this.selectedModel = record
-            this.fetchMappings(record.id)
+            this.selectModel(record)
           }
         }
       }
+    },
+    selectModel(record) {
+      this.selectedModel = record
+      this.fetchMappings(record.id)
     },
     handleAddModel() {
       this.isModelEdit = false
@@ -1156,6 +1420,11 @@ export default {
       this.rulePagination.pageSize = pagination.pageSize
       this.fetchRules()
     },
+    handleRuleMobilePageChange(page, pageSize) {
+      this.rulePagination.current = page
+      this.rulePagination.pageSize = pageSize
+      this.fetchRules()
+    },
     handleAddRule() {
       this.isRuleEdit = false
       this.ruleEditId = null
@@ -1231,11 +1500,17 @@ export default {
   .table-toolbar {
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    gap: 12px;
     margin-bottom: 16px;
     padding: 16px;
     background: #fff;
     border-radius: 12px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+    .toolbar-search {
+      width: 300px;
+    }
   }
 
   .mapping-section {
@@ -1345,6 +1620,226 @@ export default {
 
     .ant-tag {
       border-radius: 4px;
+    }
+  }
+
+  .mobile-card-list {
+    display: none;
+  }
+
+  @media (max-width: 768px) {
+    /deep/ .ant-tabs {
+      .ant-tabs-bar {
+        margin-bottom: 12px;
+      }
+
+      .ant-tabs-nav {
+        width: 100%;
+        display: flex;
+      }
+
+      .ant-tabs-tab {
+        flex: 1;
+        margin-right: 0;
+        padding: 12px 8px;
+        text-align: center;
+      }
+    }
+
+    .table-toolbar {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px;
+      border-radius: 8px;
+
+      > span:empty {
+        display: none;
+      }
+
+      .toolbar-search {
+        width: 100%;
+      }
+
+      /deep/ .ant-btn {
+        width: 100%;
+      }
+    }
+
+    .mobile-card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+
+      &.compact {
+        gap: 10px;
+      }
+    }
+
+    .mobile-model-card,
+    .mobile-mapping-card,
+    .mobile-rule-card {
+      background: #fff;
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    .mobile-model-card.selected {
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.12);
+    }
+
+    .mobile-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mobile-card-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .mobile-model-name {
+      color: #1f2937;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-model-display {
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-tag-row,
+    .capability-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+
+      /deep/ .ant-tag {
+        margin-right: 0;
+        max-width: 100%;
+        white-space: normal;
+      }
+    }
+
+    .mobile-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+    }
+
+    .mobile-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      color: #262626;
+      font-size: 13px;
+    }
+
+    .mobile-field-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-full-field {
+      margin-top: 10px;
+    }
+
+    .mobile-action-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #f0f2f5;
+
+      /deep/ .ant-btn {
+        min-width: 84px;
+      }
+    }
+
+    .mobile-pagination {
+      display: flex;
+      justify-content: center;
+      padding: 4px 0 2px;
+    }
+
+    .mobile-empty {
+      padding: 36px 12px;
+      color: #8c8c8c;
+      text-align: center;
+      background: #fafafa;
+      border-radius: 8px;
+    }
+
+    .mapping-section {
+      margin-top: 16px;
+
+      /deep/ .ant-card-head {
+        padding: 0 14px;
+      }
+
+      /deep/ .ant-card-head-title {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      /deep/ .ant-card-extra {
+        padding: 10px 0;
+      }
+
+      /deep/ .ant-card-body {
+        padding: 14px;
+      }
+    }
+
+    .resolution-config-row {
+      grid-template-columns: 1fr;
+      gap: 10px;
+
+      /deep/ .ant-input-number {
+        width: 100% !important;
+      }
+    }
+
+    /deep/ .ant-modal {
+      max-width: calc(100vw - 24px);
+      margin: 12px auto;
+    }
+
+    /deep/ .ant-modal-body {
+      padding: 16px;
+      max-height: calc(100vh - 180px);
+      overflow-y: auto;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .mobile-field-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .mobile-action-row {
+      flex-direction: column;
+
+      /deep/ .ant-btn {
+        width: 100%;
+      }
     }
   }
 }

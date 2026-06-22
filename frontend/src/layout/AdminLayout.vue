@@ -5,6 +5,7 @@
       v-model="collapsed"
       collapsible
       :trigger="null"
+      :collapsed-width="isMobile ? 0 : 80"
       class="admin-sider"
     >
       <!-- Logo 区域 -->
@@ -135,7 +136,7 @@
     </a-layout-sider>
 
     <!-- Main area -->
-    <a-layout class="main-layout" :style="{ marginLeft: collapsed ? '80px' : '200px' }">
+    <a-layout class="main-layout" :style="{ marginLeft: mainLayoutMarginLeft }">
       <!-- Header - fixed -->
       <a-layout-header class="admin-header">
         <div class="header-left">
@@ -182,7 +183,8 @@ export default {
   name: 'AdminLayout',
   data() {
     return {
-      collapsed: false
+      collapsed: false,
+      isMobile: false
     }
   },
   computed: {
@@ -195,12 +197,35 @@ export default {
     },
     isFullscreen() {
       return this.$route.meta && this.$route.meta.fullscreen === true
+    },
+    mainLayoutMarginLeft() {
+      if (this.isMobile) {
+        return '0'
+      }
+      return this.collapsed ? '80px' : '200px'
     }
   },
+  mounted() {
+    this.updateViewport()
+    window.addEventListener('resize', this.updateViewport)
+  },
+  beforeDestroy() {
+    window.removeEventListener('resize', this.updateViewport)
+  },
   methods: {
+    updateViewport() {
+      const isMobile = window.innerWidth <= 768
+      if (isMobile && !this.isMobile) {
+        this.collapsed = true
+      }
+      this.isMobile = isMobile
+    },
     handleMenuClick({ key }) {
       if (this.$route.path !== key) {
         this.$router.push(key)
+        if (this.isMobile) {
+          this.collapsed = true
+        }
       }
     },
     handleUserMenuClick({ key }) {
@@ -225,6 +250,14 @@ export default {
 .fixed-layout {
   height: 100vh;
   overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .fixed-layout,
+  .admin-sider,
+  .main-layout {
+    height: 100dvh;
+  }
 }
 
 /* =============================================
@@ -370,6 +403,7 @@ export default {
   overflow-x: hidden;
   padding: 8px 0;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 
   &::-webkit-scrollbar {
     width: 3px;
@@ -576,6 +610,75 @@ export default {
     padding: 0;
     overflow: hidden;
     background: transparent;
+  }
+}
+
+@media (max-width: 768px) {
+  .main-layout {
+    margin-left: 0 !important;
+    min-width: 0;
+  }
+
+  .admin-header {
+    height: 56px;
+    line-height: 56px;
+    padding: 0 12px;
+
+    .header-left .trigger {
+      padding: 8px;
+    }
+
+    .header-right .user-dropdown {
+      height: 56px;
+      padding: 0 6px;
+
+      span:not(.ant-avatar) {
+        display: none;
+      }
+    }
+  }
+
+  .admin-content {
+    padding: 12px;
+  }
+
+  .admin-sider {
+    z-index: 20;
+    height: 100vh;
+    max-height: 100vh;
+    bottom: auto;
+  }
+
+  @supports (height: 100dvh) {
+    .admin-sider {
+      height: 100dvh;
+      max-height: 100dvh;
+    }
+
+    /deep/ .admin-sider .ant-layout-sider-children {
+      height: 100dvh;
+      max-height: 100dvh;
+    }
+  }
+
+  .logo {
+    height: 56px;
+  }
+
+  .role-badge {
+    display: none;
+  }
+
+  .sider-menu-wrapper {
+    padding: 8px 0 calc(40px + env(safe-area-inset-bottom));
+  }
+
+  /deep/ .admin-sider.ant-layout-sider-collapsed {
+    overflow: hidden;
+  }
+
+  .sider-footer {
+    display: none;
   }
 }
 

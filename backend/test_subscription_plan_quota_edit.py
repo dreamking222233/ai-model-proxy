@@ -620,9 +620,9 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
         self.assertEqual(summary["quota_limit"], 200.0)
         self.assertEqual(summary["used_amount"], 0.0)
         self.assertEqual(summary["remaining_amount"], 200.0)
-        self.assertEqual(summary["cycle_start_at"], "2026-06-22T09:00:00")
-        self.assertEqual(summary["cycle_end_at"], "2026-06-23T09:00:00")
-        self.assertEqual(summary["next_refresh_at"], "2026-06-23T09:00:00")
+        self.assertEqual(summary["cycle_start_at"], "2026-06-22T09:00:00+08:00")
+        self.assertEqual(summary["cycle_end_at"], "2026-06-23T09:00:00+08:00")
+        self.assertEqual(summary["next_refresh_at"], "2026-06-23T09:00:00+08:00")
 
     def test_plan_sort_update_does_not_default_purchase_fields(self):
         payload = SubscriptionService._validate_plan_payload({"sort_order": 30}, is_update=True)

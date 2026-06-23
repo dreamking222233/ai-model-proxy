@@ -238,7 +238,7 @@
 </template>
 
 <script>
-import { formatDate } from '@/utils'
+import { formatBeijingTime as formatDate } from '@/utils'
 import {
   listAgentPlans,
   grantAgentSubscription,

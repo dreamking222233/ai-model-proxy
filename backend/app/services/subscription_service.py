@@ -182,6 +182,9 @@ class SubscriptionService:
             "resolved_quota_value": 0.0,
             "unlimited_daily_token_limit": None,
             "current_cycle": None,
+            "refresh_anchor_at": None,
+            "next_refresh_at": None,
+            "refresh_period_hours": None,
         }
 
     @staticmethod
@@ -499,9 +502,9 @@ class SubscriptionService:
                 strategy["quota_limit"],
             )
             if estimated:
-                message = f"本次请求预计会超出实际使用额度，每日最多可使用 {limit_text}，请缩短上下文或降低输出上限后重试"
+                message = f"本次请求预计会超出实际使用额度，每 24 小时最多可使用 {limit_text}，请缩短上下文或降低输出上限后重试"
             else:
-                message = f"已超出实际使用额度，每日最多可使用 {limit_text}，请明天再试"
+                message = f"已超出实际使用额度，每 24 小时最多可使用 {limit_text}，请在下个额度周期后重试"
             return ServiceException(
                 403,
                 message,
@@ -515,7 +518,7 @@ class SubscriptionService:
             )
         return ServiceException(
             403,
-            "当日套餐额度已用尽，请明天再试或联系管理员升级套餐",
+            "当前套餐额度已用尽，请在下个额度周期后重试或联系管理员升级套餐",
             "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
         )
 
@@ -532,6 +535,24 @@ class SubscriptionService:
         return datetime.now(zone).replace(tzinfo=None)
 
     @staticmethod
+    def _to_default_timezone_naive(value: Optional[datetime]) -> Optional[datetime]:
+        if not value:
+            return None
+        if value.tzinfo is None:
+            return value
+        zone = SubscriptionService._resolve_zoneinfo(SubscriptionService.DEFAULT_TIMEZONE)
+        return value.astimezone(zone).replace(tzinfo=None)
+
+    @staticmethod
+    def _serialize_beijing_dt(value: Optional[datetime]) -> Optional[str]:
+        if not value:
+            return None
+        zone = SubscriptionService._resolve_zoneinfo(SubscriptionService.DEFAULT_TIMEZONE)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=zone).isoformat()
+        return value.astimezone(zone).isoformat()
+
+    @staticmethod
     def _get_cycle_window(
         now_local: datetime,
         tz_name: Optional[str],
@@ -545,6 +566,37 @@ class SubscriptionService:
         start_local = target_start.astimezone(storage_zone).replace(tzinfo=None)
         end_local = target_end.astimezone(storage_zone).replace(tzinfo=None)
         return target_now.date(), start_local, end_local
+
+    @staticmethod
+    def _get_subscription_cycle_window(
+        subscription: UserSubscription,
+        now_local: datetime,
+    ) -> tuple[date, datetime, datetime]:
+        """Return the rolling 24h quota window anchored at subscription start time.
+
+        Subscription quota periods are fixed to Beijing time. ``reset_timezone``
+        remains on historical records but no longer drives daily quota refresh.
+        """
+        usage_now = SubscriptionService._to_default_timezone_naive(now_local) or SubscriptionService.get_current_time()
+        start_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "start_time", None))
+        if not start_time:
+            return SubscriptionService._get_cycle_window(usage_now, SubscriptionService.DEFAULT_TIMEZONE)
+
+        end_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "end_time", None))
+        effective_now = usage_now
+        if end_time and effective_now >= end_time:
+            effective_now = end_time - timedelta(microseconds=1)
+        if effective_now < start_time:
+            effective_now = start_time
+
+        elapsed_seconds = max(0, (effective_now - start_time).total_seconds())
+        cycle_index = int(elapsed_seconds // 86400)
+        cycle_start_at = start_time + timedelta(days=cycle_index)
+        cycle_end_at = cycle_start_at + timedelta(days=1)
+        if end_time and cycle_end_at > end_time:
+            cycle_end_at = end_time
+
+        return cycle_start_at.date(), cycle_start_at, cycle_end_at
 
     @staticmethod
     def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
@@ -678,8 +730,8 @@ class SubscriptionService:
             ),
             "online_sale_enabled": int(getattr(plan, "online_sale_enabled", 0) or 0),
             "description": plan.description,
-            "created_at": plan.created_at.isoformat() if plan.created_at else None,
-            "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+            "created_at": SubscriptionService._serialize_beijing_dt(plan.created_at),
+            "updated_at": SubscriptionService._serialize_beijing_dt(plan.updated_at),
         }
 
     @staticmethod
@@ -808,14 +860,44 @@ class SubscriptionService:
         return {
             "id": cycle.id,
             "cycle_date": cycle.cycle_date.isoformat() if cycle.cycle_date else None,
-            "cycle_start_at": cycle.cycle_start_at.isoformat() if cycle.cycle_start_at else None,
-            "cycle_end_at": cycle.cycle_end_at.isoformat() if cycle.cycle_end_at else None,
+            "cycle_start_at": SubscriptionService._serialize_beijing_dt(cycle.cycle_start_at),
+            "cycle_end_at": SubscriptionService._serialize_beijing_dt(cycle.cycle_end_at),
             "quota_metric": cycle.quota_metric,
             "quota_limit": float(limit_value),
             "used_amount": float(used_value),
             "remaining_amount": float(remaining_value),
             "request_count": int(cycle.request_count or 0),
             "last_request_id": cycle.last_request_id,
+            "next_refresh_at": SubscriptionService._serialize_beijing_dt(cycle.cycle_end_at),
+        }
+
+    @staticmethod
+    def _serialize_cycle_snapshot(
+        *,
+        cycle_id: Optional[int],
+        cycle_date: date,
+        cycle_start_at: datetime,
+        cycle_end_at: datetime,
+        quota_metric: str,
+        quota_limit: Decimal,
+        used_amount: Decimal,
+        request_count: int = 0,
+        last_request_id: Optional[str] = None,
+    ) -> dict:
+        limit_value = SubscriptionService._normalize_decimal(quota_limit)
+        used_value = SubscriptionService._normalize_decimal(used_amount)
+        return {
+            "id": cycle_id,
+            "cycle_date": cycle_date.isoformat() if cycle_date else None,
+            "cycle_start_at": SubscriptionService._serialize_beijing_dt(cycle_start_at),
+            "cycle_end_at": SubscriptionService._serialize_beijing_dt(cycle_end_at),
+            "quota_metric": quota_metric,
+            "quota_limit": float(limit_value),
+            "used_amount": float(used_value),
+            "remaining_amount": float(limit_value - used_value),
+            "request_count": int(request_count or 0),
+            "last_request_id": last_request_id,
+            "next_refresh_at": SubscriptionService._serialize_beijing_dt(cycle_end_at),
         }
 
     @staticmethod
@@ -853,19 +935,27 @@ class SubscriptionService:
             "reset_period": subscription.reset_period,
             "reset_timezone": subscription.reset_timezone,
             "activation_mode": subscription.activation_mode,
-            "start_time": subscription.start_time.isoformat() if subscription.start_time else None,
-            "end_time": subscription.end_time.isoformat() if subscription.end_time else None,
+            "start_time": SubscriptionService._serialize_beijing_dt(subscription.start_time),
+            "end_time": SubscriptionService._serialize_beijing_dt(subscription.end_time),
             "status": SubscriptionService._normalized_subscription_status(subscription),
             "created_by": subscription.created_by,
-            "activated_at": subscription.activated_at.isoformat() if subscription.activated_at else None,
-            "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
-            "updated_at": subscription.updated_at.isoformat() if subscription.updated_at else None,
+            "activated_at": SubscriptionService._serialize_beijing_dt(subscription.activated_at),
+            "created_at": SubscriptionService._serialize_beijing_dt(subscription.created_at),
+            "updated_at": SubscriptionService._serialize_beijing_dt(subscription.updated_at),
             "usage_summary": usage_summary or SubscriptionService._empty_usage_summary(),
             "current_cycle": current_cycle if isinstance(current_cycle, dict) else SubscriptionService._serialize_cycle(
                 current_cycle,
                 effective_quota_value,
             ),
         }
+        if SubscriptionService._requires_daily_cycle(subscription):
+            result["refresh_anchor_at"] = SubscriptionService._serialize_beijing_dt(subscription.start_time)
+            result["next_refresh_at"] = (
+                result["current_cycle"].get("next_refresh_at")
+                if isinstance(result.get("current_cycle"), dict)
+                else None
+            )
+            result["refresh_period_hours"] = 24
         result.update(source_info or SubscriptionService._default_subscription_source_info(subscription))
         if user is not None:
             result["username"] = user.username
@@ -1104,7 +1194,7 @@ class SubscriptionService:
             "quota_limit_snapshot": float(record.quota_limit_snapshot or 0),
             "quota_used_after": float(record.quota_used_after or 0),
             "quota_cycle_date": record.quota_cycle_date.isoformat() if record.quota_cycle_date else None,
-            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "created_at": SubscriptionService._serialize_beijing_dt(record.created_at),
         }
 
     @staticmethod
@@ -1173,9 +1263,9 @@ class SubscriptionService:
         lock: bool = False,
     ) -> SubscriptionUsageCycle:
         usage_now = now or SubscriptionService.get_current_time()
-        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
+        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_subscription_cycle_window(
+            subscription,
             usage_now,
-            subscription.reset_timezone,
         )
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
         quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
@@ -1187,32 +1277,25 @@ class SubscriptionService:
             query = query.with_for_update()
         cycle = query.first()
         if cycle:
-            cycle_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
-            should_rebuild_snapshot = cycle.quota_metric != quota_metric or (
-                quota_metric == SubscriptionService.QUOTA_METRIC_COST
-                and SubscriptionService._uses_official_cost_for_quota(subscription)
-                and cycle_used_amount > quota_limit
+            return SubscriptionService._sync_cycle_snapshot(
+                db,
+                subscription,
+                cycle,
+                cycle_start_at,
+                cycle_end_at,
+                quota_metric,
+                quota_limit,
             )
-            if should_rebuild_snapshot:
-                usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
-                    db,
-                    subscription,
-                    cycle_start_at,
-                    cycle_end_at,
-                    quota_metric,
-                )
-                cycle.quota_metric = quota_metric
-                cycle.quota_limit = quota_limit
-                cycle.used_amount = usage_snapshot["used_amount"]
-                cycle.request_count = usage_snapshot["request_count"]
-                cycle.last_request_id = usage_snapshot["last_request_id"]
-                return cycle
-            if SubscriptionService._normalize_decimal(cycle.quota_limit) != quota_limit:
-                cycle.quota_limit = quota_limit
-            return cycle
 
         savepoint = db.begin_nested()
         try:
+            usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                db,
+                subscription,
+                cycle_start_at,
+                cycle_end_at,
+                quota_metric,
+            )
             cycle = SubscriptionUsageCycle(
                 subscription_id=subscription.id,
                 user_id=subscription.user_id,
@@ -1221,9 +1304,9 @@ class SubscriptionService:
                 cycle_end_at=cycle_end_at,
                 quota_metric=quota_metric,
                 quota_limit=quota_limit,
-                used_amount=Decimal("0"),
-                request_count=0,
-                last_request_id=None,
+                used_amount=usage_snapshot["used_amount"],
+                request_count=usage_snapshot["request_count"],
+                last_request_id=usage_snapshot["last_request_id"],
             )
             db.add(cycle)
             db.flush()
@@ -1234,8 +1317,67 @@ class SubscriptionService:
 
         cycle = query.first()
         if cycle:
-            return cycle
+            return SubscriptionService._sync_cycle_snapshot(
+                db,
+                subscription,
+                cycle,
+                cycle_start_at,
+                cycle_end_at,
+                quota_metric,
+                quota_limit,
+            )
         raise ServiceException(500, "加载套餐使用周期失败", "SUBSCRIPTION_CYCLE_LOAD_FAILED")
+
+    @staticmethod
+    def _cycle_window_changed(
+        cycle: SubscriptionUsageCycle,
+        cycle_start_at: datetime,
+        cycle_end_at: datetime,
+    ) -> bool:
+        return (
+            cycle.cycle_start_at != cycle_start_at
+            or cycle.cycle_end_at != cycle_end_at
+        )
+
+    @staticmethod
+    def _sync_cycle_snapshot(
+        db: Session,
+        subscription: UserSubscription,
+        cycle: SubscriptionUsageCycle,
+        cycle_start_at: datetime,
+        cycle_end_at: datetime,
+        quota_metric: str,
+        quota_limit: Decimal,
+    ) -> SubscriptionUsageCycle:
+        cycle_used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
+        should_rebuild_snapshot = (
+            SubscriptionService._cycle_window_changed(cycle, cycle_start_at, cycle_end_at)
+            or cycle.quota_metric != quota_metric
+            or (
+                quota_metric == SubscriptionService.QUOTA_METRIC_COST
+                and SubscriptionService._uses_official_cost_for_quota(subscription)
+                and cycle_used_amount > quota_limit
+            )
+        )
+        if should_rebuild_snapshot:
+            usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                db,
+                subscription,
+                cycle_start_at,
+                cycle_end_at,
+                quota_metric,
+            )
+            cycle.cycle_start_at = cycle_start_at
+            cycle.cycle_end_at = cycle_end_at
+            cycle.quota_metric = quota_metric
+            cycle.quota_limit = quota_limit
+            cycle.used_amount = usage_snapshot["used_amount"]
+            cycle.request_count = usage_snapshot["request_count"]
+            cycle.last_request_id = usage_snapshot["last_request_id"]
+            return cycle
+        if SubscriptionService._normalize_decimal(cycle.quota_limit) != quota_limit:
+            cycle.quota_limit = quota_limit
+        return cycle
 
     @staticmethod
     def _rebuild_cycle_usage_snapshot(
@@ -1360,10 +1502,12 @@ class SubscriptionService:
         now: Optional[datetime] = None,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
-        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_cycle_window(
+        cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_subscription_cycle_window(
+            subscription,
             usage_now,
-            subscription.reset_timezone,
         )
+        quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
+        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         cycle = (
             db.query(SubscriptionUsageCycle)
             .filter(
@@ -1373,23 +1517,47 @@ class SubscriptionService:
             .first()
         )
         if cycle:
+            if SubscriptionService._cycle_window_changed(cycle, cycle_start_at, cycle_end_at) or cycle.quota_metric != quota_metric:
+                usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                    db,
+                    subscription,
+                    cycle_start_at,
+                    cycle_end_at,
+                    quota_metric,
+                )
+                return SubscriptionService._serialize_cycle_snapshot(
+                    cycle_id=cycle.id,
+                    cycle_date=cycle_date,
+                    cycle_start_at=cycle_start_at,
+                    cycle_end_at=cycle_end_at,
+                    quota_metric=quota_metric,
+                    quota_limit=quota_limit,
+                    used_amount=usage_snapshot["used_amount"],
+                    request_count=usage_snapshot["request_count"],
+                    last_request_id=usage_snapshot["last_request_id"],
+                )
             return SubscriptionService._serialize_cycle(
                 cycle,
-                SubscriptionService._get_effective_quota_limit(subscription),
+                quota_limit,
             )
-        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
-        return {
-            "id": None,
-            "cycle_date": cycle_date.isoformat(),
-            "cycle_start_at": cycle_start_at.isoformat(),
-            "cycle_end_at": cycle_end_at.isoformat(),
-            "quota_metric": SubscriptionService._get_effective_quota_metric(subscription),
-            "quota_limit": float(quota_limit),
-            "used_amount": 0.0,
-            "remaining_amount": float(quota_limit),
-            "request_count": 0,
-            "last_request_id": None,
-        }
+        usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+            db,
+            subscription,
+            cycle_start_at,
+            cycle_end_at,
+            quota_metric,
+        )
+        return SubscriptionService._serialize_cycle_snapshot(
+            cycle_id=None,
+            cycle_date=cycle_date,
+            cycle_start_at=cycle_start_at,
+            cycle_end_at=cycle_end_at,
+            quota_metric=quota_metric,
+            quota_limit=quota_limit,
+            used_amount=usage_snapshot["used_amount"],
+            request_count=usage_snapshot["request_count"],
+            last_request_id=usage_snapshot["last_request_id"],
+        )
 
     @staticmethod
     def get_current_subscription_summary(
@@ -1406,6 +1574,8 @@ class SubscriptionService:
         if SubscriptionService._requires_daily_cycle(active_subscription):
             current_cycle = SubscriptionService._get_cycle_for_summary(db, active_subscription, usage_now)
         plan_kind = SubscriptionService._get_plan_kind(active_subscription)
+        next_refresh_at = current_cycle.get("next_refresh_at") if isinstance(current_cycle, dict) else None
+        requires_daily_cycle = SubscriptionService._requires_daily_cycle(active_subscription)
 
         return {
             "subscription_type": "quota"
@@ -1414,8 +1584,8 @@ class SubscriptionService:
             "plan_name": active_subscription.plan_name,
             "plan_code": active_subscription.plan_code_snapshot,
             "plan_kind": plan_kind,
-            "start_time": active_subscription.start_time.isoformat() if active_subscription.start_time else None,
-            "end_time": active_subscription.end_time.isoformat() if active_subscription.end_time else None,
+            "start_time": SubscriptionService._serialize_beijing_dt(active_subscription.start_time),
+            "end_time": SubscriptionService._serialize_beijing_dt(active_subscription.end_time),
             "quota_metric": SubscriptionService._get_effective_quota_metric(active_subscription)
             if SubscriptionService._requires_daily_cycle(active_subscription)
             else active_subscription.quota_metric,
@@ -1430,6 +1600,9 @@ class SubscriptionService:
             else float(active_subscription.quota_value or 0),
             "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(active_subscription),
             "current_cycle": current_cycle,
+            "refresh_anchor_at": SubscriptionService._serialize_beijing_dt(active_subscription.start_time) if requires_daily_cycle else None,
+            "next_refresh_at": next_refresh_at,
+            "refresh_period_hours": 24 if requires_daily_cycle else None,
         }
 
     @staticmethod

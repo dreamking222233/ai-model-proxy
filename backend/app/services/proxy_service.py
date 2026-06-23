@@ -517,7 +517,7 @@ class ProxyService:
     def _build_quota_balance_insufficient_error() -> ServiceException:
         return ServiceException(
             402,
-            "当日套餐额度不足，且余额不足以承担本次请求，请充值或缩短上下文后重试",
+            "当前套餐额度周期余额不足，且账户余额不足以承担本次请求，请充值或缩短上下文后重试",
             "INSUFFICIENT_BALANCE",
         )
 

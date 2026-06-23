@@ -14,7 +14,10 @@
 - 代理用户购买套餐时，套餐必须满足 `agent_cost_price_cny>0` 且 `agent_cost_price_cny<=sale_price_cny`。
 - 代理返现金额为 `sale_price_cny - agent_cost_price_cny`，写入订单快照和 `agent_subscription_sale_record`，不复用 `payment_recharge_order.agent_income_cny`。
 - 套餐订单不进入余额充值、图片积分充值、代理现金余额自动入账、推广充值返利路径。
-- 套餐购买只新增标准 `user_subscription` 记录，不改动请求扣费主链路；系统仍按当前逻辑优先消耗套餐每日额度，额度不足时扣用户余额，套餐额度和余额都不足时停止使用。
+- 套餐购买只新增标准 `user_subscription` 记录，不改动请求扣费主链路；系统仍按当前逻辑优先消耗套餐额度，额度不足时扣用户余额，套餐额度和余额都不足时停止使用。
+- 限额套餐额度按北京时间 rolling 24 小时刷新，以当前 `user_subscription.start_time` 为刷新锚点；例如 16:30:31 开通，则下一次额度刷新时间为次日 16:30:31，不按自然日 0 点刷新。
+- 管理端开通、代理端开通、用户端在线购买都复用同一套 `SubscriptionService` 周期计算和扣费逻辑。
+- 用户端 `/user/balance` 套餐卡片展示下次刷新时间，来源于当前周期 `cycle_end_at`。
 
 ## 数据表
 
@@ -57,4 +60,3 @@ source backend/sql/upgrade_user_subscription_purchase_20260622.sql;
 - `backend/sql/init.sql`
 - `backend/sql/initData.sql`
 - `sql/initData.sql`
-

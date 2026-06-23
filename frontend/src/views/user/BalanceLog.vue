@@ -82,11 +82,15 @@
           <div class="package-info">
             <div class="info-item">
               <span class="label">模式</span>
-              <span class="val">{{ subscriptionSummary.plan_kind === 'daily_quota' ? '每日刷新' : '无限套餐' }}</span>
+              <span class="val">{{ subscriptionModeText }}</span>
             </div>
             <div class="info-item" v-if="subscriptionSummary.end_time">
               <span class="label">到期</span>
               <span class="val">{{ formatTime(subscriptionSummary.end_time).split(' ')[0] }}</span>
+            </div>
+            <div class="info-item refresh-time" v-if="subscriptionNextRefreshAt">
+              <span class="label">下次刷新</span>
+              <span class="val">{{ formatBeijingDateTime(subscriptionNextRefreshAt) }}</span>
             </div>
             <div class="info-item highlight" v-if="subscriptionSummary.current_cycle">
               <span class="label">剩余</span>
@@ -629,6 +633,16 @@ export default {
     subscriptionSummary() {
       return this.userInfo.subscription_summary || {}
     },
+    subscriptionNextRefreshAt() {
+      const summary = this.subscriptionSummary || {}
+      return summary.next_refresh_at || (summary.current_cycle && summary.current_cycle.next_refresh_at) || (summary.current_cycle && summary.current_cycle.cycle_end_at) || ''
+    },
+    subscriptionModeText() {
+      const summary = this.subscriptionSummary || {}
+      if (summary.plan_kind === 'daily_quota') return '每24小时刷新'
+      if (summary.current_cycle || summary.next_refresh_at) return '无限套餐 / 每24小时刷新'
+      return '无限套餐'
+    },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
     },
@@ -918,6 +932,15 @@ export default {
     formatTime(t) {
       return formatLocalDate(t) || t || '-'
     },
+    formatBeijingDateTime(t) {
+      if (!t) return '-'
+      const text = String(t).trim()
+      const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/)
+      if (match) {
+        return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6] || '00'}`
+      }
+      return this.formatTime(t)
+    },
     hasPromptCacheUsage(r) {
       if (!r) return false
       return Boolean(Number(r.upstream_cache_read_input_tokens) > 0 || Number(r.upstream_cache_creation_input_tokens) > 0)
@@ -1162,10 +1185,17 @@ export default {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        gap: 12px;
         font-size: 13px;
         
-        .label { color: #94a3b8; }
-        .val { color: #475569; font-weight: 600; }
+        .label { color: #94a3b8; flex: 0 0 auto; }
+        .val { color: #475569; font-weight: 600; text-align: right; min-width: 0; word-break: keep-all; }
+
+        &.refresh-time .val {
+          font-size: 12px;
+          font-family: 'SF Mono', monospace;
+          white-space: nowrap;
+        }
         
         &.highlight {
           margin-top: 4px;

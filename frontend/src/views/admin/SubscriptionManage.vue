@@ -554,7 +554,7 @@ import {
   updateSubscriptionPlan
 } from '@/api/subscription'
 import { getUser, listUsers } from '@/api/user'
-import { formatDate } from '@/utils'
+import { formatBeijingTime as formatDate } from '@/utils'
 
 const defaultUsageSummary = () => ({
   request_count: 0,

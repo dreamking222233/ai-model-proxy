@@ -162,29 +162,22 @@ function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function sameOriginBase() {
+  return window.location.origin === "null" ? "" : window.location.origin;
+}
+
 function apiOriginBase() {
-  return normalizeBaseUrl(els.baseUrl.value).replace(/\/v1$/i, "");
+  return sameOriginBase();
 }
 
 function apiUrl(path) {
-  const rawBase = normalizeBaseUrl(els.baseUrl.value);
-  const base = rawBase.replace(/\/v1$/i, "/v1");
-  if (!base) {
-    throw new Error("请填写服务地址");
-  }
-  if (/\/v1$/i.test(base) && path.startsWith("/v1/")) {
-    return `${base}${path.slice(3)}`;
-  }
-  if (/\/v1$/i.test(base)) {
-    return `${apiOriginBase()}${path}`;
-  }
-  return `${base}${path}`;
+  return `${sameOriginBase()}${path}`;
 }
 
 function authHeaders(extra = {}) {
   const key = String(els.apiKey.value || "").trim();
   if (!key) {
-    throw new Error("请填写 API Key");
+    return { ...extra };
   }
   return {
     Authorization: `Bearer ${key}`,
@@ -221,6 +214,13 @@ async function readError(response) {
   const text = await response.text();
   if (!text) {
     return `HTTP ${response.status}`;
+  }
+  const compact = text.trim().replace(/\s+/g, " ");
+  if (/^<!doctype html/i.test(compact) || /^<html/i.test(compact)) {
+    if (response.status === 502 || /bad gateway/i.test(compact)) {
+      return "图片接口上游暂时不可用（HTTP 502），请稍后重试。";
+    }
+    return `接口返回了 HTML 错误页（HTTP ${response.status}），请稍后重试。`;
   }
   try {
     const payload = JSON.parse(text);
@@ -278,13 +278,18 @@ function loadSettings() {
   try {
     const data = JSON.parse(localStorage.getItem(settingsKey) || "{}");
     for (const [key, value] of Object.entries(data)) {
-      if (key === "apiKey") {
+      if (key === "apiKey" || key === "baseUrl") {
         continue;
       }
       if (els[key] && typeof value === "string") {
         els[key].value = value;
       }
     }
+    delete data.apiKey;
+    delete data.baseUrl;
+    localStorage.setItem(settingsKey, JSON.stringify(data));
+    els.baseUrl.value = "";
+    els.apiKey.value = "";
     
     // 如果没有本地保存的 API，则默认展开连接面板，提高引导性
     if (!data.baseUrl && els.configSection) {
@@ -413,7 +418,7 @@ function buildCommonPayload() {
   if (!prompt) {
     throw new Error("请填写提示词");
   }
-  const n = Math.min(4, Math.max(1, Number.parseInt(els.count.value || "1", 10) || 1));
+  const n = Math.min(3, Math.max(1, Number.parseInt(els.count.value || "1", 10) || 1));
   els.count.value = String(n);
   const payload = {
     model: els.model.value.trim() || "gpt-image-2",
@@ -623,19 +628,17 @@ async function refreshQuota() {
   els.refreshQuota.disabled = true;
   setQuotaDisplay("...", "获取中");
   try {
-    let payload;
+    let totalQuota;
     try {
-      payload = await requestJson("/api/accounts/quota", {
+      const health = await requestJson("/health?format=json");
+      totalQuota = health?.accounts?.total_quota;
+    } catch (error) {
+      const payload = await requestJson("/api/accounts/quota", {
         headers: authHeaders(),
       });
-    } catch (error) {
-      if (!String(error.message || "").includes("返回的不是 JSON")) {
-        throw error;
-      }
-      const health = await requestJson("/health?format=json");
-      payload = { quota: health?.accounts?.total_quota };
+      totalQuota = payload.quota;
     }
-    const totalQuota = Math.max(0, Number.parseInt(payload.quota || 0, 10) || 0);
+    totalQuota = Math.max(0, Number.parseInt(totalQuota || 0, 10) || 0);
     const updatedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
     setQuotaDisplay(String(totalQuota), `${updatedAt} 更新`);
     setStatus(`可用额度已刷新：${totalQuota}`, "ok");
@@ -651,7 +654,7 @@ async function handleSubmit(event) {
   event.preventDefault();
   saveSettings();
   
-  const n = Math.min(4, Math.max(1, Number.parseInt(els.count.value || "1", 10) || 1));
+  const n = Math.min(3, Math.max(1, Number.parseInt(els.count.value || "1", 10) || 1));
   setBusy(true);
   setStatus(mode === "edit" ? "正在提交图片编辑请求..." : "正在提交图片生成请求...");
   
@@ -762,6 +765,18 @@ function bindEvents() {
         syncRatioOptions();
       }
     });
+  });
+  els.count.addEventListener("input", () => {
+    const raw = els.count.value.trim();
+    if (!raw) return;
+    const n = Number.parseInt(raw, 10);
+    if (Number.isNaN(n)) {
+      els.count.value = "1";
+    } else if (n > 3) {
+      els.count.value = "3";
+    } else if (n < 1) {
+      els.count.value = "1";
+    }
   });
 
   // 可视化尺寸选择卡片绑定点击事件

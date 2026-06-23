@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ChatGPT2API Image Studio</title>
+    <title>ImageStudio</title>
     <!-- 引入高质感现代字体 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=202606181653">
   </head>
   <body>
     <!-- 背景极光发光特效 -->
@@ -53,8 +53,8 @@
       </header>
 
       <div id="configSection" hidden>
-        <input id="baseUrlInput" type="hidden" value="http://43.128.147.93:3000">
-        <input id="apiKeyInput" type="hidden" value="chatgpt2api">
+        <input id="baseUrlInput" type="hidden" value="">
+        <input id="apiKeyInput" type="hidden" value="">
       </div>
 
       <!-- 主工作区 -->
@@ -137,7 +137,7 @@
               <label class="field">
                 <span class="field-title">生图数量</span>
                 <div class="input-wrapper">
-                  <input id="countInput" type="number" min="1" max="4" step="1" value="1">
+                  <input id="countInput" type="number" min="1" max="3" step="1" value="1">
                 </div>
               </label>
 
@@ -291,6 +291,6 @@
       </article>
     </template>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=202606181653"></script>
   </body>
 </html>

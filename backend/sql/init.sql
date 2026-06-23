@@ -705,7 +705,8 @@ CREATE TABLE `consumption_record` (
     KEY `idx_subscription_id` (`subscription_id`),
     KEY `idx_subscription_cycle_id` (`subscription_cycle_id`),
     KEY `idx_created_at` (`created_at`),
-    KEY `idx_consumption_user_created_id` (`user_id`, `created_at`, `id`)
+    KEY `idx_consumption_user_created_id` (`user_id`, `created_at`, `id`),
+    KEY `idx_consumption_subscription_created_id` (`subscription_id`, `created_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消费记录表';
 
 -- ============================================================

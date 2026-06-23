@@ -1500,6 +1500,7 @@ class SubscriptionService:
         db: Session,
         subscription: UserSubscription,
         now: Optional[datetime] = None,
+        rebuild_from_consumption: bool = False,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
         cycle_date, cycle_start_at, cycle_end_at = SubscriptionService._get_subscription_cycle_window(
@@ -1518,13 +1519,21 @@ class SubscriptionService:
         )
         if cycle:
             if SubscriptionService._cycle_window_changed(cycle, cycle_start_at, cycle_end_at) or cycle.quota_metric != quota_metric:
-                usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
-                    db,
-                    subscription,
-                    cycle_start_at,
-                    cycle_end_at,
-                    quota_metric,
-                )
+                if rebuild_from_consumption:
+                    usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                        db,
+                        subscription,
+                        cycle_start_at,
+                        cycle_end_at,
+                        quota_metric,
+                    )
+                    used_amount = usage_snapshot["used_amount"]
+                    request_count = usage_snapshot["request_count"]
+                    last_request_id = usage_snapshot["last_request_id"]
+                else:
+                    used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
+                    request_count = int(cycle.request_count or 0)
+                    last_request_id = cycle.last_request_id
                 return SubscriptionService._serialize_cycle_snapshot(
                     cycle_id=cycle.id,
                     cycle_date=cycle_date,
@@ -1532,21 +1541,29 @@ class SubscriptionService:
                     cycle_end_at=cycle_end_at,
                     quota_metric=quota_metric,
                     quota_limit=quota_limit,
-                    used_amount=usage_snapshot["used_amount"],
-                    request_count=usage_snapshot["request_count"],
-                    last_request_id=usage_snapshot["last_request_id"],
+                    used_amount=used_amount,
+                    request_count=request_count,
+                    last_request_id=last_request_id,
                 )
             return SubscriptionService._serialize_cycle(
                 cycle,
                 quota_limit,
             )
-        usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
-            db,
-            subscription,
-            cycle_start_at,
-            cycle_end_at,
-            quota_metric,
-        )
+        if rebuild_from_consumption:
+            usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
+                db,
+                subscription,
+                cycle_start_at,
+                cycle_end_at,
+                quota_metric,
+            )
+            used_amount = usage_snapshot["used_amount"]
+            request_count = usage_snapshot["request_count"]
+            last_request_id = usage_snapshot["last_request_id"]
+        else:
+            used_amount = Decimal("0")
+            request_count = 0
+            last_request_id = None
         return SubscriptionService._serialize_cycle_snapshot(
             cycle_id=None,
             cycle_date=cycle_date,
@@ -1554,9 +1571,9 @@ class SubscriptionService:
             cycle_end_at=cycle_end_at,
             quota_metric=quota_metric,
             quota_limit=quota_limit,
-            used_amount=usage_snapshot["used_amount"],
-            request_count=usage_snapshot["request_count"],
-            last_request_id=usage_snapshot["last_request_id"],
+            used_amount=used_amount,
+            request_count=request_count,
+            last_request_id=last_request_id,
         )
 
     @staticmethod
@@ -2141,7 +2158,12 @@ class SubscriptionService:
         if SubscriptionService._requires_daily_cycle(subscription):
             usage_now = SubscriptionService.get_current_time()
             if SubscriptionService._is_effectively_active(subscription, usage_now):
-                current_cycle = SubscriptionService._get_cycle_for_summary(db, subscription, usage_now)
+                current_cycle = SubscriptionService._get_cycle_for_summary(
+                    db,
+                    subscription,
+                    usage_now,
+                    rebuild_from_consumption=True,
+                )
 
         query = db.query(ConsumptionRecord).filter(
             SubscriptionService._subscription_usage_filter(subscription),

@@ -610,9 +610,10 @@ class SubscriptionPlanQuotaEditTest(unittest.TestCase):
                 "request_count": 0,
                 "last_request_id": None,
             },
-        ):
+        ) as rebuild_mock:
             summary = SubscriptionService._get_cycle_for_summary(db, subscription, now)
 
+        rebuild_mock.assert_not_called()
         self.assertFalse(db.begin_nested_called)
         self.assertFalse(db.flush_called)
         self.assertIsNone(summary["id"])

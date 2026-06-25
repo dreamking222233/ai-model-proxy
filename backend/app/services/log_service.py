@@ -320,8 +320,10 @@ class LogService:
             "quota_used_after",
             "quota_cycle_date",
             "cache_read_cost",
+            "cache_creation_cost",
             "input_price_per_million_snapshot",
             "output_price_per_million_snapshot",
+            "cache_creation_price_per_million_snapshot",
             "request_price_snapshot",
             "price_multiplier_snapshot",
             "fast_price_multiplier_snapshot",
@@ -487,6 +489,7 @@ class LogService:
                     ConsumptionRecord.input_cost,
                     ConsumptionRecord.output_cost,
                     ConsumptionRecord.cache_read_cost,
+                    ConsumptionRecord.cache_creation_cost,
                     ConsumptionRecord.total_cost,
                     ConsumptionRecord.request_price_snapshot,
                     ConsumptionRecord.context_tokens_snapshot,
@@ -518,6 +521,7 @@ class LogService:
             input_cost = getattr(consumption, "input_cost", 0)
             output_cost = getattr(consumption, "output_cost", 0)
             record_cache_read_cost = getattr(consumption, "cache_read_cost", 0)
+            record_cache_creation_cost = getattr(consumption, "cache_creation_cost", 0)
             total_cost = getattr(consumption, "total_cost", 0)
             record_request_price = getattr(consumption, "request_price_snapshot", 0)
             context_tokens_snapshot = log.context_tokens_snapshot
@@ -604,8 +608,10 @@ class LogService:
                 "quota_used_after": float(log.quota_used_after or 0),
                 "quota_cycle_date": log.quota_cycle_date.isoformat() if log.quota_cycle_date else None,
                 "cache_read_cost": float(log.cache_read_cost or record_cache_read_cost or 0),
+                "cache_creation_cost": float(getattr(log, "cache_creation_cost", None) or record_cache_creation_cost or 0),
                 "input_price_per_million_snapshot": float(log.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(log.output_price_per_million_snapshot or 0),
+                "cache_creation_price_per_million_snapshot": float(getattr(log, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(log, "request_price_snapshot", 0) or record_request_price or 0),
                 "price_multiplier_snapshot": float(log.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(log.fast_price_multiplier_snapshot or 1),
@@ -1217,9 +1223,11 @@ class LogService:
                 "upstream_prompt_cache_status": r.upstream_prompt_cache_status or "BYPASS",
                 "input_cost": float(r.input_cost), "output_cost": float(r.output_cost),
                 "cache_read_cost": float(r.cache_read_cost or 0),
+                "cache_creation_cost": float(getattr(r, "cache_creation_cost", 0) or 0),
                 "total_cost": float(r.total_cost),
                 "input_price_per_million_snapshot": float(r.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
+                "cache_creation_price_per_million_snapshot": float(getattr(r, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(r, "request_price_snapshot", 0) or 0),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),

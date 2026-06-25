@@ -100,6 +100,10 @@
             {{ record.billing_type === 'token' && text != null ? text : '-' }}
           </template>
 
+          <template slot="cacheCreationPrice" slot-scope="text, record">
+            {{ record.billing_type === 'token' && text != null ? text : '-' }}
+          </template>
+
           <template slot="requestPrice" slot-scope="text, record">
             {{ record.billing_type === 'request' && text != null ? `$${formatPrice(text)}` : '-' }}
           </template>
@@ -169,6 +173,10 @@
                 <div class="mobile-field">
                   <span class="mobile-field-label">输出价格</span>
                   <span>{{ record.billing_type === 'token' && record.output_price_per_million != null ? record.output_price_per_million : '-' }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">缓存创建价格</span>
+                  <span>{{ record.billing_type === 'token' && record.cache_creation_price_per_million != null ? record.cache_creation_price_per_million : '-' }}</span>
                 </div>
               </div>
 
@@ -581,14 +589,19 @@
           <div class="resolution-config-tip">仅允许配置当前模型支持的分辨率；默认档位必须是已启用分辨率。</div>
         </a-form-item>
         <a-row v-if="modelForm.billing_type === 'token'" :gutter="16">
-          <a-col :span="12">
+          <a-col :span="8">
             <a-form-item label="输入价格 (每百万 Token)">
               <a-input-number v-model="modelForm.input_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col :span="8">
             <a-form-item label="输出价格 (每百万 Token)">
               <a-input-number v-model="modelForm.output_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="缓存创建价格 (每百万 Token)">
+              <a-input-number v-model="modelForm.cache_creation_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
             </a-form-item>
           </a-col>
         </a-row>
@@ -778,6 +791,7 @@ export default {
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
         { title: '输出价格', dataIndex: 'output_price_per_million', key: 'outputPrice', width: 110, scopedSlots: { customRender: 'outputPrice' } },
+        { title: '缓存创建价', dataIndex: 'cache_creation_price_per_million', key: 'cacheCreationPrice', width: 120, scopedSlots: { customRender: 'cacheCreationPrice' } },
         { title: '单次价格', dataIndex: 'request_price', key: 'requestPrice', width: 110, scopedSlots: { customRender: 'requestPrice' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
         { title: '操作', key: 'action', width: 140, scopedSlots: { customRender: 'action' } }
@@ -803,6 +817,7 @@ export default {
         long_context_billing_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
+        cache_creation_price_per_million: 0,
         max_tokens: 4096,
         enabled: true
       },
@@ -1132,6 +1147,7 @@ export default {
         long_context_billing_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
+        cache_creation_price_per_million: 0,
         max_tokens: 4096,
         enabled: true
       }
@@ -1166,6 +1182,7 @@ export default {
           })) : [],
           input_price_per_million: model.input_price_per_million || 0,
           output_price_per_million: model.output_price_per_million || 0,
+          cache_creation_price_per_million: model.cache_creation_price_per_million || 0,
           max_tokens: model.max_tokens || 4096,
           enabled: model.enabled
         }

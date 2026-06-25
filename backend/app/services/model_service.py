@@ -322,6 +322,7 @@ class ModelService:
             "max_tokens": model.max_tokens,
             "input_price_per_million": ModelService._decimal_to_float(model.input_price_per_million),
             "output_price_per_million": ModelService._decimal_to_float(model.output_price_per_million),
+            "cache_creation_price_per_million": ModelService._decimal_to_float(getattr(model, "cache_creation_price_per_million", 0)),
             "billing_type": model.billing_type,
             "request_price": ModelService._decimal_to_float(getattr(model, "request_price", 0)),
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
@@ -442,6 +443,7 @@ class ModelService:
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
             output_price_per_million=d.get("output_price_per_million", 0),
+            cache_creation_price_per_million=d.get("cache_creation_price_per_million", 0),
             billing_type=billing_type,
             request_price=request_price,
             image_credit_multiplier=d.get("image_credit_multiplier", 1),
@@ -501,6 +503,7 @@ class ModelService:
         updatable_fields = [
             "model_name", "display_name", "model_type", "protocol_type",
             "max_tokens", "input_price_per_million", "output_price_per_million",
+            "cache_creation_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
             "model_series", "long_context_billing_enabled",
         ]

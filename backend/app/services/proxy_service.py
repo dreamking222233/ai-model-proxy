@@ -11109,6 +11109,9 @@ class ProxyService:
             raw_cache_read_input_tokens = int(
                 cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
             )
+            raw_cache_creation_input_tokens = int(
+                cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
+            )
             raw_total_tokens = raw_input_tokens + raw_output_tokens + raw_cache_read_input_tokens
             context_tokens_snapshot = ProxyService._calculate_context_tokens(
                 raw_input_tokens,
@@ -11126,6 +11129,7 @@ class ProxyService:
             input_tokens = int(raw_input_tokens * token_multiplier)
             output_tokens = int(raw_output_tokens * token_multiplier)
             cache_read_input_tokens = int(raw_cache_read_input_tokens * token_multiplier)
+            cache_creation_input_tokens = int(raw_cache_creation_input_tokens * token_multiplier)
             total_tokens = input_tokens + output_tokens + cache_read_input_tokens
 
             global_price_multiplier = Decimal(str(get_system_config(write_db, "price_multiplier", 1.0)))
@@ -11148,18 +11152,21 @@ class ProxyService:
             )
             input_price = Decimal(str(unified_model.input_price_per_million or 0))
             output_price = Decimal(str(unified_model.output_price_per_million or 0))
+            cache_creation_price = Decimal(str(getattr(unified_model, "cache_creation_price_per_million", 0) or 0))
             request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
             billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
             exact_request_billing = billing_type in {"request", "free"}
             if billing_type == "request":
                 input_cost_decimal = Decimal("0")
                 cache_read_cost_decimal = Decimal("0")
+                cache_creation_cost_decimal = Decimal("0")
                 output_cost_decimal = Decimal("0")
                 total_cost_decimal = request_price * effective_price_multiplier_decimal
                 quota_cost_decimal = request_price * official_quota_multiplier_decimal
             elif billing_type == "free":
                 input_cost_decimal = Decimal("0")
                 cache_read_cost_decimal = Decimal("0")
+                cache_creation_cost_decimal = Decimal("0")
                 output_cost_decimal = Decimal("0")
                 total_cost_decimal = Decimal("0")
                 quota_cost_decimal = Decimal("0")
@@ -11170,17 +11177,27 @@ class ProxyService:
                 cache_read_cost_decimal = (
                     Decimal(str(cache_read_input_tokens)) / Decimal("1000000")
                 ) * input_price * Decimal("0.1") * effective_price_multiplier_decimal
+                cache_creation_cost_decimal = (
+                    Decimal(str(cache_creation_input_tokens)) / Decimal("1000000")
+                ) * cache_creation_price * effective_price_multiplier_decimal
                 output_cost_decimal = (
                     Decimal(str(output_tokens)) / Decimal("1000000")
                 ) * output_price * effective_price_multiplier_decimal
-                total_cost_decimal = input_cost_decimal + cache_read_cost_decimal + output_cost_decimal
+                total_cost_decimal = (
+                    input_cost_decimal
+                    + cache_read_cost_decimal
+                    + cache_creation_cost_decimal
+                    + output_cost_decimal
+                )
                 quota_cost_decimal = (
                     (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * official_quota_multiplier_decimal
                     + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * input_price * Decimal("0.1") * official_quota_multiplier_decimal
+                    + (Decimal(str(raw_cache_creation_input_tokens)) / Decimal("1000000")) * cache_creation_price * official_quota_multiplier_decimal
                     + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * official_quota_multiplier_decimal
                 )
             input_cost = float(input_cost_decimal)
             cache_read_cost = float(cache_read_cost_decimal)
+            cache_creation_cost = float(cache_creation_cost_decimal)
             output_cost = float(output_cost_decimal)
             total_cost = float(total_cost_decimal)
             quota_cost = float(quota_cost_decimal)
@@ -11427,10 +11444,12 @@ class ProxyService:
                     upstream_prompt_cache_status=cache_log_fields.get("upstream_prompt_cache_status"),
                     input_cost=Decimal(str(input_cost)),
                     cache_read_cost=Decimal(str(cache_read_cost)),
+                    cache_creation_cost=Decimal(str(cache_creation_cost)),
                     output_cost=Decimal(str(output_cost)),
                     total_cost=Decimal(str(total_cost)),
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
+                    cache_creation_price_per_million_snapshot=cache_creation_price,
                     request_price_snapshot=request_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,
@@ -11516,8 +11535,10 @@ class ProxyService:
                     quota_used_after=quota_used_after,
                     quota_cycle_date=quota_cycle_date,
                     cache_read_cost=Decimal(str(cache_read_cost)),
+                    cache_creation_cost=Decimal(str(cache_creation_cost)),
                     input_price_per_million_snapshot=input_price,
                     output_price_per_million_snapshot=output_price,
+                    cache_creation_price_per_million_snapshot=cache_creation_price,
                     request_price_snapshot=request_price,
                     price_multiplier_snapshot=price_multiplier_decimal,
                     fast_price_multiplier_snapshot=fast_price_multiplier_decimal,

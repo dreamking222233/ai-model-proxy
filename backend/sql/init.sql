@@ -270,6 +270,7 @@ CREATE TABLE `unified_model` (
     `request_price` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '按请求次数计费的单次请求价格(美元)',
     `image_credit_multiplier` DECIMAL(12, 3) NOT NULL DEFAULT 1 COMMENT '图片请求默认扣减倍率；视频模型表示每秒媒体积分单价',
     `long_context_billing_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否启用超过256k上下文2倍计费',
+    `security_monitor_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否启用安全风控监控',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `description` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1063,24 +1064,24 @@ VALUES (1, 0.000, 0.000, 0.000);
 -- 预置 Gemini 图片模型
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
-('gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 1, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'),
-('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 2, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
-('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 3, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
+('gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 1, 0, 1, 'Google Gemini 2.5 Flash 图片生成（按图片积分计费）'),
+('gemini-3.1-flash-image-preview', 'Gemini 3.1 Flash Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 2, 0, 1, 'Google Gemini 3.1 Flash 图片生成（按图片积分计费）'),
+('gemini-3-pro-image-preview', 'Gemini 3 Pro Image Preview', 'image', 'gemini', 'google', NULL, 0, 0, 'image_credit', 0, 3, 0, 1, 'Google Gemini 3 Pro 图片生成（按图片积分计费）');
 
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
-('gpt-image-2', 'GPT Image 2', 'image', 'gpt', 'openai', NULL, 0, 0, 'image_credit', 0, 0.5, 1, 'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）');
+('gpt-image-2', 'GPT Image 2', 'image', 'gpt', 'openai', NULL, 0, 0, 'image_credit', 0, 0.5, 1, 1, 'OpenAI 兼容图片生成模型 GPT Image 2（按图片积分计费）');
 
 -- 预置 Grok 视频模型
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
-('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),
@@ -1095,14 +1096,14 @@ ON DUPLICATE KEY UPDATE
 -- 预置 Grok 文本模型
 INSERT INTO `unified_model` (
     `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
-    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
-('grok-4.20-0309-non-reasoning', 'Grok 4.20 0309 Non-Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309 非推理版（官方定价 2/6）'),
-('grok-4.20-0309', 'Grok 4.20 0309', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309（按 4.20 主档推断定价 2/6）'),
-('grok-4.20-0309-reasoning', 'Grok 4.20 0309 Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 0309 推理版（官方定价 2/6）'),
-('grok-4.20-fast', 'Grok 4.20 Fast', 'chat', 'grok', 'openai', 128000, 0.200000, 0.500000, 'token', 0, 1, 1, 'xAI Grok 4.20 Fast（参照 4.1 fast 档推断定价 0.2/0.5）'),
-('grok-4.20-auto', 'Grok 4.20 Auto', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 Auto（按 4.20 主档推断定价 2/6）'),
-('grok-4.20-expert', 'Grok 4.20 Expert', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 1, 'xAI Grok 4.20 Expert（按 4.20 高阶档推断定价 2/6）')
+('grok-4.20-0309-non-reasoning', 'Grok 4.20 0309 Non-Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 0309 非推理版（官方定价 2/6）'),
+('grok-4.20-0309', 'Grok 4.20 0309', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 0309（按 4.20 主档推断定价 2/6）'),
+('grok-4.20-0309-reasoning', 'Grok 4.20 0309 Reasoning', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 0309 推理版（官方定价 2/6）'),
+('grok-4.20-fast', 'Grok 4.20 Fast', 'chat', 'grok', 'openai', 128000, 0.200000, 0.500000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 Fast（参照 4.1 fast 档推断定价 0.2/0.5）'),
+('grok-4.20-auto', 'Grok 4.20 Auto', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 Auto（按 4.20 主档推断定价 2/6）'),
+('grok-4.20-expert', 'Grok 4.20 Expert', 'chat', 'grok', 'openai', 128000, 2.000000, 6.000000, 'token', 0, 1, 0, 1, 'xAI Grok 4.20 Expert（按 4.20 高阶档推断定价 2/6）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),

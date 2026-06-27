@@ -190,6 +190,19 @@ class ModelService:
             return 0
 
     @staticmethod
+    def _normalize_security_monitor_enabled(
+        value: object,
+        model_series: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> int:
+        if value is None:
+            return 1 if ModelService.normalize_model_series(model_series, model_name) in {"gpt", "claude"} else 0
+        try:
+            return 1 if int(value) else 0
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
     def _resolution_rule_to_dict(rule: ModelImageResolutionRule) -> dict:
         return {
             "id": rule.id,
@@ -338,6 +351,7 @@ class ModelService:
             "request_price": ModelService._decimal_to_float(getattr(model, "request_price", 0)),
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
             "long_context_billing_enabled": int(getattr(model, "long_context_billing_enabled", 0) or 0),
+            "security_monitor_enabled": int(getattr(model, "security_monitor_enabled", 0) or 0),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
             "video_size_capabilities": list(ModelService.get_video_size_capabilities(model.model_name)),
@@ -437,6 +451,11 @@ class ModelService:
             model_series,
             d["model_name"],
         )
+        security_monitor_enabled = ModelService._normalize_security_monitor_enabled(
+            d.get("security_monitor_enabled"),
+            model_series,
+            d["model_name"],
+        )
 
         resolution_rules = ModelService._validate_resolution_rules(
             d["model_name"],
@@ -460,6 +479,7 @@ class ModelService:
             request_price=request_price,
             image_credit_multiplier=d.get("image_credit_multiplier", 1),
             long_context_billing_enabled=long_context_billing_enabled,
+            security_monitor_enabled=security_monitor_enabled,
             enabled=d.get("enabled", 1),
             description=d.get("description"),
         )
@@ -502,6 +522,12 @@ class ModelService:
                 next_model_series,
                 next_model_name,
             )
+        if "security_monitor_enabled" in d:
+            d["security_monitor_enabled"] = ModelService._normalize_security_monitor_enabled(
+                d.get("security_monitor_enabled"),
+                next_model_series,
+                next_model_name,
+            )
         if "image_resolution_rules" in d:
             resolution_rules = ModelService._validate_resolution_rules(
                 next_model_name,
@@ -517,7 +543,7 @@ class ModelService:
             "max_tokens", "input_price_per_million", "output_price_per_million",
             "cache_creation_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
-            "model_series", "long_context_billing_enabled",
+            "model_series", "long_context_billing_enabled", "security_monitor_enabled",
         ]
         for field in updatable_fields:
             value = d.get(field)

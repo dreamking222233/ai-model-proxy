@@ -27,7 +27,7 @@
           :row-class-name="getModelRowClass"
           :custom-row="modelCustomRow"
           @change="handleModelTableChange"
-          :scroll="{ x: 1600 }"
+          :scroll="{ x: 1700 }"
         >
           <template slot="type" slot-scope="text">
             <a-tag>{{ text || '-' }}</a-tag>
@@ -53,6 +53,12 @@
               {{ Number(text) ? '256k x2' : '关闭' }}
             </a-tag>
             <span v-else class="muted-text">-</span>
+          </template>
+
+          <template slot="securityMonitor" slot-scope="text">
+            <a-tag :color="Number(text) ? 'red' : 'default'">
+              {{ Number(text) ? '开启' : '关闭' }}
+            </a-tag>
           </template>
 
           <template slot="enabled" slot-scope="text">
@@ -154,6 +160,9 @@
                 </a-tag>
                 <a-tag v-else-if="record.billing_type === 'free'" color="green">免费</a-tag>
                 <a-tag v-else color="blue">Token</a-tag>
+                <a-tag :color="Number(record.security_monitor_enabled) ? 'red' : 'default'">
+                  安全监控{{ Number(record.security_monitor_enabled) ? '开' : '关' }}
+                </a-tag>
               </div>
 
               <div class="mobile-field-grid">
@@ -550,6 +559,15 @@
           />
           <div class="form-tip">GPT 系列通常开启；Claude 等没有官方长上下文加价的模型可关闭。</div>
         </a-form-item>
+        <a-form-item label="安全监控">
+          <a-switch
+            :checked="!!modelForm.security_monitor_enabled"
+            checked-children="开启"
+            un-checked-children="关闭"
+            @change="handleSecurityMonitorChange"
+          />
+          <div class="form-tip">开启后该模型会执行违规检测、拦截、请求快照和风险记录；关闭后不做任何安全风控处理。</div>
+        </a-form-item>
         <a-form-item v-if="modelForm.billing_type === 'request'" label="每次请求价格 ($)">
           <a-input-number v-model="modelForm.request_price" :min="0" :step="0.001" :precision="6" style="width: 100%;" />
           <div class="form-tip">请求成功后按该固定美元价格计费；开启长上下文倍率时，超过阈值会叠加计费。</div>
@@ -787,6 +805,7 @@ export default {
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
         { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
         { title: '长上下文', dataIndex: 'long_context_billing_enabled', key: 'longContextBilling', width: 110, scopedSlots: { customRender: 'longContextBilling' } },
+        { title: '安全监控', dataIndex: 'security_monitor_enabled', key: 'securityMonitor', width: 110, scopedSlots: { customRender: 'securityMonitor' } },
         { title: '尺寸能力', dataIndex: 'image_size_capabilities', key: 'imageSizeCapabilities', width: 180, scopedSlots: { customRender: 'imageSizeCapabilities' } },
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
@@ -804,6 +823,7 @@ export default {
       isModelEdit: false,
       modelEditId: null,
       longContextBillingTouched: false,
+      securityMonitorTouched: false,
       modelForm: {
         model_name: '',
         display_name: '',
@@ -815,6 +835,7 @@ export default {
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         long_context_billing_enabled: 0,
+        security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         cache_creation_price_per_million: 0,
@@ -945,12 +966,14 @@ export default {
       if (!this.isModelEdit) {
         this.modelForm.model_series = this.inferModelSeries(this.modelForm.model_name)
         this.syncLongContextBillingDefault()
+        this.syncSecurityMonitorDefault()
       }
       this.syncImageResolutionRules()
     },
     'modelForm.model_series'() {
       if (!this.isModelEdit) {
         this.syncLongContextBillingDefault()
+        this.syncSecurityMonitorDefault()
       }
     },
     'modelForm.model_type'() {
@@ -1008,15 +1031,28 @@ export default {
     getLongContextBillingDefault() {
       return this.modelForm.model_series === 'gpt' && this.supportsLongContextBilling(this.modelForm) ? 1 : 0
     },
+    getSecurityMonitorDefault() {
+      return ['gpt', 'claude'].includes(this.modelForm.model_series) ? 1 : 0
+    },
     syncLongContextBillingDefault() {
       if (this.isModelEdit || this.longContextBillingTouched) {
         return
       }
       this.modelForm.long_context_billing_enabled = this.getLongContextBillingDefault()
     },
+    syncSecurityMonitorDefault() {
+      if (this.isModelEdit || this.securityMonitorTouched) {
+        return
+      }
+      this.modelForm.security_monitor_enabled = this.getSecurityMonitorDefault()
+    },
     handleLongContextBillingChange(checked) {
       this.longContextBillingTouched = true
       this.modelForm.long_context_billing_enabled = checked ? 1 : 0
+    },
+    handleSecurityMonitorChange(checked) {
+      this.securityMonitorTouched = true
+      this.modelForm.security_monitor_enabled = checked ? 1 : 0
     },
     syncVideoCreditRateDefault() {
       if (
@@ -1137,6 +1173,7 @@ export default {
       this.isModelEdit = false
       this.modelEditId = null
       this.longContextBillingTouched = false
+      this.securityMonitorTouched = false
       this.modelForm = {
         model_name: '',
         display_name: '',
@@ -1148,6 +1185,7 @@ export default {
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         long_context_billing_enabled: 0,
+        security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         cache_creation_price_per_million: 0,
@@ -1155,12 +1193,14 @@ export default {
         enabled: true
       }
       this.syncLongContextBillingDefault()
+      this.syncSecurityMonitorDefault()
       this.modelModalVisible = true
     },
     async handleEditModel(record) {
       this.isModelEdit = true
       this.modelEditId = record.id
       this.longContextBillingTouched = true
+      this.securityMonitorTouched = true
       this.modelModalLoading = true
       try {
         const res = await getModel(record.id)
@@ -1176,6 +1216,7 @@ export default {
           request_price: Number(model.request_price || 0),
           image_credit_multiplier: Number(model.image_credit_multiplier || 1),
           long_context_billing_enabled: Number(model.long_context_billing_enabled || 0),
+          security_monitor_enabled: Number(model.security_monitor_enabled || 0),
           image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
             resolution_code: item.resolution_code,
             enabled: Number(item.enabled || 0),
@@ -1241,6 +1282,7 @@ export default {
         const payload = {
           ...this.modelForm,
           long_context_billing_enabled: longContextBillingEnabled,
+          security_monitor_enabled: Number(this.modelForm.security_monitor_enabled || 0),
           image_resolution_rules: this.showImageResolutionConfig
             ? this.modelForm.image_resolution_rules.map(item => ({
               resolution_code: item.resolution_code,

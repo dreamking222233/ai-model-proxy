@@ -26,6 +26,7 @@ class UnifiedModel(Base):
     request_price = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Fixed price per successful request (USD)")
     image_credit_multiplier = Column(DECIMAL(12, 3), nullable=False, default=1, comment="Default image credits consumed per request")
     long_context_billing_enabled = Column(SmallInteger, nullable=False, default=0, comment="Whether to apply 2x billing above 256k context tokens")
+    security_monitor_enabled = Column(SmallInteger, nullable=False, default=0, comment="Whether security risk monitoring is enabled for this model")
     enabled = Column(SmallInteger, nullable=False, default=1)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())

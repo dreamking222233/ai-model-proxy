@@ -1,7 +1,8 @@
 import json
 import unittest
+from types import SimpleNamespace
 
-from app.services.proxy_service import ProxyService, _SecurityRiskMarkerStreamBuffer
+from app.services.proxy_service import ProxyService, _PassthroughTextBuffer, _SecurityRiskMarkerStreamBuffer
 
 
 def _event_name(sse: str) -> str:
@@ -43,6 +44,151 @@ class StreamTextBufferingTest(unittest.TestCase):
         visible += buffer.flush()
 
         self.assertEqual(visible, "可见前缀可见后缀")
+
+    def test_passthrough_buffer_does_not_accumulate_security_scan_text(self):
+        buffer = _PassthroughTextBuffer()
+
+        self.assertEqual(buffer.feed("[MIS_RISK_REPORT category=x severity=high]可见文本"), "[MIS_RISK_REPORT category=x severity=high]可见文本")
+        self.assertEqual(buffer.flush(), "")
+        self.assertEqual(buffer.raw_text, "")
+        self.assertEqual(buffer.visible_text, "")
+
+    def test_responses_completed_payload_cleans_marker_when_monitor_enabled(self):
+        payload = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "拒绝说明[MIS_RISK_REPORT category=cyber severity=high]后续文本",
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+        cleaned = ProxyService._clean_responses_completed_payload(
+            SimpleNamespace(security_monitor_enabled=1),
+            payload,
+        )
+
+        self.assertEqual(
+            cleaned["response"]["output"][0]["content"][0]["text"],
+            "拒绝说明后续文本",
+        )
+        self.assertIn("MIS_RISK_REPORT", payload["response"]["output"][0]["content"][0]["text"])
+
+    def test_responses_completed_payload_cleans_each_text_segment(self):
+        payload = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "第一段[MIS_RISK_REPORT category=cyber severity=high]",
+                            },
+                            {
+                                "type": "output_text",
+                                "text": "第二段",
+                            },
+                        ]
+                    },
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "[MIS_RISK_REPORT category=sexual severity=medium]第三段",
+                            }
+                        ]
+                    },
+                ]
+            },
+        }
+
+        cleaned = ProxyService._clean_responses_completed_payload(
+            SimpleNamespace(security_monitor_enabled=1),
+            payload,
+        )
+        segments = [
+            content["text"]
+            for item in cleaned["response"]["output"]
+            for content in item["content"]
+        ]
+
+        self.assertEqual(segments, ["第一段", "第二段", "第三段"])
+        self.assertNotIn("MIS_RISK_REPORT", json.dumps(cleaned, ensure_ascii=False))
+
+    def test_responses_completed_payload_passes_marker_when_monitor_disabled(self):
+        payload = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "原文[MIS_RISK_REPORT category=cyber severity=high]",
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+        result = ProxyService._clean_responses_completed_payload(
+            SimpleNamespace(security_monitor_enabled=0),
+            payload,
+        )
+
+        self.assertIs(result, payload)
+        self.assertIn("MIS_RISK_REPORT", result["response"]["output"][0]["content"][0]["text"])
+
+    def test_non_stream_responses_replacement_cleans_each_text_segment(self):
+        body = {
+            "output": [
+                {"content": [{"type": "output_text", "text": "第一段"}]},
+                {"content": [{"type": "output_text", "text": "第二段[MIS_RISK_REPORT category=cyber severity=high]"}]},
+            ]
+        }
+
+        cleaned = ProxyService._replace_responses_response_text(body, "unused")
+        segments = [
+            content["text"]
+            for item in cleaned["output"]
+            for content in item["content"]
+        ]
+
+        self.assertEqual(segments, ["第一段", "第二段"])
+        self.assertNotIn("MIS_RISK_REPORT", json.dumps(cleaned, ensure_ascii=False))
+
+    def test_non_stream_openai_and_anthropic_clean_each_text_segment(self):
+        openai_body = {
+            "choices": [
+                {"message": {"content": "第一段"}},
+                {"message": {"content": "第二段[MIS_RISK_REPORT category=cyber severity=high]"}},
+            ]
+        }
+        anthropic_body = {
+            "content": [
+                {"type": "text", "text": "第一段"},
+                {"type": "text", "text": "第二段[MIS_RISK_REPORT category=cyber severity=high]"},
+            ]
+        }
+
+        cleaned_openai = ProxyService._replace_openai_response_text(openai_body, "unused")
+        cleaned_anthropic = ProxyService._replace_anthropic_response_text(anthropic_body, "unused")
+
+        self.assertEqual(cleaned_openai["choices"][0]["message"]["content"], "第一段")
+        self.assertEqual(cleaned_openai["choices"][1]["message"]["content"], "第二段")
+        self.assertEqual(cleaned_anthropic["content"][0]["text"], "第一段")
+        self.assertEqual(cleaned_anthropic["content"][1]["text"], "第二段")
+        self.assertNotIn("MIS_RISK_REPORT", json.dumps(cleaned_openai, ensure_ascii=False))
+        self.assertNotIn("MIS_RISK_REPORT", json.dumps(cleaned_anthropic, ensure_ascii=False))
 
     def test_flushed_anthropic_tail_uses_delta_event_before_block_stop(self):
         chunk = {

@@ -3,14 +3,12 @@
     <section class="media-topbar">
       <div>
         <h1>媒体工作台</h1>
-        <p>生图、参考图生图与视频生成的专属工作区，支持预览、下载和最近调用成功率查看。</p>
+        <p>生图、参考图生图与视频生成的专属工作区，支持预览、下载和最近调用成功率监控。</p>
       </div>
       <div class="media-status-row">
         <div class="media-status-card">
-          <span class="media-status-label">
-            <span class="status-dot dot-credit"></span>
-            媒体积分
-          </span>
+          <span class="status-dot dot-credit"></span>
+          <span class="status-name">媒体积分</span>
           <strong>{{ formatCredit(imageCreditBalance) }}</strong>
         </div>
         <div
@@ -18,12 +16,10 @@
           :key="item.key"
           class="media-status-card"
         >
-          <span class="media-status-label">
-            <span class="status-dot" :class="'dot-' + (item.health_level || 'unknown')"></span>
-            {{ item.label }}
-          </span>
+          <span class="status-dot" :class="'dot-' + (item.health_level || 'unknown')"></span>
+          <span class="status-name">{{ item.label }}</span>
           <strong>{{ item.request_count ? item.success_rate + '%' : '暂无' }}</strong>
-          <small>{{ item.request_count }} 次调用</small>
+          <small v-if="item.request_count">({{ item.request_count }} 次)</small>
         </div>
       </div>
     </section>
@@ -37,12 +33,12 @@
 
         <div class="field-block">
           <label>模型</label>
-          <a-select v-if="mode === 'image'" v-model="selectedImageModel" style="width: 100%">
+          <a-select v-if="mode === 'image'" v-model="selectedImageModel" style="width: 100%" :getPopupContainer="(triggerNode) => triggerNode.parentNode">
             <a-select-option v-for="model in imageModels" :key="model.model_name" :value="model.model_name">
               {{ model.display_name || model.model_name }}
             </a-select-option>
           </a-select>
-          <a-select v-else v-model="selectedVideoModel" style="width: 100%">
+          <a-select v-else v-model="selectedVideoModel" style="width: 100%" :getPopupContainer="(triggerNode) => triggerNode.parentNode">
             <a-select-option v-for="model in videoModels" :key="model.model_name" :value="model.model_name">
               <div class="video-model-option">
                 <span class="video-model-name">{{ model.display_name || model.model_name }}</span>
@@ -53,16 +49,21 @@
         </div>
 
         <div class="field-block">
-          <div class="field-head">
-            <label>提示词</label>
-            <span>{{ prompt.length }} / 2000</span>
+          <label>提示词</label>
+          <div class="prompt-input-wrapper">
+            <a-textarea
+              v-model="prompt"
+              :maxLength="2000"
+              :autoSize="{ minRows: 5, maxRows: 8 }"
+              :placeholder="mode === 'image' ? '描述画面主体、风格、镜头、光线和细节' : '描述参考图如何动起来、镜头运动和氛围'"
+            />
+            <div class="prompt-footer">
+              <span class="prompt-char-count">{{ prompt.length }} / 2000</span>
+              <button v-if="prompt" type="button" class="btn-clear-prompt" @click="prompt = ''">
+                <a-icon type="close-circle" /> 清除
+              </button>
+            </div>
           </div>
-          <a-textarea
-            v-model="prompt"
-            :maxLength="2000"
-            :autoSize="{ minRows: 6, maxRows: 10 }"
-            :placeholder="mode === 'image' ? '描述画面主体、风格、镜头、光线和细节' : '描述参考图如何动起来、镜头运动和氛围'"
-          />
         </div>
 
         <template v-if="mode === 'image'">
@@ -170,6 +171,7 @@
               option-label-prop="label"
               :dropdownMatchSelectWidth="false"
               dropdownClassName="video-size-dropdown"
+              :getPopupContainer="(triggerNode) => triggerNode.parentNode"
             >
               <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size" :label="getVideoSizeLabel(size)">
                 <div class="video-size-option">
@@ -216,17 +218,39 @@
         </div>
         <div v-else class="result-grid" :class="{ 'video-grid': mode === 'video' }">
           <article v-for="item in results" :key="item.id" class="result-card">
-            <button v-if="item.type === 'image'" class="image-preview-btn" type="button" @click="previewImage(item)">
-              <img :src="item.url" :alt="item.name">
-            </button>
-            <video v-else class="video-preview" :src="item.url" controls playsinline></video>
-            <div class="result-meta">
-              <strong>{{ item.name }}</strong>
-              <span>{{ item.meta }}</span>
+            <div class="result-media-wrapper">
+              <template v-if="item.type === 'image'">
+                <button class="image-preview-btn" type="button" @click="previewImage(item)">
+                  <img :src="item.url" :alt="item.name">
+                </button>
+                <div class="media-hover-overlay">
+                  <div class="overlay-actions">
+                    <button class="action-icon-btn" title="在新窗口打开" @click.stop="openItem(item)">
+                      <a-icon type="eye" />
+                    </button>
+                    <button class="action-icon-btn" title="下载" @click.stop="downloadItem(item)">
+                      <a-icon type="download" />
+                    </button>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <video class="video-preview" :src="item.url" controls playsinline></video>
+              </template>
             </div>
-            <div class="result-actions">
-              <a-button size="small" icon="download" @click="downloadItem(item)">下载</a-button>
-              <a-button size="small" icon="select" @click="openItem(item)">打开</a-button>
+            <div class="result-meta">
+              <div class="meta-info">
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.meta }}</span>
+              </div>
+              <div v-if="item.type === 'video'" class="video-actions">
+                <button class="action-btn-mini" @click="openItem(item)">
+                  <a-icon type="eye" /> 打开
+                </button>
+                <button class="action-btn-mini" @click="downloadItem(item)">
+                  <a-icon type="download" /> 下载
+                </button>
+              </div>
             </div>
           </article>
         </div>
@@ -1004,124 +1028,121 @@ export default {
 
 <style scoped>
 .media-workbench {
+  --primary-color: #0066cc;
+  --primary-hover: #0052a3;
+  --primary-light: rgba(0, 102, 204, 0.06);
+  --bg-workbench: #f8f9fa;
+  --card-bg: #ffffff;
+  --card-border: #e4e4e7;
+  --text-primary: #18181b;
+  --text-secondary: #71717a;
+  --text-muted: #a1a1aa;
+  --focus-ring: rgba(0, 102, 204, 0.12);
+  --transition-smooth: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.03), 0 1px 3px rgba(0, 0, 0, 0.02);
+  --shadow-lg: 0 10px 24px -4px rgba(0, 0, 0, 0.03), 0 4px 12px -2px rgba(0, 0, 0, 0.01);
+
   min-height: calc(100vh - 64px);
   padding: 32px 24px;
-  overflow-x: hidden;
-  /* 苹果官方特色液态背景，通过淡色径向渐变混合，无需耗费额外绘制性能 */
-  background: radial-gradient(circle at 5% 10%, rgba(0, 113, 227, 0.05) 0%, transparent 35%),
-              radial-gradient(circle at 95% 85%, rgba(52, 199, 89, 0.05) 0%, transparent 35%),
-              radial-gradient(circle at 50% 50%, rgba(255, 149, 0, 0.02) 0%, transparent 45%),
-              #f5f5f7;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background-color: var(--bg-workbench);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 .media-topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 28px;
+  border-bottom: 1px solid var(--card-border);
+  padding-bottom: 20px;
 }
 
 .media-topbar h1 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  font-weight: 700;
-  color: #1d1d1f;
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
   letter-spacing: -0.5px;
 }
 
 .media-topbar p {
   margin: 0;
-  color: #86868b;
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
   line-height: 1.4;
 }
 
 .media-status-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(138px, 1fr));
+  display: flex;
+  align-items: center;
   gap: 12px;
-  min-width: 480px;
 }
 
-/* 状态卡片：毛玻璃质感，利用内边框阴影模拟镜面反射 */
 .media-status-card {
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.02),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.8),
-    inset -1px -1px 0px rgba(255, 255, 255, 0.1);
-  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.2s cubic-bezier(0.25, 0.8, 0.25, 1), background 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-smooth);
 }
 
 .media-status-card:hover {
-  transform: translateY(-2px);
-  background: rgba(255, 255, 255, 0.7);
-  box-shadow:
-    0 8px 20px rgba(0, 0, 0, 0.05),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.9),
-    inset -1px -1px 0px rgba(255, 255, 255, 0.2);
-}
-
-.media-status-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #86868b;
-  font-size: 12px;
-  font-weight: 500;
+  border-color: var(--text-muted);
+  box-shadow: var(--shadow-md);
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   display: inline-block;
 }
 
 .dot-good {
-  background-color: #34c759;
-  box-shadow: 0 0 6px rgba(52, 199, 89, 0.4);
+  background-color: #10b981;
 }
 
 .dot-warning {
-  background-color: #ff9500;
-  box-shadow: 0 0 6px rgba(255, 149, 0, 0.4);
+  background-color: #f59e0b;
 }
 
 .dot-bad {
-  background-color: #ff3b30;
-  box-shadow: 0 0 6px rgba(255, 59, 48, 0.4);
+  background-color: #ef4444;
 }
 
 .dot-unknown {
-  background-color: #8e8e93;
+  background-color: #6b7280;
 }
 
 .dot-credit {
-  background-color: #0071e3;
-  box-shadow: 0 0 6px rgba(0, 113, 227, 0.4);
+  background-color: var(--primary-color);
+}
+
+.status-name {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .media-status-card strong {
-  display: block;
-  margin-top: 6px;
-  color: #1d1d1f;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .media-status-card small {
-  display: block;
-  margin-top: 2px;
-  color: #86868b;
+  color: var(--text-secondary);
   font-size: 11px;
+  margin-left: 2px;
 }
 
 .media-layout {
@@ -1131,17 +1152,12 @@ export default {
   align-items: start;
 }
 
-/* 核心大卡片容器：应用中等毛玻璃滤镜，对整体滚动零性能压力，视觉高级 */
 .media-controls,
 .media-results {
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.65);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.03),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-sm);
 }
 
 .media-controls {
@@ -1163,12 +1179,11 @@ export default {
   margin-bottom: 20px;
 }
 
-/* 苹果 Segmented Control 风格的分段选择器：玻璃底座 */
 .mode-switch.ant-radio-group-solid,
 .image-mode-switch.ant-radio-group-solid,
 .video-mode-switch.ant-radio-group-solid {
-  background-color: rgba(0, 0, 0, 0.04);
-  border-radius: 10px;
+  background-color: #f4f4f5;
+  border-radius: 8px;
   padding: 2px;
   border: none;
   display: flex;
@@ -1181,14 +1196,14 @@ export default {
   text-align: center;
   background: transparent;
   border: none;
-  border-radius: 8px;
-  color: #1d1d1f;
-  font-size: 13px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 500;
   height: 28px;
   line-height: 28px;
   box-shadow: none !important;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: var(--transition-smooth);
 }
 
 .mode-switch >>> .ant-radio-button-wrapper:not(:first-child)::before,
@@ -1200,15 +1215,16 @@ export default {
 .mode-switch >>> .ant-radio-button-wrapper-checked,
 .image-mode-switch >>> .ant-radio-button-wrapper-checked,
 .video-mode-switch >>> .ant-radio-button-wrapper-checked {
-  background: rgba(255, 255, 255, 0.85);
-  color: #1d1d1f;
-  box-shadow: 0px 1px 3px rgba(0, 0, 0, 0.08), 0px 1px 1px rgba(0, 0, 0, 0.04), inset 0px 1px 0px rgba(255, 255, 255, 0.9) !important;
+  background: var(--card-bg);
+  color: var(--text-primary);
+  box-shadow: 0px 1px 3px rgba(0, 0, 0, 0.08) !important;
+  font-weight: 600;
 }
 
 .mode-switch >>> .ant-radio-button-wrapper-disabled,
 .image-mode-switch >>> .ant-radio-button-wrapper-disabled,
 .video-mode-switch >>> .ant-radio-button-wrapper-disabled {
-  color: #c7c7cc;
+  color: var(--text-muted);
   background: transparent;
 }
 
@@ -1221,30 +1237,18 @@ export default {
   margin-bottom: 18px;
 }
 
-.field-block label,
-.field-head label {
+.field-block label {
   display: block;
   margin-bottom: 6px;
-  color: #1d1d1f;
-  font-size: 13px;
+  color: var(--text-primary);
+  font-size: 12px;
   font-weight: 600;
-}
-
-.field-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.field-head span {
-  color: #86868b;
-  font-size: 11px;
 }
 
 .field-hint {
   margin-top: 6px;
-  color: #86868b;
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -1265,15 +1269,15 @@ export default {
 .video-model-name {
   min-width: 0;
   overflow: hidden;
-  color: #1d1d1f;
+  color: var(--text-primary, #18181b);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .video-model-tags {
   flex: 0 0 auto;
-  color: #86868b;
-  font-size: 12px;
+  color: var(--text-secondary, #71717a);
+  font-size: 11px;
 }
 
 .video-size-option {
@@ -1286,84 +1290,114 @@ export default {
 
 .video-size-option >>> .anticon {
   flex: 0 0 auto;
-  color: #0071e3;
+  color: var(--primary-color, #0066cc);
 }
 
 .video-size-option-main {
-  color: #1d1d1f;
+  color: var(--text-primary, #18181b);
   font-weight: 500;
 }
 
 .video-size-option-ratio {
   margin-left: auto;
-  color: #86868b;
-  font-size: 12px;
+  color: var(--text-secondary, #71717a);
+  font-size: 11px;
 }
 
-/* 自定义 Select 控件的半透玻璃风 */
 .field-block >>> .ant-select-selection {
-  background-color: rgba(255, 255, 255, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: 10px;
-  height: 38px;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.6);
-  transition: all 0.2s ease;
+  background-color: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  height: 36px;
+  transition: var(--transition-smooth);
 }
 
 .field-block >>> .ant-select-selection__rendered {
-  line-height: 36px;
+  line-height: 34px;
 }
 
 .field-block >>> .ant-input-number {
   width: 100%;
-  height: 38px;
+  height: 36px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: 10px;
-  background-color: rgba(255, 255, 255, 0.45);
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.6);
-  transition: all 0.2s ease;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background-color: var(--card-bg);
+  transition: var(--transition-smooth);
 }
 
 .field-block >>> .ant-input-number-input {
-  height: 36px;
-  color: #1d1d1f;
+  height: 34px;
+  color: var(--text-primary);
 }
 
 .field-block >>> .ant-input-number-focused,
-.field-block >>> .ant-input-number:focus {
-  border-color: #0071e3;
-  background-color: #ffffff;
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15), inset 1px 1px 0px rgba(255, 255, 255, 0.9);
-}
-
+.field-block >>> .ant-input-number:focus,
 .field-block >>> .ant-select-open .ant-select-selection,
 .field-block >>> .ant-select-focused .ant-select-selection {
-  border-color: #0071e3;
-  background-color: #ffffff;
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15), inset 1px 1px 0px rgba(255, 255, 255, 0.9);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  background-color: var(--card-bg);
 }
 
-/* 自定义 Textarea 控件的半透玻璃风 */
-.field-block >>> .ant-input {
-  background-color: rgba(255, 255, 255, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: 10px;
-  padding: 10px 12px;
-  color: #1d1d1f;
+.prompt-input-wrapper {
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background-color: var(--card-bg);
+  transition: var(--transition-smooth);
+  overflow: hidden;
+}
+
+.prompt-input-wrapper:focus-within {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.prompt-input-wrapper >>> .ant-input {
+  border: none !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  padding: 10px 12px 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
   font-family: inherit;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.6);
-  transition: all 0.2s ease;
+  color: var(--text-primary);
 }
 
-.field-block >>> .ant-input:focus {
-  border-color: #0071e3;
-  background-color: #ffffff;
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15), inset 1px 1px 0px rgba(255, 255, 255, 0.9);
+.prompt-input-wrapper >>> .ant-input::placeholder {
+  color: var(--text-muted);
 }
 
-.field-block >>> .ant-input::placeholder {
-  color: #86868b;
+.prompt-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px 8px;
+  border-top: 1px dashed #f4f4f5;
+  background-color: #fafafa;
+}
+
+.prompt-char-count {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.btn-clear-prompt {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: var(--transition-smooth);
+}
+
+.btn-clear-prompt:hover {
+  color: #ef4444;
 }
 
 .reference-panel {
@@ -1372,8 +1406,8 @@ export default {
 
 .reference-required {
   margin-top: 8px;
-  color: #bf5b00;
-  font-size: 12px;
+  color: #d97706;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -1383,44 +1417,44 @@ export default {
 
 .reference-drop {
   width: 100%;
-  height: 160px;
-  border: 1px dashed rgba(0, 0, 0, 0.15);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.35);
-  color: #86868b;
+  height: 100px;
+  border: 1px dashed var(--card-border);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--text-secondary);
   cursor: pointer;
-  overflow: hidden;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.5);
-  transition: all 0.2s ease;
+  transition: var(--transition-smooth);
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 12px;
 }
 
 .reference-drop:hover {
-  background: rgba(255, 255, 255, 0.6);
-  border-color: #0071e3;
-  color: #0071e3;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.7);
+  background: var(--primary-light);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
 }
 
 .reference-panel >>> .ant-btn {
-  margin-top: 10px;
+  margin-top: 8px;
   width: 100%;
-  border-radius: 8px;
-  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  background-color: #f4f4f5;
   border: none;
-  color: #1d1d1f;
-  transition: all 0.2s ease;
+  color: var(--text-primary);
+  font-size: 12px;
+  height: 32px;
+  transition: var(--transition-smooth);
 }
 
 .reference-panel >>> .ant-btn:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: #e4e4e7;
 }
 
 .reference-thumb-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin-top: 10px;
 }
@@ -1428,10 +1462,11 @@ export default {
 .reference-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1;
   overflow: hidden;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  background: #f4f4f5;
+  border: 1px solid var(--card-border);
   cursor: zoom-in;
 }
 
@@ -1439,9 +1474,8 @@ export default {
   display: block;
   width: 100%;
   height: 100%;
-  max-width: 100%;
   object-fit: cover;
-  transition: transform 0.2s ease;
+  transition: var(--transition-smooth);
 }
 
 .reference-thumb:hover img {
@@ -1450,23 +1484,25 @@ export default {
 
 .reference-remove {
   position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 22px;
-  height: 22px;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.6);
   color: #ffffff;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 10px;
+  transition: var(--transition-smooth);
 }
 
 .reference-remove:hover {
-  background: rgba(0, 0, 0, 0.78);
+  background: rgba(0, 0, 0, 0.85);
 }
 
 .action-row {
@@ -1477,55 +1513,52 @@ export default {
 }
 
 .action-row >>> .ant-btn {
-  border-radius: 12px;
-  height: 44px;
-  font-size: 15px;
-  font-weight: 600;
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border-radius: 8px;
+  height: 40px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: var(--transition-smooth);
   border: none;
 }
 
 .action-row >>> .ant-btn-primary {
-  background-color: #0071e3;
+  background-color: var(--primary-color);
   color: #ffffff;
-  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.25), inset 0px 1px 0px rgba(255, 255, 255, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 .action-row >>> .ant-btn-primary:hover,
 .action-row >>> .ant-btn-primary:focus {
-  background-color: #0077ed;
-  box-shadow: 0 6px 16px rgba(0, 113, 227, 0.35), inset 0px 1px 0px rgba(255, 255, 255, 0.3);
+  background-color: var(--primary-hover);
 }
 
 .action-row >>> .ant-btn-primary:active {
-  background-color: #0062c4;
   transform: scale(0.98);
 }
 
 .action-row >>> .ant-btn-primary[disabled] {
-  background-color: rgba(0, 0, 0, 0.05);
-  color: #aeaeb2;
+  background-color: #f4f4f5;
+  color: var(--text-muted);
   box-shadow: none;
 }
 
 .action-row >>> .ant-btn:not(.ant-btn-primary) {
-  background-color: rgba(0, 0, 0, 0.05);
-  color: #1d1d1f;
+  background-color: #f4f4f5;
+  color: var(--text-primary);
 }
 
 .action-row >>> .ant-btn:not(.ant-btn-primary):hover,
 .action-row >>> .ant-btn:not(.ant-btn-primary):focus {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: #e4e4e7;
 }
 
 .action-row >>> .ant-btn:not(.ant-btn-primary):active {
-  background-color: rgba(0, 0, 0, 0.15);
   transform: scale(0.98);
 }
 
 .action-row >>> .ant-btn:not(.ant-btn-primary)[disabled] {
-  background-color: rgba(0, 0, 0, 0.02);
-  color: #d1d1d6;
+  background-color: #fafafa;
+  color: var(--text-muted);
 }
 
 .result-empty {
@@ -1534,26 +1567,26 @@ export default {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  color: #86868b;
+  color: var(--text-secondary);
   text-align: center;
 }
 
 .result-empty >>> .anticon {
-  margin-bottom: 16px;
-  font-size: 48px;
-  color: #aeaeb2;
+  margin-bottom: 12px;
+  font-size: 40px;
+  color: var(--text-muted);
 }
 
 .result-empty h3 {
-  margin: 0 0 8px;
-  color: #1d1d1f;
-  font-size: 18px;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 16px;
   font-weight: 600;
 }
 
 .result-empty p {
-  color: #86868b;
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
   max-width: 280px;
   margin: 0;
   line-height: 1.4;
@@ -1565,7 +1598,7 @@ export default {
 
 .result-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 20px;
 }
 
@@ -1573,37 +1606,37 @@ export default {
   grid-template-columns: minmax(280px, 720px);
 }
 
-/* 核心优化结果卡片：使用半透明背景和双内阴影模拟液态玻璃质感，完全绕开 backdrop-filter 降低渲染消耗 */
 .result-card {
+  position: relative;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.75);
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.02),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.8),
-    inset -1px -1px 0px rgba(255, 255, 255, 0.1);
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-smooth);
   display: flex;
   flex-direction: column;
 }
 
 .result-card:hover {
-  transform: translateY(-4px);
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.06),
-    inset 1px 1px 0px rgba(255, 255, 255, 0.9),
-    inset -1px -1px 0px rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.result-media-wrapper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #f4f4f5;
 }
 
 .image-preview-btn {
   display: block;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1;
   padding: 0;
   border: 0;
-  background: rgba(0, 0, 0, 0.02);
+  background: transparent;
   cursor: zoom-in;
   overflow: hidden;
 }
@@ -1612,103 +1645,159 @@ export default {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.3s ease;
+  transition: var(--transition-smooth);
 }
 
 .result-card:hover .image-preview-btn img {
-  transform: scale(1.03);
+  transform: scale(1.02);
+}
+
+.media-hover-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.result-card:hover .media-hover-overlay {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.overlay-actions {
+  display: flex;
+  gap: 12px;
+  transform: translateY(8px);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.result-card:hover .overlay-actions {
+  transform: translateY(0);
+}
+
+.action-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  border: none;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-smooth);
+  font-size: 15px;
+}
+
+.action-icon-btn:hover {
+  background: #ffffff;
+  transform: scale(1.08);
+  color: var(--primary-color);
 }
 
 .video-preview {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000000;
-  border-radius: 12px 12px 0 0;
+  display: block;
 }
 
 .result-meta {
-  padding: 16px 16px 8px;
-  flex-grow: 1;
-}
-
-.result-meta strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #1d1d1f;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.result-meta span {
-  display: block;
-  margin-top: 4px;
-  color: #86868b;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.result-actions {
+  padding: 12px;
   display: flex;
-  gap: 8px;
-  padding: 0 16px 16px;
+  flex-direction: column;
 }
 
-/* 按钮的微小透光玻璃效果 */
-.result-actions >>> .ant-btn {
-  flex: 1;
-  border-radius: 8px;
-  height: 32px;
+.meta-info strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
-  border: none;
-  background-color: rgba(0, 0, 0, 0.03);
-  color: #0071e3;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.5);
-  transition: all 0.2s ease;
 }
 
-.result-actions >>> .ant-btn:hover {
-  background-color: rgba(0, 0, 0, 0.06);
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.8);
+.meta-info span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.result-actions >>> .ant-btn:active {
-  transform: scale(0.97);
+.video-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  border-top: 1px solid #f4f4f5;
+  padding-top: 8px;
+}
+
+.action-btn-mini {
+  flex: 1;
+  height: 26px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: var(--transition-smooth);
+}
+
+.action-btn-mini:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: var(--primary-light);
 }
 
 .raw-collapse {
   margin-top: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.45);
-  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: #fafafa;
+  border-radius: 8px;
   overflow: hidden;
-  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.6);
 }
 
 .raw-collapse >>> .ant-collapse-header {
   font-weight: 500;
-  color: #86868b;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .raw-collapse pre {
-  max-height: 280px;
+  max-height: 200px;
   overflow: auto;
   margin: 0;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  background: var(--card-bg);
   padding: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 6px;
+  border: 1px solid var(--card-border);
+  color: var(--text-secondary);
 }
 
 .preview-modal-image {
   display: block;
   max-width: 100%;
-  max-height: 78vh;
+  max-height: 75vh;
   margin: 0 auto;
 }
 
@@ -1718,7 +1807,6 @@ export default {
   }
 
   .media-status-row {
-    min-width: 0;
     margin-top: 14px;
   }
 
@@ -1733,162 +1821,72 @@ export default {
 
 @media (max-width: 640px) {
   .media-workbench {
-    min-height: calc(100vh - 56px);
-    padding: 14px 10px 24px;
+    padding: 16px 12px;
   }
 
   .media-topbar {
-    margin-bottom: 14px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
   }
 
   .media-topbar h1 {
-    font-size: 22px;
-    margin-bottom: 4px;
-  }
-
-  .media-topbar p {
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .media-status-row,
-  .field-grid {
-    grid-template-columns: 1fr;
+    font-size: 20px;
   }
 
   .media-status-row {
+    flex-wrap: wrap;
     gap: 8px;
   }
 
   .media-status-card {
-    padding: 10px 12px;
+    padding: 4px 8px;
   }
 
   .media-status-card strong {
-    margin-top: 2px;
-    font-size: 18px;
-  }
-
-  .media-status-card small {
-    display: inline-block;
-    margin-top: 0;
+    font-size: 12px;
   }
 
   .media-layout {
-    gap: 12px;
+    gap: 16px;
   }
 
   .media-controls,
   .media-results {
-    border-radius: 12px;
-  }
-
-  .media-controls {
-    padding: 14px;
+    padding: 16px;
+    border-radius: 8px;
   }
 
   .media-results {
     min-height: 360px;
-    padding: 14px;
-  }
-
-  .mode-switch,
-  .image-mode-switch,
-  .video-mode-switch {
-    margin-bottom: 14px;
-  }
-
-  .mode-switch >>> .ant-radio-button-wrapper,
-  .image-mode-switch >>> .ant-radio-button-wrapper,
-  .video-mode-switch >>> .ant-radio-button-wrapper {
-    font-size: 12px;
-  }
-
-  .field-block {
-    margin-bottom: 14px;
-  }
-
-  .field-grid {
-    gap: 0;
-  }
-
-  .reference-drop {
-    height: 112px;
   }
 
   .reference-thumb-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(3, 1fr);
   }
 
   .action-row {
     grid-template-columns: 1fr;
     gap: 8px;
-    margin-top: 14px;
-  }
-
-  .action-row >>> .ant-btn {
-    width: 100%;
   }
 
   .result-empty {
     min-height: 300px;
-    padding: 24px 12px;
-  }
-
-  .result-empty >>> .anticon {
-    font-size: 36px;
   }
 
   .result-grid,
   .video-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 
   .result-card:hover {
     transform: none;
   }
-
-  .result-meta {
-    padding: 12px 12px 6px;
-  }
-
-  .result-actions {
-    padding: 0 12px 12px;
-  }
-
-  .raw-collapse {
-    margin-top: 14px;
-  }
-
-  .raw-collapse pre {
-    max-height: 200px;
-    font-size: 11px;
-  }
-
-  .preview-modal-image {
-    max-height: 72vh;
-  }
 }
 
 @media (max-width: 380px) {
-  .media-workbench {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
-
-  .media-controls,
-  .media-results {
-    padding: 12px;
-  }
-
   .reference-thumb-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .result-actions {
-    flex-direction: column;
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style>

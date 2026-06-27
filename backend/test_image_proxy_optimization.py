@@ -3,6 +3,7 @@ import json
 import unittest
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 
@@ -116,21 +117,53 @@ class ImageProxyOptimizationTest(unittest.IsolatedAsyncioTestCase):
             billing_type="image_credit",
         )
 
-        image_request = ProxyService._build_image_request_from_responses(
-            _FixedDb(image_model),
-            {
-                "model": "responses:gpt-image-2",
-                "input": "生成一张 9:16 竖屏 2K 图片",
-                "image_size": "2K",
-                "aspect_ratio": "9:16",
-                "stream": False,
-            },
-        )
+        request_data = {
+            "model": "responses:gpt-image-2",
+            "input": "生成一张 9:16 竖屏 2K 图片",
+            "image_size": "2K",
+            "aspect_ratio": "9:16",
+            "stream": False,
+        }
+
+        with patch.object(
+            ProxyService,
+            "_resolve_requested_model_or_raise",
+            return_value=image_model,
+        ):
+            image_request = ProxyService._build_image_request_from_responses(
+                SimpleNamespace(),
+                request_data,
+            )
 
         self.assertEqual(image_request["model"], "gpt-image-2")
         self.assertEqual(image_request["prompt"], "生成一张 9:16 竖屏 2K 图片")
         self.assertEqual(image_request["image_size"], "2K")
         self.assertEqual(image_request["aspect_ratio"], "9:16")
+
+    def test_responses_image_request_uses_override_resolved_image_model(self):
+        image_model = SimpleNamespace(
+            model_name="gpt-image-2",
+            model_type="image",
+            billing_type="image_credit",
+        )
+        request_data = {
+            "model": "image-alias",
+            "input": "生成一张图",
+            "stream": False,
+        }
+
+        with patch.object(
+            ProxyService,
+            "_resolve_requested_model_or_raise",
+            return_value=image_model,
+        ):
+            self.assertTrue(ProxyService._is_responses_image_request(SimpleNamespace(), request_data))
+            image_request = ProxyService._build_image_request_from_responses(
+                SimpleNamespace(),
+                request_data,
+            )
+
+        self.assertEqual(image_request["model"], "gpt-image-2")
 
     async def test_openai_image_route_fallback_only_on_404(self):
         calls = []
@@ -354,6 +387,7 @@ class ImageProxyOptimizationTest(unittest.IsolatedAsyncioTestCase):
                     "stream": True,
                 },
                 client_ip="127.0.0.1",
+                request_id="req-test",
             )
             chunks = []
             async for chunk in response.body_iterator:

@@ -1258,6 +1258,7 @@ CREATE TABLE `unified_model` (
   `request_price` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '按请求次数计费的单次请求价格(美元)',
   `image_credit_multiplier` decimal(12,3) NOT NULL DEFAULT '1.000' COMMENT '图片请求默认扣减倍率；视频模型表示每秒媒体积分单价',
   `long_context_billing_enabled` tinyint NOT NULL DEFAULT '0' COMMENT '是否启用超过256k上下文2倍计费',
+  `security_monitor_enabled` tinyint NOT NULL DEFAULT '0' COMMENT '是否启用安全风控监控',
   `enabled` tinyint NOT NULL DEFAULT '1',
   `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1404,9 +1405,9 @@ VALUES (1, 0.000, 0.000, 0.000);
 -- 预置 Grok 视频模型
 INSERT INTO `unified_model` (
   `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
-  `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `enabled`, `description`
+  `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
-('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
 ON DUPLICATE KEY UPDATE
   `display_name` = VALUES(`display_name`),
   `model_type` = VALUES(`model_type`),

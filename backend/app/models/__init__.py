@@ -23,6 +23,7 @@ from app.models.model import (
     ModelChannelMapping,
     ModelImageResolutionRule,
     ModelPriceAdjustmentRule,
+    UserPriceAdjustmentRule,
     ModelOverrideRule,
 )
 from app.models.log import (
@@ -38,6 +39,7 @@ from app.models.log import (
     ConsumptionRecord,
     UserImageBalance,
     ImageCreditRecord,
+    VideoTaskBillingSnapshot,
     ConversationSession,
     ConversationCheckpoint,
     UserSubscription,
@@ -81,6 +83,7 @@ __all__ = [
     "ModelChannelMapping",
     "ModelImageResolutionRule",
     "ModelPriceAdjustmentRule",
+    "UserPriceAdjustmentRule",
     "ModelOverrideRule",
     "HealthCheckLog",
     "RequestLog",
@@ -94,6 +97,7 @@ __all__ = [
     "ConsumptionRecord",
     "UserImageBalance",
     "ImageCreditRecord",
+    "VideoTaskBillingSnapshot",
     "ConversationSession",
     "ConversationCheckpoint",
     "UserSubscription",

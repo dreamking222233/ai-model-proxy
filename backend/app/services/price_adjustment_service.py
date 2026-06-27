@@ -1,6 +1,7 @@
 """Price adjustment rule service."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -10,8 +11,29 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ServiceException
-from app.models.model import ModelPriceAdjustmentRule, UnifiedModel
+from app.models.model import ModelPriceAdjustmentRule, UnifiedModel, UserPriceAdjustmentRule
+from app.models.user import SysUser
 from app.services.model_service import ModelService
+
+
+@dataclass(frozen=True)
+class PriceAdjustmentResolution:
+    """Resolved price adjustment result for billing snapshots and UI display."""
+
+    multiplier: Decimal
+    source: str = "default"
+    rule_id: Optional[int] = None
+    rule_name: Optional[str] = None
+    user_id: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "multiplier": float(self.multiplier or 1),
+            "source": self.source,
+            "rule_id": self.rule_id,
+            "rule_name": self.rule_name,
+            "user_id": self.user_id,
+        }
 
 
 class PriceAdjustmentService:
@@ -170,6 +192,39 @@ class PriceAdjustmentService:
         return payload
 
     @staticmethod
+    def _user_rule_to_dict(
+        rule: UserPriceAdjustmentRule,
+        user: Optional[SysUser] = None,
+        include_active: bool = False,
+    ) -> dict:
+        payload = {
+            "id": rule.id,
+            "name": rule.name,
+            "user_id": rule.user_id,
+            "username": getattr(user, "username", None) if user else None,
+            "email": getattr(user, "email", None) if user else None,
+            "model_series": rule.model_series,
+            "model_type": rule.model_type,
+            "billing_type": rule.billing_type,
+            "multiplier": float(rule.multiplier or 1),
+            "schedule_type": rule.schedule_type,
+            "start_time": rule.start_time.strftime("%H:%M:%S") if rule.start_time else None,
+            "end_time": rule.end_time.strftime("%H:%M:%S") if rule.end_time else None,
+            "priority": int(rule.priority or 0),
+            "enabled": int(rule.enabled or 0),
+            "description": rule.description,
+            "created_by": rule.created_by,
+            "updated_by": rule.updated_by,
+            "created_at": rule.created_at.isoformat() if rule.created_at else None,
+            "updated_at": rule.updated_at.isoformat() if rule.updated_at else None,
+        }
+        if include_active:
+            payload["is_active_now"] = PriceAdjustmentService.is_rule_active_now(rule)
+        if user is None:
+            payload["username"] = "用户已删除"
+        return payload
+
+    @staticmethod
     def is_daily_time_active(start_time: time, end_time: time, now_time: time) -> bool:
         if start_time < end_time:
             return start_time <= now_time < end_time
@@ -186,6 +241,13 @@ class PriceAdjustmentService:
             return False
         current = now or PriceAdjustmentService.now_beijing()
         return PriceAdjustmentService.is_daily_time_active(rule.start_time, rule.end_time, current.time())
+
+    @staticmethod
+    def _ensure_user_exists(db: Session, user_id: int) -> SysUser:
+        user = db.query(SysUser).filter(SysUser.id == int(user_id)).first()
+        if not user:
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+        return user
 
     @staticmethod
     def list_rules(
@@ -242,6 +304,21 @@ class PriceAdjustmentService:
         db.commit()
 
     @staticmethod
+    def _matching_rules_query(db: Session, rule_model, unified_model: UnifiedModel, user_id: Optional[int] = None):
+        series = getattr(unified_model, "model_series", None) or ModelService.infer_model_series(unified_model.model_name)
+        model_type = str(getattr(unified_model, "model_type", None) or "chat").strip().lower()
+        billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
+        query = db.query(rule_model).filter(
+            rule_model.enabled == 1,
+            or_(rule_model.model_series == series, rule_model.model_series == "all"),
+            or_(rule_model.model_type == model_type, rule_model.model_type == "all"),
+            or_(rule_model.billing_type == billing_type, rule_model.billing_type == "all"),
+        )
+        if user_id is not None:
+            query = query.filter(rule_model.user_id == int(user_id))
+        return query.order_by(rule_model.priority.asc(), rule_model.id.desc())
+
+    @staticmethod
     def resolve_rule(
         db: Session,
         unified_model: Optional[UnifiedModel],
@@ -249,20 +326,7 @@ class PriceAdjustmentService:
     ) -> Optional[ModelPriceAdjustmentRule]:
         if unified_model is None:
             return None
-        series = getattr(unified_model, "model_series", None) or ModelService.infer_model_series(unified_model.model_name)
-        model_type = str(getattr(unified_model, "model_type", None) or "chat").strip().lower()
-        billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
-        rows = (
-            db.query(ModelPriceAdjustmentRule)
-            .filter(
-                ModelPriceAdjustmentRule.enabled == 1,
-                or_(ModelPriceAdjustmentRule.model_series == series, ModelPriceAdjustmentRule.model_series == "all"),
-                or_(ModelPriceAdjustmentRule.model_type == model_type, ModelPriceAdjustmentRule.model_type == "all"),
-                or_(ModelPriceAdjustmentRule.billing_type == billing_type, ModelPriceAdjustmentRule.billing_type == "all"),
-            )
-            .order_by(ModelPriceAdjustmentRule.priority.asc(), ModelPriceAdjustmentRule.id.desc())
-            .all()
-        )
+        rows = PriceAdjustmentService._matching_rules_query(db, ModelPriceAdjustmentRule, unified_model).all()
         current = now or PriceAdjustmentService.now_beijing()
         for rule in rows:
             if PriceAdjustmentService.is_rule_active_now(rule, current):
@@ -270,15 +334,156 @@ class PriceAdjustmentService:
         return None
 
     @staticmethod
+    def resolve_user_rule(
+        db: Session,
+        user_id: Optional[int],
+        unified_model: Optional[UnifiedModel],
+        now: Optional[datetime] = None,
+    ) -> Optional[UserPriceAdjustmentRule]:
+        if unified_model is None or not user_id:
+            return None
+        rows = PriceAdjustmentService._matching_rules_query(db, UserPriceAdjustmentRule, unified_model, int(user_id)).all()
+        current = now or PriceAdjustmentService.now_beijing()
+        for rule in rows:
+            if PriceAdjustmentService.is_rule_active_now(rule, current):
+                return rule
+        return None
+
+    @staticmethod
+    def resolve_adjustment(
+        db: Session,
+        unified_model: Optional[UnifiedModel],
+        now: Optional[datetime] = None,
+        user_id: Optional[int] = None,
+    ) -> PriceAdjustmentResolution:
+        if unified_model is None:
+            return PriceAdjustmentResolution(multiplier=Decimal("1"))
+        user_rule = PriceAdjustmentService.resolve_user_rule(db, user_id, unified_model, now) if user_id else None
+        if user_rule:
+            return PriceAdjustmentResolution(
+                multiplier=Decimal(str(user_rule.multiplier or 1)).quantize(Decimal("0.000001")),
+                source="user",
+                rule_id=int(user_rule.id),
+                rule_name=user_rule.name,
+                user_id=int(user_rule.user_id),
+            )
+        global_rule = PriceAdjustmentService.resolve_rule(db, unified_model, now)
+        if global_rule:
+            return PriceAdjustmentResolution(
+                multiplier=Decimal(str(global_rule.multiplier or 1)).quantize(Decimal("0.000001")),
+                source="global",
+                rule_id=int(global_rule.id),
+                rule_name=global_rule.name,
+                user_id=int(user_id) if user_id else None,
+            )
+        return PriceAdjustmentResolution(multiplier=Decimal("1"), source="default", user_id=int(user_id) if user_id else None)
+
+    @staticmethod
     def resolve_multiplier(
         db: Session,
         unified_model: Optional[UnifiedModel],
         now: Optional[datetime] = None,
+        user_id: Optional[int] = None,
     ) -> Decimal:
-        rule = PriceAdjustmentService.resolve_rule(db, unified_model, now)
-        if not rule:
-            return Decimal("1")
-        return Decimal(str(rule.multiplier or 1)).quantize(Decimal("0.000001"))
+        return PriceAdjustmentService.resolve_adjustment(db, unified_model, now=now, user_id=user_id).multiplier
+
+    @staticmethod
+    def list_user_rules(
+        db: Session,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: Optional[int] = None,
+        keyword: Optional[str] = None,
+        model_series: Optional[str] = None,
+        model_type: Optional[str] = None,
+        enabled: Optional[int] = None,
+    ) -> tuple[list[dict], int]:
+        query = db.query(UserPriceAdjustmentRule, SysUser).outerjoin(SysUser, SysUser.id == UserPriceAdjustmentRule.user_id)
+        if user_id is not None:
+            query = query.filter(UserPriceAdjustmentRule.user_id == int(user_id))
+        if keyword:
+            keyword_text = str(keyword).strip()
+            if keyword_text:
+                like = f"%{keyword_text}%"
+                conditions = [SysUser.username.like(like), SysUser.email.like(like)]
+                if keyword_text.isdigit():
+                    conditions.extend([SysUser.id == int(keyword_text), UserPriceAdjustmentRule.user_id == int(keyword_text)])
+                query = query.filter(or_(*conditions))
+        if model_series:
+            query = query.filter(UserPriceAdjustmentRule.model_series == PriceAdjustmentService._normalize_series(model_series))
+        if model_type:
+            query = query.filter(UserPriceAdjustmentRule.model_type == PriceAdjustmentService._normalize_model_type(model_type))
+        if enabled is not None:
+            query = query.filter(UserPriceAdjustmentRule.enabled == (1 if int(enabled) else 0))
+        total = query.count()
+        rows = (
+            query.order_by(UserPriceAdjustmentRule.user_id.asc(), UserPriceAdjustmentRule.priority.asc(), UserPriceAdjustmentRule.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        return [PriceAdjustmentService._user_rule_to_dict(rule, user, include_active=True) for rule, user in rows], total
+
+    @staticmethod
+    def create_user_rule(db: Session, user_id: int, data, operator_id: Optional[int] = None) -> dict:
+        user = PriceAdjustmentService._ensure_user_exists(db, user_id)
+        payload = PriceAdjustmentService._normalize_payload(data)
+        payload["user_id"] = int(user_id)
+        payload["created_by"] = operator_id
+        payload["updated_by"] = operator_id
+        rule = UserPriceAdjustmentRule(**payload)
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return PriceAdjustmentService._user_rule_to_dict(rule, user, include_active=True)
+
+    @staticmethod
+    def update_user_rule(db: Session, user_id: int, rule_id: int, data, operator_id: Optional[int] = None) -> dict:
+        user = PriceAdjustmentService._ensure_user_exists(db, user_id)
+        rule = db.query(UserPriceAdjustmentRule).filter(UserPriceAdjustmentRule.id == rule_id).first()
+        if not rule or int(rule.user_id) != int(user_id):
+            raise ServiceException(404, "用户专属价格调控规则不存在", "USER_PRICE_ADJUSTMENT_RULE_NOT_FOUND")
+        payload = PriceAdjustmentService._normalize_payload(data, existing=rule)
+        payload["updated_by"] = operator_id
+        for key, value in payload.items():
+            setattr(rule, key, value)
+        db.commit()
+        db.refresh(rule)
+        return PriceAdjustmentService._user_rule_to_dict(rule, user, include_active=True)
+
+    @staticmethod
+    def delete_user_rule(db: Session, user_id: int, rule_id: int) -> None:
+        rule = db.query(UserPriceAdjustmentRule).filter(UserPriceAdjustmentRule.id == rule_id).first()
+        if not rule or int(rule.user_id) != int(user_id):
+            raise ServiceException(404, "用户专属价格调控规则不存在", "USER_PRICE_ADJUSTMENT_RULE_NOT_FOUND")
+        db.delete(rule)
+        db.commit()
+
+    @staticmethod
+    def list_user_effective_matrix(db: Session, user_id: int) -> list[dict]:
+        user = PriceAdjustmentService._ensure_user_exists(db, user_id)
+        now = PriceAdjustmentService.now_beijing()
+        rows = []
+        for series in ("gpt", "claude", "grok", "gemini", "other"):
+            for model_type in ("chat", "image", "video"):
+                fake_model = UnifiedModel(
+                    model_name=f"{series}-{model_type}",
+                    model_series=series,
+                    model_type=model_type,
+                    billing_type="image_credit" if model_type in {"image", "video"} else "token",
+                )
+                resolution = PriceAdjustmentService.resolve_adjustment(db, fake_model, now=now, user_id=user_id)
+                payload = resolution.to_dict()
+                payload.update({
+                    "model_series": series,
+                    "model_type": model_type,
+                    "billing_type": fake_model.billing_type,
+                    "username": user.username,
+                    "email": user.email,
+                    "beijing_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                rows.append(payload)
+        return rows
 
     @staticmethod
     def get_options() -> dict:

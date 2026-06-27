@@ -383,6 +383,8 @@ class AuthService:
         db.query(UserApiKey).filter(UserApiKey.user_id == user_id).delete(synchronize_session=False)
         db.query(UserImageBalance).filter(UserImageBalance.user_id == user_id).delete(synchronize_session=False)
         db.query(UserBalance).filter(UserBalance.user_id == user_id).delete(synchronize_session=False)
+        from app.models.model import UserPriceAdjustmentRule
+        db.query(UserPriceAdjustmentRule).filter(UserPriceAdjustmentRule.user_id == user_id).delete(synchronize_session=False)
         db.delete(user)
         db.commit()
 

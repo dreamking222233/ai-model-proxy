@@ -172,9 +172,13 @@ class ImageCreditService:
         multiplier,
         image_size: str | None = None,
         remark: str | None = None,
+        adjustment_multiplier=None,
+        price_adjustment_source: str | None = None,
+        price_adjustment_rule_id: int | None = None,
     ) -> dict:
         amount_decimal = ImageCreditService._normalize_amount(amount, "amount")
         multiplier_decimal = ImageCreditService._normalize_amount(multiplier, "multiplier")
+        adjustment_multiplier_decimal = Decimal(str(adjustment_multiplier if adjustment_multiplier is not None else 1)).quantize(Decimal("0.000001"))
 
         balance = (
             db.query(UserImageBalance)
@@ -201,6 +205,9 @@ class ImageCreditService:
             balance_before=balance_before,
             balance_after=balance.balance,
             multiplier=multiplier_decimal,
+            adjustment_price_multiplier_snapshot=adjustment_multiplier_decimal,
+            price_adjustment_source_snapshot=price_adjustment_source,
+            price_adjustment_rule_id_snapshot=price_adjustment_rule_id,
             image_size=image_size,
             action_type="request",
             operator_id=None,

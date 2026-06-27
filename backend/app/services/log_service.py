@@ -325,6 +325,10 @@ class LogService:
             "output_price_per_million_snapshot",
             "cache_creation_price_per_million_snapshot",
             "request_price_snapshot",
+            "global_price_multiplier_snapshot",
+            "adjustment_price_multiplier_snapshot",
+            "price_adjustment_source_snapshot",
+            "price_adjustment_rule_id_snapshot",
             "price_multiplier_snapshot",
             "fast_price_multiplier_snapshot",
             "context_tokens_snapshot",
@@ -492,6 +496,10 @@ class LogService:
                     ConsumptionRecord.cache_creation_cost,
                     ConsumptionRecord.total_cost,
                     ConsumptionRecord.request_price_snapshot,
+                    ConsumptionRecord.global_price_multiplier_snapshot,
+                    ConsumptionRecord.adjustment_price_multiplier_snapshot,
+                    ConsumptionRecord.price_adjustment_source_snapshot,
+                    ConsumptionRecord.price_adjustment_rule_id_snapshot,
                     ConsumptionRecord.context_tokens_snapshot,
                     ConsumptionRecord.context_token_threshold_snapshot,
                     ConsumptionRecord.context_price_multiplier_snapshot,
@@ -533,6 +541,18 @@ class LogService:
             context_price_multiplier_snapshot = log.context_price_multiplier_snapshot
             if context_price_multiplier_snapshot is None and consumption is not None:
                 context_price_multiplier_snapshot = getattr(consumption, "context_price_multiplier_snapshot", None)
+            global_price_multiplier_snapshot = log.global_price_multiplier_snapshot
+            if global_price_multiplier_snapshot is None and consumption is not None:
+                global_price_multiplier_snapshot = getattr(consumption, "global_price_multiplier_snapshot", None)
+            adjustment_price_multiplier_snapshot = log.adjustment_price_multiplier_snapshot
+            if adjustment_price_multiplier_snapshot is None and consumption is not None:
+                adjustment_price_multiplier_snapshot = getattr(consumption, "adjustment_price_multiplier_snapshot", None)
+            price_adjustment_source_snapshot = log.price_adjustment_source_snapshot
+            if price_adjustment_source_snapshot is None and consumption is not None:
+                price_adjustment_source_snapshot = getattr(consumption, "price_adjustment_source_snapshot", None)
+            price_adjustment_rule_id_snapshot = log.price_adjustment_rule_id_snapshot
+            if price_adjustment_rule_id_snapshot is None and consumption is not None:
+                price_adjustment_rule_id_snapshot = getattr(consumption, "price_adjustment_rule_id_snapshot", None)
             effective_price_multiplier = (
                 (log.price_multiplier_snapshot or 1)
                 * (log.fast_price_multiplier_snapshot or 1)
@@ -613,6 +633,10 @@ class LogService:
                 "output_price_per_million_snapshot": float(log.output_price_per_million_snapshot or 0),
                 "cache_creation_price_per_million_snapshot": float(getattr(log, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(log, "request_price_snapshot", 0) or record_request_price or 0),
+                "global_price_multiplier_snapshot": float(global_price_multiplier_snapshot or 1),
+                "adjustment_price_multiplier_snapshot": float(adjustment_price_multiplier_snapshot or 1),
+                "price_adjustment_source_snapshot": price_adjustment_source_snapshot,
+                "price_adjustment_rule_id_snapshot": price_adjustment_rule_id_snapshot,
                 "price_multiplier_snapshot": float(log.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(log.fast_price_multiplier_snapshot or 1),
                 "context_tokens_snapshot": int(context_tokens_snapshot or 0),
@@ -1229,6 +1253,10 @@ class LogService:
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
                 "cache_creation_price_per_million_snapshot": float(getattr(r, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(r, "request_price_snapshot", 0) or 0),
+                "global_price_multiplier_snapshot": float(getattr(r, "global_price_multiplier_snapshot", 1) or 1),
+                "adjustment_price_multiplier_snapshot": float(getattr(r, "adjustment_price_multiplier_snapshot", 1) or 1),
+                "price_adjustment_source_snapshot": getattr(r, "price_adjustment_source_snapshot", None),
+                "price_adjustment_rule_id_snapshot": getattr(r, "price_adjustment_rule_id_snapshot", None),
                 "price_multiplier_snapshot": float(r.price_multiplier_snapshot or 1),
                 "fast_price_multiplier_snapshot": float(r.fast_price_multiplier_snapshot or 1),
                 "context_tokens_snapshot": int(r.context_tokens_snapshot or 0),

@@ -39,6 +39,44 @@ export function deleteUser(id) {
   })
 }
 
+export function listUserPriceAdjustments(userId, params) {
+  return request({
+    url: `/api/admin/users/${userId}/price-adjustments`,
+    method: 'get',
+    params
+  })
+}
+
+export function getUserEffectivePriceAdjustments(userId) {
+  return request({
+    url: `/api/admin/users/${userId}/price-adjustments/effective`,
+    method: 'get'
+  })
+}
+
+export function createUserPriceAdjustment(userId, data) {
+  return request({
+    url: `/api/admin/users/${userId}/price-adjustments`,
+    method: 'post',
+    data
+  })
+}
+
+export function updateUserPriceAdjustment(userId, ruleId, data) {
+  return request({
+    url: `/api/admin/users/${userId}/price-adjustments/${ruleId}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteUserPriceAdjustment(userId, ruleId) {
+  return request({
+    url: `/api/admin/users/${userId}/price-adjustments/${ruleId}`,
+    method: 'delete'
+  })
+}
+
 export function rechargeBalance(data) {
   return request({
     url: '/api/admin/users/recharge',

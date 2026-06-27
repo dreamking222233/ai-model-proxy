@@ -87,6 +87,30 @@ class ModelPriceAdjustmentRule(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class UserPriceAdjustmentRule(Base):
+    """User-specific price multiplier rule by model series/type and Beijing-time schedule."""
+
+    __tablename__ = "user_price_adjustment_rule"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    model_series = Column(String(32), nullable=False, default="all", comment="gpt/claude/grok/gemini/other/all")
+    model_type = Column(String(20), nullable=False, default="all", comment="chat/image/video/embedding/completion/all")
+    billing_type = Column(String(20), nullable=False, default="all", comment="token/request/image_credit/free/all")
+    multiplier = Column(DECIMAL(12, 6), nullable=False, default=1)
+    schedule_type = Column(String(20), nullable=False, default="always", comment="always/daily_time")
+    start_time = Column(Time, nullable=True, comment="Daily start time in Asia/Shanghai")
+    end_time = Column(Time, nullable=True, comment="Daily end time in Asia/Shanghai")
+    priority = Column(Integer, nullable=False, default=100)
+    enabled = Column(SmallInteger, nullable=False, default=1)
+    description = Column(Text, nullable=True)
+    created_by = Column(BigInteger, nullable=True, index=True)
+    updated_by = Column(BigInteger, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class ModelOverrideRule(Base):
     """Model override rule for request redirection."""
 

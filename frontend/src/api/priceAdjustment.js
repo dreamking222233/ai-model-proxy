@@ -22,6 +22,14 @@ export function getEffectivePriceAdjustments() {
   })
 }
 
+export function listUserPriceAdjustmentRules(params) {
+  return request({
+    url: '/api/admin/price-adjustments/user-rules',
+    method: 'get',
+    params
+  })
+}
+
 export function createPriceAdjustmentRule(data) {
   return request({
     url: '/api/admin/price-adjustments',

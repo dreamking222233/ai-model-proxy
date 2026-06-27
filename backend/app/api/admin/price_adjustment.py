@@ -51,6 +51,31 @@ def get_effective_price_adjustments(
     return ResponseModel(data=PriceAdjustmentService.list_effective_matrix(db))
 
 
+@router.get("/user-rules", response_model=ResponseModel)
+def list_user_price_adjustment_rules(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    model_series: Optional[str] = Query(None),
+    model_type: Optional[str] = Query(None),
+    enabled: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    items, total = PriceAdjustmentService.list_user_rules(
+        db,
+        page=page,
+        page_size=page_size,
+        user_id=user_id,
+        keyword=keyword,
+        model_series=model_series,
+        model_type=model_type,
+        enabled=enabled,
+    )
+    return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
 @router.post("", response_model=ResponseModel)
 def create_price_adjustment_rule(
     data: ModelPriceAdjustmentRuleCreate,

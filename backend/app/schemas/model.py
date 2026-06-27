@@ -155,6 +155,58 @@ class ModelPriceAdjustmentRuleInfo(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class UserPriceAdjustmentRuleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    model_series: str = Field(default="all", max_length=32)
+    model_type: str = Field(default="all", max_length=20)
+    billing_type: str = Field(default="all", max_length=20)
+    multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    schedule_type: str = Field(default="always", max_length=20)
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: int = Field(default=100, ge=0)
+    enabled: int = Field(default=1, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class UserPriceAdjustmentRuleUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    model_series: Optional[str] = Field(None, max_length=32)
+    model_type: Optional[str] = Field(None, max_length=20)
+    billing_type: Optional[str] = Field(None, max_length=20)
+    multiplier: Optional[Decimal] = Field(None, gt=0)
+    schedule_type: Optional[str] = Field(None, max_length=20)
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: Optional[int] = Field(None, ge=0)
+    enabled: Optional[int] = Field(None, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class UserPriceAdjustmentRuleInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int
+    name: str
+    user_id: int
+    username: Optional[str] = None
+    email: Optional[str] = None
+    model_series: str
+    model_type: str
+    billing_type: str
+    multiplier: Decimal
+    schedule_type: str
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    priority: int
+    enabled: int
+    description: Optional[str] = None
+    created_by: Optional[int] = None
+    updated_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 # ===========================================================================
 # Model-Channel Mapping
 # ===========================================================================

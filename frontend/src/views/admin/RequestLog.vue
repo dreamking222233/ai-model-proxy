@@ -188,7 +188,7 @@
         :custom-row="customRow"
         :expand-icon-column-index="-1"
         :expand-icon-as-cell="false"
-        :scroll="{ x: 1480 }"
+        :scroll="{ x: 1600 }"
         size="middle"
       >
         <template slot="expandedRowRender" slot-scope="record">
@@ -213,6 +213,7 @@
                 <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-meta">缓存创建价格 ${{ formatPrice(getCacheCreationPricePerMillion(record)) }} / 1M tokens</span>
               </template>
               <span class="compact-expand-meta">基础价格倍率 {{ formatMultiplier(record.price_multiplier_snapshot) }}</span>
+              <span class="compact-expand-meta">用户倍率 x{{ formatMultiplier(getAdjustmentMultiplier(record)) }} · {{ getAdjustmentSourceLabel(record) }}</span>
               <span class="compact-expand-meta">综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
               <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
               <a-tag v-if="isLongContext(record)" color="red" class="fast-detail-tag">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</a-tag>
@@ -268,6 +269,15 @@
           <a-tooltip :title="text || '-'" placement="topLeft">
             <span class="channel-cell channel-cell--ellipsis">{{ text || '-' }}</span>
           </a-tooltip>
+        </template>
+
+        <template slot="userMultiplier" slot-scope="text, record">
+          <div class="user-multiplier-cell">
+            <span class="user-multiplier-value">x{{ formatMultiplier(getAdjustmentMultiplier(record)) }}</span>
+            <a-tag :color="getAdjustmentSourceColor(record)" class="user-multiplier-tag">
+              {{ getAdjustmentSourceLabel(record) }}
+            </a-tag>
+          </div>
         </template>
 
         <template slot="total_cost" slot-scope="text, record">
@@ -732,6 +742,14 @@ export default {
           scopedSlots: { customRender: 'responseTime' }
         },
         {
+          title: '用户倍率',
+          dataIndex: 'adjustment_price_multiplier_snapshot',
+          key: 'userMultiplier',
+          width: 120,
+          align: 'center',
+          scopedSlots: { customRender: 'userMultiplier' }
+        },
+        {
           title: '计费',
           dataIndex: 'total_cost',
           key: 'total_cost',
@@ -927,6 +945,31 @@ export default {
     },
     getEffectivePriceMultiplier(record) {
       return Number(record && record.price_multiplier_snapshot || 1) * this.getFastPriceMultiplier(record) * this.getContextPriceMultiplier(record)
+    },
+    getAdjustmentMultiplier(record) {
+      const value = record && record.adjustment_price_multiplier_snapshot != null
+        ? record.adjustment_price_multiplier_snapshot
+        : record && record.price_multiplier_snapshot
+      const num = Number(value == null ? 1 : value)
+      return Number.isFinite(num) && num > 0 ? num : 1
+    },
+    getAdjustmentSourceLabel(record) {
+      const source = String(record && record.price_adjustment_source_snapshot || '').toLowerCase()
+      const map = {
+        user: '用户专属',
+        global: '全局',
+        default: '默认'
+      }
+      return map[source] || '历史'
+    },
+    getAdjustmentSourceColor(record) {
+      const source = String(record && record.price_adjustment_source_snapshot || '').toLowerCase()
+      const map = {
+        user: 'purple',
+        global: 'blue',
+        default: 'default'
+      }
+      return map[source] || 'default'
     },
     isFastMode(record) {
       return this.getFastPriceMultiplier(record) > 1 || String(record && record.service_tier || '') === 'priority'
@@ -1562,6 +1605,25 @@ export default {
       line-height: 20px;
       height: 20px;
     }
+  }
+
+  .user-multiplier-cell {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 76px;
+  }
+
+  .user-multiplier-value {
+    font-weight: 700;
+    color: #1f2937;
+    line-height: 1;
+  }
+
+  .user-multiplier-tag {
+    margin-right: 0;
+    line-height: 18px;
   }
 
   .cost-tooltip-content {

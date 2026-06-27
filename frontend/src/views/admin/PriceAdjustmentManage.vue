@@ -96,6 +96,70 @@
       </a-table>
     </a-card>
 
+    <a-card title="用户专属倍率" :bordered="false" class="panel-card">
+      <div class="table-toolbar">
+        <div class="toolbar-left">
+          <a-input-search
+            v-model="userRuleFilters.keyword"
+            allow-clear
+            placeholder="搜索用户 ID、用户名或邮箱"
+            style="width: 260px"
+            @search="handleUserRuleFilterChange"
+          />
+          <a-select v-model="userRuleFilters.model_series" allow-clear placeholder="系列" style="width: 150px" @change="handleUserRuleFilterChange">
+            <a-select-option v-for="item in seriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <a-select v-model="userRuleFilters.model_type" allow-clear placeholder="类型" style="width: 150px" @change="handleUserRuleFilterChange">
+            <a-select-option v-for="item in typeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <a-select v-model="userRuleFilters.enabled" allow-clear placeholder="状态" style="width: 120px" @change="handleUserRuleFilterChange">
+            <a-select-option :value="1">启用</a-select-option>
+            <a-select-option :value="0">禁用</a-select-option>
+          </a-select>
+        </div>
+        <a-button :loading="userRuleLoading" @click="fetchUserRules">
+          <a-icon type="reload" /> 刷新
+        </a-button>
+      </div>
+
+      <a-table
+        row-key="id"
+        :columns="userRuleColumns"
+        :data-source="userRules"
+        :loading="userRuleLoading"
+        :pagination="userRulePagination"
+        :scroll="{ x: 1220 }"
+        @change="handleUserRuleTableChange"
+      >
+        <template slot="userInfo" slot-scope="text, record">
+          <div class="user-rule-user">
+            <strong>{{ record.username || `用户 #${record.user_id}` }}</strong>
+            <span>{{ record.email || `ID ${record.user_id}` }}</span>
+          </div>
+        </template>
+        <template slot="userSeries" slot-scope="text">
+          <a-tag :color="getSeriesColor(text)">{{ getSeriesLabel(text) }}</a-tag>
+        </template>
+        <template slot="userModelType" slot-scope="text">{{ getTypeLabel(text) }}</template>
+        <template slot="userBillingType" slot-scope="text">{{ getBillingLabel(text) }}</template>
+        <template slot="userMultiplier" slot-scope="text">
+          <span class="rate-text">x{{ formatMultiplier(text) }}</span>
+        </template>
+        <template slot="userSchedule" slot-scope="text, record">
+          <span v-if="record.schedule_type === 'daily_time'">
+            每日 {{ formatTimeOnly(record.start_time) }} - {{ formatTimeOnly(record.end_time) }}
+          </span>
+          <span v-else>长期</span>
+        </template>
+        <template slot="userActive" slot-scope="text">
+          <a-tag :color="text ? 'green' : 'default'">{{ text ? '当前生效' : '未生效' }}</a-tag>
+        </template>
+        <template slot="userEnabled" slot-scope="text">
+          <a-tag :color="text ? 'green' : 'red'">{{ text ? '启用' : '禁用' }}</a-tag>
+        </template>
+      </a-table>
+    </a-card>
+
     <a-modal
       :title="modalTitle"
       :visible="modalVisible"
@@ -179,6 +243,7 @@ import {
   listPriceAdjustmentRules,
   getPriceAdjustmentOptions,
   getEffectivePriceAdjustments,
+  listUserPriceAdjustmentRules,
   createPriceAdjustmentRule,
   updatePriceAdjustmentRule,
   deletePriceAdjustmentRule
@@ -202,6 +267,21 @@ export default {
         model_type: undefined,
         enabled: undefined
       },
+      userRuleLoading: false,
+      userRules: [],
+      userRuleFilters: {
+        keyword: '',
+        model_series: undefined,
+        model_type: undefined,
+        enabled: undefined
+      },
+      userRulePagination: {
+        current: 1,
+        pageSize: 20,
+        total: 0,
+        showSizeChanger: true,
+        showTotal: total => `共 ${total} 条`
+      },
       pagination: {
         current: 1,
         pageSize: 20,
@@ -220,6 +300,18 @@ export default {
         { title: '优先级', dataIndex: 'priority', key: 'priority', width: 90 },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
         { title: '操作', key: 'action', width: 130, fixed: 'right', scopedSlots: { customRender: 'action' } }
+      ],
+      userRuleColumns: [
+        { title: '用户', key: 'userInfo', width: 220, scopedSlots: { customRender: 'userInfo' } },
+        { title: '名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
+        { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 110, scopedSlots: { customRender: 'userSeries' } },
+        { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 120, scopedSlots: { customRender: 'userModelType' } },
+        { title: '计费', dataIndex: 'billing_type', key: 'billing_type', width: 130, scopedSlots: { customRender: 'userBillingType' } },
+        { title: '倍率', dataIndex: 'multiplier', key: 'multiplier', width: 100, scopedSlots: { customRender: 'userMultiplier' } },
+        { title: '生效时间', key: 'schedule', width: 220, scopedSlots: { customRender: 'userSchedule' } },
+        { title: '当前', dataIndex: 'is_active_now', key: 'active', width: 100, scopedSlots: { customRender: 'userActive' } },
+        { title: '优先级', dataIndex: 'priority', key: 'priority', width: 90 },
+        { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'userEnabled' } }
       ],
       modalVisible: false,
       modalLoading: false,
@@ -267,7 +359,7 @@ export default {
       this.options = res.data || this.options
     },
     async fetchAll() {
-      await Promise.all([this.fetchRules(), this.fetchEffective()])
+      await Promise.all([this.fetchRules(), this.fetchEffective(), this.fetchUserRules()])
     },
     async fetchRules() {
       this.loading = true
@@ -302,6 +394,31 @@ export default {
       this.pagination.current = pagination.current
       this.pagination.pageSize = pagination.pageSize
       this.fetchRules()
+    },
+    async fetchUserRules() {
+      this.userRuleLoading = true
+      try {
+        const params = {
+          page: this.userRulePagination.current,
+          page_size: this.userRulePagination.pageSize,
+          ...this.userRuleFilters
+        }
+        const res = await listUserPriceAdjustmentRules(params)
+        const data = res.data || {}
+        this.userRules = data.list || []
+        this.userRulePagination.total = data.total || 0
+      } finally {
+        this.userRuleLoading = false
+      }
+    },
+    handleUserRuleFilterChange() {
+      this.userRulePagination.current = 1
+      this.fetchUserRules()
+    },
+    handleUserRuleTableChange(pagination) {
+      this.userRulePagination.current = pagination.current
+      this.userRulePagination.pageSize = pagination.pageSize
+      this.fetchUserRules()
     },
     handleAdd() {
       this.isEdit = false
@@ -483,5 +600,20 @@ export default {
 .rate-text {
   font-weight: 700;
   color: #0f766e;
+}
+
+.user-rule-user {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    color: #1f2937;
+  }
+
+  span {
+    color: #64748b;
+    font-size: 12px;
+  }
 }
 </style>

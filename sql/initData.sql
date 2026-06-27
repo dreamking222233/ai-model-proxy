@@ -472,6 +472,10 @@ CREATE TABLE `consumption_record` (
   `input_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `output_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `request_price_snapshot` decimal(12,6) DEFAULT '0.000000' COMMENT '按请求计费单次价格快照',
+  `global_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000' COMMENT '系统全局价格倍率快照',
+  `adjustment_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000' COMMENT '分类/用户价格调控倍率快照',
+  `price_adjustment_source_snapshot` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '倍率来源:user/global/default',
+  `price_adjustment_rule_id_snapshot` bigint unsigned DEFAULT NULL COMMENT '命中倍率规则ID快照',
   `price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `fast_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `context_tokens_snapshot` int DEFAULT '0' COMMENT '计费上下文Token快照',
@@ -621,6 +625,9 @@ CREATE TABLE `image_credit_record` (
   `balance_before` decimal(12,3) NOT NULL DEFAULT '0.000',
   `balance_after` decimal(12,3) NOT NULL DEFAULT '0.000',
   `multiplier` decimal(12,3) NOT NULL DEFAULT '1.000',
+  `adjustment_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000' COMMENT '分类/用户价格调控倍率快照',
+  `price_adjustment_source_snapshot` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '倍率来源:user/global/default',
+  `price_adjustment_rule_id_snapshot` bigint unsigned DEFAULT NULL COMMENT '命中倍率规则ID快照',
   `image_size` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Google 生图分辨率档位',
   `action_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'request' COMMENT 'request/recharge/deduct',
   `operator_id` bigint unsigned DEFAULT NULL,
@@ -1017,6 +1024,10 @@ CREATE TABLE `request_log` (
   `input_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `output_price_per_million_snapshot` decimal(12,6) DEFAULT '0.000000',
   `request_price_snapshot` decimal(12,6) DEFAULT '0.000000' COMMENT '按请求计费单次价格快照',
+  `global_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000' COMMENT '系统全局价格倍率快照',
+  `adjustment_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000' COMMENT '分类/用户价格调控倍率快照',
+  `price_adjustment_source_snapshot` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '倍率来源:user/global/default',
+  `price_adjustment_rule_id_snapshot` bigint unsigned DEFAULT NULL COMMENT '命中倍率规则ID快照',
   `price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `fast_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `context_tokens_snapshot` int DEFAULT '0' COMMENT '计费上下文Token快照',
@@ -1293,6 +1304,64 @@ CREATE TABLE `model_price_adjustment_rule` (
   KEY `idx_price_adjustment_match` (`enabled`,`model_series`,`model_type`,`billing_type`,`priority`),
   KEY `idx_price_adjustment_schedule` (`schedule_type`,`start_time`,`end_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型分类价格调控规则表';
+
+-- ----------------------------
+-- Table structure for user_price_adjustment_rule
+-- ----------------------------
+DROP TABLE IF EXISTS `user_price_adjustment_rule`;
+CREATE TABLE `user_price_adjustment_rule` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '规则名称',
+  `user_id` bigint unsigned NOT NULL COMMENT '用户ID',
+  `model_series` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'all' COMMENT 'gpt/claude/grok/gemini/other/all',
+  `model_type` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'all' COMMENT 'chat/image/video/embedding/completion/all',
+  `billing_type` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'all' COMMENT 'token/request/image_credit/free/all',
+  `multiplier` decimal(12,6) NOT NULL DEFAULT '1.000000' COMMENT '用户专属价格倍率',
+  `schedule_type` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'always' COMMENT 'always/daily_time',
+  `start_time` time DEFAULT NULL COMMENT '每日开始时间，北京时间',
+  `end_time` time DEFAULT NULL COMMENT '每日结束时间，北京时间',
+  `priority` int NOT NULL DEFAULT '100' COMMENT '优先级，数字小优先',
+  `enabled` tinyint NOT NULL DEFAULT '1',
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `created_by` bigint unsigned DEFAULT NULL COMMENT '创建管理员ID',
+  `updated_by` bigint unsigned DEFAULT NULL COMMENT '最后更新管理员ID',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_user_price_adjustment_user` (`user_id`,`enabled`),
+  KEY `idx_user_price_adjustment_match` (`user_id`,`enabled`,`model_series`,`model_type`,`billing_type`,`priority`),
+  KEY `idx_user_price_adjustment_schedule` (`schedule_type`,`start_time`,`end_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户专属模型价格调控规则表';
+
+-- ----------------------------
+-- Table structure for video_task_billing_snapshot
+-- ----------------------------
+DROP TABLE IF EXISTS `video_task_billing_snapshot`;
+CREATE TABLE `video_task_billing_snapshot` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `video_id` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '上游视频任务ID',
+  `request_id` varchar(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '创建请求ID',
+  `user_id` bigint unsigned NOT NULL COMMENT '用户ID',
+  `channel_id` bigint unsigned NOT NULL COMMENT '渠道ID',
+  `requested_model` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `actual_model` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `billing_type` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT 'image_credit',
+  `charged_credits` decimal(12,3) DEFAULT '0.000',
+  `model_multiplier` decimal(12,3) DEFAULT '1.000',
+  `video_size` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `video_seconds` int DEFAULT '0',
+  `adjustment_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
+  `price_adjustment_source_snapshot` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `price_adjustment_rule_id_snapshot` bigint unsigned DEFAULT NULL,
+  `billed` tinyint NOT NULL DEFAULT '0',
+  `billed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_video_task_billing_video_id` (`video_id`),
+  KEY `idx_video_task_user` (`user_id`,`created_at`),
+  KEY `idx_video_task_billed` (`billed`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='异步视频任务计费快照表';
 
 -- ----------------------------
 -- Table structure for user_api_key

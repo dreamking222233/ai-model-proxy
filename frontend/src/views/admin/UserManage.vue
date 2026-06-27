@@ -160,6 +160,11 @@
                 <a-icon type="picture" />
               </a-button>
             </a-tooltip>
+            <a-tooltip title="专属倍率">
+              <a-button type="link" size="small" style="color: #13c2c2" @click="openUserPriceAdjustments(record)">
+                <a-icon type="control" />
+              </a-button>
+            </a-tooltip>
             <a-tooltip :title="record.status === 1 ? '禁用' : '启用'">
               <a-popconfirm
                 :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
@@ -304,6 +309,10 @@
                 <a-icon type="picture" />
                 图片积分
               </a-button>
+              <a-button size="small" style="color: #13c2c2" @click="openUserPriceAdjustments(record)">
+                <a-icon type="control" />
+                倍率
+              </a-button>
               <a-popconfirm
                 :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
                 ok-text="确定"
@@ -425,6 +434,139 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <a-drawer
+      :title="priceAdjustmentDrawerTitle"
+      :visible="priceAdjustmentDrawerVisible"
+      :width="modalWidth(860)"
+      destroyOnClose
+      @close="priceAdjustmentDrawerVisible = false"
+    >
+      <a-spin :spinning="priceAdjustmentLoading">
+        <div class="price-adjustment-section">
+          <div class="price-adjustment-section-title">当前生效倍率</div>
+          <a-table
+            size="small"
+            row-key="matrixKey"
+            :columns="priceEffectiveColumns"
+            :data-source="effectivePriceMatrix"
+            :pagination="false"
+            :scroll="{ x: 620 }"
+          >
+            <template slot="matrixMultiplier" slot-scope="text, record">
+              <strong>x{{ formatMultiplier(record.multiplier) }}</strong>
+            </template>
+            <template slot="matrixSource" slot-scope="text, record">
+              <a-tag :color="getPriceSourceColor(record.source)">{{ getPriceSourceLabel(record.source) }}</a-tag>
+            </template>
+          </a-table>
+        </div>
+
+        <div class="price-adjustment-section">
+          <div class="price-adjustment-section-title">规则设置</div>
+          <a-form layout="vertical" class="price-rule-form">
+            <a-row :gutter="12">
+              <a-col :xs="24" :md="12">
+                <a-form-item label="规则名称">
+                  <a-input v-model="priceRuleForm.name" placeholder="如：张三 GPT 专属倍率" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="模型系列">
+                  <a-select v-model="priceRuleForm.model_series">
+                    <a-select-option v-for="item in priceSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="模型类型">
+                  <a-select v-model="priceRuleForm.model_type">
+                    <a-select-option v-for="item in priceModelTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="计费类型">
+                  <a-select v-model="priceRuleForm.billing_type">
+                    <a-select-option v-for="item in priceBillingTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="倍率">
+                  <a-input-number v-model="priceRuleForm.multiplier" :min="0.000001" :max="100" :step="0.1" :precision="6" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="优先级">
+                  <a-input-number v-model="priceRuleForm.priority" :min="0" :step="10" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="6">
+                <a-form-item label="状态">
+                  <a-switch v-model="priceRuleForm.enabled" checked-children="启用" un-checked-children="禁用" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24" :md="8">
+                <a-form-item label="生效方式">
+                  <a-select v-model="priceRuleForm.schedule_type">
+                    <a-select-option value="always">长期生效</a-select-option>
+                    <a-select-option value="daily_time">每日时间段</a-select-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+              <a-col v-if="priceRuleForm.schedule_type === 'daily_time'" :xs="12" :md="8">
+                <a-form-item label="开始时间">
+                  <a-input v-model="priceRuleForm.start_time" placeholder="09:00" />
+                </a-form-item>
+              </a-col>
+              <a-col v-if="priceRuleForm.schedule_type === 'daily_time'" :xs="12" :md="8">
+                <a-form-item label="结束时间">
+                  <a-input v-model="priceRuleForm.end_time" placeholder="18:00" />
+                </a-form-item>
+              </a-col>
+              <a-col :xs="24">
+                <a-form-item label="说明">
+                  <a-input v-model="priceRuleForm.description" placeholder="可选" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <div class="price-rule-actions">
+              <a-button @click="resetPriceRuleForm">清空</a-button>
+              <a-button type="primary" :loading="priceRuleSubmitting" @click="submitPriceRule">
+                {{ editingPriceRuleId ? '保存规则' : '新增规则' }}
+              </a-button>
+            </div>
+          </a-form>
+
+          <a-table
+            size="small"
+            row-key="id"
+            :columns="priceRuleColumns"
+            :data-source="userPriceRules"
+            :pagination="false"
+            :scroll="{ x: 900 }"
+            class="price-rule-table"
+          >
+            <template slot="ruleMultiplier" slot-scope="text">x{{ formatMultiplier(text) }}</template>
+            <template slot="ruleEnabled" slot-scope="text">
+              <a-tag :color="Number(text) === 1 ? 'green' : 'default'">{{ Number(text) === 1 ? '启用' : '禁用' }}</a-tag>
+            </template>
+            <template slot="ruleActive" slot-scope="text">
+              <a-tag :color="text ? 'green' : 'orange'">{{ text ? '生效中' : '未生效' }}</a-tag>
+            </template>
+            <template slot="ruleAction" slot-scope="text, record">
+              <a-space>
+                <a-button type="link" size="small" @click="editPriceRule(record)">编辑</a-button>
+                <a-popconfirm title="确定删除该专属倍率规则？" ok-text="确定" cancel-text="取消" @confirm="deletePriceRule(record)">
+                  <a-button type="link" size="small" style="color: #f5222d">删除</a-button>
+                </a-popconfirm>
+              </a-space>
+            </template>
+          </a-table>
+        </div>
+      </a-spin>
+    </a-drawer>
   </div>
 </template>
 
@@ -437,7 +579,12 @@ import {
   rechargeBalance,
   deductBalance,
   rechargeImageCredits,
-  deductImageCredits
+  deductImageCredits,
+  listUserPriceAdjustments,
+  getUserEffectivePriceAdjustments,
+  createUserPriceAdjustment,
+  updateUserPriceAdjustment,
+  deleteUserPriceAdjustment
 } from '@/api/user'
 import { formatDate, formatUtcDate } from '@/utils'
 
@@ -470,7 +617,49 @@ export default {
         { title: '余额', dataIndex: 'balance', key: 'balance', width: 140, sorter: true, scopedSlots: { customRender: 'balance' } },
         { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, sorter: true, scopedSlots: { customRender: 'lastLogin' } },
-        { title: '操作', key: 'action', width: 220, align: 'center', fixed: 'right', scopedSlots: { customRender: 'action' } }
+        { title: '操作', key: 'action', width: 250, align: 'center', fixed: 'right', scopedSlots: { customRender: 'action' } }
+      ],
+      priceSeriesOptions: [
+        { value: 'all', label: '全部系列' },
+        { value: 'gpt', label: 'GPT' },
+        { value: 'claude', label: 'Claude' },
+        { value: 'grok', label: 'Grok' },
+        { value: 'gemini', label: 'Gemini' },
+        { value: 'other', label: '其他' }
+      ],
+      priceModelTypeOptions: [
+        { value: 'all', label: '全部类型' },
+        { value: 'chat', label: '文本对话' },
+        { value: 'image', label: '图片生成' },
+        { value: 'video', label: '视频生成' },
+        { value: 'embedding', label: '向量' },
+        { value: 'completion', label: '补全' }
+      ],
+      priceBillingTypeOptions: [
+        { value: 'all', label: '全部计费' },
+        { value: 'token', label: '按 Token' },
+        { value: 'request', label: '按请求' },
+        { value: 'image_credit', label: '媒体积分' },
+        { value: 'free', label: '免费' }
+      ],
+      priceEffectiveColumns: [
+        { title: '模型系列', dataIndex: 'model_series', key: 'model_series', width: 100, customRender: text => this.getSeriesLabel(text) },
+        { title: '模型类型', dataIndex: 'model_type', key: 'model_type', width: 110, customRender: text => this.getModelTypeLabel(text) },
+        { title: '计费类型', dataIndex: 'billing_type', key: 'billing_type', width: 110, customRender: text => this.getBillingTypeLabel(text) },
+        { title: '当前倍率', dataIndex: 'multiplier', key: 'multiplier', width: 100, scopedSlots: { customRender: 'matrixMultiplier' } },
+        { title: '来源', dataIndex: 'source', key: 'source', width: 110, scopedSlots: { customRender: 'matrixSource' } },
+        { title: '规则', dataIndex: 'rule_name', key: 'rule_name', width: 160, ellipsis: true }
+      ],
+      priceRuleColumns: [
+        { title: '名称', dataIndex: 'name', key: 'name', width: 160, ellipsis: true },
+        { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 90, customRender: text => this.getSeriesLabel(text) },
+        { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 100, customRender: text => this.getModelTypeLabel(text) },
+        { title: '计费', dataIndex: 'billing_type', key: 'billing_type', width: 100, customRender: text => this.getBillingTypeLabel(text) },
+        { title: '倍率', dataIndex: 'multiplier', key: 'multiplier', width: 90, scopedSlots: { customRender: 'ruleMultiplier' } },
+        { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
+        { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 80, scopedSlots: { customRender: 'ruleEnabled' } },
+        { title: '当前', dataIndex: 'is_active_now', key: 'is_active_now', width: 90, scopedSlots: { customRender: 'ruleActive' } },
+        { title: '操作', key: 'action', width: 120, fixed: 'right', scopedSlots: { customRender: 'ruleAction' } }
       ],
       // Edit Modal
       editModalVisible: false,
@@ -494,6 +683,26 @@ export default {
         amount: 0,
         type: 'recharge',
         reason: ''
+      },
+      priceAdjustmentDrawerVisible: false,
+      priceAdjustmentLoading: false,
+      priceRuleSubmitting: false,
+      selectedPriceUser: null,
+      userPriceRules: [],
+      effectivePriceMatrix: [],
+      editingPriceRuleId: null,
+      priceRuleForm: {
+        name: '',
+        model_series: 'all',
+        model_type: 'all',
+        billing_type: 'all',
+        multiplier: 1,
+        schedule_type: 'always',
+        start_time: '',
+        end_time: '',
+        priority: 100,
+        enabled: true,
+        description: ''
       }
     }
   },
@@ -509,6 +718,10 @@ export default {
     },
     totalBalance() {
       return this.userList.reduce((sum, u) => sum + (parseFloat(u.balance) || 0), 0)
+    },
+    priceAdjustmentDrawerTitle() {
+      if (!this.selectedPriceUser) return '用户专属倍率'
+      return `用户专属倍率 - ${this.selectedPriceUser.username || `#${this.selectedPriceUser.id}`}`
     }
   },
   mounted() {
@@ -702,6 +915,163 @@ export default {
         query: { user_id: record.id }
       })
     },
+    formatMultiplier(value) {
+      const num = Number(value == null ? 1 : value)
+      if (!Number.isFinite(num)) return '1'
+      return num.toFixed(6).replace(/\.?0+$/, '')
+    },
+    getSeriesLabel(value) {
+      const item = this.priceSeriesOptions.find(option => option.value === value)
+      return item ? item.label : (value || '-')
+    },
+    getModelTypeLabel(value) {
+      const item = this.priceModelTypeOptions.find(option => option.value === value)
+      return item ? item.label : (value || '-')
+    },
+    getBillingTypeLabel(value) {
+      const item = this.priceBillingTypeOptions.find(option => option.value === value)
+      return item ? item.label : (value || '-')
+    },
+    getPriceSourceLabel(source) {
+      const map = {
+        user: '用户专属',
+        global: '全局',
+        default: '默认'
+      }
+      return map[String(source || '').toLowerCase()] || '历史'
+    },
+    getPriceSourceColor(source) {
+      const map = {
+        user: 'purple',
+        global: 'blue',
+        default: 'default'
+      }
+      return map[String(source || '').toLowerCase()] || 'default'
+    },
+    buildPriceRulePayload() {
+      const payload = {
+        name: String(this.priceRuleForm.name || '').trim(),
+        model_series: this.priceRuleForm.model_series,
+        model_type: this.priceRuleForm.model_type,
+        billing_type: this.priceRuleForm.billing_type,
+        multiplier: this.priceRuleForm.multiplier,
+        schedule_type: this.priceRuleForm.schedule_type,
+        priority: this.priceRuleForm.priority,
+        enabled: this.priceRuleForm.enabled,
+        description: String(this.priceRuleForm.description || '').trim() || null
+      }
+      if (payload.schedule_type === 'daily_time') {
+        payload.start_time = String(this.priceRuleForm.start_time || '').trim()
+        payload.end_time = String(this.priceRuleForm.end_time || '').trim()
+      }
+      return payload
+    },
+    resetPriceRuleForm() {
+      this.editingPriceRuleId = null
+      this.priceRuleForm = {
+        name: '',
+        model_series: 'all',
+        model_type: 'all',
+        billing_type: 'all',
+        multiplier: 1,
+        schedule_type: 'always',
+        start_time: '',
+        end_time: '',
+        priority: 100,
+        enabled: true,
+        description: ''
+      }
+    },
+    async openUserPriceAdjustments(record) {
+      this.selectedPriceUser = record
+      this.priceAdjustmentDrawerVisible = true
+      this.resetPriceRuleForm()
+      await this.fetchUserPriceAdjustments()
+    },
+    async fetchUserPriceAdjustments() {
+      if (!this.selectedPriceUser) return
+      this.priceAdjustmentLoading = true
+      try {
+        const [rulesRes, effectiveRes] = await Promise.all([
+          listUserPriceAdjustments(this.selectedPriceUser.id, { page: 1, page_size: 100 }),
+          getUserEffectivePriceAdjustments(this.selectedPriceUser.id)
+        ])
+        const rulesData = rulesRes.data || {}
+        this.userPriceRules = rulesData.list || []
+        this.effectivePriceMatrix = (effectiveRes.data || []).map(item => ({
+          ...item,
+          matrixKey: `${item.model_series}-${item.model_type}-${item.billing_type}`
+        }))
+      } catch (err) {
+        console.error('Failed to fetch user price adjustments:', err)
+        this.$message.error(err.message || '获取用户专属倍率失败')
+      } finally {
+        this.priceAdjustmentLoading = false
+      }
+    },
+    editPriceRule(record) {
+      this.editingPriceRuleId = record.id
+      this.priceRuleForm = {
+        name: record.name || '',
+        model_series: record.model_series || 'all',
+        model_type: record.model_type || 'all',
+        billing_type: record.billing_type || 'all',
+        multiplier: Number(record.multiplier || 1),
+        schedule_type: record.schedule_type || 'always',
+        start_time: record.start_time || '',
+        end_time: record.end_time || '',
+        priority: Number(record.priority || 100),
+        enabled: Number(record.enabled) === 1,
+        description: record.description || ''
+      }
+    },
+    async submitPriceRule() {
+      if (!this.selectedPriceUser) return
+      const payload = this.buildPriceRulePayload()
+      if (!payload.name) {
+        this.$message.warning('请输入规则名称')
+        return
+      }
+      if (!payload.multiplier || payload.multiplier <= 0) {
+        this.$message.warning('请输入有效倍率')
+        return
+      }
+      if (payload.schedule_type === 'daily_time' && (!payload.start_time || !payload.end_time)) {
+        this.$message.warning('请填写每日时间段')
+        return
+      }
+      this.priceRuleSubmitting = true
+      try {
+        if (this.editingPriceRuleId) {
+          await updateUserPriceAdjustment(this.selectedPriceUser.id, this.editingPriceRuleId, payload)
+          this.$message.success('专属倍率规则已保存')
+        } else {
+          await createUserPriceAdjustment(this.selectedPriceUser.id, payload)
+          this.$message.success('专属倍率规则已创建')
+        }
+        this.resetPriceRuleForm()
+        await this.fetchUserPriceAdjustments()
+      } catch (err) {
+        console.error('Failed to save user price adjustment:', err)
+        this.$message.error(err.message || '保存专属倍率失败')
+      } finally {
+        this.priceRuleSubmitting = false
+      }
+    },
+    async deletePriceRule(record) {
+      if (!this.selectedPriceUser) return
+      try {
+        await deleteUserPriceAdjustment(this.selectedPriceUser.id, record.id)
+        this.$message.success('专属倍率规则已删除')
+        if (this.editingPriceRuleId === record.id) {
+          this.resetPriceRuleForm()
+        }
+        await this.fetchUserPriceAdjustments()
+      } catch (err) {
+        console.error('Failed to delete user price adjustment:', err)
+        this.$message.error(err.message || '删除专属倍率失败')
+      }
+    },
     getSubscriptionStatus(expiresAt) {
       const expireDate = new Date(expiresAt)
       if (Number.isNaN(expireDate.getTime())) return '未知'
@@ -845,6 +1215,35 @@ export default {
     font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
     font-weight: 600;
     color: #722ed1;
+  }
+
+  .price-adjustment-section {
+    margin-bottom: 24px;
+  }
+
+  .price-adjustment-section-title {
+    margin-bottom: 12px;
+    color: #1f2937;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .price-rule-form {
+    padding: 16px;
+    margin-bottom: 16px;
+    background: #fafafa;
+    border: 1px solid #f0f0f0;
+    border-radius: 8px;
+  }
+
+  .price-rule-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .price-rule-table {
+    margin-top: 12px;
   }
 
   .time-text {

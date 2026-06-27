@@ -14,7 +14,9 @@ from app.schemas.user import (
  ImageCreditRechargeRequest,
  ImageCreditDeductRequest,
 )
+from app.schemas.model import UserPriceAdjustmentRuleCreate, UserPriceAdjustmentRuleUpdate
 from app.schemas.common import ResponseModel
+from app.services.price_adjustment_service import PriceAdjustmentService
 
 router = APIRouter(prefix="/api/admin/users", tags=["管理-用户管理"])
 
@@ -33,6 +35,90 @@ def list_users(
     role_list = [item.strip() for item in str(roles or "").split(",") if item.strip()] or None
     items, total = AuthService.list_users(db, page, page_size, keyword, sort_by, sort_order, roles=role_list)
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/{user_id}/price-adjustments", response_model=ResponseModel)
+def list_user_price_adjustment_rules(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    model_series: str = Query(None),
+    model_type: str = Query(None),
+    enabled: int = Query(None),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    items, total = PriceAdjustmentService.list_user_rules(
+        db,
+        page=page,
+        page_size=page_size,
+        user_id=user_id,
+        model_series=model_series,
+        model_type=model_type,
+        enabled=enabled,
+    )
+    return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/{user_id}/price-adjustments/effective", response_model=ResponseModel)
+def get_user_effective_price_adjustments(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=PriceAdjustmentService.list_user_effective_matrix(db, user_id))
+
+
+@router.post("/{user_id}/price-adjustments", response_model=ResponseModel)
+def create_user_price_adjustment_rule(
+    user_id: int,
+    data: UserPriceAdjustmentRuleCreate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    rule = PriceAdjustmentService.create_user_rule(db, user_id, data, current_user.id)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "create_user_price_adjustment", "user_price_adjustment_rule", rule.get("id"),
+        f"Created user price adjustment for user {user_id}: {rule.get('model_series')}/{rule.get('model_type')} x{rule.get('multiplier')}",
+        None,
+    )
+    return ResponseModel(data=rule, message="用户专属倍率规则已创建")
+
+
+@router.put("/{user_id}/price-adjustments/{rule_id}", response_model=ResponseModel)
+def update_user_price_adjustment_rule(
+    user_id: int,
+    rule_id: int,
+    data: UserPriceAdjustmentRuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    rule = PriceAdjustmentService.update_user_rule(db, user_id, rule_id, data, current_user.id)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "update_user_price_adjustment", "user_price_adjustment_rule", rule_id,
+        f"Updated user price adjustment for user {user_id}: {rule.get('model_series')}/{rule.get('model_type')} x{rule.get('multiplier')}, enabled={rule.get('enabled')}",
+        None,
+    )
+    return ResponseModel(data=rule, message="用户专属倍率规则已保存")
+
+
+@router.delete("/{user_id}/price-adjustments/{rule_id}", response_model=ResponseModel)
+def delete_user_price_adjustment_rule(
+    user_id: int,
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    PriceAdjustmentService.delete_user_rule(db, user_id, rule_id)
+    LogService.create_operation_log(
+        db, current_user.id, current_user.username,
+        "delete_user_price_adjustment", "user_price_adjustment_rule", rule_id,
+        f"Deleted user price adjustment {rule_id} for user {user_id}",
+        None,
+    )
+    return ResponseModel(message="用户专属倍率规则已删除")
 
 
 @router.get("/{user_id}", response_model=ResponseModel)

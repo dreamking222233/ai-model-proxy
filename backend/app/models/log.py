@@ -102,6 +102,10 @@ class RequestLog(Base):
     output_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     cache_creation_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     request_price_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
+    global_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    adjustment_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    price_adjustment_source_snapshot = Column(String(20), nullable=True)
+    price_adjustment_rule_id_snapshot = Column(BigInteger, nullable=True)
     price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     fast_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     context_tokens_snapshot = Column(Integer, nullable=True, default=0)
@@ -303,6 +307,10 @@ class ConsumptionRecord(Base):
     output_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     cache_creation_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
     request_price_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)
+    global_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    adjustment_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    price_adjustment_source_snapshot = Column(String(20), nullable=True)
+    price_adjustment_rule_id_snapshot = Column(BigInteger, nullable=True)
     price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     fast_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
     context_tokens_snapshot = Column(Integer, nullable=True, default=0)
@@ -353,11 +361,44 @@ class ImageCreditRecord(Base):
     balance_before = Column(DECIMAL(12, 3), nullable=False, default=0)
     balance_after = Column(DECIMAL(12, 3), nullable=False, default=0)
     multiplier = Column(DECIMAL(12, 3), nullable=False, default=1)
+    adjustment_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    price_adjustment_source_snapshot = Column(String(20), nullable=True)
+    price_adjustment_rule_id_snapshot = Column(BigInteger, nullable=True)
     image_size = Column(String(16), nullable=True, comment="Google image size such as 1K/2K/4K")
     action_type = Column(String(20), nullable=False, default="request", comment="request/recharge/deduct")
     operator_id = Column(BigInteger, nullable=True, index=True)
     remark = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class VideoTaskBillingSnapshot(Base):
+    """Persistent route and billing snapshot for async video tasks."""
+
+    __tablename__ = "video_task_billing_snapshot"
+    __table_args__ = (
+        Index("idx_video_task_user", "user_id", "created_at"),
+        Index("idx_video_task_billed", "billed", "created_at"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    video_id = Column(String(128), nullable=False, unique=True, index=True)
+    request_id = Column(String(36), nullable=True, index=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    channel_id = Column(BigInteger, nullable=False, index=True)
+    requested_model = Column(String(128), nullable=True)
+    actual_model = Column(String(128), nullable=True)
+    billing_type = Column(String(20), nullable=True, default="image_credit")
+    charged_credits = Column(DECIMAL(12, 3), nullable=True, default=0)
+    model_multiplier = Column(DECIMAL(12, 3), nullable=True, default=1)
+    video_size = Column(String(16), nullable=True)
+    video_seconds = Column(Integer, nullable=True, default=0)
+    adjustment_price_multiplier_snapshot = Column(DECIMAL(12, 6), nullable=True, default=1)
+    price_adjustment_source_snapshot = Column(String(20), nullable=True)
+    price_adjustment_rule_id_snapshot = Column(BigInteger, nullable=True)
+    billed = Column(SmallInteger, nullable=False, default=0)
+    billed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class ConversationSession(Base):

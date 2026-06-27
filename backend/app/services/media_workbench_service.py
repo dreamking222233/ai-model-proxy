@@ -16,7 +16,7 @@ class MediaWorkbenchService:
 
     IMAGE_MODELS = ("gpt-image-2", "codex-gpt-image-2", "plus-codex-gpt-image-2")
     IMAGE_REQUEST_TYPES = ("image_generation", "image_edit")
-    VIDEO_MODELS = ("grok-imagine-video",)
+    VIDEO_MODELS = ("grok-imagine-video", "grok-video", "grok-imagine-video-1.5-preview")
     VIDEO_REQUEST_TYPES = ("video_generation",)
     LOCAL_ERROR_MARKERS = (
         "INSUFFICIENT_IMAGE_CREDITS",
@@ -96,6 +96,7 @@ class MediaWorkbenchService:
         request_types: tuple[str, ...],
         since: datetime,
         until: datetime,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         summary = MediaWorkbenchService._empty_summary(
             key,
@@ -108,22 +109,22 @@ class MediaWorkbenchService:
         success_expr = LogService._visible_success_condition()
         local_error_expr = MediaWorkbenchService._local_error_condition()
 
-        row = (
-            db.query(
-                func.count(RequestLog.id).label("request_count"),
-                func.sum(case((success_expr, 1), else_=0)).label("success_count"),
-                func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
-                func.max(RequestLog.created_at).label("last_request_at"),
-            )
-            .filter(
-                RequestLog.created_at >= since,
-                RequestLog.created_at < until,
-                RequestLog.requested_model.in_(models),
-                RequestLog.request_type.in_(request_types),
-                not_(local_error_expr),
-            )
-            .first()
+        query = db.query(
+            func.count(RequestLog.id).label("request_count"),
+            func.sum(case((success_expr, 1), else_=0)).label("success_count"),
+            func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
+            func.max(RequestLog.created_at).label("last_request_at"),
+        ).filter(
+            RequestLog.created_at >= since,
+            RequestLog.created_at < until,
+            RequestLog.requested_model.in_(models),
+            RequestLog.request_type.in_(request_types),
+            not_(local_error_expr),
         )
+        if user_id is not None:
+            query = query.filter(RequestLog.user_id == user_id)
+
+        row = query.first()
 
         request_count = int(row.request_count or 0) if row else 0
         success_count = int(row.success_count or 0) if row else 0
@@ -142,7 +143,7 @@ class MediaWorkbenchService:
         return summary
 
     @staticmethod
-    def get_media_health(db: Session, window_hours: int = 24) -> dict[str, Any]:
+    def get_media_health(db: Session, window_hours: int = 24, user_id: int | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         hours = min(max(int(window_hours or 24), 1), 168)
         since = now - timedelta(hours=hours)
@@ -155,6 +156,7 @@ class MediaWorkbenchService:
                 request_types=MediaWorkbenchService.IMAGE_REQUEST_TYPES,
                 since=since,
                 until=now,
+                user_id=user_id,
             ),
             "video_grok": MediaWorkbenchService._build_summary(
                 db,
@@ -164,6 +166,7 @@ class MediaWorkbenchService:
                 request_types=MediaWorkbenchService.VIDEO_REQUEST_TYPES,
                 since=since,
                 until=now,
+                user_id=user_id,
             ),
         }
         return {

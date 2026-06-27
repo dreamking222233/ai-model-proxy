@@ -18,4 +18,4 @@ def get_media_health(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    return ResponseModel(data=MediaWorkbenchService.get_media_health(db, window_hours))
+    return ResponseModel(data=MediaWorkbenchService.get_media_health(db, window_hours, current_user.id))

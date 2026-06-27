@@ -234,6 +234,75 @@ class MediaWorkbenchTest(unittest.TestCase):
         finally:
             db.close()
 
+    def test_video_health_includes_cpa_grok_preview_model(self):
+        engine = create_engine("sqlite:///:memory:")
+        RequestLog.__table__.create(bind=engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        try:
+            db.add(
+                RequestLog(
+                    request_id="video-preview-success",
+                    requested_model="grok-imagine-video-1.5-preview",
+                    request_type="video_generation",
+                    status="success",
+                    response_time_ms=90000,
+                    created_at=now,
+                )
+            )
+            db.commit()
+
+            result = MediaWorkbenchService.get_media_health(db, 24)
+            video = result["items"]["video_grok"]
+
+            self.assertEqual(video["request_count"], 1)
+            self.assertEqual(video["success_count"], 1)
+            self.assertEqual(video["health_level"], "good")
+        finally:
+            db.close()
+
+    def test_health_summary_can_be_scoped_to_current_user(self):
+        engine = create_engine("sqlite:///:memory:")
+        RequestLog.__table__.create(bind=engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        try:
+            db.add_all([
+                RequestLog(
+                    request_id="user-1-video",
+                    user_id=1,
+                    requested_model="grok-imagine-video",
+                    request_type="video_generation",
+                    status="success",
+                    response_time_ms=90000,
+                    created_at=now,
+                ),
+                RequestLog(
+                    request_id="user-2-video",
+                    user_id=2,
+                    requested_model="grok-imagine-video",
+                    request_type="video_generation",
+                    status="error",
+                    channel_id=1,
+                    error_message="upstream failed",
+                    response_time_ms=120000,
+                    created_at=now,
+                ),
+            ])
+            db.commit()
+
+            result = MediaWorkbenchService.get_media_health(db, 24, user_id=1)
+            video = result["items"]["video_grok"]
+
+            self.assertEqual(video["request_count"], 1)
+            self.assertEqual(video["success_count"], 1)
+            self.assertEqual(video["failed_count"], 0)
+            self.assertEqual(video["health_level"], "good")
+        finally:
+            db.close()
+
     def test_image_edit_form_preserves_multiple_reference_images(self):
         form = _FakeForm(
             values={

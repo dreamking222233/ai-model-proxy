@@ -60,7 +60,7 @@ curl -N -X POST "https://你的域名/v1/chat/completions" \
     ],
     "video_config": {
       "seconds": 10,
-      "size": "1792x1024",
+      "size": "1280x720",
       "resolution_name": "720p",
       "preset": "normal"
     }
@@ -77,7 +77,7 @@ curl -X POST "https://你的域名/v1/created/video" \
   -F "model=grok-imagine-video" \
   -F "prompt=霓虹雨夜街头，电影感慢镜头追拍" \
   -F "seconds=10" \
-  -F "size=1792x1024" \
+  -F "size=1280x720" \
   -F "resolution_name=720p" \
   -F "preset=normal" \
   -F "input_reference[]=@reference.png"
@@ -91,7 +91,8 @@ curl -X POST "https://你的域名/v1/created/video" \
 
 - grok2api 渠道 `seconds`: `6`、`10`、`12`、`16`、`20`
 - CPA Grok 视频渠道 `seconds`: `1` 到 `15`；超过 `15` 时按 `15` 秒生成和计费
-- `size`: `720x1280`、`1280x720`、`1024x1024`、`1024x1792`、`1792x1024`
+- grok2api 渠道 `size`: `720x1280`、`1280x720`、`1024x1024`、`1024x1792`、`1792x1024`
+- CPA Grok 视频渠道 `size`: `848x480`、`1280x720`、`1696x960`、`1920x1080`
 - `resolution_name`: `480p`、`720p`
 - `preset`: `fun`、`normal`、`spicy`、`custom`
 - `input_reference[]`: 图生视频参考图，最多 7 张

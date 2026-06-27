@@ -12084,6 +12084,19 @@ class ProxyService:
         return "16:9"
 
     @staticmethod
+    def _cpa_grok_video_size(size: str) -> str:
+        normalized = str(size or "").strip().lower()
+        if normalized in {"848x480", "1280x720", "1696x960", "1920x1080"}:
+            return normalized
+        legacy_mapping = {
+            "720x1280": "1280x720",
+            "1024x1024": "1280x720",
+            "1024x1792": "1920x1080",
+            "1792x1024": "1920x1080",
+        }
+        return legacy_mapping.get(normalized, "1280x720")
+
+    @staticmethod
     def _cpa_grok_video_resolution_name(size: str, resolution_name: Optional[str]) -> str:
         if resolution_name:
             return str(resolution_name).strip().lower()
@@ -12536,7 +12549,7 @@ class ProxyService:
             "model": upstream_model_name,
             "prompt": prompt,
             "duration": int(seconds),
-            "aspect_ratio": ProxyService._cpa_grok_video_aspect_ratio(size),
+            "size": ProxyService._cpa_grok_video_size(size),
             "resolution": ProxyService._cpa_grok_video_resolution_name(size, resolution_name),
         }
         if reference_files:

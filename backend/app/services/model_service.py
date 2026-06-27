@@ -41,9 +41,9 @@ class ModelService:
         "gpt-image-2",
     }
     VIDEO_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
-        "grok-imagine-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
-        "grok-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
-        "grok-imagine-video-1.5-preview": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
+        "grok-imagine-video": ("848x480", "1280x720", "1696x960", "1920x1080"),
+        "grok-video": ("848x480", "1280x720", "1696x960", "1920x1080"),
+        "grok-imagine-video-1.5-preview": ("848x480", "1280x720", "1696x960", "1920x1080"),
     }
     VIDEO_SECONDS_CAPABILITIES: dict[str, tuple[int, ...]] = {
         "grok-imagine-video": tuple(range(1, 16)),

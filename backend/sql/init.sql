@@ -229,7 +229,7 @@ CREATE TABLE `channel` (
     `base_url` VARCHAR(512) NOT NULL,
     `api_key` TEXT NOT NULL COMMENT '加密存储的API Key',
     `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
-    `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/google-official/google-vertex-image',
+    `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/openai-image-compatible/openai-image-native-size/openai-image-modelinvoke/cpa-grok-video/google-official/google-vertex-image',
     `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,

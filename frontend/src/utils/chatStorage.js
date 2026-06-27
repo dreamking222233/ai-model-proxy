@@ -192,6 +192,7 @@ export function createSession(options, namespace) {
     model: options.model || '',
     channelId: options.channelId || null,
     imageOptions: options.imageOptions || null,
+    videoOptions: options.videoOptions || null,
     messages: [],
     createdAt: now,
     updatedAt: now

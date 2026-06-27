@@ -64,6 +64,11 @@ def list_available_models(
                 if m.model_type == "video"
                 else []
             ),
+            "video_seconds_capabilities": (
+                list(ModelService.get_video_seconds_capabilities(m.model_name))
+                if m.model_type == "video"
+                else []
+            ),
             "channel_count": channel_count,
             "description": m.description,
         })
@@ -140,6 +145,11 @@ def list_chat_models(
             ),
             "video_size_capabilities": (
                 list(ModelService.get_video_size_capabilities(m.model_name))
+                if m.model_type == "video"
+                else []
+            ),
+            "video_seconds_capabilities": (
+                list(ModelService.get_video_seconds_capabilities(m.model_name))
                 if m.model_type == "video"
                 else []
             ),

@@ -23,8 +23,8 @@
         <a-button type="link" class="home-btn" @click="$router.push('/user/dashboard')">
           <a-icon type="home" />
         </a-button>
-        <div v-if="isImageModel" class="balance-tag">
-          <a-icon type="picture" /> {{ formatCredit(imageCreditBalance) }}
+        <div v-if="isImageModel || isVideoModel" class="balance-tag">
+          <a-icon :type="isVideoModel ? 'video-camera' : 'picture'" /> {{ formatCredit(imageCreditBalance) }}
         </div>
         <a-button type="link" class="new-chat-btn" @click="handleNewSession">
           <a-icon type="plus-circle" />
@@ -78,9 +78,9 @@
     <div class="chat-content" ref="messagesContainer">
       <div v-if="!currentMessages.length" class="welcome-screen">
         <div class="welcome-icon">
-          <a-icon :type="isImageModel ? 'picture' : 'robot'" />
+          <a-icon :type="isVideoModel ? 'video-camera' : (isImageModel ? 'picture' : 'robot')" />
         </div>
-        <h2 class="welcome-title">{{ isImageModel ? 'AI 生图' : 'AI 对话' }}</h2>
+        <h2 class="welcome-title">{{ isVideoModel ? 'AI 视频' : (isImageModel ? 'AI 生图' : 'AI 对话') }}</h2>
         <p class="welcome-desc">
           {{ imageWelcomeText }}
         </p>
@@ -91,6 +91,7 @@
         :key="index"
         :message="msg"
         :imageMap="runtimeImageMap"
+        :videoMap="runtimeVideoMap"
         :streaming="streaming && index === currentMessages.length - 1 && msg.role === 'assistant'"
         @open-image="handleOpenCachedImage"
         @preview-image="handlePreviewCachedImage"
@@ -109,7 +110,7 @@
     </div>
 
     <!-- Input Area -->
-    <div class="chat-input-container" :class="{ 'has-toolbar': isImageModel }">
+    <div class="chat-input-container" :class="{ 'has-toolbar': isImageModel || isVideoModel }">
       <!-- Image Toolbar -->
       <div v-if="isImageModel" class="image-mobile-toolbar">
         <div class="toolbar-scroll">
@@ -142,6 +143,45 @@
         </div>
       </div>
 
+      <!-- Video Toolbar -->
+      <div v-if="isVideoModel" class="image-mobile-toolbar">
+        <div class="toolbar-scroll">
+          <div class="toolbar-item">
+            <span class="label">模式</span>
+            <a-select v-model="videoActionMode" size="small" style="width: 86px" :dropdownMatchSelectWidth="false">
+              <a-select-option value="text">文生</a-select-option>
+              <a-select-option value="image">图生</a-select-option>
+            </a-select>
+          </div>
+          <div class="toolbar-item">
+            <span class="label">时长</span>
+            <a-select v-model="selectedVideoSeconds" size="small" style="width: 76px" :dropdownMatchSelectWidth="false">
+              <a-select-option v-for="seconds in videoSecondsOptions" :key="seconds" :value="seconds">
+                {{ seconds }}秒
+              </a-select-option>
+            </a-select>
+          </div>
+          <div class="toolbar-item">
+            <span class="label">画面</span>
+            <a-select v-model="selectedVideoSize" size="small" style="width: 132px" :dropdownMatchSelectWidth="false">
+              <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size">
+                {{ size }}
+              </a-select-option>
+            </a-select>
+          </div>
+          <div class="toolbar-spacer"></div>
+        </div>
+      </div>
+
+      <div v-if="isVideoImageMode && videoReferencePreviewUrl" class="mobile-edit-preview">
+        <div class="preview-card">
+          <img :src="videoReferencePreviewUrl" alt="video-reference" />
+          <div class="preview-close" @click="clearVideoReference">
+            <a-icon type="close-circle" />
+          </div>
+        </div>
+      </div>
+
       <!-- Image Edit Preview -->
       <div v-if="isImageEditMode && editImagePreviewUrl" class="mobile-edit-preview">
         <div class="preview-card">
@@ -155,13 +195,14 @@
       <!-- Text Input -->
       <div class="input-wrapper">
         <a-button v-if="isImageEditMode" shape="circle" icon="upload" class="upload-btn" @click="triggerEditImagePick" />
+        <a-button v-if="isVideoImageMode" shape="circle" icon="upload" class="upload-btn" @click="triggerVideoReferencePick" />
         <a-textarea
           ref="chatInput"
           v-model="inputText"
           :placeholder="inputPlaceholder"
           :autoSize="{ minRows: 1, maxRows: 4 }"
           @keydown="handleKeydown"
-          :disabled="!apiKey || imageGenerating"
+          :disabled="!apiKey || imageGenerating || videoGenerating"
           class="mobile-textarea"
         />
         <div class="input-actions">
@@ -170,7 +211,7 @@
             type="primary"
             shape="circle"
             :disabled="!canSend"
-            :loading="imageGenerating"
+            :loading="imageGenerating || videoGenerating"
             @click="handleSend"
             class="mobile-send-btn"
           >
@@ -196,6 +237,13 @@
       accept="image/*"
       style="display: none"
       @change="handleEditImageSelected"
+    >
+    <input
+      ref="videoReferenceInput"
+      type="file"
+      accept="image/*"
+      style="display: none"
+      @change="handleVideoReferenceSelected"
     >
 
     <!-- Image Preview Modal -->
@@ -247,6 +295,9 @@ import {
 var DEFAULT_IMAGE_SIZES = ['512', '1K', '2K', '4K']
 var DEFAULT_ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4']
 var IMAGE_REQUEST_TIMEOUT_MS = 10 * 60 * 1000
+var VIDEO_REQUEST_TIMEOUT_MS = 20 * 60 * 1000
+var VIDEO_SECONDS_OPTIONS = [6, 10, 12, 16, 20]
+var VIDEO_SIZE_OPTIONS = ['720x1280', '1280x720', '1024x1024', '1024x1792', '1792x1024']
 
 export default {
   name: 'MobileChat',
@@ -279,9 +330,20 @@ export default {
       selectedImageSize: '1K',
       selectedAspectRatio: '1:1',
       runtimeImageMap: {},
+      runtimeVideoMap: {},
       editImageFile: null,
       editImagePreviewUrl: '',
       editImageName: '',
+      // Video generation
+      videoGenerating: false,
+      videoActionMode: 'text',
+      selectedVideoSeconds: 10,
+      selectedVideoSize: '1280x720',
+      selectedVideoResolution: '720p',
+      selectedVideoPreset: 'normal',
+      videoReferenceFile: null,
+      videoReferencePreviewUrl: '',
+      videoReferenceName: '',
       imagePreviewVisible: false,
       imagePreviewSrc: '',
       imagePreviewName: '',
@@ -330,11 +392,17 @@ export default {
     isImageModel: function () {
       return this.currentModelMeta && this.currentModelMeta.model_type === 'image'
     },
+    isVideoModel: function () {
+      return this.currentModelMeta && this.currentModelMeta.model_type === 'video'
+    },
     supportsImageEdit: function () {
       return !!(this.currentModelMeta && this.currentModelMeta.supports_image_edit)
     },
     isImageEditMode: function () {
       return this.isImageModel && this.supportsImageEdit && this.imageActionMode === 'edit'
+    },
+    isVideoImageMode: function () {
+      return this.isVideoModel && this.videoActionMode === 'image'
     },
     currentImageSizeOptions: function () {
       var meta = this.currentModelMeta || {}
@@ -347,6 +415,19 @@ export default {
     },
     aspectRatioOptions: function () {
       return DEFAULT_ASPECT_RATIOS
+    },
+    videoSecondsOptions: function () {
+      var capabilities = Array.isArray(this.currentModelMeta && this.currentModelMeta.video_seconds_capabilities)
+        ? this.currentModelMeta.video_seconds_capabilities
+        : []
+      var normalized = capabilities.map(function (item) { return Number(item) }).filter(function (item) { return item > 0 })
+      return normalized.length > 0 ? normalized : VIDEO_SECONDS_OPTIONS
+    },
+    videoSizeOptions: function () {
+      var capabilities = Array.isArray(this.currentModelMeta && this.currentModelMeta.video_size_capabilities)
+        ? this.currentModelMeta.video_size_capabilities
+        : []
+      return capabilities.length > 0 ? capabilities : VIDEO_SIZE_OPTIONS
     },
     currentImageCreditCost: function () {
       if (!this.isImageModel) return 0
@@ -367,7 +448,20 @@ export default {
       if (!this.isImageModel) return true
       return Number(this.imageCreditBalance || 0) >= Number(this.currentImageCreditCost || 0)
     },
+    currentVideoCreditCost: function () {
+      if (!this.isVideoModel) return 0
+      var meta = this.currentModelMeta || {}
+      if ((meta.billing_type || 'token') === 'free') return 0
+      return Number(meta.image_credit_multiplier || 0.5) * Number(this.selectedVideoSeconds || 6)
+    },
+    hasEnoughVideoCredits: function () {
+      if (!this.isVideoModel) return true
+      return Number(this.imageCreditBalance || 0) >= Number(this.currentVideoCreditCost || 0)
+    },
     imageWelcomeText: function () {
+      if (this.isVideoModel) {
+        return this.isVideoImageMode ? '上传参考图并输入提示词生成视频' : '输入提示词生成视频'
+      }
       if (!this.isImageModel) return '选择模型，开始与 AI 对话'
       if (this.isImageEditMode) return '上传原图并输入要求进行编辑'
       return '选择生图模型，输入提示词生成图片'
@@ -378,14 +472,20 @@ export default {
         this.apiKey &&
         !this.streaming &&
         !this.imageGenerating &&
+        !this.videoGenerating &&
         (!this.isImageEditMode || !!this.editImageFile) &&
-        (!this.isImageModel || this.hasEnoughImageCredits)
+        (!this.isVideoImageMode || !!this.videoReferenceFile) &&
+        (!this.isImageModel || this.hasEnoughImageCredits) &&
+        (!this.isVideoModel || this.hasEnoughVideoCredits)
     },
     inputPlaceholder: function () {
       if (!this.apiKey) return '请先获取 API Key...'
       if (!this.currentModel) return '请先选择模型...'
       if (this.isImageModel && !this.hasEnoughImageCredits) return '图片积分不足...'
+      if (this.isVideoModel && !this.hasEnoughVideoCredits) return '媒体积分不足...'
       if (this.isImageEditMode && !this.editImageFile) return '上传待编辑图片...'
+      if (this.isVideoImageMode && !this.videoReferenceFile) return '上传视频参考图...'
+      if (this.isVideoModel) return '描述你想生成的视频...'
       return '输入消息...'
     },
     relayBase: function () {
@@ -401,6 +501,16 @@ export default {
     },
     currentModel: function () {
       this.ensureImageOptionsForCurrentModel()
+      this.ensureVideoOptionsForCurrentModel()
+    },
+    videoActionMode: function () {
+      this.persistCurrentSessionVideoOptions()
+    },
+    selectedVideoSeconds: function () {
+      this.persistCurrentSessionVideoOptions()
+    },
+    selectedVideoSize: function () {
+      this.persistCurrentSessionVideoOptions()
     }
   },
   created: function () {
@@ -414,6 +524,7 @@ export default {
   },
   beforeDestroy: function () {
     if (this.abortController) this.abortController.abort()
+    this.revokeRuntimeVideos()
     if (this.$refs.messagesContainer) {
       this.$refs.messagesContainer.removeEventListener('scroll', this.handleScroll)
     }
@@ -487,13 +598,50 @@ export default {
       this.selectedAspectRatio = sessionOptions.aspectRatio || '1:1'
       this.imageActionMode = (this.supportsImageEdit && sessionOptions.mode === 'edit') ? 'edit' : 'generate'
     },
+    ensureVideoOptionsForCurrentModel: function () {
+      if (!this.isVideoModel) {
+        this.videoActionMode = 'text'
+        return
+      }
+      var sessionOptions = (this.currentSession && this.currentSession.videoOptions) || {}
+      var secondsOptions = this.videoSecondsOptions
+      this.selectedVideoSeconds = Number(sessionOptions.seconds || this.selectedVideoSeconds || 10)
+      if (secondsOptions.indexOf(this.selectedVideoSeconds) === -1) {
+        this.selectedVideoSeconds = secondsOptions.indexOf(15) !== -1 ? 15 : (secondsOptions[0] || 10)
+      }
+      var sizeOptions = this.videoSizeOptions
+      this.selectedVideoSize = sessionOptions.size || this.selectedVideoSize || '1280x720'
+      if (sizeOptions.indexOf(this.selectedVideoSize) === -1) {
+        this.selectedVideoSize = sizeOptions.indexOf('1280x720') !== -1 ? '1280x720' : (sizeOptions[0] || '1280x720')
+      }
+      this.videoActionMode = sessionOptions.mode === 'image' ? 'image' : 'text'
+      this.persistCurrentSessionVideoOptions()
+    },
+    persistCurrentSessionVideoOptions: function () {
+      if (!this.currentSession || !this.isVideoModel) return
+      this.currentSession.videoOptions = {
+        mode: this.videoActionMode,
+        seconds: this.selectedVideoSeconds,
+        size: this.selectedVideoSize,
+        resolution: this.selectedVideoResolution,
+        preset: this.selectedVideoPreset
+      }
+      saveSession(this.currentSession, this.storageNamespace)
+      this.refreshSessions()
+    },
     loadSessions: function () {
       this.sessions = this.getStorageSessions()
       if (this.sessions.length > 0) {
         this.currentSessionId = this.sessions[0].id
         this.currentModel = this.sessions[0].model || ''
         this.currentChannelId = this.sessions[0].channelId || null
+        if (this.sessions[0].videoOptions) {
+          this.videoActionMode = this.sessions[0].videoOptions.mode || this.videoActionMode
+          this.selectedVideoSeconds = Number(this.sessions[0].videoOptions.seconds || this.selectedVideoSeconds)
+          this.selectedVideoSize = this.sessions[0].videoOptions.size || this.selectedVideoSize
+        }
         this.hydrateSessionImages(this.sessions[0])
+        this.hydrateSessionVideos(this.sessions[0])
       }
     },
     loadModels: function () {
@@ -505,6 +653,7 @@ export default {
           this.modelList = Object.values(modelMap)
           if (!this.currentModel && this.modelList.length > 0) this.currentModel = this.modelList[0].model_name
           this.ensureImageOptionsForCurrentModel()
+          this.ensureVideoOptionsForCurrentModel()
         }).catch(() => this.loadUserModels())
       } else {
         this.loadUserModels()
@@ -515,11 +664,16 @@ export default {
         this.modelList = res.data || []
         if (!this.currentModel && this.modelList.length > 0) this.currentModel = this.modelList[0].model_name
         this.ensureImageOptionsForCurrentModel()
+        this.ensureVideoOptionsForCurrentModel()
       })
     },
     loadApiKey: function () {
       var cached = sessionStorage.getItem(this.apiKeyStorageKey)
-      if (cached) { this.apiKey = cached; return }
+      if (cached) {
+        this.apiKey = cached
+        this.hydrateSessionVideos(this.currentSession)
+        return
+      }
       listApiKeys().then(res => {
         var active = (res.data || []).find(k => k.status === 'active')
         if (active) {
@@ -527,6 +681,7 @@ export default {
             if (r.data && r.data.key) {
               this.apiKey = r.data.key
               sessionStorage.setItem(this.apiKeyStorageKey, r.data.key)
+              this.hydrateSessionVideos(this.currentSession)
             }
           })
         }
@@ -540,11 +695,17 @@ export default {
     handleNewSession: function () {
       var session = createSession({
         model: this.currentModel,
-        channelId: this.currentChannelId
+        channelId: this.currentChannelId,
+        videoOptions: {
+          mode: this.videoActionMode,
+          seconds: this.selectedVideoSeconds,
+          size: this.selectedVideoSize
+        }
       }, this.storageNamespace)
       this.refreshSessions()
       this.currentSessionId = session.id
       this.runtimeImageMap = {}
+      this.runtimeVideoMap = {}
       this.errorMsg = ''
     },
     handleNewSessionWithClose: function () {
@@ -558,12 +719,15 @@ export default {
       if (session) {
         this.currentModel = session.model || this.currentModel
         this.currentChannelId = session.channelId || null
+        this.ensureVideoOptionsForCurrentModel()
         this.hydrateSessionImages(session)
+        this.hydrateSessionVideos(session)
       }
     },
     handleModelChangeWithClose: function (model) {
       this.currentModel = model
       this.modelSelectorVisible = false
+      this.ensureVideoOptionsForCurrentModel()
       if (this.currentSession) {
         this.currentSession.model = model
         saveSession(this.currentSession, this.storageNamespace)
@@ -585,6 +749,8 @@ export default {
       this.sessions = []
       this.currentSessionId = ''
       this.runtimeImageMap = {}
+      this.revokeRuntimeVideos()
+      this.runtimeVideoMap = {}
     },
     handleKeydown: function (e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -594,12 +760,18 @@ export default {
     },
     handleStop: function () {
       if (this.abortController) this.abortController.abort()
+      this.streaming = false
+      this.videoGenerating = false
     },
     handleSend: function () {
       if (!this.canSend) return
       if (this.isImageModel) {
         if (this.isImageEditMode) this.handleEditImage()
         else this.handleGenerateImage()
+        return
+      }
+      if (this.isVideoModel) {
+        this.handleGenerateVideo()
         return
       }
 
@@ -747,11 +919,308 @@ export default {
       var reader = new FileReader()
       reader.onload = r => {
         this.editImageFile = file
+        this.editImageName = file.name || 'upload.png'
         this.editImagePreviewUrl = r.target.result
       }
       reader.readAsDataURL(file)
     },
-    clearEditImage: function () { this.editImageFile = null; this.editImagePreviewUrl = '' },
+    clearEditImage: function () {
+      this.editImageFile = null
+      this.editImagePreviewUrl = ''
+      this.editImageName = ''
+      if (this.$refs.editImageInput) this.$refs.editImageInput.value = ''
+    },
+    triggerVideoReferencePick: function () {
+      if (this.$refs.videoReferenceInput) this.$refs.videoReferenceInput.click()
+    },
+    handleVideoReferenceSelected: function (event) {
+      var files = event && event.target && event.target.files
+      var file = files && files[0]
+      if (!file) return
+      if (file.type && file.type.indexOf('image/') !== 0) {
+        this.$message.error('请上传图片文件')
+        this.clearVideoReference()
+        return
+      }
+      var self = this
+      var reader = new FileReader()
+      reader.onload = function (loadEvent) {
+        self.videoReferenceFile = file
+        self.videoReferenceName = file.name || 'reference.png'
+        self.videoReferencePreviewUrl = loadEvent && loadEvent.target ? loadEvent.target.result : ''
+      }
+      reader.onerror = function () {
+        self.$message.error('图片读取失败，请重新上传')
+        self.clearVideoReference()
+      }
+      reader.readAsDataURL(file)
+    },
+    clearVideoReference: function () {
+      this.videoReferenceFile = null
+      this.videoReferencePreviewUrl = ''
+      this.videoReferenceName = ''
+      if (this.$refs.videoReferenceInput) this.$refs.videoReferenceInput.value = ''
+    },
+    handleGenerateVideo: function () {
+      if (!this.canSend) return
+      if (this.isVideoImageMode) {
+        this.handleGenerateImageToVideo()
+        return
+      }
+      this.handleGenerateTextToVideo()
+    },
+    pushVideoGenerationMessages: function (prompt, sourceCacheKey, sourceName) {
+      var session = this.ensureCurrentSession()
+      session.videoOptions = {
+        mode: this.videoActionMode,
+        seconds: this.selectedVideoSeconds,
+        size: this.selectedVideoSize,
+        resolution: this.selectedVideoResolution,
+        preset: this.selectedVideoPreset
+      }
+      session.messages.push({
+        role: 'user',
+        content: prompt,
+        timestamp: Date.now(),
+        requestKind: this.isVideoImageMode ? 'image_to_video' : 'text_to_video',
+        localImageCacheKey: sourceCacheKey || '',
+        localImageName: sourceName || ''
+      })
+      session.updatedAt = Date.now()
+      if (session.messages.length === 1) autoTitle(session)
+      session.messages.push({
+        role: 'assistant',
+        kind: 'video_generating',
+        content: '正在生成视频...',
+        timestamp: Date.now(),
+        videos: [],
+        meta: {
+          model: this.currentModel,
+          prompt: prompt,
+          requestType: this.isVideoImageMode ? 'image_to_video' : 'text_to_video',
+          seconds: this.selectedVideoSeconds,
+          size: this.selectedVideoSize,
+          resolution: this.selectedVideoResolution,
+          preset: this.selectedVideoPreset,
+          sourceImageCacheKey: sourceCacheKey || '',
+          sourceImageName: sourceName || ''
+        }
+      })
+      saveSession(session, this.storageNamespace)
+      this.refreshSessions()
+      return session
+    },
+    handleGenerateTextToVideo: function () {
+      var prompt = this.inputText.trim()
+      var session = this.pushVideoGenerationMessages(prompt)
+      var self = this
+      this.inputText = ''
+      this.errorMsg = ''
+      this.videoGenerating = true
+      this.sendTextToVideoRequest(prompt).then(function (result) {
+        return self.finishVideoFromResponse(session, prompt, result)
+      }).catch(function (err) {
+        self.failVideoResult(session, err && err.message ? err.message : '视频生成失败，请稍后重试')
+      })
+    },
+    handleGenerateImageToVideo: function () {
+      if (!this.videoReferenceFile || !this.videoReferencePreviewUrl) return
+      var prompt = this.inputText.trim()
+      var session = this.ensureCurrentSession()
+      var sourceCacheKey = session.id + '_video_source_' + Date.now()
+      var sourceName = this.videoReferenceName || 'reference.png'
+      this.$set(this.runtimeImageMap, sourceCacheKey, this.videoReferencePreviewUrl)
+      saveImageCache(sourceCacheKey, this.videoReferencePreviewUrl)
+      var imageFile = this.videoReferenceFile
+      var imageName = this.videoReferenceName
+      this.clearVideoReference()
+      session = this.pushVideoGenerationMessages(prompt, sourceCacheKey, sourceName)
+      var self = this
+      this.inputText = ''
+      this.errorMsg = ''
+      this.videoGenerating = true
+      this.sendImageToVideoRequest(prompt, imageFile, imageName).then(function (result) {
+        return self.finishVideoFromResponse(session, prompt, result)
+      }).catch(function (err) {
+        self.failVideoResult(session, err && err.message ? err.message : '视频生成失败，请稍后重试')
+      })
+    },
+    finishVideoFromResponse: function (session, prompt, result) {
+      var videoUrl = this.resolveVideoContentUrl(result && result.content_url)
+      var self = this
+      if (!videoUrl) {
+        return Promise.reject(new Error('视频生成结果缺少可播放地址'))
+      }
+      return this.resolveVideoDisplayUrl(videoUrl).then(function (displayUrl) {
+        self.finishVideoResult(session, {
+          prompt: prompt,
+          text: '视频已生成完成',
+          url: displayUrl || videoUrl,
+          contentUrl: videoUrl,
+          videoCacheKey: videoUrl,
+          usage: (result && result.usage) || {},
+          videoId: (result && result.id) || ''
+        })
+      })
+    },
+    finishVideoResult: function (session, payload) {
+      var usage = payload.usage || {}
+      var chargedCredits = Number(
+        usage.image_credits_charged !== undefined
+          ? usage.image_credits_charged
+          : this.currentVideoCreditCost
+      )
+      var lastMsg = session.messages[session.messages.length - 1]
+      if (lastMsg && lastMsg.role === 'assistant') {
+        lastMsg.kind = 'video_result'
+        lastMsg.content = payload.text || '视频已生成完成'
+        this.$set(lastMsg, 'videos', [{
+          url: payload.url || '',
+          contentUrl: payload.contentUrl || '',
+          videoCacheKey: payload.videoCacheKey || payload.contentUrl || '',
+          videoId: payload.videoId || '',
+          mimeType: 'video/mp4'
+        }])
+        lastMsg.meta = Object.assign({}, lastMsg.meta || {}, {
+          imageCreditsCharged: chargedCredits
+        })
+      }
+      this.videoGenerating = false
+      this.abortController = null
+      session.updatedAt = Date.now()
+      saveSession(session, this.storageNamespace)
+      this.refreshSessions()
+      this.imageCreditBalance = Math.max(0, Number(this.imageCreditBalance || 0) - chargedCredits)
+      this.loadBalance()
+    },
+    failVideoResult: function (session, message) {
+      var lastMsg = session.messages[session.messages.length - 1]
+      if (lastMsg && lastMsg.role === 'assistant') session.messages.pop()
+      this.videoGenerating = false
+      this.abortController = null
+      this.errorMsg = message
+      session.updatedAt = Date.now()
+      saveSession(session, this.storageNamespace)
+      this.refreshSessions()
+      this.loadBalance()
+    },
+    buildVideoFormData: function (prompt) {
+      var formData = new FormData()
+      formData.append('model', this.currentModel)
+      formData.append('prompt', prompt)
+      formData.append('seconds', String(this.selectedVideoSeconds))
+      formData.append('size', this.selectedVideoSize)
+      formData.append('resolution_name', this.selectedVideoResolution)
+      formData.append('preset', this.selectedVideoPreset)
+      return formData
+    },
+    sendTextToVideoRequest: function (prompt) {
+      return this.sendVideoFormRequest(this.buildVideoFormData(prompt))
+    },
+    sendImageToVideoRequest: function (prompt, imageFile, imageName) {
+      if (!imageFile) return Promise.reject(new Error('参考图不存在，请重新上传'))
+      var formData = this.buildVideoFormData(prompt)
+      formData.append('input_reference[]', imageFile, imageName || imageFile.name || 'reference.png')
+      return this.sendVideoFormRequest(formData)
+    },
+    sendVideoFormRequest: function (formData) {
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      var timeoutId = null
+      if (controller) {
+        timeoutId = setTimeout(function () {
+          controller.abort()
+        }, VIDEO_REQUEST_TIMEOUT_MS)
+        this.abortController = controller
+      }
+      var headers = {
+        'Authorization': 'Bearer ' + this.apiKey
+      }
+      if (this.currentChannelId) headers['X-Channel-Id'] = String(this.currentChannelId)
+
+      return fetch(this.relayBase + '/v1/created/video', {
+        method: 'POST',
+        headers: headers,
+        body: formData,
+        signal: controller ? controller.signal : undefined
+      }).then(function (response) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!response.ok) {
+          return response.text().then(function (text) {
+            var errMsg = '视频生成请求失败 (' + response.status + ')'
+            try {
+              var parsed = JSON.parse(text)
+              errMsg = (parsed.error && parsed.error.message) || parsed.message || parsed.detail || errMsg
+            } catch (e) {
+              if (text) errMsg = text
+            }
+            throw new Error(errMsg)
+          })
+        }
+        return response.json()
+      }).catch(function (err) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (err && err.name === 'AbortError') throw new Error('视频生成等待超过 20 分钟，请稍后重试')
+        if (err && err.message === 'Failed to fetch') throw new Error('视频生成请求连接失败，请检查网络或代理超时配置')
+        throw err
+      }).then(function (result) {
+        if (!result || !result.content_url) throw new Error('视频生成结果为空，请稍后重试')
+        return result
+      })
+    },
+    resolveVideoContentUrl: function (url) {
+      if (!url) return ''
+      if (/^https?:\/\//i.test(url)) return url
+      return this.relayBase + (url.charAt(0) === '/' ? url : '/' + url)
+    },
+    resolveVideoDisplayUrl: function (url) {
+      if (!url) return Promise.resolve('')
+      if (this.runtimeVideoMap[url]) return Promise.resolve(this.runtimeVideoMap[url])
+      var self = this
+      return fetch(url, {
+        headers: {
+          'Authorization': 'Bearer ' + this.apiKey
+        }
+      }).then(function (response) {
+        if (!response.ok) return ''
+        return response.blob()
+      }).then(function (blob) {
+        if (!blob) return ''
+        var objectUrl = URL.createObjectURL(blob)
+        self.$set(self.runtimeVideoMap, url, objectUrl)
+        return objectUrl
+      }).catch(function () {
+        return ''
+      })
+    },
+    collectSessionVideoContentUrls: function (session) {
+      var urls = []
+      var messages = (session && session.messages) || []
+      messages.forEach(function (message) {
+        var videos = (message && message.videos) || []
+        videos.forEach(function (video) {
+          var url = video && (video.videoCacheKey || video.contentUrl)
+          if (url && urls.indexOf(url) === -1) urls.push(url)
+        })
+      })
+      return urls
+    },
+    hydrateSessionVideos: function (session) {
+      if (!this.apiKey || !session) return Promise.resolve()
+      var self = this
+      var urls = this.collectSessionVideoContentUrls(session)
+      if (!urls.length) return Promise.resolve()
+      return Promise.all(urls.map(function (url) {
+        return self.resolveVideoDisplayUrl(url)
+      }))
+    },
+    revokeRuntimeVideos: function () {
+      Object.keys(this.runtimeVideoMap || {}).forEach(function (key) {
+        var objectUrl = this.runtimeVideoMap[key]
+        if (objectUrl && String(objectUrl).indexOf('blob:') === 0) {
+          URL.revokeObjectURL(objectUrl)
+        }
+      }.bind(this))
+    },
     handlePreviewCachedImage: function (data) {
       this.imagePreviewSrc = this.runtimeImageMap[data.cacheKey]
       this.imagePreviewName = data.name

@@ -572,7 +572,15 @@ export default {
       return DEFAULT_ASPECT_RATIOS
     },
     videoSecondsOptions: function () {
-      return VIDEO_SECONDS_OPTIONS
+      var capabilities = Array.isArray(this.currentModelMeta && this.currentModelMeta.video_seconds_capabilities)
+        ? this.currentModelMeta.video_seconds_capabilities
+        : []
+      var normalized = capabilities.map(function (item) {
+        return Number(item)
+      }).filter(function (item) {
+        return item > 0
+      })
+      return normalized.length > 0 ? normalized : VIDEO_SECONDS_OPTIONS
     },
     videoSizeOptions: function () {
       var capabilities = Array.isArray(this.currentModelMeta && this.currentModelMeta.video_size_capabilities)
@@ -1282,8 +1290,8 @@ console.log(response.choices[0].message.content);`
       }
       this.selectedVideoSize = nextSize
       this.selectedVideoSeconds = Number(sessionOptions.seconds || this.selectedVideoSeconds || 10)
-      if (VIDEO_SECONDS_OPTIONS.indexOf(this.selectedVideoSeconds) === -1) {
-        this.selectedVideoSeconds = 10
+      if (this.videoSecondsOptions.indexOf(this.selectedVideoSeconds) === -1) {
+        this.selectedVideoSeconds = this.videoSecondsOptions.indexOf(15) !== -1 ? 15 : (this.videoSecondsOptions[0] || 10)
       }
       this.selectedVideoResolution = sessionOptions.resolution || this.selectedVideoResolution || '720p'
       if (VIDEO_RESOLUTION_OPTIONS.indexOf(this.selectedVideoResolution) === -1) {

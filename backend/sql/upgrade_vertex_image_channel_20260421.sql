@@ -10,7 +10,7 @@ SET @add_provider_variant = (
         AND COLUMN_NAME = 'provider_variant'
     ),
     'SELECT 1',
-    "ALTER TABLE `channel` ADD COLUMN `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/google-official/google-vertex-image' AFTER `protocol_type`"
+    "ALTER TABLE `channel` ADD COLUMN `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/openai-image-compatible/openai-image-native-size/openai-image-modelinvoke/cpa-grok-video/google-official/google-vertex-image' AFTER `protocol_type`"
   )
 );
 PREPARE stmt FROM @add_provider_variant;

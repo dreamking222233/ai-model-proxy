@@ -322,7 +322,10 @@ export default {
       return capabilities.length ? capabilities : VIDEO_SIZE_OPTIONS
     },
     videoSecondsOptions() {
-      return VIDEO_SECONDS_OPTIONS
+      const capabilities = Array.isArray(this.currentVideoModelMeta.video_seconds_capabilities)
+        ? this.currentVideoModelMeta.video_seconds_capabilities.map(item => Number(item)).filter(item => item > 0)
+        : []
+      return capabilities.length ? capabilities : VIDEO_SECONDS_OPTIONS
     },
     healthItems() {
       const items = this.health.items || {}
@@ -365,6 +368,15 @@ export default {
       if (!this.currentImageSupportsEdit && this.imageMode === 'reference') {
         this.imageMode = 'text'
       }
+    },
+    selectedVideoModel() {
+      this.ensureVideoOptions()
+    },
+    videoSecondsOptions() {
+      this.ensureVideoOptions()
+    },
+    videoSizeOptions() {
+      this.ensureVideoOptions()
     }
   },
   mounted() {
@@ -446,6 +458,16 @@ export default {
         request_count: 0,
         success_rate: 0,
         health_level: 'unknown'
+      }
+    },
+    ensureVideoOptions() {
+      const secondsOptions = this.videoSecondsOptions.length ? this.videoSecondsOptions : VIDEO_SECONDS_OPTIONS
+      if (!secondsOptions.includes(Number(this.videoSeconds))) {
+        this.videoSeconds = secondsOptions.includes(15) ? 15 : (secondsOptions[0] || 10)
+      }
+      const sizeOptions = this.videoSizeOptions.length ? this.videoSizeOptions : VIDEO_SIZE_OPTIONS
+      if (!sizeOptions.includes(this.videoSize)) {
+        this.videoSize = sizeOptions.includes('1280x720') ? '1280x720' : sizeOptions[0]
       }
     },
     formatCredit(value) {

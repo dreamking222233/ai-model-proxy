@@ -230,6 +230,11 @@ def get_channels_models(
                         if um.model_type == "video"
                         else []
                     ),
+                    "video_seconds_capabilities": (
+                        list(ModelService.get_video_seconds_capabilities(um.model_name))
+                        if um.model_type == "video"
+                        else []
+                    ),
                 })
 
         if models:

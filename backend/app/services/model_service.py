@@ -42,6 +42,13 @@ class ModelService:
     }
     VIDEO_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "grok-imagine-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
+        "grok-video": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
+        "grok-imagine-video-1.5-preview": ("720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"),
+    }
+    VIDEO_SECONDS_CAPABILITIES: dict[str, tuple[int, ...]] = {
+        "grok-imagine-video": tuple(range(1, 16)),
+        "grok-video": tuple(range(1, 16)),
+        "grok-imagine-video-1.5-preview": tuple(range(1, 16)),
     }
     BILLING_TYPES = {"token", "request", "image_credit", "free"}
 
@@ -135,6 +142,10 @@ class ModelService:
     @staticmethod
     def get_video_size_capabilities(model_name: str) -> tuple[str, ...]:
         return ModelService.VIDEO_SIZE_CAPABILITIES.get(str(model_name or ""), ())
+
+    @staticmethod
+    def get_video_seconds_capabilities(model_name: str) -> tuple[int, ...]:
+        return ModelService.VIDEO_SECONDS_CAPABILITIES.get(str(model_name or ""), ())
 
     @staticmethod
     def _normalize_credit_decimal(value: object, field_name: str = "credit_cost") -> Decimal:
@@ -330,6 +341,7 @@ class ModelService:
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
             "video_size_capabilities": list(ModelService.get_video_size_capabilities(model.model_name)),
+            "video_seconds_capabilities": list(ModelService.get_video_seconds_capabilities(model.model_name)),
             "enabled": model.enabled,
             "description": model.description,
             "created_at": model.created_at.isoformat() if model.created_at else None,

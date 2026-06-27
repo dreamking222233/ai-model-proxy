@@ -12023,7 +12023,16 @@ class ProxyService:
         normalized = str(value or "720x1280").strip().lower()
         allowed = {"720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"}
         if ProxyService._is_cpa_grok_video_channel(channel):
-            allowed = {"720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"}
+            allowed = {
+                "848x480",
+                "1280x720",
+                "1696x960",
+                "1920x1080",
+                "720x1280",
+                "1024x1024",
+                "1024x1792",
+                "1792x1024",
+            }
         if normalized not in allowed:
             raise ServiceException(400, "size 参数无效", "INVALID_VIDEO_SIZE")
         return normalized

@@ -34,6 +34,16 @@ class CpaGrokVideoChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ProxyService._cpa_grok_video_size("1024x1024"), "1280x720")
         self.assertEqual(ProxyService._cpa_grok_video_size("720x1280"), "1280x720")
 
+    def test_cpa_video_size_validation_accepts_cpa_native_sizes(self):
+        cpa_channel = Channel(protocol_type="openai", provider_variant="cpa-grok-video")
+        default_channel = Channel(protocol_type="openai", provider_variant="default")
+
+        self.assertEqual(ProxyService._normalize_video_size("848x480", cpa_channel), "848x480")
+        self.assertEqual(ProxyService._normalize_video_size("1696x960", cpa_channel), "1696x960")
+        self.assertEqual(ProxyService._normalize_video_size("1920x1080", cpa_channel), "1920x1080")
+        with self.assertRaises(ServiceException):
+            ProxyService._normalize_video_size("1696x960", default_channel)
+
     def test_cpa_response_is_normalized_to_existing_video_shape(self):
         normalized = ProxyService._normalize_cpa_grok_video_response(
             {

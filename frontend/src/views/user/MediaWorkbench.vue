@@ -44,7 +44,10 @@
           </a-select>
           <a-select v-else v-model="selectedVideoModel" style="width: 100%">
             <a-select-option v-for="model in videoModels" :key="model.model_name" :value="model.model_name">
-              {{ model.display_name || model.model_name }}
+              <div class="video-model-option">
+                <span class="video-model-name">{{ model.display_name || model.model_name }}</span>
+                <span class="video-model-tags">{{ getVideoModelCapabilityText(model.model_name) }}</span>
+              </div>
             </a-select-option>
           </a-select>
         </div>
@@ -111,16 +114,22 @@
           <div class="field-block">
             <label>视频模式</label>
             <a-radio-group v-model="videoMode" button-style="solid" class="video-mode-switch">
-              <a-radio-button value="text">文生视频</a-radio-button>
+              <a-radio-button value="text" :disabled="isVideoImageRequired">文生视频</a-radio-button>
               <a-radio-button value="image">图生视频</a-radio-button>
             </a-radio-group>
+            <div class="field-hint">
+              {{ videoModeHint }}
+            </div>
           </div>
 
           <div v-if="videoMode === 'image'" class="reference-panel" :class="{ filled: referenceFiles.length }">
             <input ref="referenceInput" type="file" accept="image/*" multiple class="hidden-input" @change="handleReferenceChange">
             <button type="button" class="reference-drop" @click="pickReference">
-              <span><a-icon type="upload" /> 上传参考图</span>
+              <span><a-icon type="upload" /> 上传参考图（最多 {{ videoReferenceMaxCount }} 张）</span>
             </button>
+            <div v-if="isVideoImageRequired && !referenceFiles.length" class="reference-required">
+              当前模型必须上传参考图后才能生成视频。
+            </div>
             <div v-if="referenceFiles.length" class="reference-thumb-grid">
               <div v-for="item in referenceFiles" :key="item.id" class="reference-thumb" @click="previewReference(item)">
                 <img :src="item.url" :alt="item.name">
@@ -135,11 +144,16 @@
           <div class="field-grid">
             <div class="field-block">
               <label>时长</label>
-              <a-select v-model="videoSeconds">
-                <a-select-option v-for="seconds in videoSecondsOptions" :key="seconds" :value="seconds">
-                  {{ seconds }} 秒
-                </a-select-option>
-              </a-select>
+              <a-input-number
+                v-model="videoSeconds"
+                :min="videoSecondsMin"
+                :max="videoSecondsMax"
+                :step="1"
+                :precision="0"
+                style="width: 100%"
+                @change="handleVideoSecondsChange"
+              />
+              <div class="field-hint">支持 {{ videoSecondsMin }}-{{ videoSecondsMax }} 秒，超过上限会按上限提交。</div>
             </div>
             <div class="field-block">
               <label>清晰度</label>
@@ -151,19 +165,29 @@
           </div>
           <div class="field-block">
             <label>画面尺寸</label>
-            <a-select v-model="videoSize">
-              <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size">
-                {{ getVideoSizeLabel(size) }}
+            <a-select
+              v-model="videoSize"
+              option-label-prop="label"
+              :dropdownMatchSelectWidth="false"
+              dropdownClassName="video-size-dropdown"
+            >
+              <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size" :label="getVideoSizeLabel(size)">
+                <template #default>
+                  <div class="video-size-option">
+                    <a-icon :type="getVideoSizeIcon(size)" />
+                    <span class="video-size-option-main">{{ getVideoSizeLabel(size) }}</span>
+                    <span class="video-size-option-ratio">{{ getVideoSizeRatio(size) }}</span>
+                  </div>
+                </template>
               </a-select-option>
             </a-select>
           </div>
           <div class="field-block">
             <label>预设</label>
             <a-select v-model="videoPreset">
-              <a-select-option value="normal">normal</a-select-option>
-              <a-select-option value="fun">fun</a-select-option>
-              <a-select-option value="spicy">spicy</a-select-option>
-              <a-select-option value="custom">custom</a-select-option>
+              <a-select-option v-for="preset in videoPresetOptions" :key="preset.value" :value="preset.value">
+                {{ preset.label }}
+              </a-select-option>
             </a-select>
           </div>
         </template>
@@ -238,6 +262,35 @@ const IMAGE_SIZE_OPTIONS = ['1K', '2K', '4K']
 const VIDEO_SECONDS_OPTIONS = [6, 10, 12, 16, 20]
 const VIDEO_SIZE_OPTIONS = ['720x1280', '1280x720', '1024x1024', '1024x1792', '1792x1024']
 const MAX_REFERENCE_FILES = 7
+const VIDEO_PRESET_OPTIONS = [
+  { value: 'normal', label: '标准' },
+  { value: 'fun', label: '趣味' },
+  { value: 'spicy', label: '强表现' },
+  { value: 'custom', label: '自定义' }
+]
+const VIDEO_MODEL_CAPABILITIES = {
+  'grok-imagine-video': {
+    label: '文生/图生',
+    supportsText: true,
+    supportsImage: true,
+    imageRequired: false,
+    maxReferenceImages: 3
+  },
+  'grok-video': {
+    label: '文生/图生',
+    supportsText: true,
+    supportsImage: true,
+    imageRequired: false,
+    maxReferenceImages: 3
+  },
+  'grok-imagine-video-1.5-preview': {
+    label: '需参考图',
+    supportsText: false,
+    supportsImage: true,
+    imageRequired: true,
+    maxReferenceImages: 1
+  }
+}
 
 export default {
   name: 'MediaWorkbench',
@@ -321,11 +374,44 @@ export default {
         : []
       return capabilities.length ? capabilities : VIDEO_SIZE_OPTIONS
     },
+    videoPresetOptions() {
+      return VIDEO_PRESET_OPTIONS
+    },
     videoSecondsOptions() {
       const capabilities = Array.isArray(this.currentVideoModelMeta.video_seconds_capabilities)
         ? this.currentVideoModelMeta.video_seconds_capabilities.map(item => Number(item)).filter(item => item > 0)
         : []
       return capabilities.length ? capabilities : VIDEO_SECONDS_OPTIONS
+    },
+    videoSecondsMin() {
+      return this.videoSecondsOptions.length ? Math.min(...this.videoSecondsOptions) : 1
+    },
+    videoSecondsMax() {
+      return this.videoSecondsOptions.length ? Math.max(...this.videoSecondsOptions) : 15
+    },
+    currentVideoCapability() {
+      return VIDEO_MODEL_CAPABILITIES[this.selectedVideoModel] || {
+        label: '文生/图生',
+        supportsText: true,
+        supportsImage: true,
+        imageRequired: false,
+        maxReferenceImages: MAX_REFERENCE_FILES
+      }
+    },
+    isVideoImageRequired() {
+      return !!this.currentVideoCapability.imageRequired
+    },
+    videoReferenceMaxCount() {
+      const value = Number(this.currentVideoCapability.maxReferenceImages || MAX_REFERENCE_FILES)
+      return Math.max(1, Math.min(MAX_REFERENCE_FILES, value))
+    },
+    videoModeHint() {
+      const capability = this.currentVideoCapability
+      const maxText = `参考图最多 ${this.videoReferenceMaxCount} 张`
+      if (capability.imageRequired) {
+        return `当前模型仅支持图生视频，${maxText}`
+      }
+      return `当前模型支持文生视频和图生视频，${maxText}`
     },
     healthItems() {
       const items = this.health.items || {}
@@ -350,7 +436,7 @@ export default {
       if (this.mode === 'image') {
         return !!this.selectedImageModel && (this.imageMode !== 'reference' || (this.currentImageSupportsEdit && this.imageReferenceFiles.length > 0))
       }
-      return !!this.selectedVideoModel && (this.videoMode !== 'image' || this.referenceFiles.length > 0)
+      return !!this.selectedVideoModel && (this.videoMode !== 'image' ? !this.isVideoImageRequired : this.referenceFiles.length > 0)
     }
   },
   watch: {
@@ -371,12 +457,21 @@ export default {
     },
     selectedVideoModel() {
       this.ensureVideoOptions()
+      this.ensureVideoModeAndReferences()
     },
     videoSecondsOptions() {
       this.ensureVideoOptions()
     },
     videoSizeOptions() {
       this.ensureVideoOptions()
+    },
+    videoReferenceMaxCount() {
+      this.trimVideoReferencesToLimit()
+    },
+    isVideoImageRequired(required) {
+      if (required) {
+        this.videoMode = 'image'
+      }
     }
   },
   mounted() {
@@ -461,14 +556,41 @@ export default {
       }
     },
     ensureVideoOptions() {
-      const secondsOptions = this.videoSecondsOptions.length ? this.videoSecondsOptions : VIDEO_SECONDS_OPTIONS
-      if (!secondsOptions.includes(Number(this.videoSeconds))) {
-        this.videoSeconds = secondsOptions.includes(15) ? 15 : (secondsOptions[0] || 10)
-      }
+      this.videoSeconds = this.normalizeVideoSeconds(this.videoSeconds)
       const sizeOptions = this.videoSizeOptions.length ? this.videoSizeOptions : VIDEO_SIZE_OPTIONS
       if (!sizeOptions.includes(this.videoSize)) {
         this.videoSize = sizeOptions.includes('1280x720') ? '1280x720' : sizeOptions[0]
       }
+    },
+    ensureVideoModeAndReferences() {
+      if (this.isVideoImageRequired) {
+        this.videoMode = 'image'
+      }
+      this.trimVideoReferencesToLimit()
+    },
+    trimVideoReferencesToLimit() {
+      if (!this.referenceFiles.length) return
+      const limit = this.videoReferenceMaxCount
+      if (this.referenceFiles.length <= limit) return
+      const removed = this.referenceFiles.slice(limit)
+      removed.forEach(item => {
+        URL.revokeObjectURL(item.url)
+        this.objectUrls = this.objectUrls.filter(url => url !== item.url)
+      })
+      this.referenceFiles = this.referenceFiles.slice(0, limit)
+      this.errorMessage = `当前模型参考图最多支持 ${limit} 张，已保留前 ${limit} 张`
+    },
+    normalizeVideoSeconds(value) {
+      const min = this.videoSecondsMin
+      const max = this.videoSecondsMax
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed)) {
+        return Math.min(Math.max(10, min), max)
+      }
+      return Math.min(Math.max(Math.round(parsed), min), max)
+    },
+    handleVideoSecondsChange(value) {
+      this.videoSeconds = this.normalizeVideoSeconds(value)
     },
     formatCredit(value) {
       const num = Number(value || 0)
@@ -517,9 +639,10 @@ export default {
         this.errorMessage = '请上传图片文件'
         return
       }
-      const available = Math.max(0, MAX_REFERENCE_FILES - current.length)
+      const maxFiles = kind === 'video' ? this.videoReferenceMaxCount : MAX_REFERENCE_FILES
+      const available = Math.max(0, maxFiles - current.length)
       if (available <= 0) {
-        this.errorMessage = `参考图最多支持 ${MAX_REFERENCE_FILES} 张`
+        this.errorMessage = `参考图最多支持 ${maxFiles} 张`
         return
       }
       const nextItems = files.slice(0, available).map(file => {
@@ -538,7 +661,7 @@ export default {
         this.referenceFiles = current.concat(nextItems)
       }
       if (files.length > available) {
-        this.errorMessage = `参考图最多支持 ${MAX_REFERENCE_FILES} 张，已添加前 ${available} 张`
+        this.errorMessage = `参考图最多支持 ${maxFiles} 张，已添加前 ${available} 张`
       } else {
         this.errorMessage = ''
       }
@@ -633,13 +756,18 @@ export default {
       }
     },
     async generateVideo() {
+      if (this.videoMode === 'image' && !this.referenceFiles.length) {
+        this.videoMode = 'image'
+        this.errorMessage = this.isVideoImageRequired ? '当前模型需要上传参考图' : '图生视频需要先上传参考图'
+        return
+      }
       this.busy = true
       this.errorMessage = ''
       try {
         const form = new FormData()
         form.append('model', this.selectedVideoModel)
         form.append('prompt', this.prompt.trim())
-        form.append('seconds', String(this.videoSeconds))
+        form.append('seconds', String(this.normalizeVideoSeconds(this.videoSeconds)))
         form.append('size', this.videoSize)
         form.append('resolution_name', this.videoResolution)
         form.append('preset', this.videoPreset)
@@ -835,15 +963,42 @@ export default {
       link.click()
       document.body.removeChild(link)
     },
-    getVideoSizeLabel(size) {
-      const labels = {
-        '720x1280': '竖屏 720x1280',
-        '1280x720': '横屏 1280x720',
-        '1024x1024': '方形 1024x1024',
-        '1024x1792': '竖屏 1024x1792',
-        '1792x1024': '横屏 1792x1024'
+    getVideoModelCapability(modelName) {
+      return VIDEO_MODEL_CAPABILITIES[modelName] || {
+        label: '文生/图生',
+        supportsText: true,
+        supportsImage: true,
+        imageRequired: false,
+        maxReferenceImages: MAX_REFERENCE_FILES
       }
-      return labels[size] || size
+    },
+    getVideoModelCapabilityText(modelName) {
+      const capability = this.getVideoModelCapability(modelName)
+      return `${capability.label} · 参考图最多 ${capability.maxReferenceImages || MAX_REFERENCE_FILES} 张`
+    },
+    getVideoSizeMeta(size) {
+      const match = String(size || '').match(/^(\d+)x(\d+)$/i)
+      if (!match) {
+        return { orientation: 'custom', label: String(size || ''), icon: 'fullscreen', ratio: '' }
+      }
+      const width = Number(match[1])
+      const height = Number(match[2])
+      if (width > height) {
+        return { orientation: 'landscape', label: `横屏 ${width}×${height}`, icon: 'desktop', ratio: `${width}:${height}` }
+      }
+      if (height > width) {
+        return { orientation: 'portrait', label: `竖屏 ${width}×${height}`, icon: 'mobile', ratio: `${width}:${height}` }
+      }
+      return { orientation: 'square', label: `方形 ${width}×${height}`, icon: 'border', ratio: '1:1' }
+    },
+    getVideoSizeLabel(size) {
+      return this.getVideoSizeMeta(size).label
+    },
+    getVideoSizeIcon(size) {
+      return this.getVideoSizeMeta(size).icon
+    },
+    getVideoSizeRatio(size) {
+      return this.getVideoSizeMeta(size).ratio
     }
   }
 }
@@ -1088,10 +1243,63 @@ export default {
   font-size: 11px;
 }
 
+.field-hint {
+  margin-top: 6px;
+  color: #86868b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+
+.video-model-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.video-model-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #1d1d1f;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-model-tags {
+  flex: 0 0 auto;
+  color: #86868b;
+  font-size: 12px;
+}
+
+.video-size-option {
+  display: flex;
+  min-width: 180px;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.video-size-option >>> .anticon {
+  flex: 0 0 auto;
+  color: #0071e3;
+}
+
+.video-size-option-main {
+  color: #1d1d1f;
+  font-weight: 500;
+}
+
+.video-size-option-ratio {
+  margin-left: auto;
+  color: #86868b;
+  font-size: 12px;
 }
 
 /* 自定义 Select 控件的半透玻璃风 */
@@ -1106,6 +1314,29 @@ export default {
 
 .field-block >>> .ant-select-selection__rendered {
   line-height: 36px;
+}
+
+.field-block >>> .ant-input-number {
+  width: 100%;
+  height: 38px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.45);
+  box-shadow: inset 1px 1px 0px rgba(255, 255, 255, 0.6);
+  transition: all 0.2s ease;
+}
+
+.field-block >>> .ant-input-number-input {
+  height: 36px;
+  color: #1d1d1f;
+}
+
+.field-block >>> .ant-input-number-focused,
+.field-block >>> .ant-input-number:focus {
+  border-color: #0071e3;
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15), inset 1px 1px 0px rgba(255, 255, 255, 0.9);
 }
 
 .field-block >>> .ant-select-open .ant-select-selection,
@@ -1139,6 +1370,13 @@ export default {
 
 .reference-panel {
   margin-bottom: 18px;
+}
+
+.reference-required {
+  margin-top: 8px;
+  color: #bf5b00;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .hidden-input {

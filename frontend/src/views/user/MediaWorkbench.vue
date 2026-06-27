@@ -275,6 +275,15 @@ import { getBalance, getSiteConfig } from '@/api/user'
 import { getMediaHealth } from '@/api/mediaWorkbench'
 import { getUser, getChatApiKeyStorageKey } from '@/utils/auth'
 import { prepareUserApiKey } from '@/utils/userApiKey'
+import {
+  clearMediaResults,
+  createMediaResultId,
+  getMediaAsset,
+  getMediaResults,
+  removeMediaResults,
+  saveMediaAsset,
+  saveMediaResult
+} from '@/utils/mediaWorkbenchStorage'
 
 const IMAGE_TIMEOUT_MS = 10 * 60 * 1000
 const VIDEO_CREATE_TIMEOUT_MS = 300 * 1000
@@ -284,6 +293,7 @@ const IMAGE_SIZE_OPTIONS = ['1K', '2K', '4K']
 const VIDEO_SECONDS_OPTIONS = [6, 10, 12, 16, 20]
 const VIDEO_SIZE_OPTIONS = ['720x1280', '1280x720', '1024x1024', '1024x1792', '1792x1024']
 const MAX_REFERENCE_FILES = 7
+const MAX_CACHED_RESULTS = 20
 const VIDEO_PRESET_OPTIONS = [
   { value: 'normal', label: '标准' },
   { value: 'fun', label: '趣味' },
@@ -453,6 +463,10 @@ export default {
       if (configured === window.location.origin.replace(/\/+$/, '')) return ''
       return configured
     },
+    storageNamespace() {
+      const user = getUser() || {}
+      return user.id ? `user_${user.id}` : 'anonymous'
+    },
     canSubmit() {
       if (this.busy || !this.apiKey || !this.prompt.trim()) return false
       if (this.mode === 'image') {
@@ -511,8 +525,40 @@ export default {
         this.loadBalance(),
         this.loadHealth(),
         this.loadSiteConfig(),
-        this.loadApiKey()
+        this.loadApiKey(),
+        this.loadCachedResults()
       ])
+    },
+    async loadCachedResults() {
+      const cached = getMediaResults(this.storageNamespace)
+      if (!cached.length) return
+      const restored = []
+      for (const item of cached) {
+        const asset = await getMediaAsset(item.assetKey)
+        if (!asset || !asset.value) continue
+        let url = ''
+        if (item.type === 'video' && asset.value instanceof Blob) {
+          url = URL.createObjectURL(asset.value)
+          this.objectUrls.push(url)
+        } else if (item.type === 'image') {
+          url = asset.value
+        }
+        if (!url) continue
+        restored.push({
+          id: item.id,
+          type: item.type,
+          url,
+          name: item.name,
+          meta: item.meta,
+          assetKey: item.assetKey,
+          rawResponse: item.rawResponse || '',
+          createdAt: item.createdAt || Date.now()
+        })
+      }
+      if (restored.length) {
+        this.results = restored.slice(0, MAX_CACHED_RESULTS)
+        this.rawResponse = restored[0].rawResponse || ''
+      }
     },
     async loadModels() {
       try {
@@ -890,41 +936,101 @@ export default {
       }
     },
     setImageResults(result, sourceMode = 'text') {
-      this.revokeResultObjectUrls()
       const data = Array.isArray(result.data) ? result.data : []
-      this.results = data.map((item, index) => {
+      const rawResponse = JSON.stringify(result, null, 2)
+      const nextResults = data.map((item, index) => {
         const dataUrl = item.b64_json
           ? `data:${item.mime_type || 'image/png'};base64,${item.b64_json}`
           : item.url
+        const id = createMediaResultId()
         return {
-          id: `image-${Date.now()}-${index}`,
+          id,
           type: 'image',
           url: dataUrl,
           name: `media-image-${index + 1}.png`,
-          meta: `${this.selectedImageModel} · ${sourceMode === 'reference' ? '参考图' : '文生图'} · ${this.imageSize} · ${this.aspectRatio}`
+          meta: `${this.selectedImageModel} · ${sourceMode === 'reference' ? '参考图' : '文生图'} · ${this.imageSize} · ${this.aspectRatio}`,
+          assetKey: `${id}-asset`,
+          rawResponse,
+          createdAt: Date.now()
         }
       }).filter(item => item.url)
-      if (!this.results.length) {
+      if (!nextResults.length) {
         throw new Error('生图结果为空，请稍后重试')
       }
+      this.results = this.limitDisplayedResults(nextResults.concat(this.results))
+      nextResults.forEach(item => {
+        saveMediaAsset(item.assetKey, item.url, 'image').then(saved => {
+          if (!saved) return
+          saveMediaResult({
+            id: item.id,
+            type: item.type,
+            assetKey: item.assetKey,
+            name: item.name,
+            meta: item.meta,
+            model: this.selectedImageModel,
+            prompt: this.prompt.trim(),
+            rawResponse,
+            createdAt: item.createdAt
+          }, this.storageNamespace)
+        })
+      })
     },
     async setVideoResult(result) {
-      this.revokeResultObjectUrls()
       const contentUrl = result.content_url ? this.runtimeRelayBase + result.content_url : ''
       if (!contentUrl) {
         throw new Error('视频结果为空，请稍后重试')
       }
-      const objectUrl = await this.fetchVideoObjectUrl(contentUrl, VIDEO_CREATE_TIMEOUT_MS)
-      this.results = [{
-        id: `video-${Date.now()}`,
+      const videoBlob = await this.fetchVideoBlob(contentUrl, VIDEO_CREATE_TIMEOUT_MS)
+      const objectUrl = URL.createObjectURL(videoBlob)
+      this.objectUrls.push(objectUrl)
+      const id = createMediaResultId()
+      const rawResponse = JSON.stringify(result, null, 2)
+      const item = {
+        id,
         type: 'video',
         url: objectUrl,
         name: `media-video-${result.id || Date.now()}.mp4`,
         meta: `${this.selectedVideoModel} · ${this.videoSeconds} 秒 · ${this.videoSize}`,
-        sourceUrl: contentUrl
-      }]
+        sourceUrl: contentUrl,
+        assetKey: `${id}-asset`,
+        rawResponse,
+        createdAt: Date.now()
+      }
+      this.results = this.limitDisplayedResults([item].concat(this.results))
+      const saved = await saveMediaAsset(item.assetKey, videoBlob, videoBlob.type || 'video/mp4')
+      if (saved) {
+        saveMediaResult({
+          id: item.id,
+          type: item.type,
+          assetKey: item.assetKey,
+          name: item.name,
+          meta: item.meta,
+          model: this.selectedVideoModel,
+          prompt: this.prompt.trim(),
+          rawResponse,
+          createdAt: item.createdAt
+        }, this.storageNamespace)
+      }
     },
-    async fetchVideoObjectUrl(url, timeoutMs) {
+    limitDisplayedResults(items) {
+      const next = items.slice(0, MAX_CACHED_RESULTS)
+      const removed = items.slice(MAX_CACHED_RESULTS)
+      const removedAssetKeys = []
+      removed.forEach(item => {
+        if (item.url && item.url.startsWith('blob:')) {
+          URL.revokeObjectURL(item.url)
+          this.objectUrls = this.objectUrls.filter(url => url !== item.url)
+        }
+        if (item.assetKey) {
+          removedAssetKeys.push(item.assetKey)
+        }
+      })
+      if (removedAssetKeys.length) {
+        removeMediaResults(removedAssetKeys, this.storageNamespace)
+      }
+      return next
+    },
+    async fetchVideoBlob(url, timeoutMs) {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
       const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
       try {
@@ -935,10 +1041,7 @@ export default {
         if (!response.ok) {
           throw new Error('视频内容获取失败，请稍后重试')
         }
-        const blob = await response.blob()
-        const objectUrl = URL.createObjectURL(blob)
-        this.objectUrls.push(objectUrl)
-        return objectUrl
+        return await response.blob()
       } catch (e) {
         if (e && e.name === 'AbortError') {
           throw new Error('视频内容获取超过 300 秒，请稍后重试')
@@ -965,6 +1068,7 @@ export default {
       this.results = []
       this.rawResponse = ''
       this.errorMessage = ''
+      clearMediaResults(this.storageNamespace)
     },
     previewImage(item) {
       this.previewImageUrl = item.url

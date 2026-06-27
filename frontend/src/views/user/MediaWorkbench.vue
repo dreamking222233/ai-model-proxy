@@ -172,13 +172,11 @@
               dropdownClassName="video-size-dropdown"
             >
               <a-select-option v-for="size in videoSizeOptions" :key="size" :value="size" :label="getVideoSizeLabel(size)">
-                <template #default>
-                  <div class="video-size-option">
-                    <a-icon :type="getVideoSizeIcon(size)" />
-                    <span class="video-size-option-main">{{ getVideoSizeLabel(size) }}</span>
-                    <span class="video-size-option-ratio">{{ getVideoSizeRatio(size) }}</span>
-                  </div>
-                </template>
+                <div class="video-size-option">
+                  <a-icon :type="getVideoSizeIcon(size)" />
+                  <span class="video-size-option-main">{{ getVideoSizeLabel(size) }}</span>
+                  <span class="video-size-option-ratio">{{ getVideoSizeRatio(size) }}</span>
+                </div>
               </a-select-option>
             </a-select>
           </div>

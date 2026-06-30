@@ -20,6 +20,7 @@ class ChannelService:
     PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE = "openai-image-compatible"
     PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE = "openai-image-native-size"
     PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE = "openai-image-modelinvoke"
+    PROVIDER_VARIANT_GEEK2API_IMAGE = "geek2api-image"
     PROVIDER_VARIANT_CPA_GROK_VIDEO = "cpa-grok-video"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
@@ -60,6 +61,8 @@ class ChannelService:
             return 0
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE:
             return 0
+        if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE:
+            return 0
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO:
             return 0
         if protocol == "google" and normalized_variant in {
@@ -81,6 +84,7 @@ class ChannelService:
                 ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
                 ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
                 ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
+                ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
                 ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO,
             }:
                 return raw_variant
@@ -101,6 +105,8 @@ class ChannelService:
             return ()
         if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE:
             return ("1K", "2K", "4K")
+        if normalized_variant == ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE:
+            return ("1K", "2K", "4K")
         if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE:
             return ("1K",)
         if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE:
@@ -114,6 +120,7 @@ class ChannelService:
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
+            ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
         }
 
     @staticmethod

@@ -947,6 +947,9 @@ export default {
       if (channel.provider_variant === 'openai-image-modelinvoke') {
         return '该渠道是 XiaoLe 类型图片上游，适配当前系统作为上游的图片接口，生成走 /v1/image/created，编辑走 /v1/image/edit，默认承接 1K 图片请求。'
       }
+      if (channel.provider_variant === 'geek2api-image') {
+        return '该渠道是 Geek2API 图片上游，支持 1K/2K/4K、16:9/9:16 等实测尺寸映射，并会透传 n/quality。'
+      }
       if (channel.provider_variant === 'cpa-grok-video') {
         return '该渠道是 CPA Grok 视频上游，视频请求会走 CPA 原生视频接口，但用户侧 /v1/videos 响应保持当前系统格式。'
       }
@@ -1411,6 +1414,9 @@ export default {
         if (normalized === 'openai-image-modelinvoke') {
           return 'XiaoLe 类型图片上游'
         }
+        if (normalized === 'geek2api-image') {
+          return 'Geek2API 图片'
+        }
         if (normalized === 'cpa-grok-video') {
           return 'CPA Grok 视频'
         }
@@ -1435,6 +1441,9 @@ export default {
       }
       if (protocol === 'openai' && normalized === 'openai-image-modelinvoke') {
         return 'cyan'
+      }
+      if (protocol === 'openai' && normalized === 'geek2api-image') {
+        return 'lime'
       }
       if (protocol === 'openai' && normalized === 'cpa-grok-video') {
         return 'volcano'

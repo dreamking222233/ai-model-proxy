@@ -109,6 +109,24 @@
               </a-select>
             </div>
           </div>
+          <div class="field-grid">
+            <div class="field-block">
+              <label>数量</label>
+              <a-select v-model="imageCount" :disabled="imageMode === 'reference'">
+                <a-select-option v-for="count in imageCountOptions" :key="count" :value="count">
+                  {{ count }} 张
+                </a-select-option>
+              </a-select>
+            </div>
+            <div class="field-block">
+              <label>质量</label>
+              <a-select v-model="imageQuality">
+                <a-select-option v-for="option in imageQualityOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </a-select-option>
+              </a-select>
+            </div>
+          </div>
         </template>
 
         <template v-else>
@@ -336,6 +354,8 @@ export default {
       imageMode: 'text',
       imageSize: '1K',
       aspectRatio: '1:1',
+      imageCount: 1,
+      imageQuality: 'high',
       videoSeconds: 10,
       videoMode: 'text',
       videoSize: '1792x1024',
@@ -396,8 +416,23 @@ export default {
         { value: '1:1', label: '1:1 方图' },
         { value: '16:9', label: '16:9 横图' },
         { value: '9:16', label: '9:16 竖图' },
+        { value: '3:2', label: '3:2 横图' },
+        { value: '2:3', label: '2:3 竖图' },
         { value: '4:3', label: '4:3 横图' },
-        { value: '3:4', label: '3:4 竖图' }
+        { value: '3:4', label: '3:4 竖图' },
+        { value: '5:4', label: '5:4 横图' },
+        { value: '4:5', label: '4:5 竖图' },
+        { value: '21:9', label: '21:9 超宽' }
+      ]
+    },
+    imageCountOptions() {
+      return [1, 2, 4]
+    },
+    imageQualityOptions() {
+      return [
+        { value: 'low', label: '低' },
+        { value: 'medium', label: '中' },
+        { value: 'high', label: '高' }
       ]
     },
     videoSizeOptions() {
@@ -775,7 +810,8 @@ export default {
             response_format: 'b64_json',
             image_size: this.imageSize,
             aspect_ratio: this.aspectRatio,
-            n: 1
+            quality: this.imageQuality,
+            n: Number(this.imageCount) || 1
           })
         }, IMAGE_TIMEOUT_MS, '生图等待超过 10 分钟，请稍后重试')
         this.rawResponse = JSON.stringify(result, null, 2)
@@ -802,6 +838,7 @@ export default {
         form.append('response_format', 'b64_json')
         form.append('image_size', this.imageSize)
         form.append('aspect_ratio', this.aspectRatio)
+        form.append('quality', this.imageQuality)
         form.append('n', '1')
         this.imageReferenceFiles.forEach(item => {
           form.append('image', item.file, item.name || 'reference.png')

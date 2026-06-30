@@ -328,10 +328,11 @@
             <a-select-option value="openai-image-compatible">OpenAI Image Compatible</a-select-option>
             <a-select-option value="openai-image-native-size">OpenAI Image Native Size</a-select-option>
             <a-select-option value="openai-image-modelinvoke">XiaoLe 类型图片上游</a-select-option>
+            <a-select-option value="geek2api-image">Geek2API Image</a-select-option>
             <a-select-option value="cpa-grok-video">CPA Grok 视频</a-select-option>
           </a-select>
           <div class="form-hint">
-            Image Compatible 适合只支持默认 1K 的图片网关；Image Native Size 会向上游透传 `size/quality`；XiaoLe 类型图片上游会把图片请求转到当前系统的图片接口；CPA Grok 视频用于 CPA 的 Grok 视频生成接口。
+            Image Compatible 适合只支持默认 1K 的图片网关；Image Native Size 会向上游透传 `size/quality`；Geek2API Image 使用 Geek2API 实测尺寸表；XiaoLe 类型图片上游会把图片请求转到当前系统的图片接口；CPA Grok 视频用于 CPA 的 Grok 视频生成接口。
           </div>
         </a-form-item>
         <a-form-item v-if="form.protocol_type === 'google'" label="Google 渠道类型">
@@ -586,6 +587,7 @@ export default {
           'openai-image-compatible': 'OpenAI Image Compatible',
           'openai-image-native-size': 'OpenAI Image Native Size',
           'openai-image-modelinvoke': 'XiaoLe 类型图片上游',
+          'geek2api-image': 'Geek2API Image',
           'cpa-grok-video': 'CPA Grok 视频'
         }
         return openaiVariantMap[normalized] || 'Default'
@@ -610,6 +612,9 @@ export default {
         }
         if (normalized === 'openai-image-modelinvoke') {
           return 'cyan'
+        }
+        if (normalized === 'geek2api-image') {
+          return 'lime'
         }
         if (normalized === 'cpa-grok-video') {
           return 'volcano'
@@ -687,10 +692,10 @@ export default {
         }
         this.form.health_check_enabled = false
       } else if (value === 'openai') {
-        if (!['default', 'openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'cpa-grok-video'].includes(this.form.provider_variant)) {
+        if (!['default', 'openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'geek2api-image', 'cpa-grok-video'].includes(this.form.provider_variant)) {
           this.form.provider_variant = 'default'
         }
-        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'cpa-grok-video'].includes(this.form.provider_variant)
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'geek2api-image', 'cpa-grok-video'].includes(this.form.provider_variant)
       } else {
         this.form.provider_variant = 'default'
         this.form.health_check_enabled = true
@@ -717,7 +722,7 @@ export default {
         return
       }
       if (this.form.protocol_type === 'openai') {
-        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'cpa-grok-video'].includes(value)
+        this.form.health_check_enabled = !['openai-image-compatible', 'openai-image-native-size', 'openai-image-modelinvoke', 'geek2api-image', 'cpa-grok-video'].includes(value)
       }
     },
     async fetchList() {

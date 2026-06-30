@@ -15080,11 +15080,113 @@ class ProxyService:
         return size_presets.get(normalized_ratio) or size_presets.get("1:1")
 
     @staticmethod
+    def _build_geek2api_image_size(
+        image_size: Optional[str],
+        aspect_ratio: Optional[str],
+    ) -> Optional[str]:
+        if not image_size:
+            return None
+        normalized_ratio = str(aspect_ratio or "1:1")
+        presets = {
+            "1K": {
+                "1:1": "1024x1024",
+                "16:9": "1280x720",
+                "9:16": "720x1280",
+                "3:2": "1008x672",
+                "2:3": "672x1008",
+                "4:3": "1024x768",
+                "3:4": "768x1024",
+                "5:4": "1040x832",
+                "4:5": "832x1040",
+                "21:9": "1344x576",
+            },
+            "2K": {
+                "1:1": "2048x2048",
+                "16:9": "2048x1152",
+                "9:16": "1152x2048",
+                "3:2": "2064x1376",
+                "2:3": "1376x2064",
+                "4:3": "2048x1536",
+                "3:4": "1536x2048",
+                "5:4": "2080x1664",
+                "4:5": "1664x2080",
+                "21:9": "2016x864",
+            },
+            "4K": {
+                "1:1": "2880x2880",
+                "16:9": "3840x2160",
+                "9:16": "2160x3840",
+                "3:2": "3504x2336",
+                "2:3": "2336x3504",
+                "4:3": "3264x2448",
+                "3:4": "2448x3264",
+                "5:4": "3200x2560",
+                "4:5": "2560x3200",
+                "21:9": "3808x1632",
+            },
+        }
+        size_presets = presets.get(str(image_size))
+        if not size_presets:
+            return None
+        return size_presets.get(normalized_ratio) or size_presets.get("1:1")
+
+    @staticmethod
+    def _normalize_geek2api_explicit_image_size(size_value: Any) -> Optional[str]:
+        explicit_size = ProxyService._normalize_pixel_size(size_value)
+        if not explicit_size:
+            return None
+        supported_sizes = {
+            "1024x1024",
+            "1280x720",
+            "720x1280",
+            "1008x672",
+            "672x1008",
+            "1024x768",
+            "768x1024",
+            "1040x832",
+            "832x1040",
+            "1344x576",
+            "2048x2048",
+            "2048x1152",
+            "1152x2048",
+            "2064x1376",
+            "1376x2064",
+            "2048x1536",
+            "1536x2048",
+            "2080x1664",
+            "1664x2080",
+            "2016x864",
+            "2880x2880",
+            "3840x2160",
+            "2160x3840",
+            "3504x2336",
+            "2336x3504",
+            "3264x2448",
+            "2448x3264",
+            "3200x2560",
+            "2560x3200",
+            "3808x1632",
+        }
+        if explicit_size not in supported_sizes:
+            raise ServiceException(
+                400,
+                f"Geek2API 图片渠道不支持 size={explicit_size}",
+                "INVALID_IMAGE_SIZE",
+            )
+        return explicit_size
+
+    @staticmethod
     def _resolve_openai_native_image_size(
         request_data: dict,
         image_size: Optional[str],
         aspect_ratio: Optional[str],
+        provider_variant: Optional[str] = None,
     ) -> Optional[str]:
+        if provider_variant == ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE:
+            explicit_size = ProxyService._normalize_geek2api_explicit_image_size(request_data.get("size"))
+            if explicit_size:
+                return explicit_size
+            return ProxyService._build_geek2api_image_size(image_size, aspect_ratio)
         explicit_size = ProxyService._normalize_pixel_size(request_data.get("size"))
         if explicit_size:
             return ProxyService._clamp_openai_native_image_size(explicit_size)
@@ -15887,7 +15989,10 @@ class ProxyService:
             getattr(channel, "protocol_type", None),
             getattr(channel, "provider_variant", None),
         )
-        use_native_size = provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
+        use_native_size = provider_variant in {
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+            ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
+        }
         ProxyService._validate_supported_image_count(
             requested_image_count,
             max_count=4,
@@ -15910,6 +16015,7 @@ class ProxyService:
                 request_data,
                 image_size,
                 aspect_ratio,
+                provider_variant,
             )
             if native_size:
                 payload["size"] = native_size
@@ -16038,7 +16144,10 @@ class ProxyService:
             getattr(channel, "protocol_type", None),
             getattr(channel, "provider_variant", None),
         )
-        use_native_size = provider_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE
+        use_native_size = provider_variant in {
+            ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
+            ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
+        }
 
         base_url = channel.base_url.rstrip("/")
         urls = ProxyService._openai_image_edit_url_candidates(base_url, provider_variant)
@@ -16078,6 +16187,7 @@ class ProxyService:
                 request_data,
                 image_size,
                 aspect_ratio,
+                provider_variant,
             )
             if native_size:
                 files.append(("size", (None, native_size)))

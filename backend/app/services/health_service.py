@@ -69,6 +69,7 @@ def _resolve_health_target(channel: Channel, actual_model_name: str) -> tuple[st
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_COMPATIBLE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
+            ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
         }:
             return raw_target, "openai_image_generation"
         return raw_target, "openai_chat"

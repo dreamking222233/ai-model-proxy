@@ -67,6 +67,19 @@ class CpaGrokVideoChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(normalized["seconds"], "15")
         self.assertEqual(normalized["size"], "1280x720")
 
+    def test_video_reference_mime_validation_applies_to_cpa_images(self):
+        data_url = ProxyService._video_reference_to_data_url({
+            "content": b"abc",
+            "content_type": "image/jpeg",
+        })
+        self.assertTrue(data_url.startswith("data:image/jpeg;base64,"))
+
+        with self.assertRaises(ServiceException):
+            ProxyService._video_reference_to_data_url({
+                "content": b"abc",
+                "content_type": "application/octet-stream",
+            })
+
     async def test_cpa_download_url_requires_completed_video_url(self):
         channel = Channel(
             name="CPA Grok",

@@ -953,6 +953,9 @@ export default {
       if (channel.provider_variant === 'cpa-grok-video') {
         return '该渠道是 CPA Grok 视频上游，视频请求会走 CPA 原生视频接口，但用户侧 /v1/videos 响应保持当前系统格式。'
       }
+      if (channel.provider_variant === 'zz1cc-video') {
+        return '该渠道是 zz1cc 视频上游，适合映射 video-ds-2.0 / video-ds-2.0-fast，用户侧 /v1/videos 响应保持当前系统格式。'
+      }
       if (channel.provider_variant === 'openai-image-compatible') {
         return '该渠道只支持默认 1K，系统会自动跳过它来承接 2K/4K 请求。建议同时补一个 Native Size 渠道。'
       }
@@ -1420,6 +1423,9 @@ export default {
         if (normalized === 'cpa-grok-video') {
           return 'CPA Grok 视频'
         }
+        if (normalized === 'zz1cc-video') {
+          return 'zz1cc 视频'
+        }
         return 'OpenAI 默认'
       }
       if (protocol === 'google') {
@@ -1447,6 +1453,9 @@ export default {
       }
       if (protocol === 'openai' && normalized === 'cpa-grok-video') {
         return 'volcano'
+      }
+      if (protocol === 'openai' && normalized === 'zz1cc-video') {
+        return 'magenta'
       }
       if (protocol === 'openai' && normalized === 'openai-image-compatible') {
         return 'orange'

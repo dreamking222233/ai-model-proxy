@@ -44,11 +44,15 @@ class ModelService:
         "grok-imagine-video": ("848x480", "1280x720", "1696x960", "1920x1080"),
         "grok-video": ("848x480", "1280x720", "1696x960", "1920x1080"),
         "grok-imagine-video-1.5-preview": ("848x480", "1280x720", "1696x960", "1920x1080"),
+        "video-ds-2.0": ("720x1280", "1280x720", "1024x1024"),
+        "video-ds-2.0-fast": ("720x1280", "1280x720", "1024x1024"),
     }
     VIDEO_SECONDS_CAPABILITIES: dict[str, tuple[int, ...]] = {
         "grok-imagine-video": tuple(range(1, 16)),
         "grok-video": tuple(range(1, 16)),
         "grok-imagine-video-1.5-preview": tuple(range(1, 16)),
+        "video-ds-2.0": (15,),
+        "video-ds-2.0-fast": (15,),
     }
     BILLING_TYPES = {"token", "request", "image_credit", "free"}
 

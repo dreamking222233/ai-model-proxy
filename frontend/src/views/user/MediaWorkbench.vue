@@ -339,6 +339,20 @@ const VIDEO_MODEL_CAPABILITIES = {
     supportsImage: true,
     imageRequired: true,
     maxReferenceImages: 1
+  },
+  'video-ds-2.0': {
+    label: '文生/图生',
+    supportsText: true,
+    supportsImage: true,
+    imageRequired: false,
+    maxReferenceImages: 7
+  },
+  'video-ds-2.0-fast': {
+    label: '文生/图生',
+    supportsText: true,
+    supportsImage: true,
+    imageRequired: false,
+    maxReferenceImages: 7
   }
 }
 

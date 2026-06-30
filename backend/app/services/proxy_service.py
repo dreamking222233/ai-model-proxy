@@ -232,8 +232,9 @@ class ProxyService:
     _VIDEO_WAIT_POLL_INTERVAL_SECONDS = 5.0
     _VIDEO_WAIT_TIMEOUT_SECONDS = 20 * 60
     _VIDEO_COMPLETED_STATUSES = {"completed", "succeeded", "success", "done"}
-    _VIDEO_FAILED_STATUSES = {"failed", "error", "cancelled"}
+    _VIDEO_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "expired"}
     _CPA_GROK_VIDEO_VARIANT = "cpa-grok-video"
+    _ZZ1CC_VIDEO_VARIANT = "zz1cc-video"
     _VIDEO_FAILURE_TEXT_PATTERNS = (
         "video_generation_failed",
         "video generation failed",
@@ -12451,6 +12452,10 @@ class ProxyService:
         return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._CPA_GROK_VIDEO_VARIANT
 
     @staticmethod
+    def _is_zz1cc_video_channel(channel: Optional[Channel]) -> bool:
+        return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._ZZ1CC_VIDEO_VARIANT
+
+    @staticmethod
     def _resolve_cpa_grok_video_create_url(base_url: str) -> str:
         normalized = str(base_url or "").rstrip("/")
         if normalized.endswith("/v1"):
@@ -12465,6 +12470,18 @@ class ProxyService:
         return f"{normalized}/v1/videos/{video_id}"
 
     @staticmethod
+    def _resolve_zz1cc_video_create_url(base_url: str) -> str:
+        return ProxyService._resolve_openai_video_create_url(base_url)
+
+    @staticmethod
+    def _resolve_zz1cc_video_retrieve_url(base_url: str, video_id: str) -> str:
+        return ProxyService._resolve_openai_video_retrieve_url(base_url, video_id)
+
+    @staticmethod
+    def _resolve_zz1cc_video_content_url(base_url: str, video_id: str) -> str:
+        return ProxyService._resolve_openai_video_content_url(base_url, video_id)
+
+    @staticmethod
     def _resolve_openai_chat_completions_url(base_url: str) -> str:
         normalized = str(base_url or "").rstrip("/")
         if normalized.endswith("/v1"):
@@ -12474,11 +12491,17 @@ class ProxyService:
     @staticmethod
     def _normalize_video_seconds(value: Any, channel: Optional[Channel] = None) -> int:
         if value in (None, ""):
+            if ProxyService._is_zz1cc_video_channel(channel):
+                return 15
             return 4 if ProxyService._is_cpa_grok_video_channel(channel) else 6
         try:
             seconds = int(value)
         except (TypeError, ValueError):
             raise ServiceException(400, "seconds 参数无效", "INVALID_VIDEO_SECONDS")
+        if ProxyService._is_zz1cc_video_channel(channel):
+            if seconds != 15:
+                raise ServiceException(400, "zz1cc 视频 seconds 仅支持 15", "INVALID_VIDEO_SECONDS")
+            return seconds
         if ProxyService._is_cpa_grok_video_channel(channel):
             return min(15, max(1, seconds))
         if seconds not in {6, 10, 12, 16, 20}:
@@ -12499,6 +12522,17 @@ class ProxyService:
                 "1024x1024",
                 "1024x1792",
                 "1792x1024",
+            }
+        if ProxyService._is_zz1cc_video_channel(channel):
+            allowed = {
+                "720x1280",
+                "1280x720",
+                "1024x1024",
+                "1024x1792",
+                "1792x1024",
+                "848x480",
+                "1696x960",
+                "1920x1080",
             }
         if normalized not in allowed:
             raise ServiceException(400, "size 参数无效", "INVALID_VIDEO_SIZE")
@@ -12545,6 +12579,8 @@ class ProxyService:
         if not isinstance(content, (bytes, bytearray)) or not content:
             raise ServiceException(400, "上传的参考图不能为空", "INVALID_VIDEO_REFERENCE")
         content_type = str(reference_file.get("content_type") or "application/octet-stream").strip()
+        if not content_type.lower().startswith("image/"):
+            raise ServiceException(400, "input_reference[] 仅支持图片文件", "INVALID_VIDEO_REFERENCE")
         encoded = base64.b64encode(bytes(content)).decode("ascii")
         return f"data:{content_type};base64,{encoded}"
 
@@ -12573,6 +12609,15 @@ class ProxyService:
         return legacy_mapping.get(normalized, "1280x720")
 
     @staticmethod
+    def _zz1cc_video_aspect_ratio(size: str) -> str:
+        normalized = str(size or "").strip().lower()
+        if normalized in {"720x1280", "1024x1792"}:
+            return "9:16"
+        if normalized in {"1024x1024"}:
+            return "1:1"
+        return "16:9"
+
+    @staticmethod
     def _cpa_grok_video_resolution_name(size: str, resolution_name: Optional[str]) -> str:
         if resolution_name:
             return str(resolution_name).strip().lower()
@@ -12590,6 +12635,77 @@ class ProxyService:
         if normalized in {"failed", "error", "cancelled", "canceled", "expired"}:
             return "failed"
         return normalized or "queued"
+
+    @staticmethod
+    def _normalize_zz1cc_video_status(status: Any) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"done", "completed", "succeeded", "success"}:
+            return "completed"
+        if normalized in {"pending", "queued"}:
+            return "queued"
+        if normalized in {"in_progress", "processing", "running"}:
+            return "in_progress"
+        if normalized in {"failed", "error", "cancelled", "canceled", "expired"}:
+            return "failed"
+        return normalized or "queued"
+
+    @staticmethod
+    def _normalize_zz1cc_video_response(
+        body: dict[str, Any],
+        *,
+        video_id: Optional[str] = None,
+        model: Optional[str] = None,
+        prompt: Optional[str] = None,
+        seconds: Optional[int] = None,
+        size: Optional[str] = None,
+    ) -> dict[str, Any]:
+        resolved_id = str(
+            video_id
+            or body.get("id")
+            or body.get("task_id")
+            or body.get("request_id")
+            or ""
+        ).strip()
+        status = ProxyService._normalize_zz1cc_video_status(
+            body.get("status") or body.get("state")
+        )
+        normalized: dict[str, Any] = {
+            "object": "video",
+            "id": resolved_id,
+            "model": model or body.get("model") or "",
+            "status": status,
+            "progress": body.get("progress", 100 if status == "completed" else 0),
+        }
+        if body.get("task_id") is not None:
+            normalized["task_id"] = body.get("task_id")
+        if body.get("request_id") is not None:
+            normalized["upstream_request_id"] = body.get("request_id")
+        if prompt is not None:
+            normalized["prompt"] = prompt
+        elif isinstance(body.get("prompt"), str):
+            normalized["prompt"] = body.get("prompt")
+        if seconds is not None:
+            normalized["seconds"] = str(seconds)
+        elif body.get("seconds") is not None:
+            normalized["seconds"] = str(body.get("seconds"))
+        if size is not None:
+            normalized["size"] = size
+        elif body.get("size") is not None:
+            normalized["size"] = body.get("size")
+        if body.get("aspect_ratio") is not None:
+            normalized["aspect_ratio"] = body.get("aspect_ratio")
+        elif size:
+            normalized["aspect_ratio"] = ProxyService._zz1cc_video_aspect_ratio(size)
+        for key in ("created_at", "completed_at", "updated_at"):
+            if body.get(key) is not None:
+                normalized[key] = body.get(key)
+        if isinstance(body.get("error"), (dict, str)):
+            normalized["error"] = body.get("error")
+            if status not in ProxyService._VIDEO_FAILED_STATUSES:
+                normalized["status"] = "failed"
+        elif body.get("message") and status in ProxyService._VIDEO_FAILED_STATUSES:
+            normalized["error"] = {"message": body.get("message"), "code": body.get("code")}
+        return normalized
 
     @staticmethod
     def _extract_cpa_grok_video_url(body: dict[str, Any]) -> str:
@@ -12931,6 +13047,96 @@ class ProxyService:
         return adjusted_rate, total, adjustment
 
     @staticmethod
+    def _build_video_request_quota_precheck(
+        db: Session,
+        unified_model: UnifiedModel,
+        *,
+        user_id: Optional[int] = None,
+    ) -> dict[str, Decimal]:
+        price_adjustment = PriceAdjustmentService.resolve_adjustment(
+            db,
+            unified_model,
+            user_id=user_id,
+        )
+        global_price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+        adjustment_multiplier = price_adjustment.multiplier
+        effective_price_multiplier = global_price_multiplier * adjustment_multiplier
+        request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
+        estimated_cost = request_price * effective_price_multiplier
+        return {
+            "estimated_input_tokens": Decimal("0"),
+            "estimated_output_tokens": Decimal("0"),
+            "estimated_total_tokens": Decimal("0"),
+            "estimated_total_cost": estimated_cost,
+            "estimated_quota_cost": estimated_cost,
+            "estimated_cost_is_exact": Decimal("1"),
+            "global_price_multiplier_snapshot": global_price_multiplier,
+            "adjustment_price_multiplier_snapshot": adjustment_multiplier,
+            "price_adjustment_source_snapshot": price_adjustment.source,
+            "price_adjustment_rule_id_snapshot": Decimal(str(price_adjustment.rule_id or 0)),
+            "effective_price_multiplier_snapshot": effective_price_multiplier,
+            "fast_price_multiplier_snapshot": Decimal("1"),
+            "context_price_multiplier_snapshot": Decimal("1"),
+            "context_tokens_snapshot": Decimal("0"),
+        }
+
+    @staticmethod
+    def _assert_video_request_billing_allowed(
+        db: Session,
+        user: SysUser,
+        unified_model: UnifiedModel,
+    ) -> None:
+        quota_precheck = ProxyService._build_video_request_quota_precheck(
+            db,
+            unified_model,
+            user_id=ProxyService._safe_object_id(user),
+        )
+        ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+
+    @staticmethod
+    def _log_video_request_success(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        request_id: str,
+        video_id: str,
+        requested_model: str,
+        actual_model: str,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        client_ip: str,
+        response_time_ms: int,
+        *,
+        video_size: str,
+    ) -> None:
+        ProxyService._deduct_balance_and_log(
+            db,
+            user,
+            api_key_record,
+            unified_model,
+            request_id,
+            requested_model,
+            input_tokens=0,
+            output_tokens=0,
+            channel=channel,
+            client_ip=client_ip,
+            response_time_ms=response_time_ms,
+            is_stream=False,
+            request_type="video_generation",
+            actual_model=actual_model,
+        )
+        with session_scope() as write_db:
+            request_log = (
+                write_db.query(RequestLog)
+                .filter(RequestLog.request_id == request_id)
+                .first()
+            )
+            if request_log:
+                request_log.upstream_session_id = str(video_id)
+                request_log.image_count = 1
+                request_log.image_size = video_size
+
+    @staticmethod
     def _log_video_success(
         user: SysUser,
         api_key_record: UserApiKey,
@@ -13038,6 +13244,7 @@ class ProxyService:
     ) -> JSONResponse:
         release_session_connection(db)
         start_time = time.time()
+        billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
         seconds = request_data.get("_normalized_video_seconds")
         if seconds is None:
@@ -13110,7 +13317,6 @@ class ProxyService:
         response_time_ms = int((time.time() - start_time) * 1000)
         ProxyService._record_success(db, channel)
 
-        billing_type = str(unified_model.billing_type or "image_credit")
         normalized_body = ProxyService._normalize_cpa_grok_video_response(
             response_body,
             video_id=video_id,
@@ -13122,29 +13328,262 @@ class ProxyService:
 
         if bill_on_create:
             try:
-                ProxyService._log_video_success(
-                    user,
-                    api_key_record,
-                    request_id,
-                    video_id,
-                    requested_model,
-                    upstream_model_name,
-                    channel,
-                    client_ip,
-                    response_time_ms,
-                    billing_type=billing_type,
-                    charged_credits=charged_credits,
-                    model_multiplier=model_multiplier,
-                    video_size=size,
-                    video_seconds=int(seconds),
-                    adjustment_multiplier=adjustment_multiplier,
-                    price_adjustment_source=price_adjustment_source,
-                    price_adjustment_rule_id=price_adjustment_rule_id,
-                )
+                if billing_type == "request":
+                    ProxyService._log_video_request_success(
+                        db,
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        unified_model,
+                        client_ip,
+                        response_time_ms,
+                        video_size=size,
+                    )
+                else:
+                    ProxyService._log_video_success(
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        billing_type=billing_type,
+                        charged_credits=charged_credits,
+                        model_multiplier=model_multiplier,
+                        video_size=size,
+                        video_seconds=int(seconds),
+                        adjustment_multiplier=adjustment_multiplier,
+                        price_adjustment_source=price_adjustment_source,
+                        price_adjustment_rule_id=price_adjustment_rule_id,
+                    )
             except ServiceException:
                 raise
             except Exception as exc:
                 logger.error("CPA video billing / logging failed after upstream success: %s", exc)
+                raise ServiceException(
+                    500,
+                    "视频任务创建成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                    "VIDEO_BILLING_FAILED",
+                ) from exc
+
+        ProxyService._store_video_task_route(
+            video_id,
+            user_id=ProxyService._safe_object_id(user),
+            channel_id=ProxyService._safe_object_id(channel),
+            requested_model=requested_model,
+            actual_model=upstream_model_name,
+            request_id=request_id,
+            billing_type=billing_type,
+            charged_credits=charged_credits,
+            model_multiplier=model_multiplier,
+            video_size=size,
+            video_seconds=int(seconds),
+            adjustment_multiplier=adjustment_multiplier,
+            price_adjustment_source=price_adjustment_source,
+            price_adjustment_rule_id=price_adjustment_rule_id,
+            billed=bill_on_create,
+        )
+        normalized_body.setdefault("request_id", request_id)
+        normalized_body["usage"] = {
+            "billing_type": billing_type,
+            "image_credits_charged": float(charged_credits if bill_on_create else Decimal("0.000")),
+            "model_multiplier": float(model_multiplier),
+            "video_credit_rate_per_second": float(model_multiplier),
+            "request_type": "video_generation",
+            "video_count": 1,
+            "size": size,
+            "seconds": int(seconds),
+            "billing_status": "charged" if bill_on_create else "pending_completion",
+        }
+        return JSONResponse(content=normalized_body, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_zz1cc_video_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        model_multiplier: Decimal,
+        request_headers: Optional[dict[str, str]] = None,
+        bill_on_create: bool = False,
+        adjustment_multiplier: Optional[Decimal] = None,
+        price_adjustment_source: Optional[str] = None,
+        price_adjustment_rule_id: Optional[int] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        seconds = request_data.get("_normalized_video_seconds")
+        if seconds is None:
+            seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
+        size = request_data.get("_normalized_video_size") or ProxyService._normalize_video_size(
+            request_data.get("size"),
+            channel,
+        )
+        reference_files = ProxyService._extract_video_reference_inputs(request_data)
+
+        payload: dict[str, Any] = {
+            "model": upstream_model_name,
+            "prompt": prompt,
+            "seconds": int(seconds),
+            "aspect_ratio": ProxyService._zz1cc_video_aspect_ratio(size),
+        }
+        for key in ("videos", "audios"):
+            value = request_data.get(key)
+            if isinstance(value, list) and value:
+                payload[key] = [str(item).strip() for item in value if str(item or "").strip()]
+
+        url = ProxyService._resolve_zz1cc_video_create_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        if reference_files:
+            headers.pop("Content-Type", None)
+            files: list[tuple[str, tuple]] = [
+                ("model", (None, upstream_model_name)),
+                ("prompt", (None, prompt)),
+                ("seconds", (None, str(int(seconds)))),
+                ("aspect_ratio", (None, ProxyService._zz1cc_video_aspect_ratio(size))),
+            ]
+            for key in ("videos", "audios"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        files.append((key, (None, str(item))))
+            for reference_file in reference_files:
+                content_type = str(reference_file.get("content_type") or "application/octet-stream")
+                if not content_type.lower().startswith("image/"):
+                    raise ServiceException(400, "input_reference 仅支持图片文件", "INVALID_VIDEO_REFERENCE")
+                files.append((
+                    "input_reference",
+                    (
+                        reference_file.get("filename") or "reference.png",
+                        reference_file.get("content"),
+                        content_type,
+                    ),
+                ))
+            response = await ProxyService._post_files_with_retries(
+                url,
+                files,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="zz1cc video create",
+            )
+        else:
+            response = await ProxyService._post_with_retries(
+                url,
+                payload,
+                headers,
+                request_id=request_id,
+                channel=channel,
+                timeout=timeout,
+                log_label="zz1cc video create",
+            )
+        if not 200 <= response.status_code < 300:
+            body_text = response.text[:1000]
+            upstream_detail = f"zz1cc 视频任务创建失败（HTTP {response.status_code}）：{body_text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
+                "OPENAI_VIDEO_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
+            )
+
+        try:
+            response_body = response.json()
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "zz1cc 视频任务创建响应解析失败",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            ) from exc
+        if not isinstance(response_body, dict):
+            raise ServiceException(
+                503,
+                "zz1cc 视频任务创建响应格式无效",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+        video_id = str(
+            response_body.get("id")
+            or response_body.get("task_id")
+            or response_body.get("request_id")
+            or ""
+        ).strip()
+        if not video_id:
+            raise ServiceException(
+                503,
+                "zz1cc 视频任务创建成功，但未返回 video_id",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+
+        normalized_body = ProxyService._normalize_zz1cc_video_response(
+            response_body,
+            video_id=video_id,
+            model=upstream_model_name,
+            prompt=prompt,
+            seconds=int(seconds),
+            size=size,
+        )
+
+        if bill_on_create:
+            try:
+                if billing_type == "request":
+                    ProxyService._log_video_request_success(
+                        db,
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        unified_model,
+                        client_ip,
+                        response_time_ms,
+                        video_size=size,
+                    )
+                else:
+                    ProxyService._log_video_success(
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        billing_type=billing_type,
+                        charged_credits=charged_credits,
+                        model_multiplier=model_multiplier,
+                        video_size=size,
+                        video_seconds=int(seconds),
+                        adjustment_multiplier=adjustment_multiplier,
+                        price_adjustment_source=price_adjustment_source,
+                        price_adjustment_rule_id=price_adjustment_rule_id,
+                    )
+            except ServiceException:
+                raise
+            except Exception as exc:
+                logger.error("zz1cc video billing / logging failed after upstream success: %s", exc)
                 raise ServiceException(
                     500,
                     "视频任务创建成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
@@ -13204,6 +13643,7 @@ class ProxyService:
     ) -> JSONResponse:
         release_session_connection(db)
         start_time = time.time()
+        billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
         seconds = request_data.get("_normalized_video_seconds")
         if seconds is None:
@@ -13274,28 +13714,43 @@ class ProxyService:
         response_time_ms = int((time.time() - start_time) * 1000)
         ProxyService._record_success(db, channel)
 
-        billing_type = str(unified_model.billing_type or "image_credit")
         if bill_on_create:
             try:
-                ProxyService._log_video_success(
-                    user,
-                    api_key_record,
-                    request_id,
-                    str(response_body.get("id")),
-                    requested_model,
-                    upstream_model_name,
-                    channel,
-                    client_ip,
-                    response_time_ms,
-                    billing_type=billing_type,
-                    charged_credits=charged_credits,
-                    model_multiplier=model_multiplier,
-                    video_size=size,
-                    video_seconds=int(seconds),
-                    adjustment_multiplier=adjustment_multiplier,
-                    price_adjustment_source=price_adjustment_source,
-                    price_adjustment_rule_id=price_adjustment_rule_id,
-                )
+                if billing_type == "request":
+                    ProxyService._log_video_request_success(
+                        db,
+                        user,
+                        api_key_record,
+                        request_id,
+                        str(response_body.get("id")),
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        unified_model,
+                        client_ip,
+                        response_time_ms,
+                        video_size=size,
+                    )
+                else:
+                    ProxyService._log_video_success(
+                        user,
+                        api_key_record,
+                        request_id,
+                        str(response_body.get("id")),
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        billing_type=billing_type,
+                        charged_credits=charged_credits,
+                        model_multiplier=model_multiplier,
+                        video_size=size,
+                        video_seconds=int(seconds),
+                        adjustment_multiplier=adjustment_multiplier,
+                        price_adjustment_source=price_adjustment_source,
+                        price_adjustment_rule_id=price_adjustment_rule_id,
+                    )
             except ServiceException:
                 raise
             except Exception as exc:
@@ -13374,26 +13829,28 @@ class ProxyService:
             client_ip,
         )
         ProxyService._maybe_scan_security_request_or_raise(db, unified_model, security_snapshot, request_data)
+        unified_model_id = unified_model.id
+        billing_type = str(unified_model.billing_type or "image_credit")
         if str(unified_model.model_type or "") != "video":
             raise ServiceException(400, "当前模型不是视频模型", "VIDEO_MODEL_NOT_SUPPORTED")
-        billing_type = str(unified_model.billing_type or "image_credit")
-        if billing_type not in {"image_credit", "free"}:
+        if billing_type not in {"image_credit", "request", "free"}:
             raise ServiceException(
                 400,
-                "当前视频模型仅支持图片积分或免费计费",
+                "当前视频模型仅支持图片积分、按次或免费计费",
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
 
         normalized_resolution_name = ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
         normalized_preset = ProxyService._normalize_video_preset(request_data.get("preset"))
 
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ModelService.get_available_channels(db, unified_model_id)
         if not channels:
             raise ServiceException(503, "当前视频模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None
         request_error: ServiceException | None = None
         non_retryable_request_error_codes = {
+            "INSUFFICIENT_BALANCE",
             "INSUFFICIENT_IMAGE_CREDITS",
             "IMAGE_CREDIT_BALANCE_NOT_FOUND",
             "INVALID_IMAGE_CREDIT_AMOUNT",
@@ -13405,12 +13862,14 @@ class ProxyService:
             "INVALID_VIDEO_SIZE",
             "INVALID_VIDEO_RESOLUTION",
             "INVALID_VIDEO_PRESET",
+            "INVALID_VIDEO_REFERENCE",
         }
         invalid_video_request_error_codes = {
             "INVALID_VIDEO_SECONDS",
             "INVALID_VIDEO_SIZE",
             "INVALID_VIDEO_RESOLUTION",
             "INVALID_VIDEO_PRESET",
+            "INVALID_VIDEO_REFERENCE",
         }
         for channel, actual_model_name in channels:
             ProxyService._apply_runtime_retry_config(db, channel)
@@ -13419,22 +13878,31 @@ class ProxyService:
                 if protocol_type not in {"openai", "anthropic"}:
                     continue
                 upstream_model_name = actual_model_name or requested_model
+                current_unified_model = ProxyService._resolve_requested_model_or_raise(
+                    db,
+                    requested_model,
+                    error_code="VIDEO_MODEL_NOT_FOUND",
+                )
                 normalized_seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
                 normalized_size = ProxyService._normalize_video_size(request_data.get("size"), channel)
                 model_multiplier, resolved_video_credit_cost, price_adjustment = ProxyService._resolve_adjusted_video_credit_cost(
                     db,
-                    unified_model,
+                    current_unified_model,
                     normalized_seconds,
                     user_id=ProxyService._safe_object_id(user),
                 )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
-                ImageCreditService.check_balance(db, user.id, video_credit_cost)
+                if billing_type == "image_credit":
+                    ImageCreditService.check_balance(db, user.id, video_credit_cost)
+                elif billing_type == "request":
+                    ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
                 channel_request_data = {
                     **request_data,
                     "_normalized_video_seconds": normalized_seconds,
                     "_normalized_video_size": normalized_size,
                     "_normalized_video_resolution_name": normalized_resolution_name,
                     "_normalized_video_preset": normalized_preset,
+                    "_resolved_billing_type": billing_type,
                 }
                 if ProxyService._is_cpa_grok_video_channel(channel):
                     return await ProxyService._non_stream_cpa_grok_video_request(
@@ -13442,7 +13910,27 @@ class ProxyService:
                         user,
                         api_key_record,
                         channel,
-                        unified_model,
+                        current_unified_model,
+                        channel_request_data,
+                        request_id,
+                        requested_model,
+                        upstream_model_name,
+                        client_ip,
+                        video_credit_cost,
+                        model_multiplier,
+                        request_headers=request_headers,
+                        bill_on_create=bill_on_create,
+                        adjustment_multiplier=price_adjustment.multiplier,
+                        price_adjustment_source=price_adjustment.source,
+                        price_adjustment_rule_id=price_adjustment.rule_id,
+                    )
+                if ProxyService._is_zz1cc_video_channel(channel):
+                    return await ProxyService._non_stream_zz1cc_video_request(
+                        db,
+                        user,
+                        api_key_record,
+                        channel,
+                        current_unified_model,
                         channel_request_data,
                         request_id,
                         requested_model,
@@ -13461,7 +13949,7 @@ class ProxyService:
                     user,
                     api_key_record,
                     channel,
-                    unified_model,
+                    current_unified_model,
                     channel_request_data,
                     request_id,
                     requested_model,
@@ -13560,13 +14048,14 @@ class ProxyService:
         normalized_preset = ProxyService._normalize_video_preset(video_config.get("preset"))
 
         billing_type = str(unified_model.billing_type or "image_credit")
-        if billing_type not in {"image_credit", "free"}:
+        unified_model_id = unified_model.id
+        if billing_type not in {"image_credit", "request", "free"}:
             raise ServiceException(
                 400,
-                "当前视频模型仅支持图片积分或免费计费",
+                "当前视频模型仅支持图片积分、按次或免费计费",
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        channels = ModelService.get_available_channels(db, unified_model_id)
         if not channels:
             raise ServiceException(503, "当前视频模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
@@ -13579,17 +14068,31 @@ class ProxyService:
             try:
                 if str(getattr(channel, "protocol_type", "") or "").lower() != "openai":
                     continue
+                if ProxyService._is_zz1cc_video_channel(channel):
+                    raise ServiceException(
+                        400,
+                        "zz1cc 视频模型首版不支持 /v1/chat/completions，请使用 /v1/videos 或 /v1/created/video",
+                        "VIDEO_MODEL_NOT_SUPPORTED",
+                    )
                 upstream_model_name = actual_model_name or requested_model
+                current_unified_model = ProxyService._resolve_requested_model_or_raise(
+                    db,
+                    requested_model,
+                    error_code="VIDEO_MODEL_NOT_FOUND",
+                )
                 normalized_seconds = ProxyService._normalize_video_seconds(video_config.get("seconds"), channel)
                 normalized_size = ProxyService._normalize_video_size(video_config.get("size"), channel)
                 model_multiplier, resolved_video_credit_cost, price_adjustment = ProxyService._resolve_adjusted_video_credit_cost(
                     db,
-                    unified_model,
+                    current_unified_model,
                     normalized_seconds,
                     user_id=ProxyService._safe_object_id(user),
                 )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
-                ImageCreditService.check_balance(db, user.id, video_credit_cost)
+                if billing_type == "image_credit":
+                    ImageCreditService.check_balance(db, user.id, video_credit_cost)
+                elif billing_type == "request":
+                    ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
                 payload = dict(request_data_copy)
                 payload["model"] = upstream_model_name
                 payload["video_config"] = {
@@ -13598,13 +14101,14 @@ class ProxyService:
                     "resolution_name": normalized_resolution_name,
                     "preset": normalized_preset,
                 }
+                payload["_resolved_billing_type"] = billing_type
                 if request_data.get("stream", False):
                     return await ProxyService._stream_openai_video_chat_request(
                         db,
                         user,
                         api_key_record,
                         channel,
-                        unified_model,
+                        current_unified_model,
                         payload,
                         request_id,
                         requested_model,
@@ -13625,7 +14129,7 @@ class ProxyService:
                     user,
                     api_key_record,
                     channel,
-                    unified_model,
+                    current_unified_model,
                     payload,
                     request_id,
                     requested_model,
@@ -13756,30 +14260,46 @@ class ProxyService:
         )
         response_time_ms = int((time.time() - start_time) * 1000)
         ProxyService._record_success(db, channel)
-        ProxyService._log_video_success(
-            user,
-            api_key_record,
-            request_id,
-            video_id,
-            requested_model,
-            upstream_model_name,
-            channel,
-            client_ip,
-            response_time_ms,
-            billing_type=billing_type,
-            charged_credits=charged_credits,
-            model_multiplier=model_multiplier,
-            video_size=video_size,
-            video_seconds=video_seconds,
-            adjustment_multiplier=adjustment_multiplier,
-            price_adjustment_source=price_adjustment_source,
-            price_adjustment_rule_id=price_adjustment_rule_id,
-        )
+        if billing_type == "request":
+            ProxyService._log_video_request_success(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                video_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                unified_model,
+                client_ip,
+                response_time_ms,
+                video_size=video_size,
+            )
+        else:
+            ProxyService._log_video_success(
+                user,
+                api_key_record,
+                request_id,
+                video_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                billing_type=billing_type,
+                charged_credits=charged_credits,
+                model_multiplier=model_multiplier,
+                video_size=video_size,
+                video_seconds=video_seconds,
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
+            )
         response_body.setdefault("request_id", request_id)
         response_body["usage"] = {
             **(response_body.get("usage") if isinstance(response_body.get("usage"), dict) else {}),
             "billing_type": billing_type,
-            "image_credits_charged": float(charged_credits),
+            "image_credits_charged": float(charged_credits if billing_type == "image_credit" else Decimal("0.000")),
             "model_multiplier": float(model_multiplier),
             "video_credit_rate_per_second": float(model_multiplier),
             "request_type": "video_generation",
@@ -13880,25 +14400,41 @@ class ProxyService:
                         )
                         video_id = video_url or request_id
                         ProxyService._record_success(db, channel)
-                        ProxyService._log_video_success(
-                            user,
-                            api_key_record,
-                            request_id,
-                            video_id,
-                            requested_model,
-                            upstream_model_name,
-                            channel,
-                            client_ip,
-                            response_time_ms,
-                            billing_type=billing_type,
-                            charged_credits=charged_credits,
-                            model_multiplier=model_multiplier,
-                            video_size=video_size,
-                            video_seconds=video_seconds,
-                            adjustment_multiplier=adjustment_multiplier,
-                            price_adjustment_source=price_adjustment_source,
-                            price_adjustment_rule_id=price_adjustment_rule_id,
-                        )
+                        if billing_type == "request":
+                            ProxyService._log_video_request_success(
+                                db,
+                                user,
+                                api_key_record,
+                                request_id,
+                                video_id,
+                                requested_model,
+                                upstream_model_name,
+                                channel,
+                                unified_model,
+                                client_ip,
+                                response_time_ms,
+                                video_size=video_size,
+                            )
+                        else:
+                            ProxyService._log_video_success(
+                                user,
+                                api_key_record,
+                                request_id,
+                                video_id,
+                                requested_model,
+                                upstream_model_name,
+                                channel,
+                                client_ip,
+                                response_time_ms,
+                                billing_type=billing_type,
+                                charged_credits=charged_credits,
+                                model_multiplier=model_multiplier,
+                                video_size=video_size,
+                                video_seconds=video_seconds,
+                                adjustment_multiplier=adjustment_multiplier,
+                                price_adjustment_source=price_adjustment_source,
+                                price_adjustment_rule_id=price_adjustment_rule_id,
+                            )
                     except ServiceException as exc:
                         ProxyService._log_failed_request(
                             db,
@@ -14289,7 +14825,7 @@ class ProxyService:
         response_body["usage"] = {
             **(response_body.get("usage") if isinstance(response_body.get("usage"), dict) else {}),
             "billing_type": billing_type,
-            "image_credits_charged": float(charged_credits),
+            "image_credits_charged": float(charged_credits if billing_type == "image_credit" else Decimal("0.000")),
             "model_multiplier": float(model_multiplier),
             "video_credit_rate_per_second": float(model_multiplier),
             "request_type": "video_generation",
@@ -14447,25 +14983,46 @@ class ProxyService:
         if billing_type == "image_credit" and charged_credits <= Decimal("0"):
             return False
 
-        ProxyService._log_video_success(
-            user,
-            api_key_record,
-            request_id,
-            video_id,
-            requested_model,
-            actual_model or requested_model,
-            channel,
-            client_ip,
-            response_time_ms,
-            billing_type=billing_type,
-            charged_credits=charged_credits,
-            model_multiplier=model_multiplier,
-            video_size=video_size,
-            video_seconds=video_seconds,
-            adjustment_multiplier=adjustment_multiplier,
-            price_adjustment_source=price_adjustment_source,
-            price_adjustment_rule_id=price_adjustment_rule_id,
-        )
+        if billing_type == "request":
+            unified_model = ProxyService._resolve_requested_model_or_raise(
+                db,
+                requested_model,
+                error_code="VIDEO_MODEL_NOT_FOUND",
+            )
+            ProxyService._log_video_request_success(
+                db,
+                user,
+                api_key_record,
+                request_id,
+                video_id,
+                requested_model,
+                actual_model or requested_model,
+                channel,
+                unified_model,
+                client_ip,
+                response_time_ms,
+                video_size=video_size,
+            )
+        else:
+            ProxyService._log_video_success(
+                user,
+                api_key_record,
+                request_id,
+                video_id,
+                requested_model,
+                actual_model or requested_model,
+                channel,
+                client_ip,
+                response_time_ms,
+                billing_type=billing_type,
+                charged_credits=charged_credits,
+                model_multiplier=model_multiplier,
+                video_size=video_size,
+                video_seconds=video_seconds,
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
+            )
         route_info["billed"] = True
         ProxyService._mark_video_task_snapshot_billed(video_id)
         return True
@@ -14514,6 +15071,78 @@ class ProxyService:
             raise ServiceException(
                 503,
                 "CPA Grok 视频任务查询响应格式无效",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            )
+        return body
+
+    @staticmethod
+    async def _request_zz1cc_video_status(
+        channel: Channel,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        url = ProxyService._resolve_zz1cc_video_retrieve_url(channel.base_url, video_id)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        headers.pop("Content-Type", None)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                f"zz1cc 视频任务查询网络异常：{exc}",
+            ) from exc
+        except Exception as exc:
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                f"zz1cc 视频任务查询异常：{exc}",
+            ) from exc
+        if response.status_code != 200:
+            if response.status_code in {400, 422}:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = None
+                if isinstance(body, dict) and (
+                    body.get("error")
+                    or body.get("code")
+                    or body.get("message")
+                    or body.get("status")
+                ):
+                    body["status"] = "failed"
+                    body.setdefault("progress", 100)
+                    return body
+            upstream_detail = f"zz1cc 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                upstream_detail,
+            )
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "zz1cc 视频任务查询响应解析失败",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            ) from exc
+        if not isinstance(body, dict):
+            raise ServiceException(
+                503,
+                "zz1cc 视频任务查询响应格式无效",
                 "OPENAI_VIDEO_RETRIEVE_FAILED",
             )
         return body
@@ -14572,6 +15201,13 @@ class ProxyService:
                 request_headers=request_headers,
             )
             return
+        if ProxyService._is_zz1cc_video_channel(channel):
+            await ProxyService._validate_video_url_content_or_raise(
+                channel,
+                ProxyService._resolve_zz1cc_video_content_url(channel.base_url, video_id),
+                request_headers=request_headers,
+            )
+            return
         await ProxyService._validate_video_url_content_or_raise(
             channel,
             ProxyService._resolve_openai_video_content_url(channel.base_url, video_id),
@@ -14606,10 +15242,33 @@ class ProxyService:
                     },
                 )
         url = (
-            ProxyService._resolve_openai_video_content_url(channel.base_url, video_id)
-            if content
-            else ProxyService._resolve_openai_video_retrieve_url(channel.base_url, video_id)
+            ProxyService._resolve_zz1cc_video_content_url(channel.base_url, video_id)
+            if content and ProxyService._is_zz1cc_video_channel(channel)
+            else (
+                ProxyService._resolve_openai_video_content_url(channel.base_url, video_id)
+                if content
+                else ProxyService._resolve_openai_video_retrieve_url(channel.base_url, video_id)
+            )
         )
+        if ProxyService._is_zz1cc_video_channel(channel) and not content:
+            try:
+                body = await ProxyService._request_zz1cc_video_status(
+                    channel,
+                    video_id,
+                    request_headers=request_headers,
+                )
+                normalized = ProxyService._normalize_zz1cc_video_response(body, video_id=video_id)
+                return httpx.Response(200, json=normalized)
+            except ServiceException as exc:
+                return httpx.Response(
+                    int(exc.status_code or 503),
+                    json={
+                        "error": {
+                            "message": str(exc.detail or _UPSTREAM_FAILURE_VISIBLE_MESSAGE),
+                            "code": exc.error_code,
+                        }
+                    },
+                )
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         headers.pop("Content-Type", None)
         timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
@@ -14629,6 +15288,8 @@ class ProxyService:
                 video_id,
                 request_headers=request_headers,
             )
+        elif ProxyService._is_zz1cc_video_channel(channel):
+            url = ProxyService._resolve_zz1cc_video_content_url(channel.base_url, video_id)
         else:
             url = ProxyService._resolve_openai_video_content_url(channel.base_url, video_id)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)

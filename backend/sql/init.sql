@@ -229,7 +229,7 @@ CREATE TABLE `channel` (
     `base_url` VARCHAR(512) NOT NULL,
     `api_key` TEXT NOT NULL COMMENT '加密存储的API Key',
     `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
-    `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/openai-image-compatible/openai-image-native-size/openai-image-modelinvoke/geek2api-image/cpa-grok-video/google-official/google-vertex-image',
+    `provider_variant` VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT '渠道子类型: default/openai-image-compatible/openai-image-native-size/openai-image-modelinvoke/geek2api-image/cpa-grok-video/zz1cc-video/google-official/google-vertex-image',
     `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
@@ -1149,6 +1149,24 @@ INSERT INTO `unified_model` (
     `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
 ('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1, 'Grok Imagine 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 grok2api 渠道）')
+ON DUPLICATE KEY UPDATE
+    `display_name` = VALUES(`display_name`),
+    `model_type` = VALUES(`model_type`),
+    `model_series` = VALUES(`model_series`),
+    `protocol_type` = VALUES(`protocol_type`),
+    `billing_type` = VALUES(`billing_type`),
+    `request_price` = VALUES(`request_price`),
+    `image_credit_multiplier` = VALUES(`image_credit_multiplier`),
+    `enabled` = VALUES(`enabled`),
+    `description` = VALUES(`description`);
+
+-- 预置 zz1cc 视频模型
+INSERT INTO `unified_model` (
+    `model_name`, `display_name`, `model_type`, `model_series`, `protocol_type`, `max_tokens`,
+    `input_price_per_million`, `output_price_per_million`, `billing_type`, `request_price`, `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
+) VALUES
+('video-ds-2.0', 'video-ds-2.0', 'video', 'other', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1, 'zz1cc video-ds-2.0 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 zz1cc-video 渠道）'),
+('video-ds-2.0-fast', 'video-ds-2.0-fast', 'video', 'other', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1, 'zz1cc video-ds-2.0-fast 视频生成模型（按媒体积分计费，默认 0.5 积分/秒，需映射到 zz1cc-video 渠道）')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),

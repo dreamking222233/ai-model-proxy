@@ -153,7 +153,6 @@ class SecurityDetectionService:
         "泄露系统提示",
         "获取系统提示词",
         "prompt injection",
-        "jailbreak",
         "dan",
         "无限制模式",
     ]

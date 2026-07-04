@@ -175,10 +175,15 @@
     <div class="table-card">
       <div class="table-header">
         <h3 class="section-title">调用明细</h3>
-        <span class="table-total">共 {{ pagination.total }} 条记录</span>
+        <div class="table-toolbar">
+          <span class="table-total">共 {{ pagination.total }} 条记录</span>
+          <a-button size="small" :icon="showActualModel ? 'eye-invisible' : 'eye'" @click="toggleActualModelVisible">
+            {{ showActualModel ? '隐藏实际模型' : '显示实际模型' }}
+          </a-button>
+        </div>
       </div>
       <a-table
-        :columns="columns"
+        :columns="visibleColumns"
         :data-source="logList"
         :loading="loading"
         :pagination="pagination"
@@ -188,7 +193,7 @@
         :custom-row="customRow"
         :expand-icon-column-index="-1"
         :expand-icon-as-cell="false"
-        :scroll="{ x: 1600 }"
+        :scroll="{ x: tableScrollX }"
         size="middle"
       >
         <template slot="expandedRowRender" slot-scope="record">
@@ -453,7 +458,7 @@
               <span class="detail-item-label">请求模型</span>
               <a-tag class="model-tag">{{ selectedRecord.requested_model || '-' }}</a-tag>
             </div>
-            <div class="detail-item">
+            <div v-if="showActualModel" class="detail-item">
               <span class="detail-item-label">实际模型</span>
               <a-tag v-if="selectedRecord.actual_model" class="actual-model-tag">{{ selectedRecord.actual_model }}</a-tag>
               <span v-else class="detail-item-value text-muted">-</span>
@@ -656,6 +661,7 @@ export default {
       userSummaryLoading: false,
       logList: [],
       userSummary: null,
+      showActualModel: true,
       filters: {
         model: '',
         status: undefined,
@@ -783,6 +789,13 @@ export default {
     }
   },
   computed: {
+    visibleColumns() {
+      if (this.showActualModel) return this.columns
+      return this.columns.filter(column => column.key !== 'actual_model')
+    },
+    tableScrollX() {
+      return this.showActualModel ? 1600 : 1460
+    },
     hasUserFilter() {
       return String(this.filters.user_id || '').trim() !== ''
     },
@@ -1096,6 +1109,9 @@ export default {
     handleStatusChange() {
       this.handleFilter()
     },
+    toggleActualModelVisible() {
+      this.showActualModel = !this.showActualModel
+    },
     handleReset() {
       this.filters = {
         model: '',
@@ -1391,7 +1407,16 @@ export default {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 12px;
       margin-bottom: 16px;
+    }
+
+    .table-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     .table-total {

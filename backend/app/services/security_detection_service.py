@@ -152,10 +152,28 @@ class SecurityDetectionService:
         "忽略开发者消息",
         "泄露系统提示",
         "获取系统提示词",
-        "prompt injection",
         "dan",
         "无限制模式",
     ]
+    AMBIGUOUS_PROMPT_JAILBREAK_TERMS = {
+        "prompt injection": re.compile(
+            r"\bprompt\s+injection\b.{0,96}\b("
+            r"bypass|jailbreak|ignore|leak|extract|steal|reveal|override|payload|attack|"
+            r"system\s+prompt|developer\s+message"
+            r")\b|"
+            r"\b("
+            r"bypass|jailbreak|ignore|leak|extract|steal|reveal|override|payload|attack|"
+            r"system\s+prompt|developer\s+message"
+            r")\b.{0,96}\bprompt\s+injection\b|"
+            r"(prompt\s+injection).{0,96}(绕过|越狱|忽略|泄露|获取|提取|套取|系统提示|开发者消息|"
+            r"攻击教程|攻击方法|攻击代码|攻击载荷|攻击脚本|利用方法|利用代码|构造payload)|"
+            r"(绕过|越狱|忽略|泄露|获取|提取|套取|系统提示|开发者消息|"
+            r"攻击教程|攻击方法|攻击代码|攻击载荷|攻击脚本|利用方法|利用代码|构造payload).{0,96}(prompt\s+injection)|"
+            r"(帮我|请|生成|写|构造|制作|设计|提供|创建|实现|开发).{0,48}(prompt\s+injection).{0,48}攻击|"
+            r"(帮我|请|生成|写|构造|制作|设计|提供|创建|实现|开发).{0,48}攻击.{0,48}(prompt\s+injection)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    }
     SEXUAL_HIGH_RISK_TERMS = [
         "裸聊",
         "文爱",
@@ -187,7 +205,7 @@ class SecurityDetectionService:
                          r"(写|生成|创作|制作).{0,16}强奸.{0,12}(情节|描写|小说|内容)", re.IGNORECASE | re.DOTALL),
         "轮奸": re.compile(r"轮奸(?!案|案件|罪|犯罪|事件|指控|审判|抗议|报道|史实)|"
                          r"(写|生成|创作|制作).{0,16}轮奸.{0,12}(情节|描写|小说|内容)", re.IGNORECASE | re.DOTALL),
-        "性交": re.compile(r"(?<!线)性交(?!织)", re.IGNORECASE),
+        "性交": re.compile(r"(?<!线)性交(?!织|流|换|付(?!费))", re.IGNORECASE),
         "口交": re.compile(r"(?<!人)口交(?!融)", re.IGNORECASE),
         "肛交": re.compile(r"肛交", re.IGNORECASE),
     }
@@ -474,6 +492,14 @@ class SecurityDetectionService:
         return matched
 
     @staticmethod
+    def _match_ambiguous_prompt_jailbreak_terms(text: str) -> list[dict[str, Any]]:
+        matched = []
+        for term, pattern in SecurityDetectionService.AMBIGUOUS_PROMPT_JAILBREAK_TERMS.items():
+            if pattern.search(str(text or "")):
+                matched.append({"category": "prompt_jailbreak", "term": term})
+        return matched
+
+    @staticmethod
     def _term_matches(normalized_text: str, term: str) -> bool:
         normalized = str(normalized_text or "").lower()
         normalized_term = str(term or "").strip().lower()
@@ -495,6 +521,7 @@ class SecurityDetectionService:
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.SEXUAL_HIGH_RISK_TERMS, "sexual_content"))
         matched_rules.extend(SecurityDetectionService._match_ambiguous_sexual_terms(normalized))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.PROMPT_JAILBREAK_TERMS, "prompt_jailbreak"))
+        matched_rules.extend(SecurityDetectionService._match_ambiguous_prompt_jailbreak_terms(normalized))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.CYBER_ABUSE_TERMS, "cyber_abuse"))
         matched_rules.extend(SecurityDetectionService._match_ambiguous_cyber_terms(normalized))
         matched_rules.extend(SecurityDetectionService._match_terms(normalized, SecurityDetectionService.ILLEGAL_AUTOMATION_TERMS, "illegal_automation"))

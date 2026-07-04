@@ -2,12 +2,12 @@
 Redis 客户端封装
 提供连接池管理、异常处理，不降级到内存缓存
 """
-import os
 import logging
 from typing import Optional
 import redis
 from redis.connection import ConnectionPool
 from redis.exceptions import ConnectionError as RedisConnectionError
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +19,11 @@ class RedisClient:
         """初始化 Redis 连接池（修复：失败时抛出异常）"""
         try:
             self.pool = ConnectionPool(
-                host=os.getenv("REDIS_HOST", "localhost"),
-                port=int(os.getenv("REDIS_PORT", 6379)),
-                password=os.getenv("REDIS_PASSWORD") or None,
-                db=int(os.getenv("REDIS_DB", 0)),
-                max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)),
+                host=settings.REDIS_HOST,
+                port=int(settings.REDIS_PORT),
+                password=settings.REDIS_PASSWORD or None,
+                db=int(settings.REDIS_DB),
+                max_connections=int(settings.REDIS_MAX_CONNECTIONS),
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5
@@ -35,7 +35,7 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Failed to initialize Redis client: {e}")
             # 如果 CACHE_ENABLED=true 但 Redis 连接失败，抛出异常
-            if os.getenv("CACHE_ENABLED", "true").lower() == "true":
+            if settings.CACHE_ENABLED:
                 logger.warning("Cache is enabled but Redis connection failed. Cache will be disabled.")
             self.client = None
 

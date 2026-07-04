@@ -56,6 +56,11 @@ from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheServ
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
 from app.services.security_detection_service import SecurityDetectionService
+from app.services.billing_concurrency_service import (
+    BillingAdmissionDecision,
+    BillingConcurrencyLease,
+    BillingConcurrencyService,
+)
 from app.core.exceptions import ServiceException
 from app.middleware.cache_middleware import CacheMiddleware
 from app.middleware.stream_cache_middleware import StreamCacheMiddleware
@@ -312,7 +317,7 @@ class ProxyService:
         db: Session,
         user: SysUser,
         quota_precheck: Optional[dict[str, Decimal]] = None,
-    ) -> None:
+    ) -> BillingAdmissionDecision:
         """Validate whether a text request can proceed under the user's current billing mode."""
         had_subscription_cache = user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at)
         active_subscription = SubscriptionService.refresh_user_subscription_state(
@@ -337,7 +342,11 @@ class ProxyService:
                     }:
                         raise
                     if ProxyService._can_fallback_to_balance_for_quota_precheck(db, user.id, quota_precheck):
-                        return
+                        return ProxyService._build_billing_admission_decision(
+                            db,
+                            user.id,
+                            active_subscription=active_subscription,
+                        )
                     raise ProxyService._build_quota_balance_insufficient_error()
                 if ProxyService._precheck_requires_exact_cost(quota_precheck):
                     estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
@@ -351,15 +360,174 @@ class ProxyService:
                         estimated_balance_charge,
                     ):
                         raise ProxyService._build_quota_balance_insufficient_error()
-            return
+            return ProxyService._build_billing_admission_decision(
+                db,
+                user.id,
+                active_subscription=active_subscription,
+            )
 
         if ProxyService._can_balance_cover_text_precheck(db, user.id, quota_precheck):
-            return
+            return ProxyService._build_billing_admission_decision(
+                db,
+                user.id,
+                active_subscription=None,
+            )
 
         if had_subscription_cache:
             raise ServiceException(403, "套餐已过期，请续费或充值余额", "SUBSCRIPTION_EXPIRED")
 
         raise ProxyService._build_balance_precheck_insufficient_error()
+
+    @staticmethod
+    def _billing_low_asset_threshold(db: Session) -> Decimal:
+        value = get_system_config(db, "billing_low_asset_threshold_usd", "2")
+        try:
+            return max(Decimal(str(value)), Decimal("0"))
+        except Exception:
+            return Decimal("2")
+
+    @staticmethod
+    def _billing_low_asset_concurrency_limit(db: Session) -> int:
+        value = get_system_config(db, "billing_low_asset_concurrency_limit", 3)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return BillingConcurrencyService.DEFAULT_LIMIT
+
+    @staticmethod
+    def _billing_concurrency_lease_ttl_seconds(db: Session) -> int:
+        value = get_system_config(db, "billing_concurrency_lease_ttl_seconds", BillingConcurrencyService.DEFAULT_TTL_SECONDS)
+        try:
+            return max(30, int(value))
+        except Exception:
+            return BillingConcurrencyService.DEFAULT_TTL_SECONDS
+
+    @staticmethod
+    def _get_subscription_quota_remaining(
+        db: Session,
+        active_subscription: Any,
+    ) -> tuple[Optional[str], Optional[Decimal]]:
+        if not active_subscription or not SubscriptionService._requires_daily_cycle(active_subscription):
+            return None, None
+        quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
+        quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
+        cycle = SubscriptionService._get_or_create_cycle(
+            db,
+            active_subscription,
+            SubscriptionService.get_current_time(),
+        )
+        remaining = quota_limit - SubscriptionService._normalize_decimal(cycle.used_amount)
+        return quota_metric, max(remaining, Decimal("0"))
+
+    @staticmethod
+    def _build_billing_admission_decision(
+        db: Session,
+        user_id: int,
+        *,
+        active_subscription: Any = None,
+    ) -> BillingAdmissionDecision:
+        balance = ProxyService._balance_decimal(
+            ProxyService._get_balance_record(db, user_id)
+        )
+        threshold = ProxyService._billing_low_asset_threshold(db)
+        limit = ProxyService._billing_low_asset_concurrency_limit(db)
+        quota_metric, quota_remaining = ProxyService._get_subscription_quota_remaining(
+            db,
+            active_subscription,
+        )
+        subscription_id = getattr(active_subscription, "id", None) if active_subscription else None
+
+        limited = False
+        reason: Optional[str] = None
+        if not active_subscription:
+            limited = True
+            reason = "no_subscription"
+        elif (
+            quota_metric == SubscriptionService.QUOTA_METRIC_COST
+            and quota_remaining is not None
+            and quota_remaining >= threshold
+        ):
+            limited = False
+            reason = "quota_sufficient"
+        elif balance > threshold:
+            limited = False
+            reason = "balance_sufficient"
+        elif (
+            quota_metric == SubscriptionService.QUOTA_METRIC_COST
+            and quota_remaining is not None
+            and quota_remaining < threshold
+            and balance <= 0
+        ):
+            limited = True
+            reason = "low_quota_no_balance"
+        elif balance <= threshold:
+            limited = True
+            reason = "low_balance"
+
+        decision = BillingAdmissionDecision(
+            user_id=int(user_id),
+            limited=limited,
+            limit=limit,
+            reason=reason,
+            balance=balance,
+            active_subscription_id=int(subscription_id) if subscription_id else None,
+            quota_metric=quota_metric,
+            quota_remaining_amount=quota_remaining,
+        )
+        if decision.limited:
+            logger.info(
+                "Billing concurrency guard required: user_id=%s reason=%s balance=%s quota_metric=%s quota_remaining=%s limit=%s",
+                decision.user_id,
+                decision.reason,
+                decision.balance,
+                decision.quota_metric,
+                decision.quota_remaining_amount,
+                decision.limit,
+            )
+        return decision
+
+    @staticmethod
+    def _attach_billing_concurrency_to_streaming_response(
+        response: Any,
+        lease: Optional[BillingConcurrencyLease],
+    ) -> Any:
+        if not lease or not isinstance(response, StreamingResponse):
+            return response
+
+        original_iterator = response.body_iterator
+
+        async def guarded_iterator():
+            try:
+                async for chunk in original_iterator:
+                    yield chunk
+            finally:
+                BillingConcurrencyService.release(lease)
+
+        response.body_iterator = guarded_iterator()
+        return response
+
+    @staticmethod
+    async def _run_with_billing_concurrency(
+        db: Session,
+        decision: Optional[BillingAdmissionDecision],
+        request_id: str,
+        producer: Callable[[], Any],
+    ) -> Any:
+        ttl_seconds = ProxyService._billing_concurrency_lease_ttl_seconds(db)
+        lease = BillingConcurrencyService.acquire_if_needed(
+            decision,
+            request_id,
+            ttl_seconds=ttl_seconds,
+        )
+        try:
+            result = await producer()
+        except Exception:
+            BillingConcurrencyService.release(lease)
+            raise
+        if isinstance(result, StreamingResponse):
+            return ProxyService._attach_billing_concurrency_to_streaming_response(result, lease)
+        BillingConcurrencyService.release(lease)
+        return result
 
     @staticmethod
     def _get_balance_record(
@@ -5486,7 +5654,7 @@ class ProxyService:
         )
 
         try:
-            unified_model, channels, quota_precheck = ProxyService._prepare_responses_request_context(
+            unified_model, channels, quota_precheck, admission_decision = ProxyService._prepare_responses_request_context(
                 db,
                 user,
                 requested_model,
@@ -5550,17 +5718,27 @@ class ProxyService:
                 )
 
                 if is_stream:
-                    return await ProxyService._stream_responses_request(
+                    return await ProxyService._run_with_billing_concurrency(
+                        db,
+                        admission_decision,
+                        request_id,
+                        lambda: ProxyService._stream_responses_request(
+                            db, user, api_key_record, channel, unified_model,
+                            channel_request, request_id, requested_model, client_ip,
+                            request_headers=request_headers,
+                            billing_context=request_billing_context,
+                        ),
+                    )
+                return await ProxyService._run_with_billing_concurrency(
+                    db,
+                    admission_decision,
+                    request_id,
+                    lambda: ProxyService._non_stream_responses_request(
                         db, user, api_key_record, channel, unified_model,
                         channel_request, request_id, requested_model, client_ip,
                         request_headers=request_headers,
                         billing_context=request_billing_context,
-                    )
-                return await ProxyService._non_stream_responses_request(
-                    db, user, api_key_record, channel, unified_model,
-                    channel_request, request_id, requested_model, client_ip,
-                    request_headers=request_headers,
-                    billing_context=request_billing_context,
+                    ),
                 )
             except ServiceException as exc:
                 if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
@@ -5733,7 +5911,7 @@ class ProxyService:
             )
 
             try:
-                unified_model, channels, quota_precheck = ProxyService._prepare_responses_request_context(
+                unified_model, channels, quota_precheck, admission_decision = ProxyService._prepare_responses_request_context(
                     db,
                     user,
                     requested_model,
@@ -5794,7 +5972,13 @@ class ProxyService:
                 last_cache_info = cache_info
                 release_session_connection(db)
                 started_at = time.time()
+                lease: Optional[BillingConcurrencyLease] = None
                 try:
+                    lease = BillingConcurrencyService.acquire_if_needed(
+                        admission_decision,
+                        request_id,
+                        ttl_seconds=ProxyService._billing_concurrency_lease_ttl_seconds(db),
+                    )
                     completed_output, input_tokens, output_tokens, first_chunk_time, usage_summary = (
                         await ProxyService._forward_responses_websocket_turn(
                             db,
@@ -5834,6 +6018,18 @@ class ProxyService:
                     last_response_output = completed_output
                     turn_completed = True
                     break
+                except ServiceException as exc:
+                    if exc.error_code in {"BILLING_CONCURRENCY_LIMITED", "BILLING_CONCURRENCY_UNAVAILABLE"}:
+                        await websocket.send_text(json.dumps(
+                            ProxyService._build_responses_error_payload(
+                                exc.detail,
+                                status_code=exc.status_code,
+                                error_type="rate_limit_error" if exc.status_code == 429 else "server_error",
+                            ),
+                            ensure_ascii=False,
+                        ))
+                        return
+                    raise
                 except ResponsesTurnError as exc:
                     response_time_ms = ProxyService._calculate_elapsed_ms(
                         started_at,
@@ -5874,6 +6070,8 @@ class ProxyService:
                         billing_context=billing_context,
                     )
                     return
+                finally:
+                    BillingConcurrencyService.release(lease)
 
             if turn_completed:
                 continue
@@ -5900,7 +6098,7 @@ class ProxyService:
         user: SysUser,
         requested_model: str,
         request_data: Optional[dict] = None,
-    ) -> tuple[UnifiedModel, list[tuple[Channel, str]], Optional[dict[str, Any]]]:
+    ) -> tuple[UnifiedModel, list[tuple[Channel, str]], Optional[dict[str, Any]], BillingAdmissionDecision]:
         """Resolve a Responses request into a model plus channel candidates."""
         unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
         if (
@@ -5925,7 +6123,7 @@ class ProxyService:
                 unified_model,
                 user_id=ProxyService._safe_object_id(user),
             )
-        ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+        admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
         channels = ProxyService._prioritize_channels_for_request(
             ModelService.get_available_channels(db, unified_model.id),
@@ -5940,7 +6138,7 @@ class ProxyService:
                 "Responses 渠道映射指向图片模型，请使用 /v1/images/generations 或 /v1/images/edits",
                 "IMAGE_MODEL_NOT_SUPPORTED_FOR_RESPONSES",
             )
-        return unified_model, channels, quota_precheck
+        return unified_model, channels, quota_precheck, admission_decision
 
     @staticmethod
     def _is_image_unified_model(unified_model: Any) -> bool:
@@ -7331,7 +7529,7 @@ class ProxyService:
                 )
 
                 # 1. Check user entitlement before request
-                ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+                admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
                 # 3. Get available channels sorted by priority
                 channels = ProxyService._prioritize_channels_for_request(
@@ -7411,31 +7609,51 @@ class ProxyService:
 
                     if is_stream:
                         if upstream_protocol == "anthropic":
-                            return await ProxyService._stream_openai_via_anthropic_request(
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._stream_openai_via_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    billing_context=request_billing_context,
+                                ),
+                            )
+                        return await ProxyService._run_with_billing_concurrency(
+                            db,
+                            admission_decision,
+                            request_id,
+                            lambda: ProxyService._stream_openai_request(
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
                                 billing_context=request_billing_context,
-                            )
-                        return await ProxyService._stream_openai_request(
-                            db, user, api_key_record, channel, unified_model,
-                            request_data_copy, request_id, requested_model, client_ip,
-                            request_headers=request_headers,
-                            billing_context=request_billing_context,
+                            ),
                         )
                     else:
                         if upstream_protocol == "anthropic":
-                            return await ProxyService._non_stream_openai_via_anthropic_request(
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._non_stream_openai_via_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    billing_context=request_billing_context,
+                                ),
+                            )
+                        return await ProxyService._run_with_billing_concurrency(
+                            db,
+                            admission_decision,
+                            request_id,
+                            lambda: ProxyService._non_stream_openai_request(
                                 db, user, api_key_record, channel, unified_model,
                                 request_data_copy, request_id, requested_model, client_ip,
                                 request_headers=request_headers,
                                 billing_context=request_billing_context,
-                            )
-                        return await ProxyService._non_stream_openai_request(
-                            db, user, api_key_record, channel, unified_model,
-                            request_data_copy, request_id, requested_model, client_ip,
-                            request_headers=request_headers,
-                            billing_context=request_billing_context,
+                            ),
                         )
                 except ServiceException as exc:
                     if exc.error_code in {"UPSTREAM_INVALID_REQUEST", "CONTENT_TOO_LONG"}:
@@ -7595,7 +7813,7 @@ class ProxyService:
             )
 
             # 1. Check user entitlement before request
-            ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+            admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
             # 3. Get available channels
             channels = ProxyService._prioritize_channels_for_request(
@@ -7685,23 +7903,33 @@ class ProxyService:
 
                     if is_stream:
                         if upstream_api == "responses":
-                            return await ProxyService._stream_anthropic_via_responses_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._stream_anthropic_via_responses_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                         try:
-                            return await ProxyService._stream_anthropic_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                force_compat=compat_mode,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._stream_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    force_compat=compat_mode,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                         except TypeError as exc:
                             if "unexpected keyword argument 'force_compat'" not in str(exc):
@@ -7712,33 +7940,48 @@ class ProxyService:
                                 channel.name,
                                 channel.id,
                             )
-                            return await ProxyService._stream_anthropic_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._stream_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                     else:
                         if upstream_api == "responses":
-                            return await ProxyService._non_stream_anthropic_via_responses_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._non_stream_anthropic_via_responses_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                         try:
-                            return await ProxyService._non_stream_anthropic_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                force_compat=compat_mode,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._non_stream_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    force_compat=compat_mode,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                         except TypeError as exc:
                             if "unexpected keyword argument 'force_compat'" not in str(exc):
@@ -7749,13 +7992,18 @@ class ProxyService:
                                 channel.name,
                                 channel.id,
                             )
-                            return await ProxyService._non_stream_anthropic_request(
-                                db, user, api_key_record, channel, unified_model,
-                                request_data_copy, request_id, requested_model, client_ip,
-                                request_headers=request_headers,
-                                default_reasoning_effort=default_reasoning_effort,
-                                conversation_shadow_info=conversation_shadow_info,
-                                billing_context=request_billing_context,
+                            return await ProxyService._run_with_billing_concurrency(
+                                db,
+                                admission_decision,
+                                request_id,
+                                lambda: ProxyService._non_stream_anthropic_request(
+                                    db, user, api_key_record, channel, unified_model,
+                                    request_data_copy, request_id, requested_model, client_ip,
+                                    request_headers=request_headers,
+                                    default_reasoning_effort=default_reasoning_effort,
+                                    conversation_shadow_info=conversation_shadow_info,
+                                    billing_context=request_billing_context,
+                                ),
                             )
                 except ServiceException as exc:
                     if exc.error_code == "LEGACY_CLAUDE_TOOL_CONTEXT_LIMIT":
@@ -13085,13 +13333,13 @@ class ProxyService:
         db: Session,
         user: SysUser,
         unified_model: UnifiedModel,
-    ) -> None:
+    ) -> BillingAdmissionDecision:
         quota_precheck = ProxyService._build_video_request_quota_precheck(
             db,
             unified_model,
             user_id=ProxyService._safe_object_id(user),
         )
-        ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+        return ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
 
     @staticmethod
     def _log_video_request_success(
@@ -13892,10 +14140,11 @@ class ProxyService:
                     user_id=ProxyService._safe_object_id(user),
                 )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
+                admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
                     ImageCreditService.check_balance(db, user.id, video_credit_cost)
                 elif billing_type == "request":
-                    ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
+                    admission_decision = ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
                 channel_request_data = {
                     **request_data,
                     "_normalized_video_seconds": normalized_seconds,
@@ -13905,27 +14154,60 @@ class ProxyService:
                     "_resolved_billing_type": billing_type,
                 }
                 if ProxyService._is_cpa_grok_video_channel(channel):
-                    return await ProxyService._non_stream_cpa_grok_video_request(
+                    return await ProxyService._run_with_billing_concurrency(
                         db,
-                        user,
-                        api_key_record,
-                        channel,
-                        current_unified_model,
-                        channel_request_data,
+                        admission_decision,
                         request_id,
-                        requested_model,
-                        upstream_model_name,
-                        client_ip,
-                        video_credit_cost,
-                        model_multiplier,
-                        request_headers=request_headers,
-                        bill_on_create=bill_on_create,
-                        adjustment_multiplier=price_adjustment.multiplier,
-                        price_adjustment_source=price_adjustment.source,
-                        price_adjustment_rule_id=price_adjustment.rule_id,
+                        lambda: ProxyService._non_stream_cpa_grok_video_request(
+                            db,
+                            user,
+                            api_key_record,
+                            channel,
+                            current_unified_model,
+                            channel_request_data,
+                            request_id,
+                            requested_model,
+                            upstream_model_name,
+                            client_ip,
+                            video_credit_cost,
+                            model_multiplier,
+                            request_headers=request_headers,
+                            bill_on_create=bill_on_create,
+                            adjustment_multiplier=price_adjustment.multiplier,
+                            price_adjustment_source=price_adjustment.source,
+                            price_adjustment_rule_id=price_adjustment.rule_id,
+                        ),
                     )
                 if ProxyService._is_zz1cc_video_channel(channel):
-                    return await ProxyService._non_stream_zz1cc_video_request(
+                    return await ProxyService._run_with_billing_concurrency(
+                        db,
+                        admission_decision,
+                        request_id,
+                        lambda: ProxyService._non_stream_zz1cc_video_request(
+                            db,
+                            user,
+                            api_key_record,
+                            channel,
+                            current_unified_model,
+                            channel_request_data,
+                            request_id,
+                            requested_model,
+                            upstream_model_name,
+                            client_ip,
+                            video_credit_cost,
+                            model_multiplier,
+                            request_headers=request_headers,
+                            bill_on_create=bill_on_create,
+                            adjustment_multiplier=price_adjustment.multiplier,
+                            price_adjustment_source=price_adjustment.source,
+                            price_adjustment_rule_id=price_adjustment.rule_id,
+                        ),
+                    )
+                return await ProxyService._run_with_billing_concurrency(
+                    db,
+                    admission_decision,
+                    request_id,
+                    lambda: ProxyService._non_stream_openai_video_request(
                         db,
                         user,
                         api_key_record,
@@ -13943,25 +14225,7 @@ class ProxyService:
                         adjustment_multiplier=price_adjustment.multiplier,
                         price_adjustment_source=price_adjustment.source,
                         price_adjustment_rule_id=price_adjustment.rule_id,
-                    )
-                return await ProxyService._non_stream_openai_video_request(
-                    db,
-                    user,
-                    api_key_record,
-                    channel,
-                    current_unified_model,
-                    channel_request_data,
-                    request_id,
-                    requested_model,
-                    upstream_model_name,
-                    client_ip,
-                    video_credit_cost,
-                    model_multiplier,
-                    request_headers=request_headers,
-                    bill_on_create=bill_on_create,
-                    adjustment_multiplier=price_adjustment.multiplier,
-                    price_adjustment_source=price_adjustment.source,
-                    price_adjustment_rule_id=price_adjustment.rule_id,
+                    ),
                 )
             except ServiceException as exc:
                 if exc.error_code in invalid_video_request_error_codes:
@@ -14089,10 +14353,11 @@ class ProxyService:
                     user_id=ProxyService._safe_object_id(user),
                 )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
+                admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
                     ImageCreditService.check_balance(db, user.id, video_credit_cost)
                 elif billing_type == "request":
-                    ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
+                    admission_decision = ProxyService._assert_video_request_billing_allowed(db, user, current_unified_model)
                 payload = dict(request_data_copy)
                 payload["model"] = upstream_model_name
                 payload["video_config"] = {
@@ -14103,7 +14368,37 @@ class ProxyService:
                 }
                 payload["_resolved_billing_type"] = billing_type
                 if request_data.get("stream", False):
-                    return await ProxyService._stream_openai_video_chat_request(
+                    return await ProxyService._run_with_billing_concurrency(
+                        db,
+                        admission_decision,
+                        request_id,
+                        lambda: ProxyService._stream_openai_video_chat_request(
+                            db,
+                            user,
+                            api_key_record,
+                            channel,
+                            current_unified_model,
+                            payload,
+                            request_id,
+                            requested_model,
+                            upstream_model_name,
+                            client_ip,
+                            video_credit_cost,
+                            model_multiplier,
+                            normalized_size,
+                            normalized_seconds,
+                            billing_type,
+                            request_headers=request_headers,
+                            adjustment_multiplier=price_adjustment.multiplier,
+                            price_adjustment_source=price_adjustment.source,
+                            price_adjustment_rule_id=price_adjustment.rule_id,
+                        ),
+                    )
+                return await ProxyService._run_with_billing_concurrency(
+                    db,
+                    admission_decision,
+                    request_id,
+                    lambda: ProxyService._non_stream_openai_video_chat_request(
                         db,
                         user,
                         api_key_record,
@@ -14123,27 +14418,7 @@ class ProxyService:
                         adjustment_multiplier=price_adjustment.multiplier,
                         price_adjustment_source=price_adjustment.source,
                         price_adjustment_rule_id=price_adjustment.rule_id,
-                    )
-                return await ProxyService._non_stream_openai_video_chat_request(
-                    db,
-                    user,
-                    api_key_record,
-                    channel,
-                    current_unified_model,
-                    payload,
-                    request_id,
-                    requested_model,
-                    upstream_model_name,
-                    client_ip,
-                    video_credit_cost,
-                    model_multiplier,
-                    normalized_size,
-                    normalized_seconds,
-                    billing_type,
-                    request_headers=request_headers,
-                    adjustment_multiplier=price_adjustment.multiplier,
-                    price_adjustment_source=price_adjustment.source,
-                    price_adjustment_rule_id=price_adjustment.rule_id,
+                    ),
                 )
             except ServiceException as exc:
                 if exc.error_code in {

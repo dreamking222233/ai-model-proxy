@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 3600
     DB_POOL_PRE_PING: bool = True
 
+    # Redis
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    REDIS_MAX_CONNECTIONS: int = 10
+    CACHE_ENABLED: bool = True
+
     # JWT
     JWT_SECRET_KEY: str = "model-invoke-system-jwt-secret-key-2026-please-change-in-production"
     JWT_ALGORITHM: str = "HS256"

@@ -12821,6 +12821,10 @@ class ProxyService:
                 "1024x1024",
                 "1024x1792",
                 "1792x1024",
+                "960x720",
+                "720x960",
+                "1080x720",
+                "720x1080",
                 "848x480",
                 "1696x960",
                 "1920x1080",
@@ -12922,6 +12926,14 @@ class ProxyService:
             return "9:16"
         if normalized in {"1024x1024"}:
             return "1:1"
+        if normalized == "960x720":
+            return "4:3"
+        if normalized == "720x960":
+            return "3:4"
+        if normalized == "1080x720":
+            return "3:2"
+        if normalized == "720x1080":
+            return "2:3"
         return "16:9"
 
     @staticmethod

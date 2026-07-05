@@ -23,6 +23,7 @@ class AnnouncementConfigUpdate(BaseModel):
     announcement_content: str
     support_wechat: Optional[str] = Field("", max_length=128)
     support_qq: Optional[str] = Field("", max_length=64)
+    support_contact_threshold_cny: Optional[float] = Field(100, ge=0)
 
 
 class AnnouncementPayload(BaseModel):
@@ -42,6 +43,7 @@ ANNOUNCEMENT_CONFIG_KEYS = {
     "platform_announcement_content": "",
     "platform_support_wechat": "",
     "platform_support_qq": "",
+    "platform_support_contact_threshold_cny": "100",
 }
 
 
@@ -51,6 +53,13 @@ def _get_config_map(db: Session, keys: dict[str, str]) -> dict[str, str]:
     for row in rows:
         result[row.config_key] = row.config_value
     return result
+
+
+def _config_float(config_map: dict[str, str], key: str, default: float) -> float:
+    try:
+        return float(config_map.get(key) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _upsert_config(db: Session, key: str, value: str, description: str) -> None:
@@ -157,6 +166,7 @@ def get_announcement_config(
         "announcement_content": config_map["platform_announcement_content"],
         "support_wechat": config_map["platform_support_wechat"],
         "support_qq": config_map["platform_support_qq"],
+        "support_contact_threshold_cny": _config_float(config_map, "platform_support_contact_threshold_cny", 100),
     })
 
 
@@ -176,6 +186,12 @@ def update_announcement_config(
     _upsert_config(db, "platform_announcement_content", content, "平台直营站点公告内容")
     _upsert_config(db, "platform_support_wechat", (data.support_wechat or "").strip(), "平台直营站点微信联系方式")
     _upsert_config(db, "platform_support_qq", (data.support_qq or "").strip(), "平台直营站点QQ联系方式")
+    _upsert_config(
+        db,
+        "platform_support_contact_threshold_cny",
+        str(float(data.support_contact_threshold_cny if data.support_contact_threshold_cny is not None else 100)),
+        "平台直营联系方式展示门槛，累计成功付款人民币金额需大于该值",
+    )
     db.commit()
     return ResponseModel(message="公告配置已保存")
 

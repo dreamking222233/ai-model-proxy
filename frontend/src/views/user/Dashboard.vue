@@ -112,7 +112,7 @@
               <h2 class="section-title">官方支持 <span>Support</span></h2>
             </div>
             <div class="contact-glass-card animate__animated animate__fadeInUp" style="animation-delay: 0.3s">
-              <div class="contact-methods">
+              <div v-if="supportContactVisible" class="contact-methods">
                 <div class="contact-item">
                   <div class="c-icon wechat"><a-icon type="wechat" /></div>
                   <div class="c-info">
@@ -127,6 +127,13 @@
                     <div class="c-label">QQ 咨询</div>
                     <div class="c-val">{{ siteConfig.support_qq || '-' }}</div>
                   </div>
+                </div>
+              </div>
+              <div v-else class="contact-gate-card">
+                <a-icon type="lock" />
+                <div>
+                  <div class="gate-title">联系方式暂未开放</div>
+                  <div class="gate-desc">{{ supportContactNotice }}</div>
                 </div>
               </div>
             </div>
@@ -290,6 +297,12 @@ export default {
         return `今日剩余 ${this.quotaRemainingLabel}`
       }
       return '按余额模式消费'
+    },
+    supportContactVisible() {
+      return this.siteConfig.support_contact_visible !== false
+    },
+    supportContactNotice() {
+      return this.siteConfig.support_contact_notice || '成功充值余额或购买套餐累计超过 100 元后，可查看官方 QQ 和微信联系方式。'
     }
   },
   created() {
@@ -338,6 +351,7 @@ export default {
       const lines = String(contentText).split('\n').filter(Boolean)
       const supportWechat = item.support_wechat || ''
       const supportQq = item.support_qq || ''
+      const supportContactNotice = item.support_contact_notice || ''
       this.$info({
         title,
         width: 600,
@@ -352,7 +366,7 @@ export default {
                 h('span', line)
               ]))
             ]),
-            supportWechat || supportQq
+            supportWechat || supportQq || supportContactNotice
               ? h('div', { class: 'dialog-contact' }, [
                 supportWechat ? h('div', { class: 'contact-pill' }, [
                   h('span', { class: 'icon' }, '微信'),
@@ -363,6 +377,10 @@ export default {
                   h('span', { class: 'icon' }, 'QQ'),
                   h('span', 'QQ: '),
                   h('strong', supportQq)
+                ]) : null,
+                supportContactNotice ? h('div', { class: 'contact-gate-pill' }, [
+                  h('span', { class: 'icon' }, '门槛'),
+                  h('span', supportContactNotice)
                 ]) : null
               ]) : null
           ])
@@ -625,6 +643,13 @@ export default {
       .c-label { font-size: 12px; color: #8c8c8c; font-weight: 600; }
       .c-val { font-size: 16px; font-weight: 800; color: #1a1a2e; font-family: monospace; }
     }
+    .contact-gate-card {
+      display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 14px;
+      background: #fff7e6; border: 1px solid #ffe7ba; color: #ad6800; line-height: 1.6;
+      .anticon { margin-top: 3px; color: #fa8c16; flex-shrink: 0; }
+      .gate-title { font-size: 14px; font-weight: 800; color: #874d00; margin-bottom: 2px; }
+      .gate-desc { font-size: 13px; color: #ad6800; }
+    }
   }
 
   /* ===== Quick Links ===== */
@@ -681,6 +706,11 @@ export default {
     .contact-pill {
       background: #f8fafc; padding: 8px 16px; border-radius: 10px; display: flex; align-items: center; gap: 8px; font-size: 13px;
       strong { font-family: monospace; color: #667eea; font-size: 14px; }
+    }
+    .contact-gate-pill {
+      width: 100%; background: #fff7e6; border: 1px solid #ffe7ba; color: #ad6800; padding: 10px 12px; border-radius: 10px;
+      display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6;
+      .icon { flex-shrink: 0; font-weight: 700; color: #874d00; }
     }
   }
 }

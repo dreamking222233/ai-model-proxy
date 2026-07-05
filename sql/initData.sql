@@ -1524,6 +1524,7 @@ INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `descr
 ('platform_announcement_content', '尊敬的用户，欢迎使用 AI 模型中转平台！\n\n请先在管理后台完成渠道和模型配置后再开放给用户使用。', 'string', '平台直营站点公告内容'),
 ('platform_support_wechat', '', 'string', '平台直营站点微信联系方式'),
 ('platform_support_qq', '', 'string', '平台直营站点QQ联系方式'),
+('platform_support_contact_threshold_cny', '100', 'number', '平台直营联系方式展示门槛，累计成功付款人民币金额需大于该值'),
 ('platform_allow_register', 'true', 'boolean', '平台直营站点是否允许自助注册'),
 ('max_context_tokens', '200000', 'number', '最大上下文Token数量限制'),
 ('max_message_length', '500000', 'number', '单条消息最大字符数限制'),

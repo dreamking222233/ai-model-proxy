@@ -162,6 +162,10 @@
               <span v-if="item.support_wechat"><a-icon type="wechat" /> {{ item.support_wechat }}</span>
               <span v-if="item.support_qq"><a-icon type="qq" /> {{ item.support_qq }}</span>
             </div>
+            <div v-else-if="item.support_contact_notice" class="announcement-contact-gate">
+              <a-icon type="lock" />
+              <span>{{ item.support_contact_notice }}</span>
+            </div>
           </div>
         </div>
         <a-empty v-else description="暂无公告" />
@@ -653,6 +657,26 @@ export default {
   margin-top: 12px;
   color: #667eea;
   font-weight: 600;
+}
+
+.announcement-contact-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7e6;
+  border: 1px solid #ffe7ba;
+  color: #ad6800;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.announcement-contact-gate .anticon {
+  margin-top: 3px;
+  color: #fa8c16;
+  flex-shrink: 0;
 }
 
 .admin-content {

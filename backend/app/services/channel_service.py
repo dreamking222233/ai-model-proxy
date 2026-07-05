@@ -22,6 +22,7 @@ class ChannelService:
     PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE = "openai-image-modelinvoke"
     PROVIDER_VARIANT_GEEK2API_IMAGE = "geek2api-image"
     PROVIDER_VARIANT_CPA_GROK_VIDEO = "cpa-grok-video"
+    PROVIDER_VARIANT_GROK_VIDEO_119337 = "grok-video-119337"
     PROVIDER_VARIANT_ZZ1CC_VIDEO = "zz1cc-video"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
@@ -66,6 +67,8 @@ class ChannelService:
             return 0
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO:
             return 0
+        if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337:
+            return 0
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO:
             return 0
         if protocol == "google" and normalized_variant in {
@@ -89,6 +92,7 @@ class ChannelService:
                 ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
                 ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
                 ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO,
+                ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337,
                 ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO,
             }:
                 return raw_variant
@@ -106,6 +110,8 @@ class ChannelService:
     def get_openai_image_channel_capabilities(provider_variant: Optional[str]) -> tuple[str, ...]:
         normalized_variant = str(provider_variant or "").strip().lower()
         if normalized_variant == ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO:
+            return ()
+        if normalized_variant == ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337:
             return ()
         if normalized_variant == ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO:
             return ()

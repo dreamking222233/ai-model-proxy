@@ -239,6 +239,7 @@ class ProxyService:
     _VIDEO_COMPLETED_STATUSES = {"completed", "succeeded", "success", "done"}
     _VIDEO_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "expired"}
     _CPA_GROK_VIDEO_VARIANT = "cpa-grok-video"
+    _GROK_VIDEO_119337_VARIANT = "grok-video-119337"
     _ZZ1CC_VIDEO_VARIANT = "zz1cc-video"
     _VIDEO_FAILURE_TEXT_PATTERNS = (
         "video_generation_failed",
@@ -12700,6 +12701,10 @@ class ProxyService:
         return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._CPA_GROK_VIDEO_VARIANT
 
     @staticmethod
+    def _is_grok_video_119337_channel(channel: Optional[Channel]) -> bool:
+        return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._GROK_VIDEO_119337_VARIANT
+
+    @staticmethod
     def _is_zz1cc_video_channel(channel: Optional[Channel]) -> bool:
         return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._ZZ1CC_VIDEO_VARIANT
 
@@ -12716,6 +12721,17 @@ class ProxyService:
         if normalized.endswith("/v1"):
             return f"{normalized}/videos/{video_id}"
         return f"{normalized}/v1/videos/{video_id}"
+
+    @staticmethod
+    def _resolve_grok_video_119337_create_url(base_url: str) -> str:
+        normalized = str(base_url or "").rstrip("/")
+        if normalized.endswith("/v1"):
+            return f"{normalized}/video/generations"
+        return f"{normalized}/v1/video/generations"
+
+    @staticmethod
+    def _resolve_grok_video_119337_retrieve_url(base_url: str, video_id: str) -> str:
+        return f"{ProxyService._resolve_grok_video_119337_create_url(base_url)}/{video_id}"
 
     @staticmethod
     def _resolve_zz1cc_video_create_url(base_url: str) -> str:
@@ -12741,6 +12757,8 @@ class ProxyService:
         if value in (None, ""):
             if ProxyService._is_zz1cc_video_channel(channel):
                 return 15
+            if ProxyService._is_grok_video_119337_channel(channel):
+                return 4
             return 4 if ProxyService._is_cpa_grok_video_channel(channel) else 6
         try:
             seconds = int(value)
@@ -12752,9 +12770,23 @@ class ProxyService:
             return seconds
         if ProxyService._is_cpa_grok_video_channel(channel):
             return min(15, max(1, seconds))
+        if ProxyService._is_grok_video_119337_channel(channel):
+            return ProxyService._normalize_grok_video_119337_seconds(seconds)
         if seconds not in {6, 10, 12, 16, 20}:
             raise ServiceException(400, "seconds 仅支持 6、10、12、16、20", "INVALID_VIDEO_SECONDS")
         return seconds
+
+    @staticmethod
+    def _normalize_grok_video_119337_seconds(seconds: int) -> int:
+        supported_seconds = (4, 6, 8, 10, 12, 15)
+        if seconds <= supported_seconds[0]:
+            return supported_seconds[0]
+        if seconds >= supported_seconds[-1]:
+            return supported_seconds[-1]
+        for supported in supported_seconds:
+            if seconds <= supported:
+                return supported
+        return supported_seconds[-1]
 
     @staticmethod
     def _normalize_video_size(value: Any, channel: Optional[Channel] = None) -> str:
@@ -12772,6 +12804,17 @@ class ProxyService:
                 "1792x1024",
             }
         if ProxyService._is_zz1cc_video_channel(channel):
+            allowed = {
+                "720x1280",
+                "1280x720",
+                "1024x1024",
+                "1024x1792",
+                "1792x1024",
+                "848x480",
+                "1696x960",
+                "1920x1080",
+            }
+        if ProxyService._is_grok_video_119337_channel(channel):
             allowed = {
                 "720x1280",
                 "1280x720",
@@ -12822,6 +12865,13 @@ class ProxyService:
         return []
 
     @staticmethod
+    def _count_video_reference_inputs(request_data: dict) -> int:
+        references = request_data.get("input_references")
+        if not isinstance(references, list):
+            return 0
+        return sum(1 for item in references if isinstance(item, dict) and item.get("content"))
+
+    @staticmethod
     def _video_reference_to_data_url(reference_file: dict[str, Any]) -> str:
         content = reference_file.get("content")
         if not isinstance(content, (bytes, bytearray)) or not content:
@@ -12866,6 +12916,15 @@ class ProxyService:
         return "16:9"
 
     @staticmethod
+    def _grok_video_119337_aspect_ratio(size: str) -> str:
+        normalized = str(size or "").strip().lower()
+        if normalized in {"720x1280", "1024x1792"}:
+            return "9:16"
+        if normalized in {"1024x1024"}:
+            return "1:1"
+        return "16:9"
+
+    @staticmethod
     def _cpa_grok_video_resolution_name(size: str, resolution_name: Optional[str]) -> str:
         if resolution_name:
             return str(resolution_name).strip().lower()
@@ -12896,6 +12955,104 @@ class ProxyService:
         if normalized in {"failed", "error", "cancelled", "canceled", "expired"}:
             return "failed"
         return normalized or "queued"
+
+    @staticmethod
+    def _normalize_grok_video_119337_status(status: Any) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"success", "succeeded", "completed", "done"}:
+            return "completed"
+        if normalized in {"failure", "failed", "error", "cancelled", "canceled", "expired"}:
+            return "failed"
+        if normalized in {"in_progress", "processing", "running"}:
+            return "in_progress"
+        if normalized in {"submitted", "queued", "not_start", "pending"}:
+            return "queued"
+        return normalized or "queued"
+
+    @staticmethod
+    def _grok_video_119337_body_data(body: dict[str, Any]) -> dict[str, Any]:
+        data = body.get("data")
+        return data if isinstance(data, dict) else body
+
+    @staticmethod
+    def _extract_grok_video_119337_url(body: dict[str, Any]) -> str:
+        data = body.get("data")
+        value = data.get("result_url") if isinstance(data, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return ""
+
+    @staticmethod
+    def _normalize_grok_video_119337_response(
+        body: dict[str, Any],
+        *,
+        video_id: Optional[str] = None,
+        model: Optional[str] = None,
+        prompt: Optional[str] = None,
+        seconds: Optional[int] = None,
+        size: Optional[str] = None,
+    ) -> dict[str, Any]:
+        data = ProxyService._grok_video_119337_body_data(body)
+        resolved_id = str(
+            video_id
+            or data.get("task_id")
+            or data.get("id")
+            or body.get("task_id")
+            or body.get("id")
+            or ""
+        ).strip()
+        status = ProxyService._normalize_grok_video_119337_status(
+            data.get("status") or body.get("status") or body.get("state")
+        )
+        progress = data.get("progress", body.get("progress", 100 if status == "completed" else 0))
+        normalized: dict[str, Any] = {
+            "object": "video",
+            "id": resolved_id,
+            "model": model or data.get("model") or body.get("model") or "",
+            "status": status,
+            "progress": progress,
+        }
+        if data.get("task_id") is not None:
+            normalized["task_id"] = data.get("task_id")
+        elif body.get("task_id") is not None:
+            normalized["task_id"] = body.get("task_id")
+        if prompt is not None:
+            normalized["prompt"] = prompt
+        elif isinstance(data.get("prompt"), str):
+            normalized["prompt"] = data.get("prompt")
+        elif isinstance(body.get("prompt"), str):
+            normalized["prompt"] = body.get("prompt")
+        if seconds is not None:
+            normalized["seconds"] = str(seconds)
+        elif data.get("seconds") is not None:
+            normalized["seconds"] = str(data.get("seconds"))
+        if size is not None:
+            normalized["size"] = size
+            normalized["aspect_ratio"] = ProxyService._grok_video_119337_aspect_ratio(size)
+        elif data.get("aspect_ratio") is not None:
+            normalized["aspect_ratio"] = data.get("aspect_ratio")
+        for key in ("created_at", "completed_at", "updated_at"):
+            if data.get(key) is not None:
+                normalized[key] = data.get(key)
+            elif body.get(key) is not None:
+                normalized[key] = body.get(key)
+        video_url = ProxyService._extract_grok_video_119337_url(body)
+        if video_url:
+            normalized["video_url"] = video_url
+        elif status == "completed":
+            normalized["status"] = "in_progress"
+        fail_reason = data.get("fail_reason") or body.get("fail_reason")
+        if fail_reason:
+            normalized["error"] = {"message": fail_reason}
+            if status not in ProxyService._VIDEO_COMPLETED_STATUSES:
+                normalized["status"] = "failed"
+        elif isinstance(data.get("error"), (dict, str)):
+            normalized["error"] = data.get("error")
+            if status not in ProxyService._VIDEO_FAILED_STATUSES:
+                normalized["status"] = "failed"
+        elif body.get("message") and status in ProxyService._VIDEO_FAILED_STATUSES:
+            normalized["error"] = {"message": body.get("message"), "code": body.get("code")}
+        return normalized
 
     @staticmethod
     def _normalize_zz1cc_video_response(
@@ -13870,6 +14027,208 @@ class ProxyService:
         return JSONResponse(content=normalized_body, headers={"X-Request-ID": request_id})
 
     @staticmethod
+    async def _non_stream_grok_video_119337_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        model_multiplier: Decimal,
+        request_headers: Optional[dict[str, str]] = None,
+        bill_on_create: bool = False,
+        adjustment_multiplier: Optional[Decimal] = None,
+        price_adjustment_source: Optional[str] = None,
+        price_adjustment_rule_id: Optional[int] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        seconds = request_data.get("_normalized_video_seconds")
+        if seconds is None:
+            seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
+        size = request_data.get("_normalized_video_size") or ProxyService._normalize_video_size(
+            request_data.get("size"),
+            channel,
+        )
+        resolution_name = (
+            request_data.get("_normalized_video_resolution_name")
+            if "_normalized_video_resolution_name" in request_data
+            else ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
+        )
+        reference_count = ProxyService._count_video_reference_inputs(request_data)
+        if upstream_model_name == "grok-video-1.5" and reference_count != 1:
+            raise ServiceException(
+                400,
+                "grok-video-1.5 仅支持且必须上传 1 张参考图",
+                "INVALID_VIDEO_REFERENCE",
+            )
+        if upstream_model_name == "grok-image-video" and reference_count > 7:
+            raise ServiceException(400, "grok-image-video 参考图最多支持 7 张", "INVALID_VIDEO_REFERENCE")
+        reference_files = ProxyService._extract_video_reference_inputs(request_data)
+        if len(reference_files) >= 2 and int(seconds) > 10:
+            seconds = 10
+
+        payload: dict[str, Any] = {
+            "model": upstream_model_name,
+            "prompt": prompt,
+            "seconds": int(seconds),
+            "aspect_ratio": ProxyService._grok_video_119337_aspect_ratio(size),
+            "resolution": str(resolution_name or "720p").strip().lower(),
+        }
+        if reference_files:
+            payload["image_urls"] = [
+                ProxyService._video_reference_to_data_url(reference)
+                for reference in reference_files
+            ]
+
+        url = ProxyService._resolve_grok_video_119337_create_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="119337 Grok video create",
+        )
+        if not 200 <= response.status_code < 300:
+            body_text = response.text[:1000]
+            upstream_detail = f"119337 Grok 视频任务创建失败（HTTP {response.status_code}）：{body_text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
+                "OPENAI_VIDEO_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
+            )
+
+        try:
+            response_body = response.json()
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "119337 Grok 视频任务创建响应解析失败",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            ) from exc
+        if not isinstance(response_body, dict):
+            raise ServiceException(
+                503,
+                "119337 Grok 视频任务创建响应格式无效",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+        response_data = ProxyService._grok_video_119337_body_data(response_body)
+        video_id = str(
+            response_data.get("task_id")
+            or response_data.get("id")
+            or response_body.get("task_id")
+            or response_body.get("id")
+            or ""
+        ).strip()
+        if not video_id:
+            raise ServiceException(
+                503,
+                "119337 Grok 视频任务创建成功，但未返回 task_id",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+
+        normalized_body = ProxyService._normalize_grok_video_119337_response(
+            response_body,
+            video_id=video_id,
+            model=upstream_model_name,
+            prompt=prompt,
+            seconds=int(seconds),
+            size=size,
+        )
+
+        if bill_on_create:
+            try:
+                if billing_type == "request":
+                    ProxyService._log_video_request_success(
+                        db,
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        unified_model,
+                        client_ip,
+                        response_time_ms,
+                        video_size=size,
+                    )
+                else:
+                    ProxyService._log_video_success(
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        billing_type=billing_type,
+                        charged_credits=charged_credits,
+                        model_multiplier=model_multiplier,
+                        video_size=size,
+                        video_seconds=int(seconds),
+                        adjustment_multiplier=adjustment_multiplier,
+                        price_adjustment_source=price_adjustment_source,
+                        price_adjustment_rule_id=price_adjustment_rule_id,
+                    )
+            except ServiceException:
+                raise
+            except Exception as exc:
+                logger.error("119337 Grok video billing / logging failed after upstream success: %s", exc)
+                raise ServiceException(
+                    500,
+                    "视频任务创建成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                    "VIDEO_BILLING_FAILED",
+                ) from exc
+
+        ProxyService._store_video_task_route(
+            video_id,
+            user_id=ProxyService._safe_object_id(user),
+            channel_id=ProxyService._safe_object_id(channel),
+            requested_model=requested_model,
+            actual_model=upstream_model_name,
+            request_id=request_id,
+            billing_type=billing_type,
+            charged_credits=charged_credits,
+            model_multiplier=model_multiplier,
+            video_size=size,
+            video_seconds=int(seconds),
+            adjustment_multiplier=adjustment_multiplier,
+            price_adjustment_source=price_adjustment_source,
+            price_adjustment_rule_id=price_adjustment_rule_id,
+            billed=bill_on_create,
+        )
+        normalized_body.setdefault("request_id", request_id)
+        normalized_body["usage"] = {
+            "billing_type": billing_type,
+            "image_credits_charged": float(charged_credits if bill_on_create else Decimal("0.000")),
+            "model_multiplier": float(model_multiplier),
+            "video_credit_rate_per_second": float(model_multiplier),
+            "request_type": "video_generation",
+            "video_count": 1,
+            "size": size,
+            "seconds": int(seconds),
+            "billing_status": "charged" if bill_on_create else "pending_completion",
+        }
+        return JSONResponse(content=normalized_body, headers={"X-Request-ID": request_id})
+
+    @staticmethod
     async def _non_stream_openai_video_request(
         db: Session,
         user: SysUser,
@@ -14133,6 +14492,12 @@ class ProxyService:
                 )
                 normalized_seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
                 normalized_size = ProxyService._normalize_video_size(request_data.get("size"), channel)
+                if (
+                    ProxyService._is_grok_video_119337_channel(channel)
+                    and ProxyService._count_video_reference_inputs(request_data) >= 2
+                    and int(normalized_seconds) > 10
+                ):
+                    normalized_seconds = 10
                 model_multiplier, resolved_video_credit_cost, price_adjustment = ProxyService._resolve_adjusted_video_credit_cost(
                     db,
                     current_unified_model,
@@ -14184,6 +14549,31 @@ class ProxyService:
                         admission_decision,
                         request_id,
                         lambda: ProxyService._non_stream_zz1cc_video_request(
+                            db,
+                            user,
+                            api_key_record,
+                            channel,
+                            current_unified_model,
+                            channel_request_data,
+                            request_id,
+                            requested_model,
+                            upstream_model_name,
+                            client_ip,
+                            video_credit_cost,
+                            model_multiplier,
+                            request_headers=request_headers,
+                            bill_on_create=bill_on_create,
+                            adjustment_multiplier=price_adjustment.multiplier,
+                            price_adjustment_source=price_adjustment.source,
+                            price_adjustment_rule_id=price_adjustment.rule_id,
+                        ),
+                    )
+                if ProxyService._is_grok_video_119337_channel(channel):
+                    return await ProxyService._run_with_billing_concurrency(
+                        db,
+                        admission_decision,
+                        request_id,
+                        lambda: ProxyService._non_stream_grok_video_119337_request(
                             db,
                             user,
                             api_key_record,
@@ -15423,6 +15813,79 @@ class ProxyService:
         return body
 
     @staticmethod
+    async def _request_grok_video_119337_status(
+        channel: Channel,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        url = ProxyService._resolve_grok_video_119337_retrieve_url(channel.base_url, video_id)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        headers.pop("Content-Type", None)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                f"119337 Grok 视频任务查询网络异常：{exc}",
+            ) from exc
+        except Exception as exc:
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                f"119337 Grok 视频任务查询异常：{exc}",
+            ) from exc
+        if response.status_code != 200:
+            if response.status_code in {400, 422}:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = None
+                if isinstance(body, dict) and (
+                    body.get("error")
+                    or body.get("code")
+                    or body.get("message")
+                    or body.get("status")
+                ):
+                    data = ProxyService._grok_video_119337_body_data(body)
+                    data["status"] = "FAILURE"
+                    data.setdefault("progress", "100%")
+                    return body
+            upstream_detail = f"119337 Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                upstream_detail,
+            )
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "119337 Grok 视频任务查询响应解析失败",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            ) from exc
+        if not isinstance(body, dict):
+            raise ServiceException(
+                503,
+                "119337 Grok 视频任务查询响应格式无效",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            )
+        return body
+
+    @staticmethod
     async def _resolve_cpa_grok_video_download_url(
         channel: Channel,
         video_id: str,
@@ -15458,6 +15921,41 @@ class ProxyService:
         return video_url
 
     @staticmethod
+    async def _resolve_grok_video_119337_download_url(
+        channel: Channel,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> str:
+        body = await ProxyService._request_grok_video_119337_status(
+            channel,
+            video_id,
+            request_headers=request_headers,
+        )
+        normalized = ProxyService._normalize_grok_video_119337_response(body, video_id=video_id)
+        status = ProxyService._video_status_value(normalized)
+        if not ProxyService._is_video_completed_status(status):
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    409,
+                    "视频任务尚未完成，请稍后再试",
+                    "OPENAI_VIDEO_CONTENT_FAILED",
+                ),
+                f"119337 Grok 视频任务尚未完成：video_id={video_id} status={status}",
+            )
+        video_url = ProxyService._extract_grok_video_119337_url(body) or str(normalized.get("video_url") or "").strip()
+        if not video_url:
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_CONTENT_FAILED",
+                ),
+                f"119337 Grok 视频任务已完成但未返回 data.result_url：video_id={video_id}",
+            )
+        return video_url
+
+    @staticmethod
     async def _validate_video_route_content_or_raise(
         channel: Channel,
         video_id: str,
@@ -15466,6 +15964,18 @@ class ProxyService:
     ) -> None:
         if ProxyService._is_cpa_grok_video_channel(channel):
             video_url = await ProxyService._resolve_cpa_grok_video_download_url(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+            await ProxyService._validate_video_url_content_or_raise(
+                channel,
+                video_url,
+                request_headers=request_headers,
+            )
+            return
+        if ProxyService._is_grok_video_119337_channel(channel):
+            video_url = await ProxyService._resolve_grok_video_119337_download_url(
                 channel,
                 video_id,
                 request_headers=request_headers,
@@ -15516,35 +16026,63 @@ class ProxyService:
                         }
                     },
                 )
-        url = (
-            ProxyService._resolve_zz1cc_video_content_url(channel.base_url, video_id)
-            if content and ProxyService._is_zz1cc_video_channel(channel)
-            else (
-                ProxyService._resolve_openai_video_content_url(channel.base_url, video_id)
-                if content
-                else ProxyService._resolve_openai_video_retrieve_url(channel.base_url, video_id)
-            )
-        )
-        if ProxyService._is_zz1cc_video_channel(channel) and not content:
-            try:
-                body = await ProxyService._request_zz1cc_video_status(
+        if ProxyService._is_grok_video_119337_channel(channel):
+            if content:
+                url = await ProxyService._resolve_grok_video_119337_download_url(
                     channel,
                     video_id,
                     request_headers=request_headers,
                 )
-                normalized = ProxyService._normalize_zz1cc_video_response(body, video_id=video_id)
-                return httpx.Response(200, json=normalized)
-            except ServiceException as exc:
-                return httpx.Response(
-                    int(exc.status_code or 503),
-                    json={
-                        "error": {
-                            "message": str(exc.detail or _UPSTREAM_FAILURE_VISIBLE_MESSAGE),
-                            "code": exc.error_code,
-                        }
-                    },
-                )
+            else:
+                try:
+                    body = await ProxyService._request_grok_video_119337_status(
+                        channel,
+                        video_id,
+                        request_headers=request_headers,
+                    )
+                    normalized = ProxyService._normalize_grok_video_119337_response(body, video_id=video_id)
+                    return httpx.Response(200, json=normalized)
+                except ServiceException as exc:
+                    return httpx.Response(
+                        int(exc.status_code or 503),
+                        json={
+                            "error": {
+                                "message": str(exc.detail or _UPSTREAM_FAILURE_VISIBLE_MESSAGE),
+                                "code": exc.error_code,
+                            }
+                        },
+                    )
+        elif ProxyService._is_zz1cc_video_channel(channel):
+            if content:
+                url = ProxyService._resolve_zz1cc_video_content_url(channel.base_url, video_id)
+            else:
+                try:
+                    body = await ProxyService._request_zz1cc_video_status(
+                        channel,
+                        video_id,
+                        request_headers=request_headers,
+                    )
+                    normalized = ProxyService._normalize_zz1cc_video_response(body, video_id=video_id)
+                    return httpx.Response(200, json=normalized)
+                except ServiceException as exc:
+                    return httpx.Response(
+                        int(exc.status_code or 503),
+                        json={
+                            "error": {
+                                "message": str(exc.detail or _UPSTREAM_FAILURE_VISIBLE_MESSAGE),
+                                "code": exc.error_code,
+                            }
+                        },
+                    )
+        else:
+            url = (
+                ProxyService._resolve_openai_video_content_url(channel.base_url, video_id)
+                if content
+                else ProxyService._resolve_openai_video_retrieve_url(channel.base_url, video_id)
+            )
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        if content and not ProxyService._should_send_video_url_auth(url, channel):
+            headers = {}
         headers.pop("Content-Type", None)
         timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -15559,6 +16097,12 @@ class ProxyService:
     ) -> StreamingResponse:
         if ProxyService._is_cpa_grok_video_channel(channel):
             url = await ProxyService._resolve_cpa_grok_video_download_url(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+        elif ProxyService._is_grok_video_119337_channel(channel):
+            url = await ProxyService._resolve_grok_video_119337_download_url(
                 channel,
                 video_id,
                 request_headers=request_headers,

@@ -122,9 +122,9 @@ class Settings(BaseSettings):
     WECHAT_PAY_PUBLIC_KEY_ID: str = ""
     WECHAT_PAY_NOTIFY_URL: str = ""
     RECHARGE_USER_CNY_TO_USD_RATE: Decimal = Decimal("5")
-    RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE: Decimal = Decimal("10")
+    RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE: Decimal = Decimal("7")
     RECHARGE_IMAGE_CREDIT_USER_CNY_RATE: Decimal = Decimal("5")
-    RECHARGE_IMAGE_CREDIT_AGENT_CNY_RATE: Decimal = Decimal("10")
+    RECHARGE_IMAGE_CREDIT_AGENT_CNY_RATE: Decimal = Decimal("7")
 
     class Config:
         env_file = str(BACKEND_ROOT / ".env")

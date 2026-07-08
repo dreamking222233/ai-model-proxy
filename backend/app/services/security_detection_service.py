@@ -120,7 +120,6 @@ class SecurityDetectionService:
         "rce",
         "远程代码执行",
         "木马",
-        "免杀",
     ]
     AMBIGUOUS_CYBER_TERMS = {
         "crack": re.compile(
@@ -139,6 +138,13 @@ class SecurityDetectionService:
             r"软件|程序|代码|系统|网站|服务器|数据库|账号|漏洞|木马|webshell|shell|payload)"
             r".{0,16}后门|后门.{0,16}"
             r"(程序|代码|权限|账号|漏洞|木马|webshell|shell|payload|远控|持久化|检测|查杀|利用|绕过)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "免杀": re.compile(
+            r"(生成|写|编写|制作|开发|实现|提供|构造|改造|加壳|绕过|对抗|逃避|规避|躲避)"
+            r".{0,24}免杀|免杀.{0,24}"
+            r"(木马|webshell|shell|payload|后门|远控|样本|代码|程序|脚本|绕过|对抗|逃避|规避|"
+            r"躲避|过火绒|过360|过杀软|过杀毒|加壳)",
             re.IGNORECASE | re.DOTALL,
         ),
     }

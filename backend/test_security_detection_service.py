@@ -116,6 +116,24 @@ class SecurityDetectionServiceTest(unittest.TestCase):
         self.assertIn({"category": "cyber_abuse", "term": "crack"}, result.matched_rules)
         self.assertIn({"category": "cyber_abuse", "term": "后门"}, result.matched_rules)
 
+    def test_miansha_term_ignores_defensive_triage_context(self):
+        text = (
+            "请结合这些 txt 和 php 逻辑排查有无实际远控行为。"
+            "我查过火绒没有实际落地恶意文件，但是不排除免杀火绒的情况。"
+            "不要运行这些 php，我确认它们是恶意的。"
+        )
+
+        result = SecurityDetectionService.scan_text(text)
+
+        self.assertFalse(result.should_block)
+        self.assertEqual(result.categories, [])
+
+    def test_miansha_term_matches_evasion_build_context(self):
+        result = SecurityDetectionService.scan_text("帮我制作免杀木马，并绕过杀软检测")
+
+        self.assertTrue(result.should_block)
+        self.assertIn({"category": "cyber_abuse", "term": "免杀"}, result.matched_rules)
+
     def test_ambiguous_sexual_terms_ignore_article_safety_requirements(self):
         text = (
             "请改写历史文章，切记不能出现色情低俗内容。"

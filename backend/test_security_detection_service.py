@@ -2,10 +2,151 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.services.security_detection_service import SecurityDetectionService
+from app.core.exceptions import ServiceException
+from app.services.security_detection_service import SecurityDetectionResult, SecurityDetectionService
 
 
 class SecurityDetectionServiceTest(unittest.TestCase):
+    def test_high_risk_request_is_blocked_when_keyword_block_config_is_disabled(self):
+        db = object()
+        snapshot = SimpleNamespace(snapshot_id="snapshot-high-risk")
+        result = SecurityDetectionResult(
+            risk_level="high",
+            action="review",
+            categories=["cyber_abuse"],
+            matched_rules=[{"category": "cyber_abuse", "term": "test"}],
+            reason="high risk test",
+        )
+
+        with (
+            patch.object(SecurityDetectionService, "scan_request", return_value=result),
+            patch.object(SecurityDetectionService, "_get_bool_config") as config_mock,
+            patch.object(SecurityDetectionService, "record_risk_event") as record_mock,
+            patch(
+                "app.services.security_detection_service.get_system_config",
+                return_value="blocked",
+            ),
+        ):
+            with self.assertRaises(ServiceException) as context:
+                SecurityDetectionService.ensure_allowed_or_raise(db, snapshot, {})
+
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.error_code, "SECURITY_RISK_BLOCKED")
+        self.assertEqual(result.action, "block")
+        config_mock.assert_not_called()
+        record_mock.assert_called_once_with(db, snapshot, "keyword", result)
+
+    def test_blocked_risk_request_is_always_blocked_and_recorded(self):
+        db = object()
+        snapshot = SimpleNamespace(snapshot_id="snapshot-blocked-risk")
+        result = SecurityDetectionResult(
+            risk_level="blocked",
+            action="review",
+            categories=["prompt_jailbreak"],
+            reason="blocked risk test",
+        )
+
+        with (
+            patch.object(SecurityDetectionService, "scan_request", return_value=result),
+            patch.object(SecurityDetectionService, "_get_bool_config") as config_mock,
+            patch.object(SecurityDetectionService, "record_risk_event") as record_mock,
+            patch(
+                "app.services.security_detection_service.get_system_config",
+                return_value="blocked",
+            ),
+        ):
+            with self.assertRaises(ServiceException) as context:
+                SecurityDetectionService.ensure_allowed_or_raise(db, snapshot, {})
+
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.error_code, "SECURITY_RISK_BLOCKED")
+        self.assertEqual(result.action, "block")
+        config_mock.assert_not_called()
+        record_mock.assert_called_once_with(db, snapshot, "keyword", result)
+
+    def test_high_risk_request_uses_default_message_when_config_lookup_fails(self):
+        result = SecurityDetectionResult(risk_level="high", action="block")
+
+        with (
+            patch.object(SecurityDetectionService, "scan_request", return_value=result),
+            patch.object(SecurityDetectionService, "record_risk_event"),
+            patch(
+                "app.services.security_detection_service.get_system_config",
+                side_effect=RuntimeError("config unavailable"),
+            ),
+        ):
+            with self.assertRaises(ServiceException) as context:
+                SecurityDetectionService.ensure_allowed_or_raise(object(), None, {})
+
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.detail, SecurityDetectionService.DEFAULT_BLOCK_MESSAGE)
+
+    def test_high_risk_request_stays_blocked_when_event_persistence_fails(self):
+        snapshot = SimpleNamespace(request_id="request-high-risk", user_id=123)
+        result = SecurityDetectionResult(
+            risk_level="high",
+            action="block",
+            categories=["cyber_abuse"],
+        )
+
+        with (
+            patch.object(SecurityDetectionService, "scan_request", return_value=result),
+            patch.object(
+                SecurityDetectionService,
+                "record_risk_event",
+                side_effect=RuntimeError("database unavailable"),
+            ) as record_mock,
+            patch.object(SecurityDetectionService, "_get_bool_config") as config_mock,
+            patch("app.services.security_detection_service.get_system_config", return_value="blocked"),
+            patch("app.services.security_detection_service.logger.critical") as critical_mock,
+        ):
+            with self.assertRaises(ServiceException) as context:
+                SecurityDetectionService.ensure_allowed_or_raise(object(), snapshot, {})
+
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(record_mock.call_count, 2)
+        config_mock.assert_not_called()
+        critical_mock.assert_called_once()
+
+    def test_medium_risk_request_is_recorded_without_blocking(self):
+        db = object()
+        snapshot = SimpleNamespace(snapshot_id="snapshot-medium-risk")
+        result = SecurityDetectionResult(
+            risk_level="medium",
+            action="review",
+            categories=["illegal_automation"],
+            matched_rules=[{"category": "illegal_automation", "term": "test"}],
+            reason="medium risk test",
+        )
+
+        with (
+            patch.object(SecurityDetectionService, "scan_request", return_value=result),
+            patch.object(SecurityDetectionService, "_get_bool_config", return_value=True),
+            patch.object(SecurityDetectionService, "record_risk_event") as record_mock,
+        ):
+            returned = SecurityDetectionService.ensure_allowed_or_raise(db, snapshot, {})
+
+        self.assertIs(returned, result)
+        self.assertEqual(result.action, "review")
+        record_mock.assert_called_once_with(db, snapshot, "keyword", result)
+
+    def test_security_request_scan_failure_is_fail_closed(self):
+        from app.services.proxy_service import ProxyService
+
+        with (
+            patch.object(
+                SecurityDetectionService,
+                "ensure_allowed_or_raise",
+                side_effect=RuntimeError("scan unavailable"),
+            ),
+            patch("app.services.proxy_service.logger.error"),
+        ):
+            with self.assertRaises(ServiceException) as context:
+                ProxyService._scan_security_request_or_raise(object(), None, {})
+
+        self.assertEqual(context.exception.status_code, 503)
+        self.assertEqual(context.exception.error_code, "SECURITY_DETECTION_UNAVAILABLE")
+
     def test_short_ascii_terms_do_not_match_inside_normal_words(self):
         text = "Please inspect the source resource service and force reload behavior."
 

@@ -48,6 +48,10 @@ class SecurityDetectionService:
     """Local security rules, short-lived request snapshots, and risk reports."""
 
     DEFAULT_PUBLIC_REPORT_URL = "https://api.xiaoleai.team/api/public/security/risk-report"
+    DEFAULT_BLOCK_MESSAGE = (
+        "请求可能涉及违规或高风险内容，已被安全策略拦截。"
+        "你可以改为询问合法合规的学习、防护或排查建议。"
+    )
     RISK_MARKER_PATTERN = re.compile(
         r"\[MIS_RISK_REPORT\s+category=(?P<category>[a-zA-Z0-9_\-]+)\s+severity=(?P<severity>[a-zA-Z0-9_\-]+)[^\]]*\]",
         re.IGNORECASE,
@@ -704,20 +708,63 @@ class SecurityDetectionService:
         request_data: dict,
     ) -> SecurityDetectionResult:
         result = SecurityDetectionService.scan_request(db, snapshot, request_data)
-        if result.should_block and SecurityDetectionService._get_bool_config(db, "security_keyword_block_enabled", True):
+        mandatory_high_risk_block = result.risk_level in {"high", "blocked"}
+        if mandatory_high_risk_block:
+            result.action = "block"
+            configurable_rule_block = False
+        else:
+            configurable_rule_block = (
+                result.action == "block"
+                and SecurityDetectionService._get_bool_config(
+                    db,
+                    "security_keyword_block_enabled",
+                    True,
+                )
+            )
+        if mandatory_high_risk_block or configurable_rule_block:
+            SecurityDetectionService._record_blocked_risk_event(db, snapshot, result)
+            block_message = SecurityDetectionService.DEFAULT_BLOCK_MESSAGE
             try:
-                SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
+                block_message = str(get_system_config(
+                    db,
+                    "security_block_message",
+                    SecurityDetectionService.DEFAULT_BLOCK_MESSAGE,
+                ) or SecurityDetectionService.DEFAULT_BLOCK_MESSAGE)
             except Exception as exc:
-                logger.error("Failed to record blocked security risk event: %s", exc, exc_info=True)
-            block_message = str(get_system_config(
-                db,
-                "security_block_message",
-                "请求可能涉及违规或高风险内容，已被安全策略拦截。你可以改为询问合法合规的学习、防护或排查建议。",
-            ))
+                logger.error("Failed to read security block message, using default: %s", exc, exc_info=True)
             raise ServiceException(403, block_message, "SECURITY_RISK_BLOCKED")
         if result.risk_level != "none" and snapshot is not None:
             SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
         return result
+
+    @staticmethod
+    def _record_blocked_risk_event(
+        db: Session,
+        snapshot: Optional[SecurityRequestSnapshot],
+        result: SecurityDetectionResult,
+    ) -> Optional[SecurityRiskEvent]:
+        for attempt in range(1, 3):
+            try:
+                return SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
+            except Exception as exc:
+                if attempt < 2:
+                    logger.warning(
+                        "Failed to persist blocked security risk event, retrying: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    continue
+                logger.critical(
+                    "Blocked security request audit fallback request_id=%s user_id=%s "
+                    "risk_level=%s categories=%s error=%s",
+                    getattr(snapshot, "request_id", None),
+                    getattr(snapshot, "user_id", None),
+                    result.risk_level,
+                    result.categories or [],
+                    exc,
+                    exc_info=True,
+                )
+        return None
 
     @staticmethod
     def build_security_system_prompt(

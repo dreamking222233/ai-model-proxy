@@ -18,13 +18,6 @@
             <a-icon type="pushpin" />
             直营固定开屏公告
           </div>
-          <a-alert
-            class="contact-gate-alert"
-            type="info"
-            show-icon
-            message="联系方式展示门槛"
-            description="微信和 QQ 仍在这里配置；直营用户需通过在线充值余额或购买套餐累计成功付款超过下方门槛后才会看到，未达标时用户端显示门槛提示。代理端联系方式逻辑不受影响。"
-          />
           <a-form-model layout="vertical" :model="fixedForm">
             <a-form-model-item label="公告标题">
               <a-input v-model="fixedForm.announcement_title" placeholder="平台公告" />
@@ -48,15 +41,6 @@
                 </a-form-model-item>
               </a-col>
             </a-row>
-            <a-form-model-item label="联系方式展示门槛（人民币）">
-              <a-input-number
-                v-model="fixedForm.support_contact_threshold_cny"
-                :min="0"
-                :step="1"
-                :precision="2"
-                style="width: 100%"
-              />
-            </a-form-model-item>
           </a-form-model>
           <a-button type="primary" block :loading="savingFixed" @click="saveFixedConfig">
             <a-icon type="save" />
@@ -188,8 +172,7 @@ export default {
         announcement_title: '',
         announcement_content: '',
         support_wechat: '',
-        support_qq: '',
-        support_contact_threshold_cny: 100
+        support_qq: ''
       },
       announcementForm: {
         title: '',
@@ -224,15 +207,11 @@ export default {
     async fetchFixedConfig() {
       try {
         const res = await getAnnouncementConfig()
-        const threshold = res.data && res.data.support_contact_threshold_cny !== undefined && res.data.support_contact_threshold_cny !== null
-          ? Number(res.data.support_contact_threshold_cny)
-          : 100
         this.fixedForm = {
           announcement_title: res.data?.announcement_title || '',
           announcement_content: res.data?.announcement_content || '',
           support_wechat: res.data?.support_wechat || '',
-          support_qq: res.data?.support_qq || '',
-          support_contact_threshold_cny: Number.isFinite(threshold) ? threshold : 100
+          support_qq: res.data?.support_qq || ''
         }
       } catch (e) {
         this.$message.error('固定公告读取失败')
@@ -372,11 +351,6 @@ export default {
     align-items: center;
     gap: 8px;
     font-weight: 700;
-  }
-
-  .contact-gate-alert {
-    margin-bottom: 16px;
-    border-radius: 8px;
   }
 
   .table-actions {

@@ -257,17 +257,13 @@
               <a-icon type="exclamation-circle" />
               <span>支付后未到账</span>
             </div>
-            <p>{{ supportContactVisible ? '请先点击同步结果；仍未到账时，请联系当前站点客服处理。' : supportContactNotice }}</p>
-            <div v-if="supportContactVisible" class="reminder-contact">
+            <p>请先点击同步结果；仍未到账时，请联系当前站点客服处理。</p>
+            <div class="reminder-contact">
               <span><a-icon type="wechat" /> {{ supportWechat }}</span>
               <span><a-icon type="qq" /> {{ supportQq }}</span>
             </div>
-            <div v-else class="contact-gate-tip">
-              <a-icon type="lock" />
-              <span>{{ supportContactNotice }}</span>
-            </div>
           </div>
-          <div v-if="supportContactVisible" class="support-section">
+          <div class="support-section">
             <div class="support-item">
               <div class="s-icon wechat"><a-icon type="wechat" /></div>
               <div class="s-info">
@@ -281,13 +277,6 @@
                 <div class="s-label">QQ 咨询</div>
                 <div class="s-val">{{ supportQq }}</div>
               </div>
-            </div>
-          </div>
-          <div v-else class="support-gate-card">
-            <a-icon type="lock" />
-            <div>
-              <div class="gate-title">联系方式暂未开放</div>
-              <div class="gate-desc">{{ supportContactNotice }}</div>
             </div>
           </div>
 
@@ -534,12 +523,6 @@ export default {
     },
     subscriptionOnlineRechargeEnabled() {
       return Boolean(this.siteConfig.subscription_online_recharge_enabled)
-    },
-    supportContactVisible() {
-      return this.siteConfig.support_contact_visible !== false
-    },
-    supportContactNotice() {
-      return this.siteConfig.support_contact_notice || '成功充值余额或购买套餐累计超过 100 元后，可查看官方 QQ 和微信联系方式。'
     },
     supportWechat() {
       return this.siteConfig.support_wechat || '-'
@@ -2053,31 +2036,6 @@ export default {
   color: #12b7f5;
 }
 
-.contact-gate-tip,
-.support-gate-card {
-  display: flex;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 8px;
-  background: #fff7e6;
-  border: 1px solid #ffe7ba;
-  color: #ad6800;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.contact-gate-tip {
-  align-items: flex-start;
-  margin-top: 10px;
-}
-
-.contact-gate-tip .anticon,
-.support-gate-card .anticon {
-  margin-top: 3px;
-  color: #fa8c16;
-  flex-shrink: 0;
-}
-
 /* --- Support Section --- */
 .support-section {
   display: flex;
@@ -2086,20 +2044,6 @@ export default {
   background: #f8fafc;
   padding: 12px;
   border-radius: 16px;
-}
-
-.support-gate-card {
-  align-items: flex-start;
-}
-
-.gate-title {
-  font-weight: 700;
-  color: #874d00;
-  margin-bottom: 2px;
-}
-
-.gate-desc {
-  color: #ad6800;
 }
 
 .support-item {

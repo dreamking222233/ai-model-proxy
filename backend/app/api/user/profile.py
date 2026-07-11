@@ -1,7 +1,4 @@
-from decimal import Decimal, ROUND_HALF_UP
-
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import get_current_user
@@ -11,78 +8,21 @@ from app.services.log_service import LogService
 from app.services.health_service import get_system_config
 from app.services.agent_service import AgentService
 from app.models.log import PlatformAnnouncement, SystemConfig
-from app.models.payment import PaymentRechargeOrder
 from app.schemas.user import PasswordChange
 from app.schemas.common import ResponseModel
 from fastapi import Query
 
 router = APIRouter(prefix="/api/user/profile", tags=["用户-个人信息"])
 
-SUPPORT_CONTACT_THRESHOLD_CNY = Decimal("100.00")
-SUPPORT_CONTACT_THRESHOLD_CONFIG_KEY = "platform_support_contact_threshold_cny"
 
-
-def _money(value) -> Decimal:
-    return Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _get_support_contact_threshold_cny(db: Session) -> Decimal:
-    row = db.query(SystemConfig).filter(SystemConfig.config_key == SUPPORT_CONTACT_THRESHOLD_CONFIG_KEY).first()
-    raw_value = row.config_value if row else SUPPORT_CONTACT_THRESHOLD_CNY
-    try:
-        threshold = Decimal(str(raw_value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    except Exception:
-        threshold = SUPPORT_CONTACT_THRESHOLD_CNY
-    return max(threshold, Decimal("0.00"))
-
-
-def _get_platform_support_contact_status(db: Session, user_id: int) -> dict:
-    threshold = _get_support_contact_threshold_cny(db)
-    paid_total = (
-        db.query(func.coalesce(func.sum(PaymentRechargeOrder.amount_cny), 0))
-        .filter(
-            PaymentRechargeOrder.user_id == user_id,
-            PaymentRechargeOrder.agent_id.is_(None),
-            PaymentRechargeOrder.site_scope == "platform",
-            PaymentRechargeOrder.status == "paid",
-            PaymentRechargeOrder.recharge_type.in_(("balance", "subscription")),
-        )
-        .scalar()
-    )
-    paid_cny = _money(paid_total)
-    visible = paid_cny > threshold
-    next_visible_amount = threshold + Decimal("0.01")
-    remaining = max(next_visible_amount - paid_cny, Decimal("0.00"))
-    threshold_display = f"{threshold.normalize():f}"
-    notice = (
-        f"成功充值余额或购买套餐累计超过 {threshold_display} 元后，可查看官方 QQ 和微信联系方式。"
-        f"当前累计 ¥{paid_cny:.2f}，还差 ¥{remaining:.2f}。"
-    )
+def _support_contact_compatibility_fields() -> dict:
+    """Keep the recently introduced response keys stable after removing the gate."""
     return {
-        "support_contact_visible": visible,
-        "support_contact_threshold_cny": float(threshold),
-        "support_contact_paid_cny": float(paid_cny),
-        "support_contact_notice": "" if visible else notice,
+        "support_contact_visible": True,
+        "support_contact_notice": "",
+        "support_contact_threshold_cny": None,
+        "support_contact_paid_cny": None,
     }
-
-
-def _apply_platform_support_contact_gate(db: Session, current_user: SysUser, payload: dict) -> dict:
-    result = dict(payload)
-    if getattr(current_user, "agent_id", None) is not None or result.get("site_scope") != "platform":
-        result.update({
-            "support_contact_visible": True,
-            "support_contact_threshold_cny": float(SUPPORT_CONTACT_THRESHOLD_CNY),
-            "support_contact_paid_cny": None,
-            "support_contact_notice": "",
-        })
-        return result
-
-    contact_status = _get_platform_support_contact_status(db, current_user.id)
-    result.update(contact_status)
-    if not contact_status["support_contact_visible"]:
-        result["support_wechat"] = ""
-        result["support_qq"] = ""
-    return result
 
 
 @router.get("", response_model=ResponseModel)
@@ -167,7 +107,7 @@ def get_site_config(
     result["quickstart_api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")
     for config in configs:
         result[config.config_key] = config.config_value
-    result = _apply_platform_support_contact_gate(db, current_user, result)
+    result.update(_support_contact_compatibility_fields())
     return ResponseModel(data=result)
 
 
@@ -187,7 +127,6 @@ def get_announcements(
     )
     fixed_title = site_config.get("announcement_title") or "平台公告"
     fixed_content = site_config.get("announcement_content") or ""
-    site_config = _apply_platform_support_contact_gate(db, current_user, site_config)
     result = []
     if fixed_content:
         fixed_id = f"fixed-{site_config.get('site_scope') or 'platform'}-{site_config.get('agent_id') or 'platform'}"
@@ -200,10 +139,7 @@ def get_announcements(
             "show_popup": True,
             "support_wechat": site_config.get("support_wechat") or "",
             "support_qq": site_config.get("support_qq") or "",
-            "support_contact_visible": site_config.get("support_contact_visible", True),
-            "support_contact_notice": site_config.get("support_contact_notice") or "",
-            "support_contact_threshold_cny": site_config.get("support_contact_threshold_cny"),
-            "support_contact_paid_cny": site_config.get("support_contact_paid_cny"),
+            **_support_contact_compatibility_fields(),
             "published_at": None,
         })
 
@@ -223,10 +159,7 @@ def get_announcements(
             "show_popup": bool(item.show_popup),
             "support_wechat": "",
             "support_qq": "",
-            "support_contact_visible": True,
-            "support_contact_notice": "",
-            "support_contact_threshold_cny": None,
-            "support_contact_paid_cny": None,
+            **_support_contact_compatibility_fields(),
             "published_at": item.published_at.isoformat() if item.published_at else None,
         })
     return ResponseModel(data=result)

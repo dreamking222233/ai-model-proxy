@@ -23,11 +23,13 @@ def get_site_config(
         origin=request.headers.get("Origin"),
         referer=request.headers.get("Referer"),
     )
-    if data.get("site_scope") == "platform":
-        data["support_wechat"] = ""
-        data["support_qq"] = ""
-        data["support_contact_visible"] = False
-        data["support_contact_notice"] = "登录后通过在线充值余额或购买套餐达到门槛，即可查看官方 QQ 和微信联系方式。"
+    # Deprecated compatibility fields: support contacts are now always visible.
+    data.update({
+        "support_contact_visible": True,
+        "support_contact_notice": "",
+        "support_contact_threshold_cny": None,
+        "support_contact_paid_cny": None,
+    })
     return ResponseModel(data=data)
 
 

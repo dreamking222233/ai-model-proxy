@@ -94,18 +94,31 @@ def list_chat_models(
 
     result = []
     for m in models:
-        mappings = (
-            db.query(ModelChannelMapping)
+        mapping_rows = (
+            db.query(ModelChannelMapping, Channel)
             .join(Channel, ModelChannelMapping.channel_id == Channel.id)
             .filter(
                 ModelChannelMapping.unified_model_id == m.id,
                 ModelChannelMapping.enabled == 1,
                 Channel.enabled == 1,
             )
+            .order_by(Channel.priority.asc(), Channel.id.asc())
             .all()
         )
-        if not mappings:
+        if not mapping_rows:
             continue
+
+        mappings = [row[0] for row in mapping_rows]
+        video_workbench_capabilities = {}
+        if m.model_type == "video":
+            video_workbench_capabilities = ModelService.merge_video_workbench_capabilities([
+                ModelService.resolve_video_workbench_capabilities(
+                    m.model_name,
+                    provider_variant=getattr(channel, "provider_variant", None),
+                    actual_model_name=mapping.actual_model_name,
+                )
+                for mapping, channel in mapping_rows
+            ])
 
         api_type = "openai"
         if m.model_type == "chat":
@@ -153,6 +166,7 @@ def list_chat_models(
                 if m.model_type == "video"
                 else []
             ),
+            "video_workbench_capabilities": video_workbench_capabilities,
             "supports_image_edit": (
                 ModelService.supports_image_edit(m.model_name)
                 if m.model_type == "image"

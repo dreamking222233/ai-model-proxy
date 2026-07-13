@@ -1150,7 +1150,8 @@ class ProxyService:
             raise
         except Exception as exc:
             logger.error("Security request scan failed: %s", exc, exc_info=True)
-            raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
+            if SecurityDetectionService._get_bool_config(db, "security_fail_closed_enabled", False):
+                raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
 
     @staticmethod
     def _maybe_scan_security_request_or_raise(
@@ -12788,6 +12789,66 @@ class ProxyService:
         return supported_seconds[-1]
 
     @staticmethod
+    def _video_size_from_aspect_ratio(aspect_ratio: Any) -> str:
+        normalized = str(aspect_ratio or "").strip()
+        return ModelService.VIDEO_ASPECT_RATIO_SIZE_MAP.get(normalized, "1280x720")
+
+    @staticmethod
+    def _normalize_video_aspect_ratio(value: Any, *, allowed: set[str]) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ServiceException(400, "aspect_ratio 参数无效", "INVALID_VIDEO_SIZE")
+        if normalized not in allowed:
+            raise ServiceException(
+                400,
+                f"aspect_ratio 仅支持：{'、'.join(sorted(allowed))}",
+                "INVALID_VIDEO_SIZE",
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_grok_video_119337_request_options(
+        actual_model_name: str,
+        request_data: dict,
+        *,
+        seconds: int,
+        size: str,
+        resolution_name: Optional[str],
+    ) -> dict[str, Any]:
+        """Validate 119337 model constraints before price calculation and dispatch."""
+        model_name = str(actual_model_name or "").strip()
+        reference_count = ProxyService._count_video_reference_inputs(request_data)
+        if model_name == "grok-video-1.5":
+            if reference_count != 1:
+                raise ServiceException(
+                    400,
+                    "grok-video-1.5 仅支持且必须上传 1 张参考图",
+                    "INVALID_VIDEO_REFERENCE",
+                )
+            allowed_ratios = {"16:9", "9:16"}
+        else:
+            if reference_count > 7:
+                raise ServiceException(400, "grok-image-video 参考图最多支持 7 张", "INVALID_VIDEO_REFERENCE")
+            allowed_ratios = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+            # Product requirement: any reference image caps the common model at 10 seconds.
+            if reference_count > 0 and int(seconds) > 10:
+                seconds = 10
+
+        explicit_ratio = str(request_data.get("aspect_ratio") or "").strip()
+        aspect_ratio = ProxyService._normalize_video_aspect_ratio(
+            explicit_ratio or ProxyService._grok_video_119337_aspect_ratio(size),
+            allowed=allowed_ratios,
+        )
+        normalized_resolution = ProxyService._normalize_video_resolution_name(resolution_name) or "720p"
+        return {
+            "seconds": int(seconds),
+            "size": ProxyService._video_size_from_aspect_ratio(aspect_ratio),
+            "aspect_ratio": aspect_ratio,
+            "resolution_name": normalized_resolution,
+            "reference_count": reference_count,
+        }
+
+    @staticmethod
     def _normalize_video_size(value: Any, channel: Optional[Channel] = None) -> str:
         normalized = str(value or "720x1280").strip().lower()
         allowed = {"720x1280", "1280x720", "1024x1024", "1024x1792", "1792x1024"}
@@ -13002,6 +13063,7 @@ class ProxyService:
         prompt: Optional[str] = None,
         seconds: Optional[int] = None,
         size: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
     ) -> dict[str, Any]:
         data = ProxyService._grok_video_119337_body_data(body)
         resolved_id = str(
@@ -13039,7 +13101,9 @@ class ProxyService:
             normalized["seconds"] = str(data.get("seconds"))
         if size is not None:
             normalized["size"] = size
-            normalized["aspect_ratio"] = ProxyService._grok_video_119337_aspect_ratio(size)
+            normalized["aspect_ratio"] = aspect_ratio or ProxyService._grok_video_119337_aspect_ratio(size)
+        elif aspect_ratio is not None:
+            normalized["aspect_ratio"] = aspect_ratio
         elif data.get("aspect_ratio") is not None:
             normalized["aspect_ratio"] = data.get("aspect_ratio")
         for key in ("created_at", "completed_at", "updated_at"):
@@ -14073,24 +14137,24 @@ class ProxyService:
             if "_normalized_video_resolution_name" in request_data
             else ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
         )
-        reference_count = ProxyService._count_video_reference_inputs(request_data)
-        if upstream_model_name == "grok-video-1.5" and reference_count != 1:
-            raise ServiceException(
-                400,
-                "grok-video-1.5 仅支持且必须上传 1 张参考图",
-                "INVALID_VIDEO_REFERENCE",
-            )
-        if upstream_model_name == "grok-image-video" and reference_count > 7:
-            raise ServiceException(400, "grok-image-video 参考图最多支持 7 张", "INVALID_VIDEO_REFERENCE")
+        options = ProxyService._normalize_grok_video_119337_request_options(
+            upstream_model_name,
+            request_data,
+            seconds=int(seconds),
+            size=size,
+            resolution_name=resolution_name,
+        )
+        seconds = options["seconds"]
+        size = options["size"]
+        aspect_ratio = options["aspect_ratio"]
+        resolution_name = options["resolution_name"]
         reference_files = ProxyService._extract_video_reference_inputs(request_data)
-        if len(reference_files) >= 2 and int(seconds) > 10:
-            seconds = 10
 
         payload: dict[str, Any] = {
             "model": upstream_model_name,
             "prompt": prompt,
             "seconds": int(seconds),
-            "aspect_ratio": ProxyService._grok_video_119337_aspect_ratio(size),
+            "aspect_ratio": aspect_ratio,
             "resolution": str(resolution_name or "720p").strip().lower(),
         }
         if reference_files:
@@ -14159,6 +14223,7 @@ class ProxyService:
             prompt=prompt,
             seconds=int(seconds),
             size=size,
+            aspect_ratio=aspect_ratio,
         )
 
         if bill_on_create:
@@ -14234,6 +14299,8 @@ class ProxyService:
             "request_type": "video_generation",
             "video_count": 1,
             "size": size,
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution_name,
             "seconds": int(seconds),
             "billing_status": "charged" if bill_on_create else "pending_completion",
         }
@@ -14503,12 +14570,20 @@ class ProxyService:
                 )
                 normalized_seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
                 normalized_size = ProxyService._normalize_video_size(request_data.get("size"), channel)
-                if (
-                    ProxyService._is_grok_video_119337_channel(channel)
-                    and ProxyService._count_video_reference_inputs(request_data) >= 2
-                    and int(normalized_seconds) > 10
-                ):
-                    normalized_seconds = 10
+                channel_resolution_name = normalized_resolution_name
+                normalized_aspect_ratio = None
+                if ProxyService._is_grok_video_119337_channel(channel):
+                    normalized_options = ProxyService._normalize_grok_video_119337_request_options(
+                        upstream_model_name,
+                        request_data,
+                        seconds=normalized_seconds,
+                        size=normalized_size,
+                        resolution_name=normalized_resolution_name,
+                    )
+                    normalized_seconds = normalized_options["seconds"]
+                    normalized_size = normalized_options["size"]
+                    normalized_aspect_ratio = normalized_options["aspect_ratio"]
+                    channel_resolution_name = normalized_options["resolution_name"]
                 model_multiplier, resolved_video_credit_cost, price_adjustment = ProxyService._resolve_adjusted_video_credit_cost(
                     db,
                     current_unified_model,
@@ -14525,7 +14600,8 @@ class ProxyService:
                     **request_data,
                     "_normalized_video_seconds": normalized_seconds,
                     "_normalized_video_size": normalized_size,
-                    "_normalized_video_resolution_name": normalized_resolution_name,
+                    "_normalized_video_aspect_ratio": normalized_aspect_ratio,
+                    "_normalized_video_resolution_name": channel_resolution_name,
                     "_normalized_video_preset": normalized_preset,
                     "_resolved_billing_type": billing_type,
                 }

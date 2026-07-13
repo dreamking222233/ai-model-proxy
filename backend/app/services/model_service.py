@@ -5,7 +5,7 @@ import fnmatch
 import logging
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -78,8 +78,26 @@ class ModelService:
             "1696x960",
             "1920x1080",
         ),
-        "video-ds-2.0": ("720x1280", "1280x720", "1024x1024"),
-        "video-ds-2.0-fast": ("720x1280", "1280x720", "1024x1024"),
+        "video-ds-2.0": (
+            "720x1280",
+            "1280x720",
+            "1024x1024",
+            "1024x1792",
+            "1792x1024",
+            "848x480",
+            "1696x960",
+            "1920x1080",
+        ),
+        "video-ds-2.0-fast": (
+            "720x1280",
+            "1280x720",
+            "1024x1024",
+            "1024x1792",
+            "1792x1024",
+            "848x480",
+            "1696x960",
+            "1920x1080",
+        ),
     }
     VIDEO_SECONDS_CAPABILITIES: dict[str, tuple[int, ...]] = {
         "grok-imagine-video": tuple(range(1, 16)),
@@ -88,7 +106,172 @@ class ModelService:
         "video-ds-2.0": (15,),
         "video-ds-2.0-fast": (15,),
     }
+    VIDEO_ASPECT_RATIO_SIZE_MAP: dict[str, str] = {
+        "1:1": "1024x1024",
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "4:3": "960x720",
+        "3:4": "720x960",
+        "3:2": "1080x720",
+        "2:3": "720x1080",
+    }
     BILLING_TYPES = {"token", "request", "image_credit", "free"}
+
+    @staticmethod
+    def resolve_video_workbench_capabilities(
+        model_name: str,
+        *,
+        provider_variant: Optional[str] = None,
+        actual_model_name: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Resolve workbench controls for one concrete video channel mapping."""
+        unified_name = str(model_name or "").strip()
+        actual_name = str(actual_model_name or unified_name).strip()
+        variant = str(provider_variant or "default").strip().lower()
+        common_seconds = [4, 6, 8, 10, 12, 15]
+        common_ratios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+
+        if variant == ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337:
+            if actual_name == "grok-video-1.5" or unified_name == "grok-imagine-video-1.5-preview":
+                return {
+                    "supports_text_to_video": False,
+                    "supports_image_to_video": True,
+                    "supports_video_to_video": False,
+                    "reference_required": True,
+                    "reference_min_count": 1,
+                    "reference_max_count": 1,
+                    "reference_media_types": ["image"],
+                    "seconds_options_without_reference": [],
+                    "seconds_options_with_reference": common_seconds,
+                    "aspect_ratio_options": ["16:9", "9:16"],
+                    "resolution_options": ["720p", "480p"],
+                    "default_seconds": 4,
+                    "default_aspect_ratio": "16:9",
+                    "default_resolution": "720p",
+                    "supports_preset": False,
+                    "upstream_family": "119337-grok-video-1.5",
+                }
+            return {
+                "supports_text_to_video": True,
+                "supports_image_to_video": True,
+                "supports_video_to_video": False,
+                "reference_required": False,
+                "reference_min_count": 0,
+                "reference_max_count": 7,
+                "reference_media_types": ["image"],
+                "seconds_options_without_reference": common_seconds,
+                # Product requirement is intentionally more conservative than the upstream single-image limit.
+                "seconds_options_with_reference": [4, 6, 8, 10],
+                "aspect_ratio_options": common_ratios,
+                "resolution_options": ["720p", "480p"],
+                "default_seconds": 4,
+                "default_aspect_ratio": "16:9",
+                "default_resolution": "720p",
+                "supports_preset": False,
+                "upstream_family": "119337-grok-image-video",
+            }
+
+        if variant == ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO:
+            return {
+                "supports_text_to_video": True,
+                "supports_image_to_video": True,
+                "supports_video_to_video": False,
+                "reference_required": False,
+                "reference_min_count": 0,
+                "reference_max_count": 1,
+                "reference_media_types": ["image"],
+                "seconds_options_without_reference": [15],
+                "seconds_options_with_reference": [15],
+                "aspect_ratio_options": ["16:9", "9:16", "1:1"],
+                "resolution_options": [],
+                "default_seconds": 15,
+                "default_aspect_ratio": "16:9",
+                "default_resolution": "",
+                "supports_preset": False,
+                "upstream_family": "zz1cc-video",
+            }
+
+        is_preview = actual_name in {"grok-video-1.5", "grok-imagine-video-1.5-preview"} or unified_name == "grok-imagine-video-1.5-preview"
+        if variant == ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO:
+            return {
+                "supports_text_to_video": not is_preview,
+                "supports_image_to_video": True,
+                "supports_video_to_video": False,
+                "reference_required": is_preview,
+                "reference_min_count": 1 if is_preview else 0,
+                "reference_max_count": 1 if is_preview else 3,
+                "reference_media_types": ["image"],
+                "seconds_options_without_reference": [] if is_preview else list(range(1, 16)),
+                "seconds_options_with_reference": list(range(1, 16)),
+                "aspect_ratio_options": ["16:9", "9:16"] if is_preview else common_ratios,
+                "resolution_options": ["720p", "480p"],
+                "default_seconds": 6,
+                "default_aspect_ratio": "16:9",
+                "default_resolution": "720p",
+                "supports_preset": False,
+                "upstream_family": "cpa-grok-video",
+            }
+
+        default_seconds = [6, 10, 12, 16, 20]
+        return {
+            "supports_text_to_video": not is_preview,
+            "supports_image_to_video": True,
+            "supports_video_to_video": False,
+            "reference_required": is_preview,
+            "reference_min_count": 1 if is_preview else 0,
+            "reference_max_count": 1 if is_preview else 3,
+            "reference_media_types": ["image"],
+            "seconds_options_without_reference": [] if is_preview else default_seconds,
+            "seconds_options_with_reference": default_seconds,
+            "aspect_ratio_options": ["16:9", "9:16"] if is_preview else common_ratios,
+            "resolution_options": ["720p", "480p"],
+            "default_seconds": 6,
+            "default_aspect_ratio": "16:9",
+            "default_resolution": "720p",
+            "supports_preset": variant == ChannelService.PROVIDER_VARIANT_DEFAULT,
+            "upstream_family": variant or "default",
+        }
+
+    @staticmethod
+    def merge_video_workbench_capabilities(capabilities: list[dict[str, Any]]) -> dict[str, Any]:
+        """Merge channel capabilities conservatively so any advertised request is routable."""
+        items = [item for item in capabilities if isinstance(item, dict)]
+        if not items:
+            return {}
+        merged = dict(items[0])
+        boolean_fields = (
+            "supports_text_to_video",
+            "supports_image_to_video",
+            "supports_video_to_video",
+            "supports_preset",
+        )
+        list_fields = (
+            "reference_media_types",
+            "seconds_options_without_reference",
+            "seconds_options_with_reference",
+            "aspect_ratio_options",
+            "resolution_options",
+        )
+        for item in items[1:]:
+            for field in boolean_fields:
+                merged[field] = bool(merged.get(field)) and bool(item.get(field))
+            for field in list_fields:
+                allowed = set(item.get(field) or [])
+                merged[field] = [value for value in (merged.get(field) or []) if value in allowed]
+            merged["reference_required"] = bool(merged.get("reference_required")) or bool(item.get("reference_required"))
+            merged["reference_min_count"] = max(int(merged.get("reference_min_count") or 0), int(item.get("reference_min_count") or 0))
+            merged["reference_max_count"] = min(int(merged.get("reference_max_count") or 7), int(item.get("reference_max_count") or 7))
+        families = sorted({str(item.get("upstream_family") or "default") for item in items})
+        merged["upstream_family"] = families[0] if len(families) == 1 else "mixed"
+        for default_field, options_field in (
+            ("default_seconds", "seconds_options_with_reference" if merged.get("reference_required") else "seconds_options_without_reference"),
+            ("default_aspect_ratio", "aspect_ratio_options"),
+            ("default_resolution", "resolution_options"),
+        ):
+            options = merged.get(options_field) or []
+            if options and merged.get(default_field) not in options:
+                merged[default_field] = options[0]
+        return merged
 
     @staticmethod
     def infer_model_series(model_name: object) -> str:

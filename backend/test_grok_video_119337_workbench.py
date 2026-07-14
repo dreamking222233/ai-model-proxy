@@ -3,6 +3,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+
 from app.core.exceptions import ServiceException
 from app.models.channel import Channel
 from app.models.model import UnifiedModel
@@ -159,6 +161,38 @@ class GrokVideo119337WorkbenchTest(unittest.IsolatedAsyncioTestCase):
             "data": {"task_id": "task-progress", "status": "IN_PROGRESS", "progress": "35%"},
         })
         self.assertEqual(explicit["progress"], "35%")
+
+    async def test_119337_query_error_does_not_fabricate_progress(self):
+        original_client = httpx.AsyncClient
+
+        class FakeResponse:
+            status_code = 422
+            text = '{"status":"invalid_task","message":"not found"}'
+
+            def json(self):
+                return {"status": "invalid_task", "message": "not found"}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, headers=None):
+                return FakeResponse()
+
+        httpx.AsyncClient = FakeClient
+        try:
+            body = await ProxyService._request_grok_video_119337_status(self.channel, "missing-task")
+        finally:
+            httpx.AsyncClient = original_client
+
+        self.assertEqual(body["status"], "FAILURE")
+        self.assertNotIn("progress", body)
 
     def test_model_capabilities_are_channel_aware_and_merge_conservatively(self):
         common = ModelService.resolve_video_workbench_capabilities(

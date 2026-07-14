@@ -165,7 +165,7 @@ class Zz1ccVideoChannelTest(unittest.IsolatedAsyncioTestCase):
             httpx.AsyncClient = original_client
 
         self.assertEqual(body["status"], "failed")
-        self.assertEqual(body["progress"], 100)
+        self.assertNotIn("progress", body)
 
     async def test_zz1cc_query_network_error_is_wrapped(self):
         channel = Channel(

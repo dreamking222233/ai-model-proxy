@@ -1,5 +1,7 @@
 import unittest
 
+import httpx
+
 from app.core.exceptions import ServiceException
 from app.models.channel import Channel
 from app.services.proxy_service import ProxyService
@@ -101,6 +103,46 @@ class CpaGrokVideoChannelTest(unittest.IsolatedAsyncioTestCase):
                 await ProxyService._resolve_cpa_grok_video_download_url(channel, "video-123")
         finally:
             ProxyService._request_cpa_grok_video_status = original
+
+    async def test_cpa_query_error_does_not_fabricate_progress(self):
+        channel = Channel(
+            name="CPA Grok",
+            base_url="https://cpa.example.com",
+            api_key="sk-test",
+            protocol_type="openai",
+            provider_variant="cpa-grok-video",
+            auth_header_type="authorization",
+        )
+        original_client = httpx.AsyncClient
+
+        class FakeResponse:
+            status_code = 422
+            text = '{"error":{"message":"not found"}}'
+
+            def json(self):
+                return {"error": {"message": "not found"}}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, headers=None):
+                return FakeResponse()
+
+        httpx.AsyncClient = FakeClient
+        try:
+            body = await ProxyService._request_cpa_grok_video_status(channel, "missing-task")
+        finally:
+            httpx.AsyncClient = original_client
+
+        self.assertEqual(body["status"], "failed")
+        self.assertNotIn("progress", body)
 
 
 if __name__ == "__main__":

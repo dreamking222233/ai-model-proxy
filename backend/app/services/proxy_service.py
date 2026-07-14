@@ -15803,7 +15803,6 @@ class ProxyService:
                     body = None
                 if isinstance(body, dict) and (body.get("error") or body.get("code")):
                     body.setdefault("status", "failed")
-                    body.setdefault("progress", 100)
                     return body
             upstream_detail = f"CPA Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(
@@ -15875,7 +15874,6 @@ class ProxyService:
                     or body.get("status")
                 ):
                     body["status"] = "failed"
-                    body.setdefault("progress", 100)
                     return body
             upstream_detail = f"zz1cc 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(
@@ -15948,7 +15946,6 @@ class ProxyService:
                 ):
                     data = ProxyService._grok_video_119337_body_data(body)
                     data["status"] = "FAILURE"
-                    data.setdefault("progress", "100%")
                     return body
             upstream_detail = f"119337 Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(

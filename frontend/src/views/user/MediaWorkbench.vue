@@ -26,7 +26,7 @@
 
     <main class="media-layout">
       <aside class="media-controls">
-        <a-radio-group v-model="mode" button-style="solid" class="mode-switch">
+        <a-radio-group v-model="mode" button-style="solid" class="mode-switch" :disabled="busy">
           <a-radio-button value="image">生图</a-radio-button>
           <a-radio-button value="video">视频</a-radio-button>
         </a-radio-group>
@@ -223,8 +223,21 @@
       <section class="media-results">
         <div v-if="busy" class="result-empty busy-box">
           <a-spin size="large" />
-          <h3>{{ mode === 'image' ? '正在生成图片' : '正在生成视频' }}</h3>
-          <p>{{ mode === 'image' ? '图片任务可能需要数分钟' : '视频任务可能需要较长时间，请保持页面打开' }}</p>
+          <h3>{{ busyResultTitle }}</h3>
+          <p>{{ busyResultDescription }}</p>
+          <div v-if="mode === 'video'" class="video-task-live">
+            <a-progress
+              v-if="videoTaskProgress !== null"
+              :percent="videoTaskProgress"
+              :status="videoTaskIsCompleted ? 'success' : 'active'"
+              :stroke-width="6"
+            />
+            <div class="video-task-meta">
+              <span>{{ videoTaskStatusText }}</span>
+              <span>已等待 {{ videoElapsedText }}</span>
+            </div>
+            <code v-if="activeVideoTaskId" class="video-task-id">任务 ID：{{ activeVideoTaskId }}</code>
+          </div>
         </div>
         <div v-else-if="!results.length" class="result-empty">
           <a-icon type="appstore" />
@@ -305,6 +318,8 @@ const VIDEO_CREATE_TIMEOUT_MS = 300 * 1000
 const VIDEO_POLL_TIMEOUT_MS = 20 * 60 * 1000
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
 const VIDEO_POLL_INTERVAL_MS = 3000
+const VIDEO_COMPLETED_STATUSES = ['completed', 'succeeded', 'success', 'done']
+const VIDEO_FAILED_STATUSES = ['failed', 'error', 'cancelled', 'canceled', 'expired']
 const IMAGE_SIZE_OPTIONS = ['1K', '2K', '4K']
 const VIDEO_SECONDS_OPTIONS = [6, 10, 12, 16, 20]
 const VIDEO_SIZE_OPTIONS = ['720x1280', '1280x720', '1024x1024', '1024x1792', '1792x1024', '848x480', '1696x960', '1920x1080']
@@ -405,6 +420,17 @@ export default {
       videoResolution: '720p',
       videoPreset: 'normal',
       activeVideoTaskId: '',
+      videoTaskStage: '',
+      videoTaskStatus: '',
+      videoTaskProgress: null,
+      videoStartedAt: 0,
+      videoElapsedSeconds: 0,
+      videoElapsedTimer: null,
+      videoTaskRunId: 0,
+      videoTaskCancelled: false,
+      videoRequestControllers: [],
+      videoPollSleepTimer: null,
+      videoPollSleepResolve: null,
       imageReferenceFiles: [],
       referenceFiles: [],
       apiKey: '',
@@ -589,6 +615,42 @@ export default {
       const user = getUser() || {}
       return user.id ? `user_${user.id}` : 'anonymous'
     },
+    busyResultTitle() {
+      if (this.mode === 'image') return '正在生成图片'
+      return this.videoTaskStage || '正在生成视频'
+    },
+    busyResultDescription() {
+      if (this.mode === 'image') return '图片任务可能需要数分钟'
+      return this.activeVideoTaskId
+        ? '任务已提交到生成服务，通常需要 1 至数分钟，请保持页面打开'
+        : '正在连接视频生成服务并提交任务'
+    },
+    videoTaskStatusText() {
+      const statusLabels = {
+        submitting: '提交中',
+        queued: '排队中',
+        pending: '排队中',
+        submitted: '排队中',
+        not_start: '排队中',
+        in_progress: '生成中',
+        processing: '生成中',
+        running: '生成中',
+        completed: '已完成',
+        succeeded: '已完成',
+        success: '已完成',
+        done: '已完成'
+      }
+      return statusLabels[this.videoTaskStatus] || '等待生成服务响应'
+    },
+    videoTaskIsCompleted() {
+      return VIDEO_COMPLETED_STATUSES.includes(this.videoTaskStatus)
+    },
+    videoElapsedText() {
+      const totalSeconds = Math.max(0, Number(this.videoElapsedSeconds) || 0)
+      const minutes = Math.floor(totalSeconds / 60)
+      const seconds = totalSeconds % 60
+      return minutes ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`
+    },
     canSubmit() {
       if (this.busy || !this.apiKey || !this.prompt.trim()) return false
       if (this.mode === 'image') {
@@ -651,6 +713,7 @@ export default {
     this.loadInitialData()
   },
   beforeDestroy() {
+    this.cancelActiveVideoTask()
     this.revokeObjectUrls()
     this.clearImageReference()
     this.clearReference()
@@ -984,6 +1047,7 @@ export default {
       this.busy = true
       this.errorMessage = ''
       this.activeVideoTaskId = ''
+      const videoRunId = this.startVideoTaskTracking()
       try {
         const form = new FormData()
         form.append('model', this.selectedVideoModel)
@@ -1008,14 +1072,17 @@ export default {
             'Authorization': 'Bearer ' + this.apiKey
           },
           body: form
-        }, VIDEO_CREATE_TIMEOUT_MS, '视频任务创建请求超过 300 秒，请稍后重试')
+        }, VIDEO_CREATE_TIMEOUT_MS, '视频任务创建请求超过 300 秒，请稍后重试', videoRunId)
+        this.assertVideoTaskActive(videoRunId)
         const videoId = created && (created.id || created.task_id) ? String(created.id || created.task_id) : ''
         if (!videoId) {
           throw new Error('视频任务创建成功，但未返回 video_id')
         }
         this.activeVideoTaskId = videoId
+        this.updateVideoTaskState(created, 'queued')
         this.rawResponse = JSON.stringify({ ...created, task_id: videoId }, null, 2)
-        const finalStatus = await this.waitForVideoCompletion(videoId)
+        const finalStatus = await this.waitForVideoCompletion(videoId, videoRunId)
+        this.updateVideoTaskState(finalStatus, 'completed')
         const result = {
           ...created,
           status: finalStatus.status || 'completed',
@@ -1024,33 +1091,129 @@ export default {
           retrieve_url: `/v1/videos/${videoId}`
         }
         this.rawResponse = JSON.stringify(result, null, 2)
-        await this.setVideoResult(result)
+        await this.setVideoResult(result, videoRunId)
+        this.assertVideoTaskActive(videoRunId)
         this.loadBalance()
         this.loadHealth()
       } catch (e) {
-        const taskSuffix = this.activeVideoTaskId ? `（任务 ID：${this.activeVideoTaskId}）` : ''
-        this.errorMessage = (e.message || '视频生成失败，请稍后重试') + taskSuffix
+        if (!this.isVideoTaskCancellationError(e)) {
+          const taskSuffix = this.activeVideoTaskId ? `（任务 ID：${this.activeVideoTaskId}）` : ''
+          this.errorMessage = (e.message || '视频生成失败，请稍后重试') + taskSuffix
+        }
       } finally {
-        this.busy = false
+        if (videoRunId === this.videoTaskRunId) {
+          this.stopVideoTaskTracking()
+          this.busy = false
+        }
       }
     },
-    async waitForVideoCompletion(videoId) {
-      const startedAt = Date.now()
+    startVideoTaskTracking() {
+      this.cancelActiveVideoTask()
+      this.videoTaskCancelled = false
+      this.videoTaskStage = '正在提交视频任务'
+      this.videoTaskStatus = 'submitting'
+      this.videoTaskProgress = null
+      this.videoStartedAt = Date.now()
+      this.videoElapsedSeconds = 0
+      this.videoElapsedTimer = setInterval(() => {
+        this.videoElapsedSeconds = Math.floor((Date.now() - this.videoStartedAt) / 1000)
+      }, 1000)
+      return this.videoTaskRunId
+    },
+    stopVideoTaskTracking() {
+      if (this.videoElapsedTimer) {
+        clearInterval(this.videoElapsedTimer)
+        this.videoElapsedTimer = null
+      }
+    },
+    cancelActiveVideoTask() {
+      this.videoTaskCancelled = true
+      this.videoTaskRunId += 1
+      this.videoRequestControllers.forEach(controller => controller.abort())
+      this.videoRequestControllers = []
+      if (this.videoPollSleepTimer) {
+        clearTimeout(this.videoPollSleepTimer)
+        this.videoPollSleepTimer = null
+      }
+      if (this.videoPollSleepResolve) {
+        const resolve = this.videoPollSleepResolve
+        this.videoPollSleepResolve = null
+        resolve()
+      }
+      this.stopVideoTaskTracking()
+    },
+    createVideoTaskCancellationError() {
+      const error = new Error('视频任务轮询已取消')
+      error.code = 'VIDEO_TASK_CANCELLED'
+      return error
+    },
+    isVideoTaskCancellationError(error) {
+      return !!(error && error.code === 'VIDEO_TASK_CANCELLED')
+    },
+    assertVideoTaskActive(videoRunId) {
+      if (this.videoTaskCancelled || videoRunId !== this.videoTaskRunId) {
+        throw this.createVideoTaskCancellationError()
+      }
+    },
+    registerVideoRequestController(controller, videoRunId) {
+      if (!controller || videoRunId === null || videoRunId === undefined) return
+      this.assertVideoTaskActive(videoRunId)
+      this.videoRequestControllers.push(controller)
+    },
+    unregisterVideoRequestController(controller) {
+      if (!controller) return
+      this.videoRequestControllers = this.videoRequestControllers.filter(item => item !== controller)
+    },
+    normalizeVideoProgress(progress) {
+      if (progress === null || progress === undefined || progress === '') return null
+      const parsed = Number.parseFloat(String(progress).replace('%', '').trim())
+      if (!Number.isFinite(parsed)) return null
+      return Math.min(100, Math.max(0, Math.round(parsed)))
+    },
+    updateVideoTaskState(status, fallbackStatus = '') {
+      const normalizedStatus = String((status && status.status) || fallbackStatus || '').trim().toLowerCase()
+      this.videoTaskStatus = normalizedStatus || this.videoTaskStatus
+      const progress = this.normalizeVideoProgress(status && status.progress)
+      this.videoTaskProgress = progress
+
+      if (VIDEO_COMPLETED_STATUSES.includes(normalizedStatus)) {
+        this.videoTaskStage = '视频生成完成，正在加载结果'
+      } else if (['in_progress', 'processing', 'running'].includes(normalizedStatus)) {
+        this.videoTaskStage = '正在生成视频'
+      } else if (['queued', 'pending', 'submitted', 'not_start'].includes(normalizedStatus)) {
+        this.videoTaskStage = '视频任务已创建，正在排队'
+      } else if (this.activeVideoTaskId) {
+        this.videoTaskStage = '视频任务已创建，等待生成服务响应'
+      }
+    },
+    async waitForVideoCompletion(videoId, videoRunId) {
+      const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
       let lastStatus = null
-      while (Date.now() - startedAt <= VIDEO_POLL_TIMEOUT_MS) {
-        await this.sleep(VIDEO_POLL_INTERVAL_MS)
+      while (Date.now() < deadline) {
+        const sleepMs = Math.min(VIDEO_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+        await this.sleep(sleepMs, videoRunId)
+        this.assertVideoTaskActive(videoRunId)
+        const remainingMs = deadline - Date.now()
+        if (remainingMs <= 0) break
+        const requestTimeoutMs = Math.min(VIDEO_CREATE_TIMEOUT_MS, remainingMs)
+        const timeoutMessage = requestTimeoutMs < VIDEO_CREATE_TIMEOUT_MS
+          ? '视频生成等待超过 20 分钟'
+          : '视频状态查询请求超过 300 秒，请稍后重试'
         const status = await this.fetchWithTimeout(`/v1/videos/${encodeURIComponent(videoId)}`, {
           method: 'GET',
           headers: {
             'Authorization': 'Bearer ' + this.apiKey
           }
-        }, VIDEO_CREATE_TIMEOUT_MS, '视频状态查询请求超过 300 秒，请稍后重试')
+        }, requestTimeoutMs, timeoutMessage, videoRunId)
+        this.assertVideoTaskActive(videoRunId)
         lastStatus = status
         const normalizedStatus = String((status && status.status) || '').toLowerCase()
-        if (normalizedStatus === 'completed' || normalizedStatus === 'succeeded' || normalizedStatus === 'success') {
+        this.updateVideoTaskState(status)
+        this.rawResponse = JSON.stringify({ ...status, task_id: videoId }, null, 2)
+        if (VIDEO_COMPLETED_STATUSES.includes(normalizedStatus)) {
           return status
         }
-        if (normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'canceled') {
+        if (VIDEO_FAILED_STATUSES.includes(normalizedStatus)) {
           throw new Error(this.videoStatusErrorMessage(status))
         }
       }
@@ -1063,17 +1226,26 @@ export default {
       if (error && typeof error.message === 'string' && error.message) return error.message
       return '视频生成失败，请稍后重试'
     },
-    sleep(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms))
+    sleep(ms, videoRunId) {
+      return new Promise(resolve => {
+        this.assertVideoTaskActive(videoRunId)
+        this.videoPollSleepResolve = resolve
+        this.videoPollSleepTimer = setTimeout(() => {
+          this.videoPollSleepTimer = null
+          this.videoPollSleepResolve = null
+          resolve()
+        }, ms)
+      })
     },
     async refreshApiKeyForRetry() {
       await this.loadApiKey(true)
       return !!this.apiKey
     },
-    async fetchWithTimeout(path, options, timeoutMs, timeoutMessage) {
+    async fetchWithTimeout(path, options, timeoutMs, timeoutMessage, videoRunId = null) {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
       const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
       try {
+        this.registerVideoRequestController(controller, videoRunId)
         const response = await fetch(this.runtimeRelayBase + path, {
           ...options,
           signal: controller ? controller.signal : undefined
@@ -1082,14 +1254,20 @@ export default {
           const text = await response.text()
           throw new Error(this.parseErrorMessage(text, response.status))
         }
-        return await response.json()
+        const body = await response.json()
+        if (videoRunId !== null && videoRunId !== undefined) this.assertVideoTaskActive(videoRunId)
+        return body
       } catch (e) {
         if (e && e.name === 'AbortError') {
+          if (videoRunId !== null && videoRunId !== undefined && (this.videoTaskCancelled || videoRunId !== this.videoTaskRunId)) {
+            throw this.createVideoTaskCancellationError()
+          }
           throw new Error(timeoutMessage)
         }
         throw e
       } finally {
         if (timeoutId) clearTimeout(timeoutId)
+        this.unregisterVideoRequestController(controller)
       }
     },
     parseErrorMessage(text, status) {
@@ -1140,12 +1318,14 @@ export default {
         })
       })
     },
-    async setVideoResult(result) {
+    async setVideoResult(result, videoRunId) {
+      this.assertVideoTaskActive(videoRunId)
       const contentUrl = result.content_url ? this.runtimeRelayBase + result.content_url : ''
       if (!contentUrl) {
         throw new Error('视频结果为空，请稍后重试')
       }
-      const videoBlob = await this.fetchVideoBlob(contentUrl, VIDEO_DOWNLOAD_TIMEOUT_MS)
+      const videoBlob = await this.fetchVideoBlob(contentUrl, VIDEO_DOWNLOAD_TIMEOUT_MS, true, videoRunId)
+      this.assertVideoTaskActive(videoRunId)
       const objectUrl = URL.createObjectURL(videoBlob)
       this.objectUrls.push(objectUrl)
       const id = createMediaResultId()
@@ -1195,10 +1375,11 @@ export default {
       }
       return next
     },
-    async fetchVideoBlob(url, timeoutMs, allowAuthRetry = true) {
+    async fetchVideoBlob(url, timeoutMs, allowAuthRetry = true, videoRunId = null) {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
       const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
       try {
+        this.registerVideoRequestController(controller, videoRunId)
         const response = await fetch(url, {
           headers: { 'Authorization': 'Bearer ' + this.apiKey },
           signal: controller ? controller.signal : undefined
@@ -1207,19 +1388,25 @@ export default {
           if (response.status === 401 && allowAuthRetry) {
             const refreshed = await this.refreshApiKeyForRetry()
             if (refreshed) {
-              return await this.fetchVideoBlob(url, timeoutMs, false)
+              return await this.fetchVideoBlob(url, timeoutMs, false, videoRunId)
             }
           }
           throw new Error('视频内容获取失败，请稍后重试')
         }
-        return await response.blob()
+        const blob = await response.blob()
+        if (videoRunId !== null && videoRunId !== undefined) this.assertVideoTaskActive(videoRunId)
+        return blob
       } catch (e) {
         if (e && e.name === 'AbortError') {
+          if (videoRunId !== null && videoRunId !== undefined && (this.videoTaskCancelled || videoRunId !== this.videoTaskRunId)) {
+            throw this.createVideoTaskCancellationError()
+          }
           throw new Error('视频内容获取超过 10 分钟，请稍后重试')
         }
         throw e
       } finally {
         if (timeoutId) clearTimeout(timeoutId)
+        this.unregisterVideoRequestController(controller)
       }
     },
     revokeResultObjectUrls() {
@@ -1882,6 +2069,35 @@ export default {
 
 .busy-box {
   gap: 16px;
+}
+
+.video-task-live {
+  width: min(360px, 90%);
+  padding: 14px 16px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: #fafbff;
+}
+
+.video-task-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.video-task-live >>> .ant-progress + .video-task-meta {
+  margin-top: 8px;
+}
+
+.video-task-id {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .result-grid {

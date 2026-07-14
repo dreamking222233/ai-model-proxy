@@ -13077,14 +13077,15 @@ class ProxyService:
         status = ProxyService._normalize_grok_video_119337_status(
             data.get("status") or body.get("status") or body.get("state")
         )
-        progress = data.get("progress", body.get("progress", 100 if status == "completed" else 0))
         normalized: dict[str, Any] = {
             "object": "video",
             "id": resolved_id,
             "model": model or data.get("model") or body.get("model") or "",
             "status": status,
-            "progress": progress,
         }
+        progress = data.get("progress") if data.get("progress") not in (None, "") else body.get("progress")
+        if progress not in (None, ""):
+            normalized["progress"] = progress
         if data.get("task_id") is not None:
             normalized["task_id"] = data.get("task_id")
         elif body.get("task_id") is not None:
@@ -13154,8 +13155,9 @@ class ProxyService:
             "id": resolved_id,
             "model": model or body.get("model") or "",
             "status": status,
-            "progress": body.get("progress", 100 if status == "completed" else 0),
         }
+        if body.get("progress") not in (None, ""):
+            normalized["progress"] = body.get("progress")
         if body.get("task_id") is not None:
             normalized["task_id"] = body.get("task_id")
         if body.get("request_id") is not None:
@@ -13221,8 +13223,9 @@ class ProxyService:
             "id": resolved_id,
             "model": model or body.get("model") or "",
             "status": status,
-            "progress": body.get("progress", 100 if status == "completed" else 0),
         }
+        if body.get("progress") not in (None, ""):
+            normalized["progress"] = body.get("progress")
         if prompt is not None:
             normalized["prompt"] = prompt
         elif isinstance(body.get("prompt"), str):

@@ -140,6 +140,26 @@ class GrokVideo119337WorkbenchTest(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(normalized["status"], "in_progress")
 
+    def test_video_normalizers_do_not_fabricate_missing_progress(self):
+        responses = (
+            ProxyService._normalize_grok_video_119337_response({
+                "data": {"task_id": "task-119337", "status": "IN_PROGRESS"},
+            }),
+            ProxyService._normalize_zz1cc_video_response({
+                "id": "task-zz1cc", "status": "processing",
+            }),
+            ProxyService._normalize_cpa_grok_video_response({
+                "request_id": "task-cpa", "status": "processing",
+            }),
+        )
+        for response in responses:
+            self.assertNotIn("progress", response)
+
+        explicit = ProxyService._normalize_grok_video_119337_response({
+            "data": {"task_id": "task-progress", "status": "IN_PROGRESS", "progress": "35%"},
+        })
+        self.assertEqual(explicit["progress"], "35%")
+
     def test_model_capabilities_are_channel_aware_and_merge_conservatively(self):
         common = ModelService.resolve_video_workbench_capabilities(
             "grok-video",

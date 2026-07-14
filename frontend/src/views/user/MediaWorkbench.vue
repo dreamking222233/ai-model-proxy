@@ -1349,8 +1349,9 @@ export default {
         createdAt: Date.now()
       }
       this.results = this.limitDisplayedResults([item].concat(this.results))
-      const saved = await saveMediaAsset(item.assetKey, videoBlob, videoBlob.type || 'video/mp4')
-      if (saved) {
+      // 视频下载完成后立即展示；较大的 Blob 在后台写入 IndexedDB，避免缓存耗时阻塞结果页。
+      saveMediaAsset(item.assetKey, videoBlob, videoBlob.type || 'video/mp4').then(saved => {
+        if (!saved) return
         saveMediaResult({
           id: item.id,
           type: item.type,
@@ -1362,7 +1363,7 @@ export default {
           rawResponse,
           createdAt: item.createdAt
         }, this.storageNamespace)
-      }
+      })
     },
     limitDisplayedResults(items) {
       const next = items.slice(0, MAX_CACHED_RESULTS)

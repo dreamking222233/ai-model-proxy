@@ -51,9 +51,7 @@ function runTransaction(mode, handler) {
         reject(tx.error)
       }
       tx.oncomplete = function () {
-        if (result === undefined) {
-          resolve(null)
-        }
+        resolve(result === undefined ? null : result)
       }
     }).finally(function () {
       db.close()

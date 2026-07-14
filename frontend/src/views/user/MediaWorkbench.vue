@@ -422,6 +422,7 @@ export default {
       activeVideoTaskId: '',
       videoTaskStage: '',
       videoTaskStatus: '',
+      videoTaskPhase: '',
       videoTaskProgress: null,
       videoStartedAt: 0,
       videoElapsedSeconds: 0,
@@ -626,6 +627,7 @@ export default {
         : '正在连接视频生成服务并提交任务'
     },
     videoTaskStatusText() {
+      if (this.videoTaskPhase === 'finalizing') return '准备视频文件中'
       const statusLabels = {
         submitting: '提交中',
         queued: '排队中',
@@ -1112,6 +1114,7 @@ export default {
       this.videoTaskCancelled = false
       this.videoTaskStage = '正在提交视频任务'
       this.videoTaskStatus = 'submitting'
+      this.videoTaskPhase = ''
       this.videoTaskProgress = null
       this.videoStartedAt = Date.now()
       this.videoElapsedSeconds = 0
@@ -1172,12 +1175,16 @@ export default {
     },
     updateVideoTaskState(status, fallbackStatus = '') {
       const normalizedStatus = String((status && status.status) || fallbackStatus || '').trim().toLowerCase()
+      const normalizedPhase = String((status && status.phase) || '').trim().toLowerCase()
       this.videoTaskStatus = normalizedStatus || this.videoTaskStatus
+      this.videoTaskPhase = normalizedPhase
       const progress = this.normalizeVideoProgress(status && status.progress)
       this.videoTaskProgress = progress
 
       if (VIDEO_COMPLETED_STATUSES.includes(normalizedStatus)) {
         this.videoTaskStage = '视频生成完成，正在加载结果'
+      } else if (normalizedPhase === 'finalizing') {
+        this.videoTaskStage = '视频已生成，正在准备视频文件'
       } else if (['in_progress', 'processing', 'running'].includes(normalizedStatus)) {
         this.videoTaskStage = '正在生成视频'
       } else if (['queued', 'pending', 'submitted', 'not_start'].includes(normalizedStatus)) {

@@ -141,6 +141,7 @@ class GrokVideo119337WorkbenchTest(unittest.IsolatedAsyncioTestCase):
             "data": {"task_id": "task-empty", "status": "SUCCESS", "progress": "100%"},
         })
         self.assertEqual(normalized["status"], "in_progress")
+        self.assertEqual(normalized["phase"], "finalizing")
 
     def test_video_normalizers_do_not_fabricate_missing_progress(self):
         responses = (

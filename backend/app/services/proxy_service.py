@@ -13116,7 +13116,11 @@ class ProxyService:
         if video_url:
             normalized["video_url"] = video_url
         elif status == "completed":
+            # 119337 may report SUCCESS/100% shortly before the downloadable
+            # result URL is committed. Keep polling, but expose this distinct
+            # finalization phase so clients do not present it as a stuck task.
             normalized["status"] = "in_progress"
+            normalized["phase"] = "finalizing"
         fail_reason = data.get("fail_reason") or body.get("fail_reason")
         if fail_reason:
             normalized["error"] = {"message": fail_reason}

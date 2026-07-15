@@ -293,20 +293,38 @@ def get_dashboard_stats(
     from sqlalchemy import func
     from app.services.log_service import LogService
 
-    today, _ = LogService._get_timezone_day_window(1)
+    today, now = LogService._get_timezone_day_window(1)
     user_total = db.query(func.count(SysUser.id)).filter(
         SysUser.role == "user"
+    ).scalar()
+    today_new_users = db.query(func.count(SysUser.id)).filter(
+        SysUser.role == "user",
+        SysUser.created_at >= today,
+        SysUser.created_at <= now,
     ).scalar()
     model_total = db.query(func.count(UnifiedModel.id)).scalar()
 
     today_requests = db.query(func.count(RequestLog.id)).filter(
-        RequestLog.created_at >= today
+        RequestLog.created_at >= today,
+        RequestLog.created_at <= now,
     ).scalar()
+    today_active_users = (
+        db.query(func.count(func.distinct(RequestLog.user_id)))
+        .join(SysUser, SysUser.id == RequestLog.user_id)
+        .filter(
+            SysUser.role == "user",
+            RequestLog.created_at >= today,
+            RequestLog.created_at <= now,
+        )
+        .scalar()
+    )
     today_tokens = db.query(func.coalesce(func.sum(RequestLog.total_tokens), 0)).filter(
-        RequestLog.created_at >= today
+        RequestLog.created_at >= today,
+        RequestLog.created_at <= now,
     ).scalar()
     today_cost = db.query(func.coalesce(func.sum(ConsumptionRecord.total_cost), 0)).filter(
         ConsumptionRecord.created_at >= today,
+        ConsumptionRecord.created_at <= now,
         ConsumptionRecord.total_cost > 0,
         ConsumptionRecord.request_id.isnot(None),
         ConsumptionRecord.model_name.isnot(None),
@@ -314,8 +332,10 @@ def get_dashboard_stats(
 
     return ResponseModel(data={
         "user_total": int(user_total or 0),
+        "today_new_users": int(today_new_users or 0),
+        "today_active_users": int(today_active_users or 0),
         "model_total": int(model_total or 0),
-        "today_requests": today_requests,
+        "today_requests": int(today_requests or 0),
         "today_tokens": int(today_tokens),
         "today_cost": float(today_cost or 0),
     })

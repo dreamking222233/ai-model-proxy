@@ -46,7 +46,13 @@
                   <div v-else class="stat-value">
                     <count-to :start-val="0" :end-val="card.value" :duration="1500" />
                   </div>
-                  <div class="stat-desc">{{ card.desc }}</div>
+                  <div class="stat-desc">
+                    <span>{{ card.desc }}</span>
+                    <span v-if="card.todayIncrement !== undefined" class="stat-increment">
+                      <a-icon type="rise" />
+                      今日新增 {{ formatNumber(card.todayIncrement) }} 人
+                    </span>
+                  </div>
                 </div>
               </div>
               <div class="stat-card-bg"></div>
@@ -98,7 +104,7 @@
               :loading="statsLoading"
               :row-key="getRowKey"
               size="middle"
-              :scroll="{ x: 720 }"
+              :scroll="{ x: 920 }"
               :row-class-name="(_, index) => index % 2 === 0 ? 'table-row-light' : 'table-row-dark'"
             >
               <template slot="date" slot-scope="text">
@@ -106,6 +112,12 @@
               </template>
               <template slot="total_requests" slot-scope="text">
                 <a-tag class="metric-tag metric-tag-total">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="active_users" slot-scope="text">
+                <a-tag class="user-tag user-tag-active">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="new_users" slot-scope="text">
+                <a-tag class="user-tag user-tag-new">{{ formatNumber(text) }}</a-tag>
               </template>
               <template slot="total_tokens" slot-scope="text">
                 <a-tag class="token-tag token-tag-total">{{ formatNumber(text) }}</a-tag>
@@ -130,6 +142,14 @@
                     <div class="mobile-stat-item">
                       <span class="mobile-stat-label">请求次数</span>
                       <span class="mobile-stat-value total">{{ formatNumber(record.total_requests) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">活跃用户</span>
+                      <span class="mobile-stat-value active-user">{{ formatNumber(record.active_users) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">新增用户</span>
+                      <span class="mobile-stat-value new-user">{{ formatNumber(record.new_users) }}</span>
                     </div>
                     <div class="mobile-stat-item">
                       <span class="mobile-stat-label">使用 Token</span>
@@ -191,6 +211,18 @@ export default {
           scopedSlots: { customRender: 'total_requests' }
         },
         {
+          title: '活跃用户',
+          dataIndex: 'active_users',
+          key: 'active_users',
+          scopedSlots: { customRender: 'active_users' }
+        },
+        {
+          title: '新增用户',
+          dataIndex: 'new_users',
+          key: 'new_users',
+          scopedSlots: { customRender: 'new_users' }
+        },
+        {
           title: '使用 Token',
           dataIndex: 'total_tokens',
           key: 'total_tokens',
@@ -216,7 +248,17 @@ export default {
           gradient: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
           class: 'users-card',
           desc: '当前注册用户',
+          todayIncrement: this.stats.today_new_users || 0,
           onClick: () => this.$router.push('/admin/users')
+        },
+        {
+          title: '今日活跃用户',
+          value: this.stats.today_active_users || 0,
+          icon: 'usergroup-add',
+          gradient: 'linear-gradient(135deg, #db2777 0%, #f472b6 100%)',
+          class: 'active-users-card',
+          desc: '今日至少使用一次',
+          onClick: () => this.$router.push('/admin/logs')
         },
         {
           title: '模型总数',
@@ -403,8 +445,8 @@ export default {
           data: ['请求次数', '使用 Token', '消耗金额']
         },
         grid: {
-          left: this.isMobile ? 4 : '3%',
-          right: this.isMobile ? 8 : '5%',
+          left: this.isMobile ? 4 : 84,
+          right: this.isMobile ? 8 : 176,
           bottom: this.isMobile ? 36 : '3%',
           top: this.isMobile ? 64 : 48,
           containLabel: true
@@ -423,17 +465,40 @@ export default {
         yAxis: [
           {
             type: 'value',
-            name: this.isMobile ? '' : '次数 / Token',
+            name: this.isMobile ? '' : '请求次数',
+            position: 'left',
+            nameTextStyle: { color: '#2563eb' },
             axisLine: { show: false },
             splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
-            axisLabel: { color: '#64748b' }
+            axisLabel: {
+              show: !this.isMobile,
+              color: '#2563eb',
+              formatter: value => this.formatNumber(value)
+            }
+          },
+          {
+            type: 'value',
+            name: this.isMobile ? '' : 'Token',
+            position: 'right',
+            nameTextStyle: { color: '#10b981' },
+            axisLine: { show: false },
+            splitLine: { show: false },
+            axisLabel: {
+              show: !this.isMobile,
+              color: '#10b981',
+              formatter: value => this.formatNumber(value)
+            }
           },
           {
             type: 'value',
             name: this.isMobile ? '' : 'USD',
+            position: 'right',
+            offset: 104,
+            nameTextStyle: { color: '#f97316' },
             axisLine: { show: false },
             splitLine: { show: false },
             axisLabel: {
+              show: !this.isMobile,
               color: '#f97316',
               formatter: value => `$${Number(value || 0).toFixed(4)}`
             }
@@ -442,43 +507,27 @@ export default {
         series: [
           {
             name: '请求次数',
-            type: 'line',
+            type: 'bar',
             yAxisIndex: 0,
-            smooth: true,
-            symbolSize: 8,
+            barMaxWidth: 24,
             data: requests,
-            itemStyle: { color: '#2563eb' },
-            areaStyle: {
-              color: {
-                type: 'linear',
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  { offset: 0, color: 'rgba(37, 99, 235, 0.26)' },
-                  { offset: 1, color: 'rgba(37, 99, 235, 0.02)' }
-                ]
-              }
-            }
+            itemStyle: { color: '#2563eb', borderRadius: [6, 6, 0, 0] }
           },
           {
             name: '使用 Token',
             type: 'bar',
-            yAxisIndex: 0,
-            barMaxWidth: 26,
+            yAxisIndex: 1,
+            barMaxWidth: 24,
             data: tokens,
-            itemStyle: { color: '#10b981', borderRadius: [8, 8, 0, 0] }
+            itemStyle: { color: '#10b981', borderRadius: [6, 6, 0, 0] }
           },
           {
             name: '消耗金额',
-            type: 'line',
-            yAxisIndex: 1,
-            smooth: true,
-            symbolSize: 8,
+            type: 'bar',
+            yAxisIndex: 2,
+            barMaxWidth: 24,
             data: costs,
-            itemStyle: { color: '#f97316' },
-            lineStyle: { width: 3, color: '#f97316' }
+            itemStyle: { color: '#f97316', borderRadius: [6, 6, 0, 0] }
           }
         ]
       })
@@ -614,6 +663,18 @@ export default {
             color: #94a3b8;
             font-size: 12px;
             font-weight: 600;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+
+            .stat-increment {
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              color: #16a34a;
+              white-space: nowrap;
+            }
           }
         }
       }
@@ -774,6 +835,26 @@ export default {
       padding: 3px 12px;
       font-family: 'MonoLisa', monospace;
     }
+
+    .user-tag {
+      min-width: 72px;
+      text-align: center;
+      border-radius: 999px;
+      border: none;
+      font-weight: 800;
+      padding: 3px 12px;
+      font-family: 'MonoLisa', monospace;
+    }
+
+    .user-tag-active {
+      color: #be185d;
+      background: rgba(236, 72, 153, 0.12);
+    }
+
+    .user-tag-new {
+      color: #15803d;
+      background: rgba(34, 197, 94, 0.12);
+    }
   }
 
   .mobile-stats-list {
@@ -858,8 +939,8 @@ export default {
       }
 
       .stat-card {
-        height: 136px;
-        min-height: 0;
+        height: auto;
+        min-height: 152px;
         border-radius: 10px;
 
         &:hover {
@@ -907,6 +988,7 @@ export default {
 
           .stat-desc {
             font-size: 11px;
+            gap: 2px 6px;
           }
         }
 
@@ -1024,6 +1106,14 @@ export default {
         color: #1d4ed8;
       }
 
+      &.active-user {
+        color: #be185d;
+      }
+
+      &.new-user {
+        color: #15803d;
+      }
+
       &.token {
         color: #7c2d12;
       }
@@ -1046,7 +1136,7 @@ export default {
 @media (max-width: 380px) {
   .dashboard-page {
     .stat-row .stat-card {
-      height: 128px;
+      min-height: 152px;
 
       .stat-info .stat-value {
         font-size: 20px;

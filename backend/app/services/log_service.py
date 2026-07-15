@@ -8,7 +8,7 @@ from typing import Any, Optional
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, and_, or_, not_
+from sqlalchemy import func, and_, or_, not_, case
 from sqlalchemy.orm import Session
 
 from app.models.log import RequestLog, OperationLog, ConsumptionRecord, RequestCacheSummary
@@ -786,19 +786,37 @@ class LogService:
         Returns:
             List of dicts with keys: ``date``, ``label``, ``total_requests``,
             ``success_requests``, ``failed_requests``, ``total_input_tokens``,
-            ``total_output_tokens``, ``total_tokens``, ``total_cost``.
+            ``total_output_tokens``, ``total_tokens``, ``total_cost``,
+            ``active_users``, ``new_users``.
         """
         config = LogService._resolve_request_stats_config(days=days, range_key=range_key)
         since = config["since"]
         until = config["until"]
         bucket_mode = config["bucket_mode"]
 
-        query = db.query(RequestLog).filter(
-            RequestLog.created_at >= since,
-            RequestLog.created_at <= until,
+        query = (
+            db.query(RequestLog)
+            .outerjoin(SysUser, SysUser.id == RequestLog.user_id)
+            .filter(
+                RequestLog.created_at >= since,
+                RequestLog.created_at <= until,
+            )
         )
         if agent_id is not None:
             query = query.filter(RequestLog.agent_id == agent_id)
+
+        new_user_query = db.query(SysUser).filter(
+            SysUser.role == "user",
+            SysUser.created_at >= since,
+            SysUser.created_at <= until,
+        )
+        if agent_id is not None:
+            new_user_query = new_user_query.filter(SysUser.agent_id == agent_id)
+
+        active_user_expr = func.count(func.distinct(case(
+            (SysUser.role == "user", RequestLog.user_id),
+            else_=None,
+        )))
 
         cost_query = db.query(ConsumptionRecord).filter(
             ConsumptionRecord.created_at >= since,
@@ -822,6 +840,24 @@ class LogService:
                 func.lpad(func.floor(func.hour(ConsumptionRecord.created_at) / 2) * 2, 2, "0"),
                 ":00",
             )
+            new_user_bucket_expr = func.concat(
+                func.date_format(SysUser.created_at, "%Y-%m-%d "),
+                func.lpad(func.floor(func.hour(SysUser.created_at) / 2) * 2, 2, "0"),
+                ":00",
+            )
+            new_user_rows = (
+                new_user_query.with_entities(
+                    new_user_bucket_expr.label("bucket_key"),
+                    func.count(SysUser.id).label("new_users"),
+                )
+                .group_by(new_user_bucket_expr)
+                .order_by(new_user_bucket_expr.asc())
+                .all()
+            )
+            new_users_by_bucket = {
+                str(row.bucket_key): int(row.new_users or 0)
+                for row in new_user_rows
+            }
             cost_rows = (
                 cost_query.with_entities(
                     cost_bucket_expr.label("bucket_key"),
@@ -844,6 +880,7 @@ class LogService:
                     func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
                     func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
                     func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                    active_user_expr.label("active_users"),
                 )
                 .group_by(bucket_expr)
                 .order_by(bucket_expr.asc())
@@ -862,6 +899,8 @@ class LogService:
                     "total_output_tokens": int(row.total_output_tokens or 0),
                     "total_tokens": int(row.total_tokens or 0),
                     "total_cost": cost_by_bucket.get(str(row.bucket_key), 0.0),
+                    "active_users": int(row.active_users or 0),
+                    "new_users": new_users_by_bucket.get(str(row.bucket_key), 0),
                 }
                 for row in rows
             }
@@ -881,11 +920,29 @@ class LogService:
                         "total_output_tokens": 0,
                         "total_tokens": 0,
                         "total_cost": 0.0,
+                        "active_users": 0,
+                        "new_users": new_users_by_bucket.get(
+                            (bucket_start + timedelta(hours=offset * 2)).strftime("%Y-%m-%d %H:00"),
+                            0,
+                        ),
                     },
                 )
                 for offset in range(12)
             ]
 
+        new_user_rows = (
+            new_user_query.with_entities(
+                func.date(SysUser.created_at).label("date"),
+                func.count(SysUser.id).label("new_users"),
+            )
+            .group_by(func.date(SysUser.created_at))
+            .order_by(func.date(SysUser.created_at).asc())
+            .all()
+        )
+        new_users_by_date = {
+            str(row.date): int(row.new_users or 0)
+            for row in new_user_rows
+        }
         cost_rows = (
             cost_query.with_entities(
                 func.date(ConsumptionRecord.created_at).label("date"),
@@ -908,6 +965,7 @@ class LogService:
                 func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
                 func.coalesce(func.sum(RequestLog.output_tokens), 0).label("total_output_tokens"),
                 func.coalesce(func.sum(RequestLog.total_tokens), 0).label("total_tokens"),
+                active_user_expr.label("active_users"),
             )
             .group_by(func.date(RequestLog.created_at))
             .order_by(func.date(RequestLog.created_at).asc())
@@ -926,6 +984,8 @@ class LogService:
                 "total_output_tokens": int(row.total_output_tokens or 0),
                 "total_tokens": int(row.total_tokens or 0),
                 "total_cost": cost_by_date.get(str(row.date), 0.0),
+                "active_users": int(row.active_users or 0),
+                "new_users": new_users_by_date.get(str(row.date), 0),
             }
             for row in rows
         }
@@ -946,6 +1006,11 @@ class LogService:
                     "total_output_tokens": 0,
                     "total_tokens": 0,
                     "total_cost": 0.0,
+                    "active_users": 0,
+                    "new_users": new_users_by_date.get(
+                        (start_date + timedelta(days=offset)).isoformat(),
+                        0,
+                    ),
                 },
             )
             for offset in range(total_days)

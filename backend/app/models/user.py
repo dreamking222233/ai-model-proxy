@@ -1,7 +1,7 @@
 """ORM models for sys_user and user_api_key tables."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, DateTime, SmallInteger, DECIMAL, func,
+    Column, BigInteger, String, DateTime, SmallInteger, DECIMAL, func, Index,
 )
 
 from app.database import Base
@@ -11,6 +11,10 @@ class SysUser(Base):
     """System user model."""
 
     __tablename__ = "sys_user"
+    __table_args__ = (
+        Index("idx_sys_user_role_created_at", "role", "created_at"),
+        Index("idx_sys_user_agent_role_created_at", "agent_id", "role", "created_at"),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     username = Column(String(64), nullable=False, unique=True)

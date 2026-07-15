@@ -1210,7 +1210,9 @@ CREATE TABLE `sys_user` (
   UNIQUE KEY `uk_email` (`email`),
   KEY `idx_role` (`role`),
   KEY `idx_status` (`status`),
-  KEY `idx_agent_id` (`agent_id`)
+  KEY `idx_agent_id` (`agent_id`),
+  KEY `idx_sys_user_role_created_at` (`role`,`created_at`),
+  KEY `idx_sys_user_agent_role_created_at` (`agent_id`,`role`,`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统用户表';
 
 -- ----------------------------

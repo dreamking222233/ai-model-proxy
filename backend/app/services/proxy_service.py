@@ -1150,8 +1150,7 @@ class ProxyService:
             raise
         except Exception as exc:
             logger.error("Security request scan failed: %s", exc, exc_info=True)
-            if SecurityDetectionService._get_bool_config(db, "security_fail_closed_enabled", False):
-                raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
+            raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
 
     @staticmethod
     def _maybe_scan_security_request_or_raise(

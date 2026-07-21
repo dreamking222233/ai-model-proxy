@@ -106,7 +106,6 @@ class SecurityDetectionService:
     ]
     CYBER_ABUSE_TERMS = [
         "注册机",
-        "keygen",
         "破解版",
         "破解网站",
         "网站破解",
@@ -126,6 +125,16 @@ class SecurityDetectionService:
         "木马",
     ]
     AMBIGUOUS_CYBER_TERMS = {
+        "keygen": re.compile(
+            r"(?<!ssh-)(?<![a-z0-9_])keygen(?![a-z0-9_]).{0,32}("
+            r"做|写|制作|生成|编写|实现|构造|开发|下载|提供|创建|破解|绕过|授权|激活|注册码|序列号|"
+            r"make|build|write|create|generate|develop|download|license|activation|serial|crack|software|app"
+            r")|("
+            r"做|写|制作|生成|编写|实现|构造|开发|下载|提供|创建|破解|绕过|授权|激活|注册码|序列号|"
+            r"make|build|write|create|generate|develop|download|license|activation|serial|crack|software|app"
+            r").{0,32}(?<!ssh-)(?<![a-z0-9_])keygen(?![a-z0-9_])",
+            re.IGNORECASE | re.DOTALL,
+        ),
         "crack": re.compile(
             r"\bcrack(?:ed|ing|s)?\b.{0,24}\b("
             r"password|account|license|serial|key|software|app|program|game|"
@@ -497,9 +506,52 @@ class SecurityDetectionService:
     def _match_ambiguous_cyber_terms(text: str) -> list[dict[str, Any]]:
         matched = []
         for term, pattern in SecurityDetectionService.AMBIGUOUS_CYBER_TERMS.items():
-            if pattern.search(str(text or "")):
+            normalized = str(text or "")
+            if SecurityDetectionService._matches_ambiguous_cyber_term(
+                normalized,
+                term,
+                pattern,
+            ):
                 matched.append({"category": "cyber_abuse", "term": term})
         return matched
+
+    @staticmethod
+    def _matches_ambiguous_cyber_term(text: str, term: str, pattern: re.Pattern) -> bool:
+        if term != "后门":
+            return bool(pattern.search(text))
+        for match in re.finditer(re.escape(term), text, flags=re.IGNORECASE):
+            window = text[max(0, match.start() - 32):min(len(text), match.end() + 32)]
+            if not pattern.search(window):
+                continue
+            if not SecurityDetectionService._is_negated_ambiguous_cyber_context(
+                text,
+                term,
+                match.start(),
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _is_negated_ambiguous_cyber_context(text: str, term: str, position: int) -> bool:
+        if term != "后门":
+            return False
+        normalized = str(text or "")
+        prefix = normalized[max(0, int(position) - 96):int(position)]
+        negation = re.search(
+            r"(没发现|未发现|没有发现|并未发现|不存在|没有|并无|从未)"
+            r"[^\n。！？!?]{0,80}$",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+        if not negation:
+            return False
+        negated_text = prefix[negation.start():]
+        if term in negated_text:
+            return False
+        return not bool(re.search(
+            r"(帮我|请帮|如何|怎么|需要|想要|随后|然后|接着|转而|但是|不过|后再|再植入)",
+            negated_text,
+        ))
 
     @staticmethod
     def _match_ambiguous_prompt_jailbreak_terms(text: str) -> list[dict[str, Any]]:

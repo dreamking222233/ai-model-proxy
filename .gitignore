@@ -101,3 +101,21 @@ ssl/
 frontend/dist/
 frontend/.nuxt/
 frontend/.output/
+
+# Local-only documentation, test workspaces, and generated media
+/docs/
+/md/
+/backend/app/test/
+/backend/test_*.py
+/backend/app/test/output_*/
+/backend/app/test/*.png
+/backend/app/test/*.jpg
+/backend/app/test/*.jpeg
+/backend/app/test/*.gif
+/backend/app/test/*.mp4
+/backend/app/test/*.mov
+/backend/app/test/*.webm
+/backend/app/test/*.json
+/生图/
+/调用流程/
+*.crt

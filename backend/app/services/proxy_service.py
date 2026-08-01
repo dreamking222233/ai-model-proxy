@@ -441,8 +441,15 @@ class ProxyService:
         limited = False
         reason: Optional[str] = None
         if not active_subscription:
-            limited = True
-            reason = "no_subscription"
+            # A sufficient balance is an independent source of billing capacity;
+            # users without a subscription must not be throttled when it is above
+            # the low-asset threshold.
+            if balance > threshold:
+                limited = False
+                reason = "balance_sufficient"
+            else:
+                limited = True
+                reason = "no_subscription"
         elif (
             quota_metric == SubscriptionService.QUOTA_METRIC_COST
             and quota_remaining is not None

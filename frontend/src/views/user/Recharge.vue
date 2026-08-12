@@ -95,7 +95,7 @@
                     </div>
                     <div class="sub-info">
                       <strong>余额充值</strong>
-                      <span>1人民币 = 5美刀</span>
+                      <span>1人民币 = {{ formatRate(balanceRechargeRate) }}美刀</span>
                     </div>
                   </div>
                   <div class="sub-type-card" :class="{ active: form.recharge_type === 'image_credit' }" @click="selectRechargeType('image_credit')">
@@ -104,7 +104,7 @@
                     </div>
                     <div class="sub-info">
                       <strong>图片积分充值</strong>
-                      <span>1人民币 = 5积分</span>
+                      <span>1人民币 = {{ formatRate(imageCreditRechargeRate) }}积分</span>
                     </div>
                   </div>
                 </div>
@@ -481,10 +481,10 @@ export default {
   },
   computed: {
     estimatedUsd() {
-      return this.formatUsd((Number(this.form.amount_cny || 0) || 0) * 5)
+      return this.formatUsd((Number(this.form.amount_cny || 0) || 0) * this.balanceRechargeRate)
     },
     estimatedCredits() {
-      return this.formatCredits((Number(this.form.amount_cny || 0) || 0) * 5)
+      return this.formatCredits((Number(this.form.amount_cny || 0) || 0) * this.imageCreditRechargeRate)
     },
     estimatedAmountText() {
       if (this.form.recharge_type === 'subscription') {
@@ -500,7 +500,9 @@ export default {
       if (this.form.recharge_type === 'subscription') {
         return '套餐购买后自动顺延当前有效期'
       }
-      return this.form.recharge_type === 'image_credit' ? '1人民币 = 5图片积分' : '1人民币 = 5美刀'
+      return this.form.recharge_type === 'image_credit'
+        ? `1人民币 = ${this.formatRate(this.imageCreditRechargeRate)}图片积分`
+        : `1人民币 = ${this.formatRate(this.balanceRechargeRate)}美刀`
     },
     selectedSubscriptionPlan() {
       return this.subscriptionPlans.find(item => Number(item.id) === Number(this.form.subscription_plan_id)) || null
@@ -523,6 +525,14 @@ export default {
     },
     subscriptionOnlineRechargeEnabled() {
       return Boolean(this.siteConfig.subscription_online_recharge_enabled)
+    },
+    balanceRechargeRate() {
+      const rate = Number(this.siteConfig.balance_recharge_rate)
+      return Number.isFinite(rate) && rate > 0 ? rate : 0
+    },
+    imageCreditRechargeRate() {
+      const rate = Number(this.siteConfig.image_credit_recharge_rate)
+      return Number.isFinite(rate) && rate > 0 ? rate : 0
     },
     supportWechat() {
       return this.siteConfig.support_wechat || '-'
@@ -569,6 +579,10 @@ export default {
       const num = Number(value || 0)
       return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
     },
+    formatRate(value) {
+      const number = Number(value || 0)
+      return Number.isFinite(number) ? number.toFixed(6).replace(/\.?0+$/, '') : '-'
+    },
     formatNumber(value) {
       return Number(value || 0).toLocaleString('zh-CN')
     },
@@ -584,9 +598,9 @@ export default {
     },
     estimateAmountText(amount) {
       if (this.form.recharge_type === 'image_credit') {
-        return `${this.formatCredits(Number(amount || 0) * 5)} 积分`
+        return `${this.formatCredits(Number(amount || 0) * this.imageCreditRechargeRate)} 积分`
       }
-      return `$${this.formatUsd(Number(amount || 0) * 5)}`
+      return `$${this.formatUsd(Number(amount || 0) * this.balanceRechargeRate)}`
     },
     orderCreditText(record) {
       if ((record && record.recharge_type) === 'subscription') {

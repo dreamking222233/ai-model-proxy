@@ -4,12 +4,18 @@
       <a-input-search v-model="keyword" placeholder="搜索代理编码/名称/域名" style="width: 320px" @search="fetchList" />
       <a-button type="primary" @click="openCreate">新增代理</a-button>
     </div>
-    <a-table :columns="columns" :data-source="list" :pagination="pagination" row-key="id" :loading="loading" @change="handleTableChange">
+    <a-table :columns="columns" :data-source="list" :pagination="pagination" row-key="id" :loading="loading" :scroll="{ x: 1450 }" @change="handleTableChange">
       <template slot="status" slot-scope="text">
         <a-tag :color="text === 'active' ? 'green' : 'red'">{{ text === 'active' ? '启用' : '停用' }}</a-tag>
       </template>
       <template slot="onlineRecharge" slot-scope="text">
         <a-tag :color="text ? 'green' : 'default'">{{ text ? '开启' : '关闭' }}</a-tag>
+      </template>
+      <template slot="customPricing" slot-scope="text, record">
+        <div class="pricing-status">
+          <a-tag :color="text ? 'blue' : 'default'">{{ text ? '已授权' : '未授权' }}</a-tag>
+          <small v-if="text">1 : {{ formatRate(record.custom_recharge_rate) }}</small>
+        </div>
       </template>
       <template slot="balance" slot-scope="text">
         $ {{ Number(text || 0).toFixed(4) }}
@@ -50,6 +56,10 @@
         </a-form-model-item>
         <a-form-model-item label="在线充值">
           <a-switch v-model="onlineRechargeBool" />
+        </a-form-model-item>
+        <a-form-model-item label="自定义充值比例">
+          <a-switch v-model="customPricingBool" />
+          <div class="field-tip">授权后，代理可设置本站用户的余额与图片积分统一充值比例。</div>
         </a-form-model-item>
       </a-form-model>
     </a-modal>
@@ -114,7 +124,8 @@ export default {
         owner_password: '',
         site_title: '',
         allow_self_register: 1,
-        online_recharge_enabled: 1
+        online_recharge_enabled: 1,
+        custom_recharge_rate_enabled: 0
       },
       columns: [
         { title: '代理编码', dataIndex: 'agent_code', key: 'agent_code' },
@@ -123,6 +134,7 @@ export default {
         { title: 'API 接入地址', dataIndex: 'quickstart_api_base_url', key: 'quickstart_api_base_url', scopedSlots: { customRender: 'apiBaseUrl' } },
         { title: '状态', dataIndex: 'status', key: 'status', scopedSlots: { customRender: 'status' } },
         { title: '在线充值', dataIndex: 'online_recharge_enabled', key: 'online_recharge_enabled', scopedSlots: { customRender: 'onlineRecharge' } },
+        { title: '自定义定价', dataIndex: 'custom_recharge_rate_enabled', key: 'custom_recharge_rate_enabled', width: 130, scopedSlots: { customRender: 'customPricing' } },
         { title: '余额池', dataIndex: 'balance', key: 'balance', scopedSlots: { customRender: 'balance' } },
         { title: '图片积分池', dataIndex: 'image_credit_balance', key: 'image_credit_balance', scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '操作', key: 'action', scopedSlots: { customRender: 'action' } }
@@ -144,6 +156,14 @@ export default {
       },
       set(val) {
         this.form.online_recharge_enabled = val ? 1 : 0
+      }
+    },
+    customPricingBool: {
+      get() {
+        return this.form.custom_recharge_rate_enabled === 1
+      },
+      set(val) {
+        this.form.custom_recharge_rate_enabled = val ? 1 : 0
       }
     }
   },
@@ -182,7 +202,8 @@ export default {
         owner_password: '',
         site_title: '',
         allow_self_register: 1,
-        online_recharge_enabled: 1
+        online_recharge_enabled: 1,
+        custom_recharge_rate_enabled: 0
       }
       this.modalVisible = true
     },
@@ -194,7 +215,8 @@ export default {
         frontend_domain: record.frontend_domain || '',
         site_title: record.site_title,
         allow_self_register: record.allow_self_register ? 1 : 0,
-        online_recharge_enabled: record.online_recharge_enabled ? 1 : 0
+        online_recharge_enabled: record.online_recharge_enabled ? 1 : 0,
+        custom_recharge_rate_enabled: record.custom_recharge_rate_enabled ? 1 : 0
       }
       this.modalVisible = true
     },
@@ -236,6 +258,10 @@ export default {
         this.submitting = false
       }
     },
+    formatRate(value) {
+      const number = Number(value || 0)
+      return Number.isFinite(number) ? number.toFixed(6).replace(/\.?0+$/, '') : '-'
+    },
     openAsset(record) {
       this.$router.push({ path: '/admin/agent-assets', query: { agent_id: record.id } })
     }
@@ -260,5 +286,7 @@ export default {
   font-size: 12px;
   line-height: 1.5;
 }
+.pricing-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.pricing-status small { color: #595959; white-space: nowrap; }
 .shared-api-value { font-family: monospace; }
 </style>

@@ -26,6 +26,7 @@ class AgentCreate(BaseModel):
     allow_self_register: Optional[int] = Field(1, ge=0, le=1)
     online_recharge_enabled: Optional[int] = Field(1, ge=0, le=1)
     subscription_online_recharge_enabled: Optional[int] = Field(1, ge=0, le=1)
+    custom_recharge_rate_enabled: Optional[int] = Field(0, ge=0, le=1)
     theme_config_json: Optional[str] = None
 
 
@@ -46,7 +47,38 @@ class AgentUpdate(BaseModel):
     allow_self_register: Optional[int] = Field(None, ge=0, le=1)
     online_recharge_enabled: Optional[int] = Field(None, ge=0, le=1)
     subscription_online_recharge_enabled: Optional[int] = Field(None, ge=0, le=1)
+    custom_recharge_rate_enabled: Optional[int] = Field(None, ge=0, le=1)
     theme_config_json: Optional[str] = None
+
+
+class AgentSiteConfigUpdate(BaseModel):
+    """Fields an agent operator may update for their own site."""
+
+    site_title: Optional[str] = Field(None, max_length=128)
+    site_subtitle: Optional[str] = Field(None, max_length=255)
+    announcement_title: Optional[str] = Field(None, max_length=128)
+    announcement_content: Optional[str] = None
+    support_wechat: Optional[str] = Field(None, max_length=128)
+    support_qq: Optional[str] = Field(None, max_length=64)
+    allow_self_register: Optional[int] = Field(None, ge=0, le=1)
+    subscription_online_recharge_enabled: Optional[int] = Field(None, ge=0, le=1)
+    custom_recharge_rate: Optional[Decimal] = Field(
+        None,
+        ge=Decimal("0.01"),
+    )
+    theme_config_json: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_custom_recharge_rate_precision(self):
+        if self.custom_recharge_rate is None:
+            return self
+        try:
+            normalized = self.custom_recharge_rate.quantize(Decimal("0.000001"))
+        except InvalidOperation as exc:
+            raise ValueError("充值比例格式不正确") from exc
+        if normalized != self.custom_recharge_rate:
+            raise ValueError("充值比例最多支持 6 位小数")
+        return self
 
 
 class AgentBalanceRecharge(BaseModel):

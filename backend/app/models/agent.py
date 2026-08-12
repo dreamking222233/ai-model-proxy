@@ -29,6 +29,8 @@ class Agent(Base):
     allow_self_register = Column(SmallInteger, nullable=False, default=1)
     online_recharge_enabled = Column(SmallInteger, nullable=False, default=1)
     subscription_online_recharge_enabled = Column(SmallInteger, nullable=False, default=1)
+    custom_recharge_rate_enabled = Column(SmallInteger, nullable=False, default=0)
+    custom_recharge_rate = Column(DECIMAL(12, 6), nullable=False, default=5)
     theme_config_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

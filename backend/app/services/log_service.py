@@ -1097,6 +1097,7 @@ class LogService:
         description: Optional[str] = None,
         ip: Optional[str] = None,
         agent_id: Optional[int] = None,
+        auto_commit: bool = True,
     ) -> OperationLog:
         """
         Create an operation audit log entry.
@@ -1115,8 +1116,11 @@ class LogService:
             agent_id=agent_id,
         )
         db.add(log)
-        db.commit()
-        db.refresh(log)
+        if auto_commit:
+            db.commit()
+            db.refresh(log)
+        else:
+            db.flush()
         return log
 
         return result, total

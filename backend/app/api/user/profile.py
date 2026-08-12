@@ -102,6 +102,7 @@ def get_site_config(
         x_site_host=request.headers.get("X-Site-Host"),
         origin=request.headers.get("Origin"),
         referer=request.headers.get("Referer"),
+        user=current_user,
     )
     result["api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")
     result["quickstart_api_base_url"] = result.get("quickstart_api_base_url") or result.get("api_base_url")

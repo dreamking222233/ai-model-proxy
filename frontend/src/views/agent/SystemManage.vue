@@ -66,9 +66,31 @@
               <div class="switch-item">
                 <div class="switch-info">
                   <div class="switch-title">套餐在线充值</div>
-                  <div class="switch-desc">开启后，当前站点用户可在充值页在线购买套餐</div>
+                  <div class="switch-desc">{{ customPricingEnabled ? '自定义定价生效时暂停套餐在线购买' : '开启后，当前站点用户可在充值页在线购买套餐' }}</div>
                 </div>
-                <a-switch v-model="subscriptionOnlineRechargeBool" size="large" />
+                <a-switch v-model="subscriptionOnlineRechargeBool" size="large" :disabled="customPricingEnabled" />
+              </div>
+
+              <div v-if="customPricingEnabled" class="recharge-rate-setting">
+                <div class="rate-heading">
+                  <div>
+                    <strong>统一充值比例</strong>
+                    <span>余额与图片积分使用同一比例</span>
+                  </div>
+                  <a-tag color="blue">已授权</a-tag>
+                </div>
+                <a-form-model-item label="1 人民币可兑换">
+                  <a-input-number
+                    v-model="form.custom_recharge_rate"
+                    :min="0.01"
+                    :max="form.max_custom_recharge_rate"
+                    :step="0.01"
+                    :precision="6"
+                    size="large"
+                  />
+                  <span class="rate-unit">美元 / 图片积分</span>
+                  <div class="field-tip">可设置范围 0.01 - {{ formatRate(form.max_custom_recharge_rate) }}</div>
+                </a-form-model-item>
               </div>
             </a-card>
 
@@ -162,7 +184,10 @@ export default {
         support_wechat: '',
         support_qq: '',
         allow_self_register: 1,
-        subscription_online_recharge_enabled: 1
+        subscription_online_recharge_enabled: 1,
+        custom_recharge_rate_enabled: false,
+        custom_recharge_rate: null,
+        max_custom_recharge_rate: 0
       }
     }
   },
@@ -182,6 +207,9 @@ export default {
       set(val) {
         this.form.subscription_online_recharge_enabled = val ? 1 : 0
       }
+    },
+    customPricingEnabled() {
+      return Boolean(this.form.custom_recharge_rate_enabled)
     }
   },
   mounted() {
@@ -200,10 +228,21 @@ export default {
         support_wechat: data.support_wechat || '',
         support_qq: data.support_qq || '',
         allow_self_register: data.allow_register ? 1 : 0,
-        subscription_online_recharge_enabled: data.subscription_online_recharge_enabled === false ? 0 : 1
+        subscription_online_recharge_enabled: data.subscription_online_recharge_configured === false ? 0 : 1,
+        custom_recharge_rate_enabled: Boolean(data.custom_recharge_rate_enabled),
+        custom_recharge_rate: data.custom_recharge_rate,
+        max_custom_recharge_rate: Number(data.max_custom_recharge_rate || 0)
       }
     },
     async save() {
+      if (this.customPricingEnabled) {
+        const rate = Number(this.form.custom_recharge_rate)
+        const maxRate = Number(this.form.max_custom_recharge_rate)
+        if (!Number.isFinite(rate) || rate < 0.01 || rate > maxRate) {
+          this.$message.error(`充值比例必须在 0.01 - ${this.formatRate(maxRate)} 之间`)
+          return
+        }
+      }
       this.saving = true
       try {
         const payload = {
@@ -213,14 +252,23 @@ export default {
           announcement_content: this.form.announcement_content,
           support_wechat: this.form.support_wechat,
           support_qq: this.form.support_qq,
-          allow_self_register: this.form.allow_self_register,
-          subscription_online_recharge_enabled: this.form.subscription_online_recharge_enabled
+          allow_self_register: this.form.allow_self_register
+        }
+        if (this.customPricingEnabled) {
+          payload.custom_recharge_rate = this.form.custom_recharge_rate
+        } else {
+          payload.subscription_online_recharge_enabled = this.form.subscription_online_recharge_enabled
         }
         await updateAgentSiteConfig(payload)
+        await this.fetchConfig()
         this.$message.success('系统配置已更新')
       } finally {
         this.saving = false
       }
+    },
+    formatRate(value) {
+      const number = Number(value || 0)
+      return Number.isFinite(number) ? number.toFixed(6).replace(/\.?0+$/, '') : '-'
     }
   }
 }
@@ -388,6 +436,27 @@ export default {
       font-size: 12px;
       margin-top: 2px;
     }
+  }
+
+  .recharge-rate-setting {
+    margin-top: 20px;
+    padding: 20px;
+    border: 1px solid #d9e2f2;
+    border-radius: 8px;
+    background: #f8fafc;
+
+    .rate-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+
+      strong, span { display: block; }
+      strong { color: #1e293b; font-size: 15px; }
+      span { margin-top: 4px; color: #64748b; font-size: 12px; }
+    }
+
+    .rate-unit { margin-left: 10px; color: #475569; }
   }
 
   .section-desc {

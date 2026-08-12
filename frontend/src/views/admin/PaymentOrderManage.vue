@@ -65,7 +65,7 @@
         :pagination="pagination"
         row-key="order_no"
         @change="handleTableChange"
-        :scroll="{ x: 1780 }"
+        :scroll="{ x: 1920 }"
       >
         <template slot="paymentChannel" slot-scope="text, record">
           <a-tag :color="record.payment_channel === 'alipay' ? 'blue' : 'green'">
@@ -101,6 +101,13 @@
         </template>
         <template slot="agentIncome" slot-scope="text, record">
           <span>{{ record.agent_id ? `￥${formatMoney(text)}` : '-' }}</span>
+        </template>
+        <template slot="rates" slot-scope="text, record">
+          <div v-if="record.recharge_type !== 'subscription'" class="stack-text">
+            <small>用户 1 : {{ formatRate(record.user_recharge_rate) }}</small>
+            <small v-if="record.agent_id">结算 1 : {{ formatRate(record.agent_settlement_rate) }}</small>
+          </div>
+          <span v-else>-</span>
         </template>
         <template slot="status" slot-scope="text">
           <a-tag :color="statusColor(text)">{{ statusText(text) }}</a-tag>
@@ -151,6 +158,7 @@ export default {
         { title: '归属', key: 'agent_name', width: 180, scopedSlots: { customRender: 'agentInfo' } },
         { title: '来源域名', dataIndex: 'source_host', key: 'source_host', width: 170 },
         { title: '支付金额', key: 'amount_cny', width: 150, scopedSlots: { customRender: 'amount' } },
+        { title: '比例快照', key: 'rates', width: 140, scopedSlots: { customRender: 'rates' } },
         { title: '代理分润', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 120, scopedSlots: { customRender: 'agentIncome' } },
         { title: '订单状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
         { title: '支付流水号', dataIndex: 'channel_trade_no', key: 'channel_trade_no', width: 210 },
@@ -171,6 +179,10 @@ export default {
     },
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
+    },
+    formatRate(value) {
+      const number = Number(value || 0)
+      return number > 0 && Number.isFinite(number) ? number.toFixed(6).replace(/\.?0+$/, '') : '-'
     },
     formatCredits(value) {
       const num = Number(value || 0)

@@ -1072,9 +1072,8 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
       try {
         const res = await getSiteConfig()
         const config = res.data || {}
-        if (config.api_base_url) {
-          this.apiBase = config.api_base_url
-        }
+        const configuredApiBase = config.quickstart_api_base_url || config.api_base_url
+        this.apiBase = configuredApiBase || window.location.origin
       } catch (e) {
         console.error('Failed to fetch site config:', e)
         this.apiBase = window.location.origin

@@ -132,7 +132,12 @@ def update_config(
     if not config:
         from app.core.exceptions import ServiceException
         raise ServiceException(404, "Config not found")
-    config.config_value = data.config_value
+    config_value = data.config_value
+    if config.config_key == "api_base_url":
+        from app.services.agent_service import AgentService
+
+        config_value = AgentService.normalize_shared_api_base_url(db, config_value)
+    config.config_value = config_value
     if data.description is not None:
         config.description = data.description
     db.commit()

@@ -24,7 +24,9 @@
         {{ Number(text || 0).toFixed(3) }}
       </template>
       <template slot="apiBaseUrl" slot-scope="text">
-        <span>{{ text || sharedApiBaseUrl }}</span>
+        <a-tooltip :title="text || '-'">
+          <span class="api-base-value">{{ text || '-' }}</span>
+        </a-tooltip>
       </template>
       <template slot="action" slot-scope="text, record">
         <a @click="openEdit(record)">编辑</a>
@@ -47,9 +49,15 @@
           <a-form-model-item label="登录邮箱（可选）"><a-input v-model="form.owner_email" /></a-form-model-item>
           <a-form-model-item label="登录密码"><a-input-password v-model="form.owner_password" /></a-form-model-item>
         </template>
-        <div class="shared-api-tip">
-          当前代理统一使用共享 API：<span class="shared-api-value">{{ sharedApiBaseUrl }}</span>
-        </div>
+        <a-form-model-item label="独立 API 地址">
+          <a-input
+            v-model="form.quickstart_api_base_url"
+            placeholder="例如 https://api.agent.example.com"
+          />
+          <div class="field-tip">
+            填写完整 HTTP/HTTPS 地址，留空则跟随平台共享 API。新域名还需配置 DNS、HTTPS 证书和 nginx 反向代理。
+          </div>
+        </a-form-model-item>
         <a-form-model-item label="站点标题"><a-input v-model="form.site_title" /></a-form-model-item>
         <a-form-model-item label="允许注册">
           <a-switch v-model="allowRegisterBool" />
@@ -103,6 +111,32 @@ function normalizeDomainInput(value) {
   return normalized
 }
 
+function normalizeApiBaseUrl(value) {
+  const text = String(value || '').trim()
+  if (!text) {
+    return ''
+  }
+  if (/\s/.test(text)) {
+    throw new Error('API 地址不能包含空格')
+  }
+  let parsed
+  try {
+    parsed = new URL(text)
+  } catch (error) {
+    throw new Error('API 地址必须是完整的 HTTP 或 HTTPS 地址')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('API 地址仅支持 HTTP 或 HTTPS')
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || !parsed.hostname) {
+    throw new Error('API 地址格式不正确')
+  }
+  if (parsed.pathname && parsed.pathname !== '/') {
+    throw new Error('API 地址不能包含路径')
+  }
+  return parsed.origin
+}
+
 export default {
   name: 'AgentManage',
   data() {
@@ -113,7 +147,6 @@ export default {
       editing: null,
       keyword: '',
       list: [],
-      sharedApiBaseUrl: window.location.origin,
       pagination: { current: 1, pageSize: 10, total: 0 },
       form: {
         agent_code: '',
@@ -122,6 +155,7 @@ export default {
         owner_username: '',
         owner_email: '',
         owner_password: '',
+        quickstart_api_base_url: '',
         site_title: '',
         allow_self_register: 1,
         online_recharge_enabled: 1,
@@ -131,7 +165,7 @@ export default {
         { title: '代理编码', dataIndex: 'agent_code', key: 'agent_code' },
         { title: '代理名称', dataIndex: 'agent_name', key: 'agent_name' },
         { title: '前台域名', dataIndex: 'frontend_domain', key: 'frontend_domain' },
-        { title: 'API 接入地址', dataIndex: 'quickstart_api_base_url', key: 'quickstart_api_base_url', scopedSlots: { customRender: 'apiBaseUrl' } },
+        { title: 'API 接入地址', dataIndex: 'quickstart_api_base_url', key: 'quickstart_api_base_url', width: 280, scopedSlots: { customRender: 'apiBaseUrl' } },
         { title: '状态', dataIndex: 'status', key: 'status', scopedSlots: { customRender: 'status' } },
         { title: '在线充值', dataIndex: 'online_recharge_enabled', key: 'online_recharge_enabled', scopedSlots: { customRender: 'onlineRecharge' } },
         { title: '自定义定价', dataIndex: 'custom_recharge_rate_enabled', key: 'custom_recharge_rate_enabled', width: 130, scopedSlots: { customRender: 'customPricing' } },
@@ -200,6 +234,7 @@ export default {
         owner_username: '',
         owner_email: '',
         owner_password: '',
+        quickstart_api_base_url: '',
         site_title: '',
         allow_self_register: 1,
         online_recharge_enabled: 1,
@@ -213,6 +248,7 @@ export default {
         agent_code: record.agent_code,
         agent_name: record.agent_name,
         frontend_domain: record.frontend_domain || '',
+        quickstart_api_base_url: record.configured_quickstart_api_base_url || '',
         site_title: record.site_title,
         allow_self_register: record.allow_self_register ? 1 : 0,
         online_recharge_enabled: record.online_recharge_enabled ? 1 : 0,
@@ -226,8 +262,9 @@ export default {
         const payload = { ...this.form }
         try {
           payload.frontend_domain = normalizeDomainInput(payload.frontend_domain)
+          payload.quickstart_api_base_url = normalizeApiBaseUrl(payload.quickstart_api_base_url)
         } catch (error) {
-          this.$message.error(error.message || '前台域名格式不正确')
+          this.$message.error(error.message || '代理域名或 API 地址格式不正确')
           return
         }
         if (this.editing) {
@@ -272,14 +309,6 @@ export default {
 <style lang="less" scoped>
 .page { background: #fff; padding: 20px; border-radius: 16px; }
 .toolbar { display: flex; justify-content: space-between; margin-bottom: 16px; }
-.shared-api-tip {
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f5f7ff;
-  color: #3f4c7a;
-  border: 1px solid #d9e1ff;
-}
 .field-tip {
   margin-top: 6px;
   color: #8c8c8c;
@@ -288,5 +317,13 @@ export default {
 }
 .pricing-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .pricing-status small { color: #595959; white-space: nowrap; }
-.shared-api-value { font-family: monospace; }
+.api-base-value {
+  display: inline-block;
+  max-width: 248px;
+  overflow: hidden;
+  font-family: monospace;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 </style>

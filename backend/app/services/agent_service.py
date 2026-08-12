@@ -231,8 +231,100 @@ class AgentService:
         return AgentService.normalize_host(parsed.netloc or parsed.path)
 
     @staticmethod
-    def get_shared_api_base_url() -> str:
-        return str(AgentService.PLATFORM_CONFIG_DEFAULTS.get("api_base_url") or "").rstrip("/")
+    def get_shared_api_base_url(db: Optional[Session] = None) -> str:
+        if db is not None:
+            row = (
+                db.query(SystemConfig)
+                .filter(SystemConfig.config_key == "api_base_url")
+                .first()
+            )
+            if row and str(row.config_value or "").strip():
+                return str(row.config_value).strip().rstrip("/")
+        return str(AgentService.PLATFORM_CONFIG_DEFAULTS.get("api_base_url") or "").strip().rstrip("/")
+
+    @staticmethod
+    def normalize_api_base_url(
+        raw_value: Optional[str],
+        db: Optional[Session] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        value = str(raw_value or "").strip()
+        if not value or value.lower() in {"null", "undefined"}:
+            return None, None
+        if any(ch.isspace() for ch in value):
+            raise ServiceException(400, "API 地址不能包含空格", "INVALID_AGENT_API_BASE_URL")
+
+        try:
+            parsed = urlparse(value)
+        except ValueError as exc:
+            raise ServiceException(400, "API 地址格式不正确", "INVALID_AGENT_API_BASE_URL") from exc
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ServiceException(400, "API 地址必须是完整的 HTTP 或 HTTPS 地址", "INVALID_AGENT_API_BASE_URL")
+        if parsed.params or parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ServiceException(400, "API 地址格式不正确", "INVALID_AGENT_API_BASE_URL")
+        if parsed.path not in {"", "/"}:
+            raise ServiceException(400, "API 地址不能包含路径", "INVALID_AGENT_API_BASE_URL")
+
+        try:
+            hostname = str(parsed.hostname or "").strip().lower()
+        except ValueError as exc:
+            raise ServiceException(400, "API 地址域名格式不正确", "INVALID_AGENT_API_BASE_URL") from exc
+        if not hostname:
+            raise ServiceException(400, "API 地址格式不正确", "INVALID_AGENT_API_BASE_URL")
+        is_platform_api = AgentService.is_platform_api_host(hostname, db)
+        if AgentService.is_platform_frontend_host(hostname) and not is_platform_api:
+            raise ServiceException(400, "API 地址不能使用平台站点域名", "INVALID_AGENT_API_BASE_URL")
+        if len(hostname) > 253:
+            raise ServiceException(400, "API 地址域名过长", "INVALID_AGENT_API_BASE_URL")
+        if hostname not in {"localhost", "127.0.0.1"} and not hostname.endswith((".localhost", ".local")):
+            try:
+                ipaddress.ip_address(hostname)
+            except ValueError:
+                labels = hostname.split(".")
+                if len(labels) < 2 or any(
+                    not label
+                    or len(label) > 63
+                    or label.startswith("-")
+                    or label.endswith("-")
+                    or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in label)
+                    for label in labels
+                ):
+                    raise ServiceException(400, "API 地址域名格式不正确", "INVALID_AGENT_API_BASE_URL")
+
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ServiceException(400, "API 地址端口格式不正确", "INVALID_AGENT_API_BASE_URL") from exc
+        formatted_host = f"[{hostname}]" if ":" in hostname else hostname
+        if port is not None:
+            formatted_host = f"{formatted_host}:{port}"
+        normalized_url = f"{parsed.scheme.lower()}://{formatted_host}"
+        api_domain = None if is_platform_api else hostname
+        return normalized_url, api_domain
+
+    @staticmethod
+    def normalize_shared_api_base_url(db: Session, raw_value: Optional[str]) -> str:
+        """Validate a platform API URL without allowing it to claim an agent domain."""
+        normalized_url, _ = AgentService.normalize_api_base_url(raw_value)
+        hostname = AgentService.extract_host_from_url(normalized_url)
+        if not normalized_url or not hostname:
+            raise ServiceException(400, "平台共享 API 地址不能为空", "INVALID_SHARED_API_BASE_URL")
+        conflicting_agent = (
+            db.query(Agent)
+            .filter(
+                or_(
+                    Agent.frontend_domain == hostname,
+                    Agent.api_domain == hostname,
+                )
+            )
+            .first()
+        )
+        if conflicting_agent:
+            raise ServiceException(
+                400,
+                "平台共享 API 域名已被代理使用",
+                "SHARED_API_DOMAIN_CONFLICT",
+            )
+        return normalized_url
 
     @staticmethod
     def is_platform_frontend_host(host: str) -> bool:
@@ -240,9 +332,21 @@ class AgentService:
         return normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_FRONTEND_HOSTS}
 
     @staticmethod
-    def is_platform_api_host(host: str) -> bool:
+    def is_platform_api_host(host: str, db: Optional[Session] = None) -> bool:
         normalized = AgentService.normalize_host(host)
-        return normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_API_HOSTS}
+        if AgentService.is_static_platform_api_host(normalized):
+            return True
+        if db is None:
+            return False
+        shared_host = AgentService.extract_host_from_url(AgentService.get_shared_api_base_url(db))
+        return bool(shared_host and normalized == shared_host)
+
+    @staticmethod
+    def is_static_platform_api_host(host: str) -> bool:
+        normalized = AgentService.normalize_host(host)
+        return normalized in {"localhost", "127.0.0.1"} or normalized in {
+            AgentService.normalize_host(item) for item in settings.PLATFORM_API_HOSTS
+        }
 
     @staticmethod
     def is_local_dev_host(host: Optional[str]) -> bool:
@@ -253,6 +357,8 @@ class AgentService:
     def _validate_domain_host(normalized: str, *, field_label: str, error_code: str) -> str:
         if not normalized:
             return ""
+        if len(normalized) > 253:
+            raise ServiceException(400, f"{field_label}过长", error_code)
         if normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_FRONTEND_HOSTS}:
             raise ServiceException(400, f"{field_label}不能使用平台站点域名", error_code)
         if normalized in {AgentService.normalize_host(item) for item in settings.PLATFORM_API_HOSTS}:
@@ -309,13 +415,10 @@ class AgentService:
         )
 
     @staticmethod
-    def get_agent_by_host(db: Session, host: str) -> Optional[Agent]:
+    def get_agent_by_api_host(db: Session, host: str) -> Optional[Agent]:
         normalized = AgentService.normalize_host(host)
         if not normalized:
             return None
-        agent = AgentService.get_agent_by_frontend_host(db, normalized)
-        if agent:
-            return agent
         return (
             db.query(Agent)
             .filter(
@@ -324,6 +427,16 @@ class AgentService:
             )
             .first()
         )
+
+    @staticmethod
+    def get_agent_by_host(db: Session, host: str) -> Optional[Agent]:
+        normalized = AgentService.normalize_host(host)
+        if not normalized:
+            return None
+        agent = AgentService.get_agent_by_frontend_host(db, normalized)
+        if agent:
+            return agent
+        return AgentService.get_agent_by_api_host(db, normalized)
 
     @staticmethod
     def resolve_request_site_host(
@@ -344,7 +457,12 @@ class AgentService:
         return "", "host"
 
     @staticmethod
-    def _agent_to_dict(agent: Agent, balance: Optional[AgentBalance] = None, image_balance: Optional[AgentImageBalance] = None) -> dict:
+    def _agent_to_dict(
+        agent: Agent,
+        balance: Optional[AgentBalance] = None,
+        image_balance: Optional[AgentImageBalance] = None,
+        shared_api_base_url: str = "",
+    ) -> dict:
         balance_user_rate, image_user_rate, _, _ = AgentService._recharge_rate_settings()
         custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0))
         saved_custom_rate = Decimal(str(getattr(agent, "custom_recharge_rate", None) or balance_user_rate))
@@ -369,7 +487,9 @@ class AgentService:
             "announcement_content": agent.announcement_content,
             "support_wechat": agent.support_wechat,
             "support_qq": agent.support_qq,
-            "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
+            "quickstart_api_base_url": agent.quickstart_api_base_url or shared_api_base_url,
+            "configured_quickstart_api_base_url": agent.quickstart_api_base_url or "",
+            "uses_shared_api_base_url": not bool(agent.quickstart_api_base_url),
             "allow_self_register": bool(agent.allow_self_register),
             "online_recharge_enabled": bool(agent.online_recharge_enabled),
             "subscription_online_recharge_enabled": subscription_configured,
@@ -428,10 +548,36 @@ class AgentService:
             origin=origin,
             referer=referer,
         )
+        direct_host = request_host or resolved_host
+        direct_host_agent = (
+            AgentService.get_agent_by_host(db, direct_host)
+            if resolved_from == "host"
+            else None
+        )
+        if (
+            resolved_from == "host"
+            and AgentService.is_platform_api_host(direct_host, db)
+            and (
+                AgentService.is_static_platform_api_host(direct_host)
+                or direct_host_agent is None
+            )
+        ):
+            return AgentSiteContext(
+                host=resolved_host or request_host,
+                site_scope="platform",
+                is_api_host=True,
+                agent=None,
+                request_host=request_host,
+                resolved_from=resolved_from,
+                origin_url=str(origin or "").strip(),
+                referer_url=str(referer or "").strip(),
+            )
         if resolved_from in AgentService.SITE_HINT_SOURCES:
             agent = AgentService.get_agent_by_frontend_host(db, resolved_host)
         else:
-            agent = AgentService.get_agent_by_host(db, resolved_host)
+            # A conflicting database-configured shared host must fail closed to
+            # the owning tenant until the configuration is corrected.
+            agent = direct_host_agent or AgentService.get_agent_by_host(db, resolved_host)
 
         if agent:
             api_host = request_host or resolved_host
@@ -451,7 +597,7 @@ class AgentService:
         return AgentSiteContext(
             host=effective_host,
             site_scope="platform",
-            is_api_host=AgentService.is_platform_api_host(request_host or effective_host),
+            is_api_host=AgentService.is_platform_api_host(request_host or effective_host, db),
             agent=None,
             request_host=request_host,
             resolved_from=resolved_from,
@@ -484,8 +630,12 @@ class AgentService:
             origin=origin,
             referer=referer,
         )
+        user_api_agent = None
         if user is not None:
             recharge_policy = AgentService.resolve_user_recharge_policy(db, user)
+            user_agent_id = getattr(user, "agent_id", None)
+            if user_agent_id is not None:
+                user_api_agent = db.query(Agent).filter(Agent.id == int(user_agent_id)).first()
         elif context.agent:
             recharge_policy = AgentService._build_recharge_policy(context.agent)
         else:
@@ -502,7 +652,11 @@ class AgentService:
                 "announcement_content": agent.announcement_content or "",
                 "support_wechat": agent.support_wechat or "",
                 "support_qq": agent.support_qq or "",
-                "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
+                "quickstart_api_base_url": (
+                    (user_api_agent.quickstart_api_base_url if user_api_agent else None)
+                    or agent.quickstart_api_base_url
+                    or AgentService.get_shared_api_base_url(db)
+                ),
                 "allow_register": bool(agent.allow_self_register),
                 "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
                 "online_recharge_enabled": recharge_policy.online_recharge_enabled,
@@ -525,7 +679,10 @@ class AgentService:
             "announcement_content": config_map["platform_announcement_content"],
             "support_wechat": config_map["platform_support_wechat"],
             "support_qq": config_map["platform_support_qq"],
-            "quickstart_api_base_url": config_map["api_base_url"],
+            "quickstart_api_base_url": (
+                (user_api_agent.quickstart_api_base_url if user_api_agent else None)
+                or config_map["api_base_url"]
+            ),
             "allow_register": str(config_map["platform_allow_register"]).lower() in {"1", "true", "yes"},
             "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
             "online_recharge_enabled": recharge_policy.online_recharge_enabled,
@@ -562,7 +719,7 @@ class AgentService:
         return (
             context.resolved_from == "host"
             and context.site_scope == "platform"
-            and AgentService.is_platform_api_host(context.request_host or context.host)
+            and context.is_api_host
         )
 
     @staticmethod
@@ -582,6 +739,11 @@ class AgentService:
             origin=origin,
             referer=referer,
         )
+        return AgentService.assert_user_matches_context(user, context)
+
+    @staticmethod
+    def assert_user_matches_context(user, context: AgentSiteContext) -> AgentSiteContext:
+        """Ensure an authenticated user belongs to an already resolved site context."""
         if AgentService.is_local_dev_host(context.host or context.request_host):
             return context
         if str(getattr(user, "role", "") or "") == "admin":
@@ -628,10 +790,11 @@ class AgentService:
             .all()
         )
         result: list[dict] = []
+        shared_api_base_url = AgentService.get_shared_api_base_url(db)
         for agent in items:
             balance = db.query(AgentBalance).filter(AgentBalance.agent_id == agent.id).first()
             image_balance = db.query(AgentImageBalance).filter(AgentImageBalance.agent_id == agent.id).first()
-            result.append(AgentService._agent_to_dict(agent, balance, image_balance))
+            result.append(AgentService._agent_to_dict(agent, balance, image_balance, shared_api_base_url))
         return result, total
 
     @staticmethod
@@ -641,10 +804,15 @@ class AgentService:
             raise ServiceException(404, "代理不存在", "AGENT_NOT_FOUND")
         balance = db.query(AgentBalance).filter(AgentBalance.agent_id == agent.id).first()
         image_balance = db.query(AgentImageBalance).filter(AgentImageBalance.agent_id == agent.id).first()
-        return AgentService._agent_to_dict(agent, balance, image_balance)
+        return AgentService._agent_to_dict(
+            agent,
+            balance,
+            image_balance,
+            AgentService.get_shared_api_base_url(db),
+        )
 
     @staticmethod
-    def _normalize_agent_payload(data: dict) -> dict:
+    def _normalize_agent_payload(data: dict, db: Optional[Session] = None) -> dict:
         payload = dict(data)
         if "agent_code" in payload and payload["agent_code"] is not None:
             payload["agent_code"] = str(payload["agent_code"]).strip()
@@ -660,17 +828,31 @@ class AgentService:
                 field_label="前台域名",
                 error_code="INVALID_AGENT_FRONTEND_DOMAIN",
             )
+            if payload["frontend_domain"] and AgentService.is_platform_api_host(
+                payload["frontend_domain"],
+                db,
+            ):
+                raise ServiceException(
+                    400,
+                    "前台域名不能使用平台 API 域名",
+                    "INVALID_AGENT_FRONTEND_DOMAIN",
+                )
         if "api_domain" in payload:
             api_domain = AgentService.normalize_domain_input(
                 payload.get("api_domain"),
                 field_label="代理 API 域名",
                 error_code="INVALID_AGENT_API_DOMAIN",
             )
-            payload["api_domain"] = None if AgentService.is_platform_api_host(api_domain) else api_domain
-        if "quickstart_api_base_url" in payload and payload.get("quickstart_api_base_url"):
-            payload["quickstart_api_base_url"] = str(payload["quickstart_api_base_url"]).strip().rstrip("/")
-        elif "quickstart_api_base_url" in payload:
-            payload["quickstart_api_base_url"] = AgentService.get_shared_api_base_url()
+            payload["api_domain"] = None if AgentService.is_platform_api_host(api_domain, db) else api_domain
+        if "quickstart_api_base_url" in payload:
+            api_base_url, api_domain = AgentService.normalize_api_base_url(
+                payload.get("quickstart_api_base_url"),
+                db,
+            )
+            # Entering the current platform URL is equivalent to leaving the
+            # field empty, so later platform URL changes propagate naturally.
+            payload["quickstart_api_base_url"] = api_base_url if api_domain else None
+            payload["api_domain"] = api_domain
         if "status" in payload and payload.get("status") not in {None, "active", "disabled"}:
             raise ServiceException(400, "代理状态不合法", "INVALID_AGENT_STATUS")
         return payload
@@ -681,21 +863,34 @@ class AgentService:
         data,
         audit_context: Optional[AgentAuditContext] = None,
     ) -> dict:
-        payload = AgentService._normalize_agent_payload(data if isinstance(data, dict) else data.model_dump(exclude_unset=True))
+        payload = AgentService._normalize_agent_payload(
+            data if isinstance(data, dict) else data.model_dump(exclude_unset=True),
+            db,
+        )
         if not payload.get("agent_code"):
             raise ServiceException(400, "代理编码不能为空", "INVALID_AGENT_CODE")
         if not payload.get("agent_name"):
             raise ServiceException(400, "代理名称不能为空", "INVALID_AGENT_NAME")
 
-        duplicate_filters = [Agent.agent_code == payload["agent_code"]]
-        if payload.get("frontend_domain"):
-            duplicate_filters.append(Agent.frontend_domain == payload["frontend_domain"])
-        if payload.get("api_domain"):
-            duplicate_filters.append(Agent.api_domain == payload["api_domain"])
-
-        duplicate = db.query(Agent).filter(or_(*duplicate_filters)).first()
+        duplicate = db.query(Agent).filter(Agent.agent_code == payload["agent_code"]).first()
         if duplicate:
-            raise ServiceException(400, "代理编码或域名已存在", "DUPLICATE_AGENT")
+            raise ServiceException(400, "代理编码已存在", "DUPLICATE_AGENT_CODE")
+        candidate_domains = {
+            value for value in (payload.get("frontend_domain"), payload.get("api_domain")) if value
+        }
+        if candidate_domains:
+            duplicate_domain = (
+                db.query(Agent)
+                .filter(
+                    or_(
+                        Agent.frontend_domain.in_(candidate_domains),
+                        Agent.api_domain.in_(candidate_domains),
+                    )
+                )
+                .first()
+            )
+            if duplicate_domain:
+                raise ServiceException(400, "代理域名已存在", "DUPLICATE_AGENT_DOMAIN")
         if payload.get("owner_user_id") is not None and payload.get("owner_username"):
             raise ServiceException(400, "不能同时绑定已有代理账号和创建新代理账号", "DUPLICATE_AGENT_OWNER_SOURCE")
 
@@ -717,7 +912,7 @@ class AgentService:
             announcement_content=payload.get("announcement_content"),
             support_wechat=payload.get("support_wechat"),
             support_qq=payload.get("support_qq"),
-            quickstart_api_base_url=payload.get("quickstart_api_base_url") or AgentService.get_shared_api_base_url(),
+            quickstart_api_base_url=payload.get("quickstart_api_base_url"),
             allow_self_register=int(payload.get("allow_self_register", 1)),
             online_recharge_enabled=int(payload.get("online_recharge_enabled", 1)),
             subscription_online_recharge_enabled=int(payload.get("subscription_online_recharge_enabled", 1)),
@@ -796,7 +991,10 @@ class AgentService:
         if not agent:
             raise ServiceException(404, "代理不存在", "AGENT_NOT_FOUND")
 
-        payload = AgentService._normalize_agent_payload(data if isinstance(data, dict) else data.model_dump(exclude_unset=True))
+        payload = AgentService._normalize_agent_payload(
+            data if isinstance(data, dict) else data.model_dump(exclude_unset=True),
+            db,
+        )
         current_custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0))
         current_custom_rate = Decimal(str(getattr(agent, "custom_recharge_rate", None) or AgentService.get_default_custom_recharge_rate()))
         current_subscription_enabled = bool(getattr(agent, "subscription_online_recharge_enabled", 1))
@@ -815,12 +1013,28 @@ class AgentService:
             if duplicate:
                 raise ServiceException(400, "代理编码已存在", "DUPLICATE_AGENT_CODE")
 
-        for domain_key in ("frontend_domain", "api_domain"):
-            domain_value = payload.get(domain_key)
-            if domain_value and domain_value != getattr(agent, domain_key):
-                duplicate_domain = db.query(Agent).filter(getattr(Agent, domain_key) == domain_value, Agent.id != agent.id).first()
-                if duplicate_domain:
-                    raise ServiceException(400, "代理域名已存在", "DUPLICATE_AGENT_DOMAIN")
+        resulting_domains = {
+            value
+            for value in (
+                payload.get("frontend_domain", agent.frontend_domain),
+                payload.get("api_domain", agent.api_domain),
+            )
+            if value
+        }
+        if resulting_domains:
+            duplicate_domain = (
+                db.query(Agent)
+                .filter(
+                    Agent.id != agent.id,
+                    or_(
+                        Agent.frontend_domain.in_(resulting_domains),
+                        Agent.api_domain.in_(resulting_domains),
+                    ),
+                )
+                .first()
+            )
+            if duplicate_domain:
+                raise ServiceException(400, "代理域名已存在", "DUPLICATE_AGENT_DOMAIN")
 
         for field in (
             "agent_code",

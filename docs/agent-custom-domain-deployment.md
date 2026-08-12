@@ -7,7 +7,7 @@
 - `test.test.com`
 - `ai.partner.cn`
 
-同时后端 API 继续统一使用：
+默认后端 API 继续统一使用：
 
 - `https://api.xiaoleai.team`
 
@@ -16,6 +16,8 @@
 - 前端请求自动带 `X-Site-Host`
 - 后端按 `X-Site-Host / Origin / Referer / Host` 识别当前代理站点
 - 后端动态放行已录入数据库的代理前台域名跨域访问共享 API
+
+如果代理需要独立 API 域名，可另行在 `/admin/agents` 配置，详见 [代理独立 API 地址](agent-api-base-url.md)。
 
 ---
 
@@ -32,14 +34,14 @@
 需要做的是：
 
 1. 在管理端代理配置中把 `frontend_domain` 改成真实自定义域名
-2. 保持 `quickstart_api_base_url = https://api.xiaoleai.team`
-3. `api_domain` 可继续留空
+2. 共享方案将 `quickstart_api_base_url` 留空，动态跟随平台配置
+3. 共享方案下 `api_domain` 保持为空；独立 API 地址保存时后端会自动维护该字段
 
 示例：
 
 - `frontend_domain = test.test.com`
 - `api_domain = NULL`
-- `quickstart_api_base_url = https://api.xiaoleai.team`
+- `quickstart_api_base_url = NULL`
 
 ---
 

@@ -1,14 +1,14 @@
-# 代理前台域名 + 共享 API 部署说明
+# 代理前台域名 + API 部署说明
 
 ## 目标
 
-当前正式推荐架构已经调整为：
+当前默认推荐架构为：
 
 - 每个代理拥有独立前台域名
 - 所有前台统一调用共享 API 域名 `api.xiaoleai.team`
 - 前后端共用同一套代码与数据库
 
-系统不再要求为每个代理单独开 `happy-api.xiaoleai.team` 这类 API 子域名。
+系统不强制为每个代理单独开 `happy-api.xiaoleai.team` 这类 API 子域名。如需要独立 API 品牌域名，可在 `/admin/agents` 配置，详见 [代理独立 API 地址](agent-api-base-url.md)。
 
 ---
 
@@ -74,13 +74,13 @@
 2. 允许跨域请求
 3. 不需要再为每个代理生成独立 API server block
 
-### 3. 历史模板说明
+### 3. 独立 API 模板
 
 仓库中仍保留：
 
 - [agent-api-subdomain.template.conf](/Volumes/project/modelInvocationSystem/nginx/agent-api-subdomain.template.conf)
 
-它是早期“代理独立 API 子域名”方案的历史模板，当前共享 API 架构下不再作为主推荐方案。
+它用于可选的“代理独立 API 子域名”方案。共享 API 仍是默认方案；使用独立 API 时还需 DNS、HTTPS 证书和 nginx 发布。
 
 ---
 
@@ -91,15 +91,14 @@
 - `agent_code`
 - `agent_name`
 - `frontend_domain`
-- `quickstart_api_base_url`
 
-`api_domain` 在当前架构下可以留空。
+共享 API 架构下，`quickstart_api_base_url` 和 `api_domain` 均留空，系统会动态跟随 `system_config.api_base_url`。
 
 示例：
 
 - `frontend_domain = happy.xiaoleai.team`
 - `api_domain = NULL`
-- `quickstart_api_base_url = https://api.xiaoleai.team`
+- `quickstart_api_base_url = NULL`
 
 如果后台页面仍保留 `api_domain` 输入框，也建议留空，不要再给每个代理填写平台共享 API 域名，否则没有实际收益。
 
@@ -150,7 +149,7 @@
 上线代理前建议确认：
 
 1. 代理记录中的 `frontend_domain` 与真实访问域名完全一致
-2. `quickstart_api_base_url` 为 `https://api.xiaoleai.team`
+2. `quickstart_api_base_url` 留空，系统实际返回 `https://api.xiaoleai.team`
 3. 前台站点打开开发者工具时，请求头中能看到 `X-Site-Host`
 4. 代理前台访问 `/api/public/site-config` 时返回的是代理自己的站点配置
 5. 代理用户登录后访问 `/api/agent/*` 只返回当前代理范围内数据

@@ -55,7 +55,7 @@ class UserApiKey(Base):
     expires_at = Column(DateTime, nullable=True)
     total_requests = Column(BigInteger, nullable=False, default=0)
     total_tokens = Column(BigInteger, nullable=False, default=0)
-    total_cost = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Total cost in USD")
+    total_cost = Column(DECIMAL(20, 6), nullable=False, default=0, comment="Total cost in USD")
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

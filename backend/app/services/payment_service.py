@@ -36,7 +36,7 @@ from app.models.payment import (
     PaymentRechargeSettlement,
 )
 from app.models.user import SysUser
-from app.services.agent_service import AgentService, AgentSiteContext
+from app.services.agent_service import AgentRechargePolicy, AgentService, AgentSiteContext
 from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
@@ -295,13 +295,23 @@ class PaymentService:
         site_context: AgentSiteContext | None = None,
         payment_channel: str | None = None,
         recharge_type: str | None = None,
+        recharge_policy: AgentRechargePolicy | None = None,
     ) -> None:
         channel = PaymentService._normalize_payment_channel(payment_channel)
         PaymentService._validate_payment_config(channel)
+        normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+        if recharge_policy is not None:
+            if not recharge_policy.online_recharge_enabled:
+                raise ServiceException(403, "当前站点未开启在线充值", "AGENT_ONLINE_RECHARGE_DISABLED")
+            if normalized_type == "subscription" and not recharge_policy.subscription_online_recharge_enabled:
+                if recharge_policy.custom_recharge_rate_enabled:
+                    raise ServiceException(403, "当前站点启用自定义定价后不支持在线购买套餐", "AGENT_CUSTOM_PRICING_SUBSCRIPTION_DISABLED")
+                raise ServiceException(403, "当前站点未开启套餐在线充值", "AGENT_SUBSCRIPTION_ONLINE_RECHARGE_DISABLED")
+            return
         if site_context and not AgentService.is_online_recharge_enabled(site_context):
             raise ServiceException(403, "当前站点未开启在线充值", "AGENT_ONLINE_RECHARGE_DISABLED")
         if (
-            PaymentService._normalize_recharge_type(recharge_type) == "subscription"
+            normalized_type == "subscription"
             and site_context
             and not AgentService.is_subscription_online_recharge_enabled(site_context)
         ):
@@ -380,13 +390,18 @@ class PaymentService:
         return PaymentService._append_query(base, {"order_no": order.order_no})
 
     @staticmethod
-    def _calculate_amounts(amount_cny: Decimal, agent_id: int | None, recharge_type: str = "balance") -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    def _calculate_amounts(
+        amount_cny: Decimal,
+        agent_id: int | None,
+        recharge_type: str = "balance",
+        user_recharge_rate: Decimal | None = None,
+    ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
         if normalized_type == "subscription":
             return Decimal("0.000000"), Decimal("0.000"), Decimal("0.000000"), Decimal("0.00")
         if normalized_type == "image_credit":
             user_rate = PaymentService._settings_decimal(
-                settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE,
+                user_recharge_rate if user_recharge_rate is not None else settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE,
                 "RECHARGE_IMAGE_CREDIT_USER_RATE_INVALID",
             )
             agent_rate = PaymentService._settings_decimal(
@@ -403,7 +418,10 @@ class PaymentService:
                 raise ServiceException(500, "代理图片积分结算比例配置错误，导致代理分润为负数", "RECHARGE_AGENT_INCOME_INVALID")
             return Decimal("0.000000"), credited_image_credits, agent_rate, agent_income_cny
 
-        user_rate = PaymentService._settings_decimal(settings.RECHARGE_USER_CNY_TO_USD_RATE, "RECHARGE_USER_RATE_INVALID")
+        user_rate = PaymentService._settings_decimal(
+            user_recharge_rate if user_recharge_rate is not None else settings.RECHARGE_USER_CNY_TO_USD_RATE,
+            "RECHARGE_USER_RATE_INVALID",
+        )
         agent_rate = PaymentService._settings_decimal(settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE, "RECHARGE_AGENT_RATE_INVALID")
         credited_usd = (amount_cny * user_rate).quantize(PaymentService.USD_SCALE, rounding=ROUND_HALF_UP)
         if not agent_id:
@@ -456,9 +474,16 @@ class PaymentService:
     ) -> dict:
         channel = PaymentService._normalize_payment_channel(payment_channel)
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
-        PaymentService.assert_recharge_enabled_for_site(site_context, channel, normalized_type)
+        recharge_policy = AgentService.resolve_user_recharge_policy(db, user)
+        PaymentService.assert_recharge_enabled_for_site(
+            site_context,
+            channel,
+            normalized_type,
+            recharge_policy=recharge_policy,
+        )
         subscription_plan = None
         subscription_rebate_cny = Decimal("0.00")
+        user_recharge_rate = Decimal("0.000000")
         if normalized_type == "subscription":
             subscription_plan, amount_decimal, subscription_agent_cost_cny, subscription_rebate_cny = (
                 PaymentService._load_subscription_plan_for_purchase(db, user, subscription_plan_id)
@@ -470,7 +495,13 @@ class PaymentService:
             quota_snapshot = SubscriptionService._get_plan_subscription_quota_snapshot(subscription_plan)
         else:
             amount_decimal = PaymentService._normalize_cny(amount_cny)
-            credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(amount_decimal, user.agent_id, normalized_type)
+            user_recharge_rate = recharge_policy.user_rate_for(normalized_type)
+            credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(
+                amount_decimal,
+                user.agent_id,
+                normalized_type,
+                user_recharge_rate=user_recharge_rate,
+            )
             subscription_agent_cost_cny = Decimal("0.00")
             quota_snapshot = None
         order = PaymentRechargeOrder(
@@ -484,6 +515,7 @@ class PaymentService:
             amount_cny=amount_decimal,
             credited_usd=credited_usd,
             credited_image_credits=credited_image_credits,
+            user_recharge_rate=user_recharge_rate,
             agent_settlement_rate=agent_rate,
             agent_income_cny=agent_income_cny,
             subscription_plan_id=subscription_plan.id if subscription_plan else None,
@@ -1399,6 +1431,7 @@ class PaymentService:
             "amount_cny": float(order.amount_cny or 0),
             "credited_usd": float(order.credited_usd or 0),
             "credited_image_credits": float(order.credited_image_credits or 0),
+            "user_recharge_rate": float(getattr(order, "user_recharge_rate", 0) or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
             "subscription_plan_id": order.subscription_plan_id,
             "subscription_id": order.subscription_id,

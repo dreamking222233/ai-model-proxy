@@ -27,7 +27,7 @@
           :row-class-name="getModelRowClass"
           :custom-row="modelCustomRow"
           @change="handleModelTableChange"
-          :scroll="{ x: 1700 }"
+          :scroll="{ x: 1850 }"
         >
           <template slot="type" slot-scope="text">
             <a-tag>{{ text || '-' }}</a-tag>
@@ -110,6 +110,15 @@
             {{ record.billing_type === 'token' && text != null ? text : '-' }}
           </template>
 
+          <template slot="cacheReadPrice" slot-scope="text, record">
+            <template v-if="record.billing_type === 'token'">
+              <span v-if="text != null && Number(text) === 0">免费</span>
+              <span v-else-if="text != null">{{ formatPrice(text) }}</span>
+              <span v-else>{{ formatPrice(getEffectiveCacheReadPrice(record)) }} <span class="muted-text">(输入价10%)</span></span>
+            </template>
+            <span v-else class="muted-text">-</span>
+          </template>
+
           <template slot="requestPrice" slot-scope="text, record">
             {{ record.billing_type === 'request' && text != null ? `$${formatPrice(text)}` : '-' }}
           </template>
@@ -186,6 +195,13 @@
                 <div class="mobile-field">
                   <span class="mobile-field-label">缓存创建价格</span>
                   <span>{{ record.billing_type === 'token' && record.cache_creation_price_per_million != null ? record.cache_creation_price_per_million : '-' }}</span>
+                </div>
+                <div class="mobile-field">
+                  <span class="mobile-field-label">缓存读取价格</span>
+                  <span v-if="record.billing_type === 'token' && record.cache_read_price_per_million != null && Number(record.cache_read_price_per_million) === 0">免费</span>
+                  <span v-else-if="record.billing_type === 'token' && record.cache_read_price_per_million != null">{{ formatPrice(record.cache_read_price_per_million) }}</span>
+                  <span v-else-if="record.billing_type === 'token'">{{ formatPrice(getEffectiveCacheReadPrice(record)) }}（输入价10%）</span>
+                  <span v-else class="muted-text">-</span>
                 </div>
               </div>
 
@@ -607,19 +623,32 @@
           <div class="resolution-config-tip">仅允许配置当前模型支持的分辨率；默认档位必须是已启用分辨率。</div>
         </a-form-item>
         <a-row v-if="modelForm.billing_type === 'token'" :gutter="16">
-          <a-col :span="8">
+          <a-col :span="6">
             <a-form-item label="输入价格 (每百万 Token)">
               <a-input-number v-model="modelForm.input_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
             </a-form-item>
           </a-col>
-          <a-col :span="8">
+          <a-col :span="6">
             <a-form-item label="输出价格 (每百万 Token)">
               <a-input-number v-model="modelForm.output_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
             </a-form-item>
           </a-col>
-          <a-col :span="8">
+          <a-col :span="6">
             <a-form-item label="缓存创建价格 (每百万 Token)">
               <a-input-number v-model="modelForm.cache_creation_price_per_million" :min="0" :step="0.001" style="width: 100%;" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="6">
+            <a-form-item label="缓存读取价格 (每百万 Token)">
+              <a-input-number
+                v-model="modelForm.cache_read_price_per_million"
+                :min="0"
+                :step="0.001"
+                :precision="6"
+                placeholder="留空按输入价10%"
+                style="width: 100%;"
+              />
+              <div class="form-tip">留空按当前输入价格的 10% 计费；填写 0 表示免费。</div>
             </a-form-item>
           </a-col>
         </a-row>
@@ -810,6 +839,7 @@ export default {
         { title: '编辑图', dataIndex: 'supports_image_edit', key: 'supportsImageEdit', width: 90, scopedSlots: { customRender: 'supportsImageEdit' } },
         { title: '输入价格', dataIndex: 'input_price_per_million', key: 'inputPrice', width: 100, scopedSlots: { customRender: 'inputPrice' } },
         { title: '输出价格', dataIndex: 'output_price_per_million', key: 'outputPrice', width: 110, scopedSlots: { customRender: 'outputPrice' } },
+        { title: '缓存读取价', dataIndex: 'cache_read_price_per_million', key: 'cacheReadPrice', width: 155, scopedSlots: { customRender: 'cacheReadPrice' } },
         { title: '缓存创建价', dataIndex: 'cache_creation_price_per_million', key: 'cacheCreationPrice', width: 120, scopedSlots: { customRender: 'cacheCreationPrice' } },
         { title: '单次价格', dataIndex: 'request_price', key: 'requestPrice', width: 110, scopedSlots: { customRender: 'requestPrice' } },
         { title: '状态', dataIndex: 'enabled', key: 'enabled', width: 90, scopedSlots: { customRender: 'enabled' } },
@@ -838,6 +868,7 @@ export default {
         security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
+        cache_read_price_per_million: null,
         cache_creation_price_per_million: 0,
         max_tokens: 4096,
         enabled: true
@@ -1194,6 +1225,7 @@ export default {
         security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
+        cache_read_price_per_million: null,
         cache_creation_price_per_million: 0,
         max_tokens: 4096,
         enabled: true
@@ -1232,6 +1264,9 @@ export default {
           })) : [],
           input_price_per_million: model.input_price_per_million || 0,
           output_price_per_million: model.output_price_per_million || 0,
+          cache_read_price_per_million: model.cache_read_price_per_million == null
+            ? null
+            : Number(model.cache_read_price_per_million),
           cache_creation_price_per_million: model.cache_creation_price_per_million || 0,
           max_tokens: model.max_tokens || 4096,
           enabled: model.enabled
@@ -1287,6 +1322,9 @@ export default {
           : 0
         const payload = {
           ...this.modelForm,
+          cache_read_price_per_million: this.modelForm.cache_read_price_per_million == null
+            ? null
+            : Number(this.modelForm.cache_read_price_per_million),
           long_context_billing_enabled: longContextBillingEnabled,
           security_monitor_enabled: Number(this.modelForm.security_monitor_enabled || 0),
           image_resolution_rules: this.showImageResolutionConfig
@@ -1319,6 +1357,13 @@ export default {
       const num = Number(value || 0)
       if (!Number.isFinite(num)) return '0.000000'
       return num.toFixed(6)
+    },
+
+    getEffectiveCacheReadPrice(record) {
+      if (record && record.cache_read_price_per_million != null) {
+        return Number(record.cache_read_price_per_million)
+      }
+      return Number(record && record.input_price_per_million || 0) * 0.1
     },
 
     // ==================== Mappings ====================

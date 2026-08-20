@@ -323,6 +323,7 @@ class LogService:
             "cache_creation_cost",
             "input_price_per_million_snapshot",
             "output_price_per_million_snapshot",
+            "cache_read_price_per_million_snapshot",
             "cache_creation_price_per_million_snapshot",
             "request_price_snapshot",
             "global_price_multiplier_snapshot",
@@ -495,6 +496,8 @@ class LogService:
                     ConsumptionRecord.cache_read_cost,
                     ConsumptionRecord.cache_creation_cost,
                     ConsumptionRecord.total_cost,
+                    ConsumptionRecord.input_price_per_million_snapshot,
+                    ConsumptionRecord.cache_read_price_per_million_snapshot,
                     ConsumptionRecord.request_price_snapshot,
                     ConsumptionRecord.global_price_multiplier_snapshot,
                     ConsumptionRecord.adjustment_price_multiplier_snapshot,
@@ -532,6 +535,7 @@ class LogService:
             record_cache_creation_cost = getattr(consumption, "cache_creation_cost", 0)
             total_cost = getattr(consumption, "total_cost", 0)
             record_request_price = getattr(consumption, "request_price_snapshot", 0)
+            record_cache_read_price = getattr(consumption, "cache_read_price_per_million_snapshot", None)
             context_tokens_snapshot = log.context_tokens_snapshot
             if context_tokens_snapshot is None and consumption is not None:
                 context_tokens_snapshot = getattr(consumption, "context_tokens_snapshot", 0)
@@ -553,6 +557,14 @@ class LogService:
             price_adjustment_rule_id_snapshot = log.price_adjustment_rule_id_snapshot
             if price_adjustment_rule_id_snapshot is None and consumption is not None:
                 price_adjustment_rule_id_snapshot = getattr(consumption, "price_adjustment_rule_id_snapshot", None)
+            cache_read_price_snapshot = getattr(log, "cache_read_price_per_million_snapshot", None)
+            if cache_read_price_snapshot is None:
+                cache_read_price_snapshot = record_cache_read_price
+            if cache_read_price_snapshot is None:
+                input_price_snapshot = getattr(log, "input_price_per_million_snapshot", None)
+                if input_price_snapshot is None and consumption is not None:
+                    input_price_snapshot = getattr(consumption, "input_price_per_million_snapshot", None)
+                cache_read_price_snapshot = float(input_price_snapshot or 0) * 0.1
             effective_price_multiplier = (
                 (log.price_multiplier_snapshot or 1)
                 * (log.fast_price_multiplier_snapshot or 1)
@@ -631,6 +643,7 @@ class LogService:
                 "cache_creation_cost": float(getattr(log, "cache_creation_cost", None) or record_cache_creation_cost or 0),
                 "input_price_per_million_snapshot": float(log.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(log.output_price_per_million_snapshot or 0),
+                "cache_read_price_per_million_snapshot": float(cache_read_price_snapshot),
                 "cache_creation_price_per_million_snapshot": float(getattr(log, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(log, "request_price_snapshot", 0) or record_request_price or 0),
                 "global_price_multiplier_snapshot": float(global_price_multiplier_snapshot or 1),
@@ -1097,6 +1110,7 @@ class LogService:
         description: Optional[str] = None,
         ip: Optional[str] = None,
         agent_id: Optional[int] = None,
+        auto_commit: bool = True,
     ) -> OperationLog:
         """
         Create an operation audit log entry.
@@ -1115,8 +1129,11 @@ class LogService:
             agent_id=agent_id,
         )
         db.add(log)
-        db.commit()
-        db.refresh(log)
+        if auto_commit:
+            db.commit()
+            db.refresh(log)
+        else:
+            db.flush()
         return log
 
         return result, total
@@ -1316,6 +1333,11 @@ class LogService:
                 "total_cost": float(r.total_cost),
                 "input_price_per_million_snapshot": float(r.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
+                "cache_read_price_per_million_snapshot": (
+                    float(r.cache_read_price_per_million_snapshot)
+                    if r.cache_read_price_per_million_snapshot is not None
+                    else float(r.input_price_per_million_snapshot or 0) * 0.1
+                ),
                 "cache_creation_price_per_million_snapshot": float(getattr(r, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "request_price_snapshot": float(getattr(r, "request_price_snapshot", 0) or 0),
                 "global_price_multiplier_snapshot": float(getattr(r, "global_price_multiplier_snapshot", 1) or 1),

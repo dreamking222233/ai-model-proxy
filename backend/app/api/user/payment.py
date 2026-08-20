@@ -49,7 +49,8 @@ def list_subscription_plans(
     agent_context=Depends(get_current_agent_context),
 ):
     user = _require_end_user(current_user)
-    if not AgentService.is_subscription_online_recharge_enabled(agent_context):
+    policy = AgentService.resolve_user_recharge_policy(db, user)
+    if not policy.subscription_online_recharge_enabled:
         return ResponseModel(data={"list": [], "total": 0})
     items = SubscriptionService.list_public_purchasable_plans(db, user)
     return ResponseModel(data={"list": items, "total": len(items)})

@@ -108,7 +108,7 @@ export default {
         { title: '来源', dataIndex: 'source', key: 'source', width: 140, scopedSlots: { customRender: 'source' } },
         { title: '备注', dataIndex: 'remark', key: 'remark', width: 220, ellipsis: true, scopedSlots: { customRender: 'remark' } },
         { title: '变动前后', key: 'balanceRange', width: 240, scopedSlots: { customRender: 'balanceRange' } },
-        { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 180, scopedSlots: { customRender: 'time' } }
+        { title: '时间(北京)', dataIndex: 'created_at', key: 'created_at', width: 180, scopedSlots: { customRender: 'time' } }
       ]
     }
   },

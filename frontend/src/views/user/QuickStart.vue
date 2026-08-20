@@ -248,13 +248,17 @@
                     </div>
                     <p class="api-doc-intro">
                       用于文生图，两个接口都可用，均为非流式 HTTP 调用；服务端会等待上游返回有效 <code>b64_json</code> 图片后再计费。
-                      推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>、<code>n</code>。
+                      推荐传入 <code>model</code>、<code>prompt</code>、<code>response_format</code>、<code>image_size</code>、<code>aspect_ratio</code>、<code>quality</code>、<code>n</code>。
                     </p>
                     <p class="api-doc-intro">
                       当前支持的图片模型包括 <code>gemini-2.5-flash-image</code>、<code>gemini-3.1-flash-image-preview</code>、
                       <code>gemini-3-pro-image-preview</code> 和 <code>gpt-image-2</code>。
-                      其中 OpenAI Image Native Size 渠道支持 <code>1K/2K/4K</code> 原生尺寸映射，<code>gpt-image-2</code> 支持 <code>1 &lt;= n &lt;= 4</code>，会在 <code>data</code> 数组中返回多张图片；
-                      计费按 <code>0.5</code> 图片积分/张线性累加。
+                      当前系统统一支持 <code>1K/2K/4K</code> 分辨率档位，部分 Gemini 模型还兼容 <code>512</code>；
+                      常用比例支持 <code>1:1</code>、<code>16:9</code>、<code>9:16</code>、<code>3:2</code>、<code>2:3</code>、<code>4:3</code>、<code>3:4</code>、<code>5:4</code>、<code>4:5</code>、<code>21:9</code>。
+                    </p>
+                    <p class="api-doc-intro">
+                      <code>gpt-image-2</code> 支持 <code>quality=low/medium/high</code> 和 <code>n=1/2/4</code> 多图生成，系统会在 <code>data</code> 数组中返回多张图片；
+                      实际像素尺寸会按当前可用渠道自动映射。为提高多渠道 fallback 成功率，优先使用 <code>image_size + aspect_ratio</code>，仅在明确需要渠道专属像素时再传 <code>size</code>。
                     </p>
                     <p class="api-doc-intro">
                       生图耗时可能超过 100 秒，客户端建议将 HTTP timeout 设置为 <code>600</code> 秒以上。
@@ -404,9 +408,9 @@
                       <code class="e-url">{{ relayOpenaiBase }}/created/video</code>
                     </div>
                     <p class="api-doc-intro">
-                      当前对外视频模型为 <code>grok-video</code>。推荐使用 <code>/created/video</code>，系统会创建上游视频任务、轮询至完成后返回
+                      当前对外视频模型包括 <code>grok-video</code>、<code>video-ds-2.0</code>、<code>video-ds-2.0-fast</code>。推荐使用 <code>/created/video</code>，系统会创建上游视频任务、轮询至完成后返回
                       <code>content_url</code>；<code>/videos</code> 保持异步任务模式，创建任务后通过查询与下载接口获取结果。
-                      文生视频不上传参考图，图生视频通过 <code>input_reference[]</code> 上传参考图。
+                      文生视频不上传参考图，图生视频对外统一通过 <code>input_reference[]</code> 上传参考图；系统会自动适配不同上游的视频字段。
                     </p>
 
                     <div class="code-editor-block">
@@ -435,7 +439,7 @@
                     </div>
                   </div>
 
-                  <a-alert message="注意" description="视频接口使用 multipart/form-data，文生视频只传 prompt，图生视频额外上传 input_reference[]。视频按媒体积分计费，当前 grok-video 为 0.5 积分/秒。" type="warning" class="mini-alert" />
+                  <a-alert message="注意" description="视频接口使用 multipart/form-data，文生视频只传 prompt，图生视频额外上传 input_reference[]。video-ds-2.0/video-ds-2.0-fast 当前固定 15 秒；/created/video 可能同步等待到 20 分钟，业务客户端 HTTP timeout 建议设置为 1200 秒以上。具体计费方式以模型列表展示为准。" type="warning" class="mini-alert" />
                 </div>
               </a-tab-pane>
             </a-tabs>
@@ -786,11 +790,12 @@ def save_image_items(items, prefix):
 def create_image():
     payload = {
         "model": "gpt-image-2",
-        "prompt": "生成一张 9:16 竖屏、2K 细节的赛博朋克城市夜景海报",
+        "prompt": "生成一张 16:9 横屏、2K 细节的赛博朋克城市夜景海报",
         "response_format": "b64_json",
         "image_size": "2K",
-        "aspect_ratio": "9:16",
-        "n": 1
+        "aspect_ratio": "16:9",
+        "quality": "high",
+        "n": 2
     }
     resp = requests.post(
         f"{BASE_URL}/images/generations",
@@ -814,14 +819,14 @@ def create_image_with_responses():
     payload = {
         "model": "gpt-5.4-mini",
         "stream": False,
-        "input": "生成一张 9:16 竖屏、2K 细节的赛博朋克城市夜景海报",
+        "input": "生成一张 16:9 横屏、2K 细节的赛博朋克城市夜景海报",
         "tools": [{
             "type": "image_generation",
             "model": "gpt-image-2",
             "image_size": "2K",
-            "aspect_ratio": "9:16",
+            "aspect_ratio": "16:9",
             "quality": "high",
-            "n": 1
+            "n": 2
         }],
         "tool_choice": {"type": "image_generation"}
     }
@@ -858,10 +863,11 @@ if __name__ == "__main__":
   -H "Authorization: Bearer sk-你的密钥" \\
   -d '{
     "model": "gpt-image-2",
-    "prompt": "生成一张赛博朋克风格的城市夜景海报",
+    "prompt": "生成一张 16:9 横屏、2K 细节的赛博朋克城市夜景海报",
     "response_format": "b64_json",
-    "image_size": "1K",
-    "aspect_ratio": "1:1",
+    "image_size": "2K",
+    "aspect_ratio": "16:9",
+    "quality": "high",
     "n": 2
   }'`
     },
@@ -884,6 +890,7 @@ data = {
     "response_format": "b64_json",
     "image_size": "1K",
     "aspect_ratio": "1:1",
+    "quality": "high",
     "n": "1"
 }
 
@@ -909,10 +916,20 @@ finally:
   -F "response_format=b64_json" \\
   -F "image_size=1K" \\
   -F "aspect_ratio=1:1" \\
+  -F "quality=high" \\
   -F "n=1"`
     },
     videoCreateCurlCode() {
-      return `# 文生视频：同步等待任务完成并返回 content_url
+      return `# video-ds-2.0-fast 图生视频：同步等待任务完成并返回 content_url
+curl -X POST "${this.relayOpenaiBase}/created/video" \\
+  -H "Authorization: Bearer sk-你的密钥" \\
+  -F "model=video-ds-2.0-fast" \\
+  -F "prompt=让参考图中的主体自然运动，电影感镜头推进" \\
+  -F "seconds=15" \\
+  -F "size=1280x720" \\
+  -F "input_reference[]=@reference.png"
+
+# grok-video 文生视频：同步等待任务完成并返回 content_url
 curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -H "Authorization: Bearer sk-你的密钥" \\
   -F "model=grok-video" \\
@@ -921,17 +938,6 @@ curl -X POST "${this.relayOpenaiBase}/created/video" \\
   -F "size=1792x1024" \\
   -F "resolution_name=720p" \\
   -F "preset=normal"
-
-# 图生视频：同步等待任务完成并返回 content_url
-curl -X POST "${this.relayOpenaiBase}/created/video" \\
-  -H "Authorization: Bearer sk-你的密钥" \\
-  -F "model=grok-video" \\
-  -F "prompt=让参考图中的主体自然运动，电影感镜头推进" \\
-  -F "seconds=10" \\
-  -F "size=1792x1024" \\
-  -F "resolution_name=720p" \\
-  -F "preset=normal" \\
-  -F "input_reference[]=@reference.png"
 
 # 异步模式：先创建任务，再查询与下载
 curl -X POST "${this.relayOpenaiBase}/videos" \\
@@ -955,11 +961,12 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
         { name: 'model', required: '是', description: '要调用的图片模型名称，例如 gemini-2.5-flash-image、gemini-3.1-flash-image-preview、gemini-3-pro-image-preview 或 gpt-image-2。' },
         { name: 'prompt', required: '是', description: '生图提示词，即你希望模型生成的图片内容描述。' },
         { name: 'response_format', required: '否', description: '返回格式，当前仅支持 b64_json。建议固定传 b64_json。' },
-        { name: 'image_size', required: '否', description: '图片分辨率档位参数，支持 512、1K、2K、4K；OpenAI Image Native Size 渠道会映射为原生像素尺寸。' },
-        { name: 'aspect_ratio', required: '否', description: '图片比例，例如 1:1、16:9、9:16；Native Size 渠道会与 image_size 组合映射为原生 size。' },
-        { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，系统会透传为 Google imageSize。' },
-        { name: 'size', required: '否', description: '兼容参数。可直接传 1024x1024、2048x3584 等像素尺寸；系统会据此推断分辨率档位和比例。' },
-        { name: 'n', required: '否', description: '期望图片数量。当前 gpt-image-2 支持 1-4，并会在 data 数组中返回对应张数；其他图片模型当前仅支持 1。' },
+        { name: 'image_size', required: '否', description: '推荐的分辨率档位参数，当前主要支持 1K、2K、4K；部分 Gemini 模型兼容 512。系统会按模型与渠道能力计费并映射到实际像素尺寸。' },
+        { name: 'aspect_ratio', required: '否', description: '推荐的图片比例，支持 1:1、16:9、9:16、3:2、2:3、4:3、3:4、5:4、4:5、21:9。与 image_size 组合后会自动映射为渠道可用尺寸。' },
+        { name: 'quality', required: '否', description: '图片质量，支持 low、medium、high；OpenAI/GeeK2API 兼容图片渠道会透传，未传时系统默认按 high 处理。' },
+        { name: 'imageSize', required: '否', description: '与 image_size 等价的驼峰写法，主要用于 Google/Gemini 兼容调用。' },
+        { name: 'size', required: '否', description: '高级兼容参数。可直接传渠道支持的像素尺寸，例如 2048x1152、1152x2048、3840x2160 等；显式 size 优先级更高，但可能降低跨渠道 fallback 成功率。' },
+        { name: 'n', required: '否', description: '期望图片数量。gpt-image-2 当前支持 1、2、4，并会在 data 数组返回对应张数；其他图片模型通常仅支持 1。' },
         { name: 'timeout', required: '客户端设置', description: '生图可能超过 100 秒，建议客户端 HTTP timeout 设置为 600 秒以上。' },
         { name: 'stream', required: '否', description: '不支持。若传 true 会返回错误。' }
       ]
@@ -970,20 +977,22 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
         { name: 'prompt', required: '是', description: '编辑说明，描述你希望对原图进行的修改。' },
         { name: 'image', required: '是', description: '待编辑的原图文件，通过 multipart/form-data 上传。支持重复传多个 image 字段进行多图组合编辑。' },
         { name: 'response_format', required: '否', description: '当前仅支持 b64_json，建议固定传 b64_json。' },
-        { name: 'image_size', required: '否', description: '图片细节档位提示，支持 512、1K、2K、4K。gpt-image-2 会通过提示词适配。' },
-        { name: 'aspect_ratio', required: '否', description: '目标构图比例，例如 1:1、16:9、9:16。gpt-image-2 会通过提示词适配。' },
+        { name: 'image_size', required: '否', description: '目标分辨率档位，推荐传 1K、2K、4K；系统会按渠道能力映射为实际 size。' },
+        { name: 'aspect_ratio', required: '否', description: '目标构图比例，支持 1:1、16:9、9:16、3:2、2:3、4:3、3:4、5:4、4:5、21:9。' },
+        { name: 'quality', required: '否', description: '图片质量，支持 low、medium、high；未传时默认 high。' },
+        { name: 'size', required: '否', description: '高级兼容参数。可直接传渠道支持的像素尺寸；建议优先使用 image_size + aspect_ratio。' },
         { name: 'n', required: '否', description: '当前统一固定为 1。' }
       ]
     },
     videoCreateRequestFields() {
       return [
-        { name: 'model', required: '是', description: '视频模型名称，当前请传 grok-video；系统会映射到上游 Grok 视频模型。' },
+        { name: 'model', required: '是', description: '视频模型名称，例如 grok-video、video-ds-2.0 或 video-ds-2.0-fast。' },
         { name: 'prompt', required: '是', description: '视频生成提示词，文生视频和图生视频都使用该字段。' },
-        { name: 'seconds', required: '否', description: '视频长度，支持 6、10、12、16、20。' },
-        { name: 'size', required: '否', description: '画面尺寸，支持 720x1280、1280x720、1024x1024、1024x1792、1792x1024。' },
-        { name: 'resolution_name', required: '否', description: '清晰度档位，支持 480p 或 720p。' },
-        { name: 'preset', required: '否', description: '生成预设，支持 fun、normal、spicy、custom。' },
-        { name: 'input_reference[]', required: '否', description: '图生视频参考图，可重复上传，最多 7 张；不传该字段即为文生视频。' }
+        { name: 'seconds', required: '否', description: '视频长度。grok-video 支持 6、10、12、16、20；video-ds-2.0/video-ds-2.0-fast 当前固定 15。' },
+        { name: 'size', required: '否', description: '画面尺寸。常用 1280x720、720x1280、1024x1024；video-ds 还支持 848x480、1696x960、1920x1080。' },
+        { name: 'resolution_name', required: '否', description: 'Grok 视频清晰度档位，支持 480p 或 720p；video-ds 模型无需传该字段，如传入也必须符合系统兼容枚举。' },
+        { name: 'preset', required: '否', description: 'Grok 视频生成预设，支持 fun、normal、spicy、custom；video-ds 模型无需传该字段，如传入也必须符合系统兼容枚举。' },
+        { name: 'input_reference[]', required: '否', description: '图生视频参考图。对外统一使用该字段；系统内部会按渠道适配，例如 zz1cc 使用 input_reference。' }
       ]
     },
     imageGenerationResponseFields() {

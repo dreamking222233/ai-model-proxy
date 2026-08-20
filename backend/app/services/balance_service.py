@@ -1,6 +1,7 @@
 """Balance management service."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import and_, exists, func, literal, or_
@@ -17,11 +18,20 @@ class BalanceService:
 
     ASSET_TYPES = {"all", "balance", "image_credit"}
     DIRECTIONS = {"all", "increase", "decrease"}
+    BEIJING_TZ = timezone(timedelta(hours=8))
 
     @staticmethod
     def _normalize_remark(remark: str | None) -> str | None:
         text = str(remark or "").strip()
         return text[:255] if text else None
+
+    @staticmethod
+    def _serialize_beijing_dt(value: datetime | None) -> str | None:
+        if not value:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=BalanceService.BEIJING_TZ).isoformat()
+        return value.astimezone(BalanceService.BEIJING_TZ).isoformat()
 
     @staticmethod
     def get_balance(db: Session, user_id: int) -> dict:
@@ -255,7 +265,7 @@ class BalanceService:
             "billing_mode": billing_mode,
             "balance_before": float(Decimal(str(BalanceService._row_value(row, "balance_before") or 0))),
             "balance_after": float(Decimal(str(BalanceService._row_value(row, "balance_after") or 0))),
-            "created_at": created_at.isoformat() if created_at else None,
+            "created_at": BalanceService._serialize_beijing_dt(created_at),
         }
 
     @staticmethod
@@ -459,6 +469,11 @@ class BalanceService:
                 "total_cost": float(r.total_cost),
                 "input_price_per_million_snapshot": float(r.input_price_per_million_snapshot or 0),
                 "output_price_per_million_snapshot": float(r.output_price_per_million_snapshot or 0),
+                "cache_read_price_per_million_snapshot": (
+                    float(r.cache_read_price_per_million_snapshot)
+                    if r.cache_read_price_per_million_snapshot is not None
+                    else float(r.input_price_per_million_snapshot or 0) * 0.1
+                ),
                 "cache_creation_price_per_million_snapshot": float(getattr(r, "cache_creation_price_per_million_snapshot", 0) or 0),
                 "global_price_multiplier_snapshot": float(getattr(r, "global_price_multiplier_snapshot", 1) or 1),
                 "adjustment_price_multiplier_snapshot": float(getattr(r, "adjustment_price_multiplier_snapshot", 1) or 1),

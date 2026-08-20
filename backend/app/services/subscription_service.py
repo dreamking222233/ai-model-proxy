@@ -1174,6 +1174,11 @@ class SubscriptionService:
             "total_cost": float(record.total_cost),
             "input_price_per_million_snapshot": float(record.input_price_per_million_snapshot or 0),
             "output_price_per_million_snapshot": float(record.output_price_per_million_snapshot or 0),
+            "cache_read_price_per_million_snapshot": (
+                float(record.cache_read_price_per_million_snapshot)
+                if record.cache_read_price_per_million_snapshot is not None
+                else float(record.input_price_per_million_snapshot or 0) * 0.1
+            ),
             "cache_creation_price_per_million_snapshot": float(getattr(record, "cache_creation_price_per_million_snapshot", 0) or 0),
             "global_price_multiplier_snapshot": float(getattr(record, "global_price_multiplier_snapshot", 1) or 1),
             "adjustment_price_multiplier_snapshot": float(getattr(record, "adjustment_price_multiplier_snapshot", 1) or 1),

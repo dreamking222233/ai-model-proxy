@@ -24,6 +24,7 @@ class PaymentRechargeOrder(Base):
     amount_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
     credited_usd = Column(DECIMAL(12, 6), nullable=False, default=0)
     credited_image_credits = Column(DECIMAL(12, 3), nullable=False, default=0)
+    user_recharge_rate = Column(DECIMAL(12, 6), nullable=False, default=0)
     agent_settlement_rate = Column(DECIMAL(12, 6), nullable=False, default=0)
     agent_income_cny = Column(DECIMAL(12, 2), nullable=False, default=0)
     subscription_plan_id = Column(BigInteger, nullable=True, index=True)

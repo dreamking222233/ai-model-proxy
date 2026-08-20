@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import ipaddress
+import json
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -37,6 +39,38 @@ class AgentSiteContext:
         return self.agent.id if self.agent else None
 
 
+@dataclass(frozen=True)
+class AgentAuditContext:
+    """Operator metadata for agent configuration audit records."""
+
+    user_id: Optional[int]
+    username: Optional[str]
+    source: str
+    ip_address: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AgentRechargePolicy:
+    """Validated recharge rules for one authenticated user's ownership scope."""
+
+    agent_id: Optional[int]
+    agent_status: str
+    online_recharge_enabled: bool
+    subscription_online_recharge_configured: bool
+    subscription_online_recharge_enabled: bool
+    custom_recharge_rate_enabled: bool
+    balance_recharge_rate: Decimal
+    image_credit_recharge_rate: Decimal
+    balance_agent_settlement_rate: Decimal
+    image_credit_agent_settlement_rate: Decimal
+    max_custom_recharge_rate: Decimal
+
+    def user_rate_for(self, recharge_type: str) -> Decimal:
+        if str(recharge_type or "").strip().lower() == "image_credit":
+            return self.image_credit_recharge_rate
+        return self.balance_recharge_rate
+
+
 class AgentService:
     """Resolve tenant/site context and build public site config payloads."""
 
@@ -52,6 +86,131 @@ class AgentService:
     }
 
     SITE_HINT_SOURCES = ("x_site_host", "origin", "referer")
+    RECHARGE_RATE_SCALE = Decimal("0.000001")
+    MIN_CUSTOM_RECHARGE_RATE = Decimal("0.01")
+
+    @staticmethod
+    def _append_pricing_audit_log(
+        db: Session,
+        audit_context: Optional[AgentAuditContext],
+        agent_id: int,
+        action: str,
+        details: dict,
+    ) -> None:
+        if audit_context is None:
+            return
+        from app.services.log_service import LogService
+
+        LogService.create_operation_log(
+            db,
+            audit_context.user_id,
+            audit_context.username,
+            action,
+            target_type="agent",
+            target_id=agent_id,
+            description=json.dumps(
+                {"source": audit_context.source, **details},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ip=audit_context.ip_address,
+            agent_id=agent_id,
+            auto_commit=False,
+        )
+
+    @staticmethod
+    def _rate_setting(value, error_code: str) -> Decimal:
+        try:
+            rate = Decimal(str(value))
+            normalized = rate.quantize(AgentService.RECHARGE_RATE_SCALE)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ServiceException(500, "充值比例配置无效", error_code) from exc
+        if not rate.is_finite() or rate <= 0 or normalized != rate:
+            raise ServiceException(500, "充值比例配置无效", error_code)
+        return rate
+
+    @staticmethod
+    def _recharge_rate_settings() -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        return (
+            AgentService._rate_setting(settings.RECHARGE_USER_CNY_TO_USD_RATE, "RECHARGE_USER_RATE_INVALID"),
+            AgentService._rate_setting(settings.RECHARGE_IMAGE_CREDIT_USER_CNY_RATE, "RECHARGE_IMAGE_CREDIT_USER_RATE_INVALID"),
+            AgentService._rate_setting(settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE, "RECHARGE_AGENT_RATE_INVALID"),
+            AgentService._rate_setting(settings.RECHARGE_IMAGE_CREDIT_AGENT_CNY_RATE, "RECHARGE_IMAGE_CREDIT_AGENT_RATE_INVALID"),
+        )
+
+    @staticmethod
+    def get_max_custom_recharge_rate() -> Decimal:
+        _, _, balance_agent_rate, image_agent_rate = AgentService._recharge_rate_settings()
+        return min(balance_agent_rate, image_agent_rate)
+
+    @staticmethod
+    def get_default_custom_recharge_rate() -> Decimal:
+        balance_user_rate, _, _, _ = AgentService._recharge_rate_settings()
+        return balance_user_rate
+
+    @staticmethod
+    def validate_custom_recharge_rate(value, max_rate: Optional[Decimal] = None) -> Decimal:
+        try:
+            rate = Decimal(str(value))
+            normalized = rate.quantize(AgentService.RECHARGE_RATE_SCALE)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ServiceException(400, "充值比例格式不正确", "AGENT_CUSTOM_RECHARGE_RATE_INVALID") from exc
+        if not rate.is_finite() or normalized != rate:
+            raise ServiceException(400, "充值比例最多支持 6 位小数", "AGENT_CUSTOM_RECHARGE_RATE_INVALID")
+        if rate < AgentService.MIN_CUSTOM_RECHARGE_RATE:
+            raise ServiceException(400, "充值比例不能小于 0.01", "AGENT_CUSTOM_RECHARGE_RATE_INVALID")
+        resolved_max = max_rate if max_rate is not None else AgentService.get_max_custom_recharge_rate()
+        if rate > resolved_max:
+            raise ServiceException(
+                400,
+                f"充值比例不能高于代理结算比例上限 {resolved_max}",
+                "AGENT_CUSTOM_RECHARGE_RATE_EXCEEDS_LIMIT",
+            )
+        return normalized
+
+    @staticmethod
+    def _build_recharge_policy(agent: Optional[Agent] = None) -> AgentRechargePolicy:
+        balance_user_rate, image_user_rate, balance_agent_rate, image_agent_rate = AgentService._recharge_rate_settings()
+        max_custom_rate = min(balance_agent_rate, image_agent_rate)
+        if agent is not None and str(agent.status or "") != "active":
+            raise ServiceException(403, "所属代理已停用，在线充值不可用", "AGENT_RECHARGE_POLICY_UNAVAILABLE")
+
+        custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0)) if agent is not None else False
+        if custom_enabled:
+            custom_rate = AgentService.validate_custom_recharge_rate(
+                getattr(agent, "custom_recharge_rate", None),
+                max_rate=max_custom_rate,
+            )
+            balance_user_rate = custom_rate
+            image_user_rate = custom_rate
+
+        payment_enabled = bool(settings.ALIPAY_ENABLED or settings.WECHAT_PAY_ENABLED)
+        online_enabled = payment_enabled and (agent is None or bool(getattr(agent, "online_recharge_enabled", 1)))
+        subscription_configured = agent is None or bool(getattr(agent, "subscription_online_recharge_enabled", 1))
+        subscription_enabled = online_enabled and subscription_configured and not custom_enabled
+        return AgentRechargePolicy(
+            agent_id=int(agent.id) if agent is not None else None,
+            agent_status=str(agent.status or "active") if agent is not None else "platform",
+            online_recharge_enabled=online_enabled,
+            subscription_online_recharge_configured=subscription_configured,
+            subscription_online_recharge_enabled=subscription_enabled,
+            custom_recharge_rate_enabled=custom_enabled,
+            balance_recharge_rate=balance_user_rate,
+            image_credit_recharge_rate=image_user_rate,
+            balance_agent_settlement_rate=balance_agent_rate,
+            image_credit_agent_settlement_rate=image_agent_rate,
+            max_custom_recharge_rate=max_custom_rate,
+        )
+
+    @staticmethod
+    def resolve_user_recharge_policy(db: Session, user) -> AgentRechargePolicy:
+        agent_id = getattr(user, "agent_id", None)
+        if agent_id is None:
+            return AgentService._build_recharge_policy()
+        agent = db.query(Agent).filter(Agent.id == int(agent_id)).first()
+        if not agent:
+            raise ServiceException(403, "账号所属代理不存在，在线充值不可用", "AGENT_RECHARGE_POLICY_UNAVAILABLE")
+        return AgentService._build_recharge_policy(agent)
 
     @staticmethod
     def normalize_host(raw_host: Optional[str]) -> str:
@@ -186,6 +345,16 @@ class AgentService:
 
     @staticmethod
     def _agent_to_dict(agent: Agent, balance: Optional[AgentBalance] = None, image_balance: Optional[AgentImageBalance] = None) -> dict:
+        balance_user_rate, image_user_rate, _, _ = AgentService._recharge_rate_settings()
+        custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0))
+        saved_custom_rate = Decimal(str(getattr(agent, "custom_recharge_rate", None) or balance_user_rate))
+        subscription_configured = bool(getattr(agent, "subscription_online_recharge_enabled", 1))
+        effective_subscription_enabled = (
+            bool(settings.ALIPAY_ENABLED or settings.WECHAT_PAY_ENABLED)
+            and bool(agent.online_recharge_enabled)
+            and subscription_configured
+            and not custom_enabled
+        )
         return {
             "id": agent.id,
             "agent_code": agent.agent_code,
@@ -203,7 +372,14 @@ class AgentService:
             "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
             "allow_self_register": bool(agent.allow_self_register),
             "online_recharge_enabled": bool(agent.online_recharge_enabled),
-            "subscription_online_recharge_enabled": bool(getattr(agent, "subscription_online_recharge_enabled", 1)),
+            "subscription_online_recharge_enabled": subscription_configured,
+            "subscription_online_recharge_configured": subscription_configured,
+            "effective_subscription_online_recharge_enabled": effective_subscription_enabled,
+            "custom_recharge_rate_enabled": custom_enabled,
+            "custom_recharge_rate": float(saved_custom_rate),
+            "max_custom_recharge_rate": float(AgentService.get_max_custom_recharge_rate()),
+            "balance_recharge_rate": float(saved_custom_rate if custom_enabled else balance_user_rate),
+            "image_credit_recharge_rate": float(saved_custom_rate if custom_enabled else image_user_rate),
             "theme_config_json": agent.theme_config_json,
             "balance": float(balance.balance) if balance else 0.0,
             "image_credit_balance": float(image_balance.balance) if image_balance else 0.0,
@@ -213,7 +389,7 @@ class AgentService:
 
     @staticmethod
     def is_online_recharge_enabled(context: AgentSiteContext) -> bool:
-        if not bool(settings.ALIPAY_ENABLED):
+        if not bool(settings.ALIPAY_ENABLED or settings.WECHAT_PAY_ENABLED):
             return False
         if context.site_scope != "agent" or not context.agent:
             return True
@@ -225,7 +401,10 @@ class AgentService:
             return False
         if context.site_scope != "agent" or not context.agent:
             return True
-        return bool(getattr(context.agent, "subscription_online_recharge_enabled", 1))
+        return (
+            bool(getattr(context.agent, "subscription_online_recharge_enabled", 1))
+            and not bool(getattr(context.agent, "custom_recharge_rate_enabled", 0))
+        )
 
     @staticmethod
     def get_site_context(
@@ -296,6 +475,7 @@ class AgentService:
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
         referer: Optional[str] = None,
+        user=None,
     ) -> dict:
         context = AgentService.get_site_context_from_request(
             db,
@@ -304,6 +484,12 @@ class AgentService:
             origin=origin,
             referer=referer,
         )
+        if user is not None:
+            recharge_policy = AgentService.resolve_user_recharge_policy(db, user)
+        elif context.agent:
+            recharge_policy = AgentService._build_recharge_policy(context.agent)
+        else:
+            recharge_policy = AgentService._build_recharge_policy()
         if context.agent:
             agent = context.agent
             return {
@@ -319,8 +505,10 @@ class AgentService:
                 "quickstart_api_base_url": agent.quickstart_api_base_url or AgentService.get_shared_api_base_url(),
                 "allow_register": bool(agent.allow_self_register),
                 "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
-                "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
-                "subscription_online_recharge_enabled": AgentService.is_subscription_online_recharge_enabled(context),
+                "online_recharge_enabled": recharge_policy.online_recharge_enabled,
+                "subscription_online_recharge_enabled": recharge_policy.subscription_online_recharge_enabled,
+                "balance_recharge_rate": float(recharge_policy.balance_recharge_rate),
+                "image_credit_recharge_rate": float(recharge_policy.image_credit_recharge_rate),
                 "theme_config": agent.theme_config_json,
                 "frontend_domain": agent.frontend_domain,
                 "api_domain": agent.api_domain,
@@ -340,8 +528,10 @@ class AgentService:
             "quickstart_api_base_url": config_map["api_base_url"],
             "allow_register": str(config_map["platform_allow_register"]).lower() in {"1", "true", "yes"},
             "email_verification_required": bool(settings.EMAIL_VERIFICATION_REQUIRED),
-            "online_recharge_enabled": AgentService.is_online_recharge_enabled(context),
-            "subscription_online_recharge_enabled": AgentService.is_subscription_online_recharge_enabled(context),
+            "online_recharge_enabled": recharge_policy.online_recharge_enabled,
+            "subscription_online_recharge_enabled": recharge_policy.subscription_online_recharge_enabled,
+            "balance_recharge_rate": float(recharge_policy.balance_recharge_rate),
+            "image_credit_recharge_rate": float(recharge_policy.image_credit_recharge_rate),
             "theme_config": None,
             "frontend_domain": None,
             "api_domain": None,
@@ -486,7 +676,11 @@ class AgentService:
         return payload
 
     @staticmethod
-    def create_agent(db: Session, data) -> dict:
+    def create_agent(
+        db: Session,
+        data,
+        audit_context: Optional[AgentAuditContext] = None,
+    ) -> dict:
         payload = AgentService._normalize_agent_payload(data if isinstance(data, dict) else data.model_dump(exclude_unset=True))
         if not payload.get("agent_code"):
             raise ServiceException(400, "代理编码不能为空", "INVALID_AGENT_CODE")
@@ -505,6 +699,11 @@ class AgentService:
         if payload.get("owner_user_id") is not None and payload.get("owner_username"):
             raise ServiceException(400, "不能同时绑定已有代理账号和创建新代理账号", "DUPLICATE_AGENT_OWNER_SOURCE")
 
+        custom_recharge_rate = AgentService.get_default_custom_recharge_rate()
+        custom_recharge_rate_enabled = int(payload.get("custom_recharge_rate_enabled", 0) or 0)
+        if custom_recharge_rate_enabled:
+            custom_recharge_rate = AgentService.validate_custom_recharge_rate(custom_recharge_rate)
+
         agent = Agent(
             agent_code=payload["agent_code"],
             agent_name=payload["agent_name"],
@@ -522,6 +721,8 @@ class AgentService:
             allow_self_register=int(payload.get("allow_self_register", 1)),
             online_recharge_enabled=int(payload.get("online_recharge_enabled", 1)),
             subscription_online_recharge_enabled=int(payload.get("subscription_online_recharge_enabled", 1)),
+            custom_recharge_rate_enabled=custom_recharge_rate_enabled,
+            custom_recharge_rate=custom_recharge_rate,
             theme_config_json=payload.get("theme_config_json"),
         )
         db.add(agent)
@@ -561,19 +762,54 @@ class AgentService:
 
         db.add(AgentBalance(agent_id=agent.id, balance=0, total_recharged=0, total_allocated=0, total_reclaimed=0))
         db.add(AgentImageBalance(agent_id=agent.id, balance=0, total_recharged=0, total_allocated=0, total_reclaimed=0))
-        db.commit()
+        try:
+            if custom_recharge_rate_enabled:
+                AgentService._append_pricing_audit_log(
+                    db,
+                    audit_context,
+                    int(agent.id),
+                    "update_agent_recharge_pricing_permission",
+                    {
+                        "event": "create",
+                        "custom_recharge_rate_enabled_before": False,
+                        "custom_recharge_rate_enabled_after": True,
+                        "custom_recharge_rate": float(custom_recharge_rate),
+                    },
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         from app.core.cors import invalidate_dynamic_origin_cache
         invalidate_dynamic_origin_cache()
         db.refresh(agent)
         return AgentService.get_agent(db, agent.id)
 
     @staticmethod
-    def update_agent(db: Session, agent_id: int, data) -> dict:
+    def update_agent(
+        db: Session,
+        agent_id: int,
+        data,
+        audit_context: Optional[AgentAuditContext] = None,
+    ) -> dict:
         agent = db.query(Agent).filter(Agent.id == agent_id).first()
         if not agent:
             raise ServiceException(404, "代理不存在", "AGENT_NOT_FOUND")
 
         payload = AgentService._normalize_agent_payload(data if isinstance(data, dict) else data.model_dump(exclude_unset=True))
+        current_custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0))
+        current_custom_rate = Decimal(str(getattr(agent, "custom_recharge_rate", None) or AgentService.get_default_custom_recharge_rate()))
+        current_subscription_enabled = bool(getattr(agent, "subscription_online_recharge_enabled", 1))
+        resulting_custom_enabled = current_custom_enabled
+        if payload.get("custom_recharge_rate_enabled") is not None:
+            resulting_custom_enabled = bool(int(payload["custom_recharge_rate_enabled"]))
+        custom_rate_supplied = "custom_recharge_rate" in payload and payload.get("custom_recharge_rate") is not None
+        if custom_rate_supplied and not resulting_custom_enabled:
+            raise ServiceException(403, "当前代理未开通自定义充值比例权限", "AGENT_CUSTOM_RECHARGE_RATE_FORBIDDEN")
+        if custom_rate_supplied or (resulting_custom_enabled and not current_custom_enabled):
+            candidate_rate = payload.get("custom_recharge_rate") if custom_rate_supplied else getattr(agent, "custom_recharge_rate", None)
+            payload["custom_recharge_rate"] = AgentService.validate_custom_recharge_rate(candidate_rate)
+
         if payload.get("agent_code") and payload["agent_code"] != agent.agent_code:
             duplicate = db.query(Agent).filter(Agent.agent_code == payload["agent_code"]).first()
             if duplicate:
@@ -614,6 +850,10 @@ class AgentService:
             agent.online_recharge_enabled = int(payload["online_recharge_enabled"])
         if "subscription_online_recharge_enabled" in payload and payload["subscription_online_recharge_enabled"] is not None:
             agent.subscription_online_recharge_enabled = int(payload["subscription_online_recharge_enabled"])
+        if "custom_recharge_rate_enabled" in payload and payload["custom_recharge_rate_enabled"] is not None:
+            agent.custom_recharge_rate_enabled = int(payload["custom_recharge_rate_enabled"])
+        if custom_rate_supplied:
+            agent.custom_recharge_rate = payload["custom_recharge_rate"]
 
         if "owner_user_id" in payload and payload.get("owner_user_id") is not None:
             owner = db.query(SysUser).filter(SysUser.id == payload["owner_user_id"]).first()
@@ -625,11 +865,73 @@ class AgentService:
             owner.agent_id = agent.id
             agent.owner_user_id = owner.id
 
-        db.commit()
+        updated_custom_enabled = bool(getattr(agent, "custom_recharge_rate_enabled", 0))
+        updated_custom_rate = Decimal(str(getattr(agent, "custom_recharge_rate", None) or AgentService.get_default_custom_recharge_rate()))
+        updated_subscription_enabled = bool(getattr(agent, "subscription_online_recharge_enabled", 1))
+        try:
+            if audit_context is not None and audit_context.source == "admin" and current_custom_enabled != updated_custom_enabled:
+                AgentService._append_pricing_audit_log(
+                    db,
+                    audit_context,
+                    int(agent.id),
+                    "update_agent_recharge_pricing_permission",
+                    {
+                        "custom_recharge_rate_enabled_before": current_custom_enabled,
+                        "custom_recharge_rate_enabled_after": updated_custom_enabled,
+                        "custom_recharge_rate": float(updated_custom_rate),
+                    },
+                )
+            elif audit_context is not None and audit_context.source == "agent":
+                changes = {}
+                if current_custom_rate != updated_custom_rate:
+                    changes["custom_recharge_rate"] = {
+                        "before": float(current_custom_rate),
+                        "after": float(updated_custom_rate),
+                    }
+                if current_subscription_enabled != updated_subscription_enabled:
+                    changes["subscription_online_recharge_enabled"] = {
+                        "before": current_subscription_enabled,
+                        "after": updated_subscription_enabled,
+                    }
+                if changes:
+                    AgentService._append_pricing_audit_log(
+                        db,
+                        audit_context,
+                        int(agent.id),
+                        "update_agent_recharge_pricing",
+                        {"changes": changes},
+                    )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         from app.core.cors import invalidate_dynamic_origin_cache
         invalidate_dynamic_origin_cache()
         db.refresh(agent)
         return AgentService.get_agent(db, agent.id)
+
+    @staticmethod
+    def update_agent_site_config(
+        db: Session,
+        agent_id: int,
+        data,
+        audit_context: Optional[AgentAuditContext] = None,
+    ) -> dict:
+        allowed_fields = {
+            "site_title",
+            "site_subtitle",
+            "announcement_title",
+            "announcement_content",
+            "support_wechat",
+            "support_qq",
+            "allow_self_register",
+            "subscription_online_recharge_enabled",
+            "custom_recharge_rate",
+            "theme_config_json",
+        }
+        raw_payload = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
+        payload = {key: value for key, value in raw_payload.items() if key in allowed_fields}
+        return AgentService.update_agent(db, agent_id, payload, audit_context=audit_context)
 
     @staticmethod
     def list_agent_subscription_inventory(db: Session, agent_id: int) -> list[dict]:

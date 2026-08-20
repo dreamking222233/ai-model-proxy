@@ -37,6 +37,7 @@ async def _parse_video_form(request: Request) -> dict:
         "prompt": form.get("prompt"),
         "seconds": form.get("seconds"),
         "size": form.get("size"),
+        "aspect_ratio": form.get("aspect_ratio"),
         "resolution_name": form.get("resolution_name"),
         "preset": form.get("preset"),
         "input_references": parsed_references,

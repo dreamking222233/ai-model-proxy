@@ -1,16 +1,24 @@
 import { listApiKeys, revealApiKey, createApiKey } from '@/api/user'
 import { getChatApiKeyStorageKey } from '@/utils/auth'
 
+function isUsableApiKey(value) {
+  return typeof value === 'string' && value.trim().startsWith('sk-')
+}
+
 export async function prepareUserApiKey(options = {}) {
   const user = options.user || null
   const isAdmin = options.isAdmin === true
   const keyName = options.keyName || (isAdmin ? 'Admin Chat Auto' : 'Chat Auto')
   const storageKey = options.storageKey || getChatApiKeyStorageKey(user, isAdmin)
+  const forceRefresh = options.forceRefresh === true
 
-  if (typeof sessionStorage !== 'undefined') {
+  if (!forceRefresh && typeof sessionStorage !== 'undefined') {
     const cached = sessionStorage.getItem(storageKey)
+    if (isUsableApiKey(cached)) {
+      return cached.trim()
+    }
     if (cached) {
-      return cached
+      sessionStorage.removeItem(storageKey)
     }
   }
 
@@ -22,11 +30,11 @@ export async function prepareUserApiKey(options = {}) {
     try {
       const revealRes = await revealApiKey(activeKey.id)
       const fullKey = revealRes.data && revealRes.data.key
-      if (fullKey) {
+      if (isUsableApiKey(fullKey)) {
         if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.setItem(storageKey, fullKey)
+          sessionStorage.setItem(storageKey, fullKey.trim())
         }
-        return fullKey
+        return fullKey.trim()
       }
     } catch (e) {
       // Older keys may not have key_full stored; create a fresh key below.
@@ -35,8 +43,8 @@ export async function prepareUserApiKey(options = {}) {
 
   const createRes = await createApiKey({ name: keyName })
   const fullKey = createRes.data && createRes.data.key
-  if (fullKey && typeof sessionStorage !== 'undefined') {
-    sessionStorage.setItem(storageKey, fullKey)
+  if (isUsableApiKey(fullKey) && typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem(storageKey, fullKey.trim())
   }
-  return fullKey || ''
+  return isUsableApiKey(fullKey) ? fullKey.trim() : ''
 }

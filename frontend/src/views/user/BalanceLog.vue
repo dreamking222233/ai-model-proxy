@@ -494,7 +494,7 @@
               <div v-if="getBillableCacheReadTokens(selectedRecord) > 0" class="billing-price-card">
                 <span class="billing-price-label">缓存读取单价</span>
                 <span class="billing-price-value">${{ formatPrice(getCacheReadPricePerMillion(selectedRecord)) }}</span>
-                <span class="billing-price-hint">输入价 × 10%</span>
+                <span class="billing-price-hint">/ 1M tokens × 综合价格倍率 {{ formatMultiplier(getEffectivePriceMultiplier(selectedRecord)) }}</span>
               </div>
               <div v-if="selectedRecord.upstream_cache_creation_input_tokens > 0" class="billing-price-card">
                 <span class="billing-price-label">缓存创建单价</span>
@@ -919,7 +919,10 @@ export default {
       return String(record && record.billing_type || '') === 'request' || Number(record && record.request_price_snapshot || 0) > 0
     },
     getCacheReadPricePerMillion(record) {
-      return Number(record && record.input_price_per_million_snapshot || 0) * 0.1
+      const snapshot = record && record.cache_read_price_per_million_snapshot
+      return snapshot !== null && snapshot !== undefined
+        ? Number(snapshot)
+        : Number(record && record.input_price_per_million_snapshot || 0) * 0.1
     },
     getCacheCreationPricePerMillion(record) {
       return Number(record && record.cache_creation_price_per_million_snapshot || 0)
@@ -931,7 +934,7 @@ export default {
       return Number(record && record.output_price_per_million_snapshot || 0) * this.getEffectivePriceMultiplier(record)
     },
     getEffectiveCacheReadPricePerMillion(record) {
-      return this.getEffectiveInputPricePerMillion(record) * 0.1
+      return this.getCacheReadPricePerMillion(record) * this.getEffectivePriceMultiplier(record)
     },
     formatQuotaAmount(value, metric) {
       if (metric === 'cost_usd') {

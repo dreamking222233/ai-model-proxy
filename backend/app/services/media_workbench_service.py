@@ -16,7 +16,13 @@ class MediaWorkbenchService:
 
     IMAGE_MODELS = ("gpt-image-2", "codex-gpt-image-2", "plus-codex-gpt-image-2")
     IMAGE_REQUEST_TYPES = ("image_generation", "image_edit")
-    VIDEO_MODELS = ("grok-imagine-video", "grok-video", "grok-imagine-video-1.5-preview")
+    VIDEO_MODELS = (
+        "grok-imagine-video",
+        "grok-video",
+        "grok-imagine-video-1.5-preview",
+        "video-ds-2.0",
+        "video-ds-2.0-fast",
+    )
     VIDEO_REQUEST_TYPES = ("video_generation",)
     LOCAL_ERROR_MARKERS = (
         "INSUFFICIENT_IMAGE_CREDITS",
@@ -161,7 +167,7 @@ class MediaWorkbenchService:
             "video_grok": MediaWorkbenchService._build_summary(
                 db,
                 key="video_grok",
-                label="Grok 视频生成",
+                label="视频生成",
                 models=MediaWorkbenchService.VIDEO_MODELS,
                 request_types=MediaWorkbenchService.VIDEO_REQUEST_TYPES,
                 since=since,

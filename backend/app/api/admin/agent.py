@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,7 +15,7 @@ from app.schemas.agent import (
     AgentSettlementSettleRequest,
 )
 from app.schemas.common import ResponseModel
-from app.services.agent_service import AgentService
+from app.services.agent_service import AgentAuditContext, AgentService
 from app.services.agent_asset_service import AgentAssetService
 from app.services.agent_settlement_service import AgentSettlementService
 from app.services.redemption_service import RedemptionService
@@ -139,20 +139,43 @@ def get_agent(
 @router.post("", response_model=ResponseModel)
 def create_agent(
     data: AgentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
-    return ResponseModel(data=AgentService.create_agent(db, data), message="代理创建成功")
+    created = AgentService.create_agent(
+        db,
+        data,
+        audit_context=AgentAuditContext(
+            user_id=current_user.id,
+            username=current_user.username,
+            source="admin",
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+    return ResponseModel(data=created, message="代理创建成功")
 
 
 @router.put("/{agent_id}", response_model=ResponseModel)
 def update_agent(
     agent_id: int,
     data: AgentUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
-    return ResponseModel(data=AgentService.update_agent(db, agent_id, data), message="代理更新成功")
+    updated = AgentService.update_agent(
+        db,
+        agent_id,
+        data,
+        audit_context=AgentAuditContext(
+            user_id=current_user.id,
+            username=current_user.username,
+            source="admin",
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+    return ResponseModel(data=updated, message="代理更新成功")
 
 
 @router.post("/{agent_id}/balance/recharge", response_model=ResponseModel)

@@ -65,7 +65,7 @@
         :loading="loadingOrders"
         :pagination="orderPagination"
         row-key="order_no"
-        :scroll="{ x: 900 }"
+        :scroll="{ x: 1040 }"
         @change="handleOrderTableChange"
       >
         <template slot="rechargeType" slot-scope="text">
@@ -79,6 +79,12 @@
         </template>
         <template slot="commission" slot-scope="text">
           <span class="commission-text">+￥{{ formatMoney(text) }}</span>
+        </template>
+        <template slot="rates" slot-scope="text, record">
+          <div class="money-stack rate-stack">
+            <small>用户 1 : {{ formatRate(record.user_recharge_rate) }}</small>
+            <small>结算 1 : {{ formatRate(record.agent_settlement_rate) }}</small>
+          </div>
         </template>
         <template slot="status" slot-scope="text">
           <a-tag :color="statusColor(text)">{{ statusText(text) }}</a-tag>
@@ -159,6 +165,7 @@ export default {
         { title: '用户', dataIndex: 'username', key: 'username', width: 120 },
         { title: '充值类型', dataIndex: 'recharge_type', key: 'recharge_type', width: 110, scopedSlots: { customRender: 'rechargeType' } },
         { title: '用户充值', key: 'userMoney', width: 160, scopedSlots: { customRender: 'userMoney' } },
+        { title: '比例快照', key: 'rates', width: 140, scopedSlots: { customRender: 'rates' } },
         { title: '代理增加现金', dataIndex: 'agent_income_cny', key: 'agent_income_cny', width: 140, scopedSlots: { customRender: 'commission' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 110, scopedSlots: { customRender: 'status' } },
         { title: '支付成功时间', dataIndex: 'paid_at', key: 'paid_at', width: 170, scopedSlots: { customRender: 'time' } }
@@ -183,6 +190,10 @@ export default {
     },
     formatUsd(value) {
       return Number(value || 0).toFixed(4)
+    },
+    formatRate(value) {
+      const number = Number(value || 0)
+      return number > 0 && Number.isFinite(number) ? number.toFixed(6).replace(/\.?0+$/, '') : '-'
     },
     formatCredits(value) {
       const num = Number(value || 0)

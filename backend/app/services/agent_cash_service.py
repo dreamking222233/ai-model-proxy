@@ -110,6 +110,8 @@ class AgentCashService:
             "amount_cny": float(order.amount_cny or 0),
             "credited_usd": float(order.credited_usd or 0),
             "credited_image_credits": float(order.credited_image_credits or 0),
+            "user_recharge_rate": float(getattr(order, "user_recharge_rate", 0) or 0),
+            "agent_settlement_rate": float(order.agent_settlement_rate or 0),
             "agent_income_cny": float(order.agent_income_cny or 0),
             "subscription_plan_id": order.subscription_plan_id,
             "subscription_id": order.subscription_id,

@@ -21,6 +21,7 @@ class UnifiedModel(Base):
     max_tokens = Column(Integer, nullable=True)
     input_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Input price per million tokens (USD)")
     output_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Output price per million tokens (USD)")
+    cache_read_price_per_million = Column(DECIMAL(12, 6), nullable=True, default=None, comment="Prompt cache read price per million tokens (USD); NULL uses 10% of input price")
     cache_creation_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Prompt cache creation price per million tokens (USD)")
     billing_type = Column(String(20), nullable=False, default="token", comment="Billing type: token/request/image_credit/free")
     request_price = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Fixed price per successful request (USD)")

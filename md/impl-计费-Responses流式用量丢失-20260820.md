@@ -25,7 +25,9 @@ Responses 上游的 `response.completed` 包含最终 input、output 与 cached 
 - Responses 重试相关 3 项定向测试通过。
 - 扩展测试发现仓库现有失败：3 项 WebSocket 用例调用参数未跟随当前方法签名，2 项长上下文用例的 `FakeDb` 缺少 `query`；均不在本次 Responses HTTP 流式改动路径。
 
-## 待验证项
+## 生产验证
 
-- 部署后检查 8085 健康状态。
-- 等待一条新的 `sub2api-codex` Responses 请求，确认 `request_log` 与 `consumption_record` 的普通输入、输出和缓存读取字段均非异常 0，费用包含对应分项。
+- GitHub 与生产服务器均更新至提交 `825cf29`，8085 后端重启后健康检查返回 `{"status":"ok"}`。
+- 新进程于 2026-08-20 16:42:51 完成启动。此后 `sub2api-codex` 缓存请求 `11db6fab-83f9-4a00-95e3-0821b092ebb7` 记录 input=10086、output=94、cache_read=58240；请求日志与消费记录一致。
+- 此后缓存请求 `5e1a08cb-8395-40cd-81f0-2fe2be1d109c` 记录 input=14518、output=78、cache_read=87808；请求日志与消费记录一致。
+- 两条验证记录的总费用均包含普通输入、输出与缓存读取分项，未继续出现“缓存读取有值但普通输入/输出为 0”的故障模式。

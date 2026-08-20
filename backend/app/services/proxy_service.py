@@ -6663,6 +6663,9 @@ class ProxyService:
                             "prompt_cache_status", "BYPASS"
                         )
                         collected_usage["_upstream_cache_usage"] = usage_summary
+                        # Persist the usage snapshot before yielding the terminal event.
+                        # Codex clients may close the stream as soon as they receive it.
+                        billing_callback(input_tokens, output_tokens, False)
                         # 记录结束
                         collector.add_chunk("", "stop")
                         flushed_delta = security_text_buffer.flush()
@@ -6698,6 +6701,8 @@ class ProxyService:
                             payload["delta"] = cleaned_delta
 
                     yield ProxyService._payload_to_sse(payload)
+                    if payload_type == "response.completed":
+                        break
 
                 if completed:
                     if (
@@ -6716,8 +6721,6 @@ class ProxyService:
                 stream_error = exc
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
                 raise
-
-            billing_callback(input_tokens, output_tokens, False)
 
         async def event_generator():
             stream_error = None

@@ -48,6 +48,10 @@ class SecurityDetectionService:
     """Local security rules, short-lived request snapshots, and risk reports."""
 
     DEFAULT_PUBLIC_REPORT_URL = "https://api.xiaoleai.team/api/public/security/risk-report"
+    DEFAULT_BLOCK_MESSAGE = (
+        "请求可能涉及违规或高风险内容，已被安全策略拦截。"
+        "你可以改为询问合法合规的学习、防护或排查建议。"
+    )
     RISK_MARKER_PATTERN = re.compile(
         r"\[MIS_RISK_REPORT\s+category=(?P<category>[a-zA-Z0-9_\-]+)\s+severity=(?P<severity>[a-zA-Z0-9_\-]+)[^\]]*\]",
         re.IGNORECASE,
@@ -102,7 +106,6 @@ class SecurityDetectionService:
     ]
     CYBER_ABUSE_TERMS = [
         "注册机",
-        "keygen",
         "破解版",
         "破解网站",
         "网站破解",
@@ -120,9 +123,18 @@ class SecurityDetectionService:
         "rce",
         "远程代码执行",
         "木马",
-        "免杀",
     ]
     AMBIGUOUS_CYBER_TERMS = {
+        "keygen": re.compile(
+            r"(?<!ssh-)(?<![a-z0-9_])keygen(?![a-z0-9_]).{0,32}("
+            r"做|写|制作|生成|编写|实现|构造|开发|下载|提供|创建|破解|绕过|授权|激活|注册码|序列号|"
+            r"make|build|write|create|generate|develop|download|license|activation|serial|crack|software|app"
+            r")|("
+            r"做|写|制作|生成|编写|实现|构造|开发|下载|提供|创建|破解|绕过|授权|激活|注册码|序列号|"
+            r"make|build|write|create|generate|develop|download|license|activation|serial|crack|software|app"
+            r").{0,32}(?<!ssh-)(?<![a-z0-9_])keygen(?![a-z0-9_])",
+            re.IGNORECASE | re.DOTALL,
+        ),
         "crack": re.compile(
             r"\bcrack(?:ed|ing|s)?\b.{0,24}\b("
             r"password|account|license|serial|key|software|app|program|game|"
@@ -139,6 +151,13 @@ class SecurityDetectionService:
             r"软件|程序|代码|系统|网站|服务器|数据库|账号|漏洞|木马|webshell|shell|payload)"
             r".{0,16}后门|后门.{0,16}"
             r"(程序|代码|权限|账号|漏洞|木马|webshell|shell|payload|远控|持久化|检测|查杀|利用|绕过)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "免杀": re.compile(
+            r"(生成|写|编写|制作|开发|实现|提供|构造|改造|加壳|绕过|对抗|逃避|规避|躲避)"
+            r".{0,24}免杀|免杀.{0,24}"
+            r"(木马|webshell|shell|payload|后门|远控|样本|代码|程序|脚本|绕过|对抗|逃避|规避|"
+            r"躲避|过火绒|过360|过杀软|过杀毒|加壳)",
             re.IGNORECASE | re.DOTALL,
         ),
     }
@@ -487,9 +506,52 @@ class SecurityDetectionService:
     def _match_ambiguous_cyber_terms(text: str) -> list[dict[str, Any]]:
         matched = []
         for term, pattern in SecurityDetectionService.AMBIGUOUS_CYBER_TERMS.items():
-            if pattern.search(str(text or "")):
+            normalized = str(text or "")
+            if SecurityDetectionService._matches_ambiguous_cyber_term(
+                normalized,
+                term,
+                pattern,
+            ):
                 matched.append({"category": "cyber_abuse", "term": term})
         return matched
+
+    @staticmethod
+    def _matches_ambiguous_cyber_term(text: str, term: str, pattern: re.Pattern) -> bool:
+        if term != "后门":
+            return bool(pattern.search(text))
+        for match in re.finditer(re.escape(term), text, flags=re.IGNORECASE):
+            window = text[max(0, match.start() - 32):min(len(text), match.end() + 32)]
+            if not pattern.search(window):
+                continue
+            if not SecurityDetectionService._is_negated_ambiguous_cyber_context(
+                text,
+                term,
+                match.start(),
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _is_negated_ambiguous_cyber_context(text: str, term: str, position: int) -> bool:
+        if term != "后门":
+            return False
+        normalized = str(text or "")
+        prefix = normalized[max(0, int(position) - 96):int(position)]
+        negation = re.search(
+            r"(没发现|未发现|没有发现|并未发现|不存在|没有|并无|从未)"
+            r"[^\n。！？!?]{0,80}$",
+            prefix,
+            flags=re.IGNORECASE,
+        )
+        if not negation:
+            return False
+        negated_text = prefix[negation.start():]
+        if term in negated_text:
+            return False
+        return not bool(re.search(
+            r"(帮我|请帮|如何|怎么|需要|想要|随后|然后|接着|转而|但是|不过|后再|再植入)",
+            negated_text,
+        ))
 
     @staticmethod
     def _match_ambiguous_prompt_jailbreak_terms(text: str) -> list[dict[str, Any]]:
@@ -698,20 +760,63 @@ class SecurityDetectionService:
         request_data: dict,
     ) -> SecurityDetectionResult:
         result = SecurityDetectionService.scan_request(db, snapshot, request_data)
-        if result.should_block and SecurityDetectionService._get_bool_config(db, "security_keyword_block_enabled", True):
+        mandatory_high_risk_block = result.risk_level in {"high", "blocked"}
+        if mandatory_high_risk_block:
+            result.action = "block"
+            configurable_rule_block = False
+        else:
+            configurable_rule_block = (
+                result.action == "block"
+                and SecurityDetectionService._get_bool_config(
+                    db,
+                    "security_keyword_block_enabled",
+                    True,
+                )
+            )
+        if mandatory_high_risk_block or configurable_rule_block:
+            SecurityDetectionService._record_blocked_risk_event(db, snapshot, result)
+            block_message = SecurityDetectionService.DEFAULT_BLOCK_MESSAGE
             try:
-                SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
+                block_message = str(get_system_config(
+                    db,
+                    "security_block_message",
+                    SecurityDetectionService.DEFAULT_BLOCK_MESSAGE,
+                ) or SecurityDetectionService.DEFAULT_BLOCK_MESSAGE)
             except Exception as exc:
-                logger.error("Failed to record blocked security risk event: %s", exc, exc_info=True)
-            block_message = str(get_system_config(
-                db,
-                "security_block_message",
-                "请求可能涉及违规或高风险内容，已被安全策略拦截。你可以改为询问合法合规的学习、防护或排查建议。",
-            ))
+                logger.error("Failed to read security block message, using default: %s", exc, exc_info=True)
             raise ServiceException(403, block_message, "SECURITY_RISK_BLOCKED")
         if result.risk_level != "none" and snapshot is not None:
             SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
         return result
+
+    @staticmethod
+    def _record_blocked_risk_event(
+        db: Session,
+        snapshot: Optional[SecurityRequestSnapshot],
+        result: SecurityDetectionResult,
+    ) -> Optional[SecurityRiskEvent]:
+        for attempt in range(1, 3):
+            try:
+                return SecurityDetectionService.record_risk_event(db, snapshot, "keyword", result)
+            except Exception as exc:
+                if attempt < 2:
+                    logger.warning(
+                        "Failed to persist blocked security risk event, retrying: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    continue
+                logger.critical(
+                    "Blocked security request audit fallback request_id=%s user_id=%s "
+                    "risk_level=%s categories=%s error=%s",
+                    getattr(snapshot, "request_id", None),
+                    getattr(snapshot, "user_id", None),
+                    result.risk_level,
+                    result.categories or [],
+                    exc,
+                    exc_info=True,
+                )
+        return None
 
     @staticmethod
     def build_security_system_prompt(

@@ -91,7 +91,7 @@
         :pagination="pagination"
         :loading="loading"
         row-key="event_id"
-        :scroll="{ x: 1280 }"
+        :scroll="{ x: 1380 }"
         @change="handleTableChange"
       >
         <template slot="risk_level" slot-scope="text">
@@ -99,6 +99,9 @@
         </template>
         <template slot="category" slot-scope="text">
           <a-tag>{{ getCategoryText(text) }}</a-tag>
+        </template>
+        <template slot="disposition" slot-scope="text">
+          <a-tag :color="getDispositionColor(text)">{{ getDispositionText(text) }}</a-tag>
         </template>
         <template slot="status" slot-scope="text">
           <a-badge :status="getStatusBadge(text)" :text="getStatusText(text)" />
@@ -211,6 +214,7 @@ export default {
         { title: '等级', dataIndex: 'risk_level', scopedSlots: { customRender: 'risk_level' }, width: 100 },
         { title: '分类', dataIndex: 'category', scopedSlots: { customRender: 'category' }, width: 130 },
         { title: '来源', dataIndex: 'event_source', width: 130 },
+        { title: '处置动作', dataIndex: 'action', scopedSlots: { customRender: 'disposition' }, width: 110 },
         { title: '原因', dataIndex: 'reason', scopedSlots: { customRender: 'reason' }, width: 260 },
         { title: '状态', dataIndex: 'status', scopedSlots: { customRender: 'status' }, width: 110 },
         { title: '操作', scopedSlots: { customRender: 'action' }, width: 90, fixed: 'right' }
@@ -309,6 +313,12 @@ export default {
         illegal_automation: '异常自动化',
         student_pretext_abuse: '学生伪装'
       }[value] || value || '-'
+    },
+    getDispositionColor(value) {
+      return { block: 'red', review: 'orange' }[value] || 'default'
+    },
+    getDispositionText(value) {
+      return { block: '已拦截', review: '仅记录' }[value] || value || '-'
     },
     getStatusText(value) {
       return { open: '待处理', reviewed: '已处理', ignored: '已忽略' }[value] || value || '-'

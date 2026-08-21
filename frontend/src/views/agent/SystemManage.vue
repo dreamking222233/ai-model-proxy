@@ -43,14 +43,14 @@
                 </a-col>
               </a-row>
 
-              <a-form-model-item label="统一 API 地址">
+              <a-form-model-item label="API 接入地址">
                 <a-input :value="form.quickstart_api_base_url" disabled size="large" class="disabled-input">
                   <a-icon slot="prefix" type="link" style="color: rgba(0,0,0,.25)" />
-                  <a-tooltip slot="suffix" title="当前代理端固定使用共享 API 地址，暂不支持修改">
+                  <a-tooltip slot="suffix" title="该地址由平台管理员在代理管理中配置">
                     <a-icon type="info-circle" style="color: rgba(0,0,0,.45)" />
                   </a-tooltip>
                 </a-input>
-                <div class="field-tip">该地址用于下级用户接入时配置 API Base URL</div>
+                <div class="field-tip">下级用户的快速开始和密钥导入会使用此 API Base URL</div>
               </a-form-model-item>
 
               <div class="divider"></div>

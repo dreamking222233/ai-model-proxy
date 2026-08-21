@@ -1157,8 +1157,7 @@ class ProxyService:
             raise
         except Exception as exc:
             logger.error("Security request scan failed: %s", exc, exc_info=True)
-            if SecurityDetectionService._get_bool_config(db, "security_fail_closed_enabled", False):
-                raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
+            raise ServiceException(503, "安全检测暂不可用，请稍后重试", "SECURITY_DETECTION_UNAVAILABLE")
 
     @staticmethod
     def _maybe_scan_security_request_or_raise(
@@ -6664,6 +6663,9 @@ class ProxyService:
                             "prompt_cache_status", "BYPASS"
                         )
                         collected_usage["_upstream_cache_usage"] = usage_summary
+                        # Persist the usage snapshot before yielding the terminal event.
+                        # Codex clients may close the stream as soon as they receive it.
+                        billing_callback(input_tokens, output_tokens, False)
                         # 记录结束
                         collector.add_chunk("", "stop")
                         flushed_delta = security_text_buffer.flush()
@@ -6699,6 +6701,8 @@ class ProxyService:
                             payload["delta"] = cleaned_delta
 
                     yield ProxyService._payload_to_sse(payload)
+                    if payload_type == "response.completed":
+                        break
 
                 if completed:
                     if (
@@ -6717,8 +6721,6 @@ class ProxyService:
                 stream_error = exc
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
                 raise
-
-            billing_callback(input_tokens, output_tokens, False)
 
         async def event_generator():
             stream_error = None
@@ -13089,14 +13091,15 @@ class ProxyService:
         status = ProxyService._normalize_grok_video_119337_status(
             data.get("status") or body.get("status") or body.get("state")
         )
-        progress = data.get("progress", body.get("progress", 100 if status == "completed" else 0))
         normalized: dict[str, Any] = {
             "object": "video",
             "id": resolved_id,
             "model": model or data.get("model") or body.get("model") or "",
             "status": status,
-            "progress": progress,
         }
+        progress = data.get("progress") if data.get("progress") not in (None, "") else body.get("progress")
+        if progress not in (None, ""):
+            normalized["progress"] = progress
         if data.get("task_id") is not None:
             normalized["task_id"] = data.get("task_id")
         elif body.get("task_id") is not None:
@@ -13127,7 +13130,11 @@ class ProxyService:
         if video_url:
             normalized["video_url"] = video_url
         elif status == "completed":
+            # 119337 may report SUCCESS/100% shortly before the downloadable
+            # result URL is committed. Keep polling, but expose this distinct
+            # finalization phase so clients do not present it as a stuck task.
             normalized["status"] = "in_progress"
+            normalized["phase"] = "finalizing"
         fail_reason = data.get("fail_reason") or body.get("fail_reason")
         if fail_reason:
             normalized["error"] = {"message": fail_reason}
@@ -13166,8 +13173,9 @@ class ProxyService:
             "id": resolved_id,
             "model": model or body.get("model") or "",
             "status": status,
-            "progress": body.get("progress", 100 if status == "completed" else 0),
         }
+        if body.get("progress") not in (None, ""):
+            normalized["progress"] = body.get("progress")
         if body.get("task_id") is not None:
             normalized["task_id"] = body.get("task_id")
         if body.get("request_id") is not None:
@@ -13233,8 +13241,9 @@ class ProxyService:
             "id": resolved_id,
             "model": model or body.get("model") or "",
             "status": status,
-            "progress": body.get("progress", 100 if status == "completed" else 0),
         }
+        if body.get("progress") not in (None, ""):
+            normalized["progress"] = body.get("progress")
         if prompt is not None:
             normalized["prompt"] = prompt
         elif isinstance(body.get("prompt"), str):
@@ -15812,7 +15821,6 @@ class ProxyService:
                     body = None
                 if isinstance(body, dict) and (body.get("error") or body.get("code")):
                     body.setdefault("status", "failed")
-                    body.setdefault("progress", 100)
                     return body
             upstream_detail = f"CPA Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(
@@ -15884,7 +15892,6 @@ class ProxyService:
                     or body.get("status")
                 ):
                     body["status"] = "failed"
-                    body.setdefault("progress", 100)
                     return body
             upstream_detail = f"zz1cc 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(
@@ -15957,7 +15964,6 @@ class ProxyService:
                 ):
                     data = ProxyService._grok_video_119337_body_data(body)
                     data["status"] = "FAILURE"
-                    data.setdefault("progress", "100%")
                     return body
             upstream_detail = f"119337 Grok 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
             raise ProxyService._attach_upstream_detail(

@@ -1391,7 +1391,7 @@ CREATE TABLE `user_api_key` (
   `expires_at` datetime DEFAULT NULL,
   `total_requests` bigint unsigned NOT NULL DEFAULT '0',
   `total_tokens` bigint unsigned NOT NULL DEFAULT '0',
-  `total_cost` decimal(10,6) NOT NULL DEFAULT '0.000000',
+  `total_cost` decimal(20,6) NOT NULL DEFAULT '0.000000',
   `last_used_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

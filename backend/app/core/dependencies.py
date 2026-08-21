@@ -209,16 +209,16 @@ def verify_api_key_from_headers(
     # API keys are meant to work against the shared API endpoint even for
     # agent-owned users. Browser/client Origin or Referer can point at a
     # provider UI and should not override the API host in this direct mode.
-    if AgentService.is_platform_api_host(host or ""):
-        site_kwargs = {"host": host}
+    direct_context = AgentService.get_site_context_from_request(db, host=host)
+    if direct_context.is_api_host:
+        AgentService.assert_user_matches_context(user, direct_context)
     else:
-        site_kwargs = {
+        AgentService.assert_user_matches_site(db, user, **{
             "host": host,
             "x_site_host": x_site_host,
             "origin": origin,
             "referer": referer,
-        }
-    AgentService.assert_user_matches_site(db, user, **site_kwargs)
+        })
 
     # Refresh cached subscription state before the request layer makes balance/quota decisions.
     if user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at):

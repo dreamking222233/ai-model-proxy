@@ -30,6 +30,7 @@ class ModelService:
     MODEL_SERIES_VALUES = {"gpt", "claude", "grok", "gemini", "other"}
     CACHE_READ_FALLBACK_RATE = Decimal("0.1")
     PRICE_QUANTUM = Decimal("0.000001")
+    LONG_CONTEXT_TOKEN_THRESHOLD_DEFAULT = 262144
 
     GOOGLE_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "gemini-2.5-flash-image": ("1K",),
@@ -446,6 +447,25 @@ class ModelService:
             return 0
 
     @staticmethod
+    def _normalize_long_context_token_threshold(value: object) -> int:
+        if value is None or value == "":
+            return ModelService.LONG_CONTEXT_TOKEN_THRESHOLD_DEFAULT
+        try:
+            numeric_value = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ServiceException(400, "长上下文 Token 阈值参数无效", "INVALID_LONG_CONTEXT_TOKEN_THRESHOLD")
+        if not numeric_value.is_finite() or numeric_value != numeric_value.to_integral_value():
+            raise ServiceException(400, "长上下文 Token 阈值必须为整数", "INVALID_LONG_CONTEXT_TOKEN_THRESHOLD")
+        threshold = int(numeric_value)
+        if threshold <= 0 or threshold > 2147483647:
+            raise ServiceException(
+                400,
+                "长上下文 Token 阈值必须是 1 到 2147483647 之间的整数",
+                "INVALID_LONG_CONTEXT_TOKEN_THRESHOLD",
+            )
+        return threshold
+
+    @staticmethod
     def _normalize_security_monitor_enabled(
         value: object,
         model_series: Optional[str] = None,
@@ -610,6 +630,9 @@ class ModelService:
             "request_price": ModelService._decimal_to_float(getattr(model, "request_price", 0)),
             "image_credit_multiplier": ModelService._decimal_to_float(model.image_credit_multiplier, 1.0),
             "long_context_billing_enabled": int(getattr(model, "long_context_billing_enabled", 0) or 0),
+            "long_context_token_threshold": ModelService._normalize_long_context_token_threshold(
+                getattr(model, "long_context_token_threshold", None)
+            ),
             "security_monitor_enabled": int(getattr(model, "security_monitor_enabled", 0) or 0),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
@@ -710,6 +733,9 @@ class ModelService:
             model_series,
             d["model_name"],
         )
+        long_context_token_threshold = ModelService._normalize_long_context_token_threshold(
+            d.get("long_context_token_threshold")
+        )
         security_monitor_enabled = ModelService._normalize_security_monitor_enabled(
             d.get("security_monitor_enabled"),
             model_series,
@@ -742,6 +768,7 @@ class ModelService:
             request_price=request_price,
             image_credit_multiplier=d.get("image_credit_multiplier", 1),
             long_context_billing_enabled=long_context_billing_enabled,
+            long_context_token_threshold=long_context_token_threshold,
             security_monitor_enabled=security_monitor_enabled,
             enabled=d.get("enabled", 1),
             description=d.get("description"),
@@ -789,6 +816,16 @@ class ModelService:
                 next_model_series,
                 next_model_name,
             )
+        if "long_context_token_threshold" in d:
+            if d.get("long_context_token_threshold") is None:
+                raise ServiceException(
+                    400,
+                    "长上下文 Token 阈值必须是正整数",
+                    "INVALID_LONG_CONTEXT_TOKEN_THRESHOLD",
+                )
+            d["long_context_token_threshold"] = ModelService._normalize_long_context_token_threshold(
+                d.get("long_context_token_threshold")
+            )
         if "security_monitor_enabled" in d:
             d["security_monitor_enabled"] = ModelService._normalize_security_monitor_enabled(
                 d.get("security_monitor_enabled"),
@@ -810,7 +847,8 @@ class ModelService:
             "max_tokens", "input_price_per_million", "output_price_per_million",
             "cache_read_price_per_million", "cache_creation_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
-            "model_series", "long_context_billing_enabled", "security_monitor_enabled",
+            "model_series", "long_context_billing_enabled", "long_context_token_threshold",
+            "security_monitor_enabled",
         ]
         for field in updatable_fields:
             value = d.get(field)

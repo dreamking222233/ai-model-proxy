@@ -4,7 +4,14 @@ from datetime import datetime, time
 from decimal import Decimal
 from typing import Optional, List
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _validate_long_context_token_threshold_input(value):
+    """Reject values that Pydantic's normal int coercion could turn into unsafe thresholds."""
+    if value is None or isinstance(value, bool):
+        raise ValueError("长上下文 Token 阈值必须是正整数")
+    return value
 
 
 # ===========================================================================
@@ -28,10 +35,16 @@ class UnifiedModelCreate(BaseModel):
     request_price: Decimal = Field(default=Decimal("0"), ge=0)
     image_credit_multiplier: Decimal = Field(default=Decimal("1"), ge=0)
     long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
+    long_context_token_threshold: Optional[int] = Field(None, gt=0, le=2147483647)
     security_monitor_enabled: Optional[int] = Field(None, ge=0, le=1)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
+
+    _validate_long_context_token_threshold = field_validator(
+        "long_context_token_threshold",
+        mode="before",
+    )(_validate_long_context_token_threshold_input)
 
 
 class UnifiedModelUpdate(BaseModel):
@@ -51,10 +64,16 @@ class UnifiedModelUpdate(BaseModel):
     request_price: Optional[Decimal] = Field(None, ge=0)
     image_credit_multiplier: Optional[Decimal] = Field(None, ge=0)
     long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
+    long_context_token_threshold: Optional[int] = Field(None, gt=0, le=2147483647)
     security_monitor_enabled: Optional[int] = Field(None, ge=0, le=1)
     enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
+
+    _validate_long_context_token_threshold = field_validator(
+        "long_context_token_threshold",
+        mode="before",
+    )(_validate_long_context_token_threshold_input)
 
 
 class UnifiedModelInfo(BaseModel):
@@ -75,6 +94,7 @@ class UnifiedModelInfo(BaseModel):
     request_price: Decimal
     image_credit_multiplier: Decimal
     long_context_billing_enabled: int
+    long_context_token_threshold: int
     security_monitor_enabled: int
     enabled: int
     description: Optional[str] = None

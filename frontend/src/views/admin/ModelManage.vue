@@ -50,7 +50,7 @@
 
           <template slot="longContextBilling" slot-scope="text, record">
             <a-tag v-if="supportsLongContextBilling(record)" :color="Number(text) ? 'red' : 'default'">
-              {{ Number(text) ? '256k x2' : '关闭' }}
+              {{ Number(text) ? `> ${formatLongContextThreshold(record.long_context_token_threshold)} x2` : '关闭' }}
             </a-tag>
             <span v-else class="muted-text">-</span>
           </template>
@@ -181,7 +181,9 @@
                 </div>
                 <div class="mobile-field">
                   <span class="mobile-field-label">长上下文</span>
-                  <span v-if="supportsLongContextBilling(record)">{{ Number(record.long_context_billing_enabled) ? '256k x2' : '关闭' }}</span>
+                  <span v-if="supportsLongContextBilling(record)">
+                    {{ Number(record.long_context_billing_enabled) ? `> ${formatLongContextThreshold(record.long_context_token_threshold)} x2` : '关闭' }}
+                  </span>
                   <span v-else class="muted-text">-</span>
                 </div>
                 <div class="mobile-field">
@@ -568,12 +570,28 @@
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item v-if="supportsLongContextBilling(modelForm)" label="长上下文 256k 后 2 倍计费">
+        <a-form-item v-if="supportsLongContextBilling(modelForm)" label="长上下文双倍计费">
           <a-switch
             :checked="!!modelForm.long_context_billing_enabled"
+            checked-children="开启"
+            un-checked-children="关闭"
             @change="handleLongContextBillingChange"
           />
-          <div class="form-tip">GPT 系列通常开启；Claude 等没有官方长上下文加价的模型可关闭。</div>
+          <div class="form-tip">开启后，计费上下文 Token 严格超过下方阈值时按 2 倍计费。</div>
+        </a-form-item>
+        <a-form-item
+          v-if="supportsLongContextBilling(modelForm) && Number(modelForm.long_context_billing_enabled)"
+          label="长上下文 Token 阈值"
+        >
+          <a-input-number
+            v-model="modelForm.long_context_token_threshold"
+            :min="1"
+            :max="2147483647"
+            :step="1000"
+            :precision="0"
+            style="width: 100%;"
+          />
+          <div class="form-tip">默认 262144；例如设置 200000，则从 200001 Token 起按 2 倍计费。</div>
         </a-form-item>
         <a-form-item label="安全监控">
           <a-switch
@@ -865,6 +883,7 @@ export default {
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         long_context_billing_enabled: 0,
+        long_context_token_threshold: 262144,
         security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
@@ -1068,6 +1087,10 @@ export default {
     getLongContextBillingDefault() {
       return this.modelForm.model_series === 'gpt' && this.supportsLongContextBilling(this.modelForm) ? 1 : 0
     },
+    formatLongContextThreshold(value) {
+      const threshold = Number(value || 262144)
+      return Number.isFinite(threshold) && threshold > 0 ? Math.trunc(threshold).toLocaleString() : '262,144'
+    },
     getSecurityMonitorDefault() {
       return ['gpt', 'claude'].includes(this.modelForm.model_series) ? 1 : 0
     },
@@ -1222,6 +1245,7 @@ export default {
         image_credit_multiplier: 1,
         image_resolution_rules: [],
         long_context_billing_enabled: 0,
+        long_context_token_threshold: 262144,
         security_monitor_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
@@ -1254,6 +1278,7 @@ export default {
           request_price: Number(model.request_price || 0),
           image_credit_multiplier: Number(model.image_credit_multiplier || 1),
           long_context_billing_enabled: Number(model.long_context_billing_enabled || 0),
+          long_context_token_threshold: Number(model.long_context_token_threshold || 262144),
           security_monitor_enabled: Number(model.security_monitor_enabled || 0),
           image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
             resolution_code: item.resolution_code,
@@ -1302,6 +1327,15 @@ export default {
         this.$message.warning('请输入大于 0 的每次请求价格')
         return
       }
+      const longContextTokenThreshold = Number(this.modelForm.long_context_token_threshold)
+      if (
+        this.supportsLongContextBilling(this.modelForm) &&
+        Number(this.modelForm.long_context_billing_enabled) &&
+        (!Number.isInteger(longContextTokenThreshold) || longContextTokenThreshold <= 0)
+      ) {
+        this.$message.warning('请输入大于 0 的长上下文 Token 整数阈值')
+        return
+      }
       this.syncImageResolutionRules()
       if (this.showImageResolutionConfig) {
         const enabledRules = this.modelForm.image_resolution_rules.filter(item => item.enabled)
@@ -1326,6 +1360,9 @@ export default {
             ? null
             : Number(this.modelForm.cache_read_price_per_million),
           long_context_billing_enabled: longContextBillingEnabled,
+          long_context_token_threshold: Number.isInteger(longContextTokenThreshold) && longContextTokenThreshold > 0
+            ? longContextTokenThreshold
+            : 262144,
           security_monitor_enabled: Number(this.modelForm.security_monitor_enabled || 0),
           image_resolution_rules: this.showImageResolutionConfig
             ? this.modelForm.image_resolution_rules.map(item => ({

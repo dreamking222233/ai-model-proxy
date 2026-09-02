@@ -266,7 +266,7 @@ class ProxyService:
     _RESPONSES_REASONING_EFFORT_ALIASES = {"xhigh": "high"}
     _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
-    _LONG_CONTEXT_TOKEN_THRESHOLD = 262144
+    _LONG_CONTEXT_TOKEN_THRESHOLD = ModelService.LONG_CONTEXT_TOKEN_THRESHOLD_DEFAULT
     _LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _LONG_CONTEXT_PRICE_MULTIPLIER = Decimal("2")
 
@@ -1767,13 +1767,26 @@ class ProxyService:
             return False
 
     @staticmethod
+    def _get_long_context_token_threshold(unified_model: Optional[UnifiedModel] = None) -> int:
+        if unified_model is None:
+            return ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+        try:
+            threshold = int(
+                getattr(unified_model, "long_context_token_threshold", None)
+                or ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+            )
+        except (TypeError, ValueError):
+            return ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+        return threshold if threshold > 0 else ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+
+    @staticmethod
     def _get_context_price_multiplier_decimal(
         context_tokens: int = 0,
         unified_model: Optional[UnifiedModel] = None,
     ) -> Decimal:
         if not ProxyService._is_long_context_billing_enabled(unified_model):
             return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT
-        if int(context_tokens or 0) > ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD:
+        if int(context_tokens or 0) > ProxyService._get_long_context_token_threshold(unified_model):
             return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER
         return ProxyService._LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT
 
@@ -2672,6 +2685,7 @@ class ProxyService:
             estimated_output_tokens or 0,
             0,
         )
+        context_token_threshold = ProxyService._get_long_context_token_threshold(unified_model)
         context_price_multiplier = ProxyService._get_context_price_multiplier_decimal(
             estimated_context_tokens,
             unified_model,
@@ -2679,7 +2693,7 @@ class ProxyService:
         quota_precheck: dict[str, Decimal] = {
             "estimated_total_tokens": Decimal(str(max(estimated_input_tokens, 0))),
             "context_tokens_snapshot": Decimal(str(estimated_context_tokens)),
-            "context_token_threshold_snapshot": Decimal(str(ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD)),
+            "context_token_threshold_snapshot": Decimal(str(context_token_threshold)),
             "context_price_multiplier_snapshot": context_price_multiplier,
         }
         if estimated_output_tokens is not None:
@@ -2714,7 +2728,7 @@ class ProxyService:
                     # cannot pass precheck and fail local accounting after a successful call.
                     conservative_context_tokens = max(
                         estimated_context_tokens,
-                        ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD + 1,
+                        context_token_threshold + 1,
                     )
                     quota_precheck["estimated_total_tokens"] = Decimal(str(conservative_context_tokens))
                     quota_precheck["context_tokens_snapshot"] = Decimal(str(conservative_context_tokens))
@@ -11706,7 +11720,7 @@ class ProxyService:
                 raw_output_tokens,
                 raw_cache_read_input_tokens,
             )
-            context_token_threshold_snapshot = ProxyService._LONG_CONTEXT_TOKEN_THRESHOLD
+            context_token_threshold_snapshot = ProxyService._get_long_context_token_threshold(unified_model)
             context_price_multiplier_decimal = ProxyService._get_context_price_multiplier_decimal(
                 context_tokens_snapshot,
                 unified_model,

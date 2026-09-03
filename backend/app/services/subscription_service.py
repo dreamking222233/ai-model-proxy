@@ -291,8 +291,7 @@ class SubscriptionService:
         hard_limit: bool,
         use_official_cost: bool,
     ) -> dict:
-        from app.services.subscription_bonus_service import SubscriptionBonusService
-        result = {
+        return {
             "quota_metric": quota_metric,
             "quota_limit": SubscriptionService._normalize_decimal(quota_limit),
             "hard_limit": hard_limit,

@@ -581,6 +581,18 @@
         <a-form-item label="每日赠送额度（美元）">
           <a-input-number v-model="bonusForm.daily_quota_usd" :min="0.000001" :precision="6" style="width:100%" />
         </a-form-item>
+        <a-form-item label="适用模型系列">
+          <a-select
+            v-model="bonusForm.model_series"
+            mode="multiple"
+            allowClear
+            placeholder="留空表示全部已标记为赠送模型的系列"
+            style="width:100%"
+          >
+            <a-select-option v-for="item in modelSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <div class="form-tip">仅所选系列模型可抵扣赠送额度；留空时适用于全部已开启“赠送模型”的模型。</div>
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -673,7 +685,7 @@ export default {
       usageModalVisible: false,
       bonusModalVisible: false,
       bonusSaving: false,
-      bonusForm: { user_id: null, source_subscription_id: null, grant_request_id: '', duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100 },
+      bonusForm: { user_id: null, source_subscription_id: null, grant_request_id: '', duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100, model_series: [] },
       usageLoading: false,
       selectedSubscription: null,
       usageSummary: defaultUsageSummary(),
@@ -926,7 +938,9 @@ export default {
           sale_price_cny: record.sale_price_cny || 0,
           agent_cost_price_cny: record.agent_cost_price_cny || 0,
           online_sale_enabled: Number(record.online_sale_enabled || 0),
-          description: record.description
+          description: record.description,
+          model_scope: record.model_scope || (record.model_series && record.model_series.length ? 'selected_series' : 'all_models'),
+          model_series: Array.isArray(record.model_series) ? [...record.model_series] : []
         }
         : defaultPlanForm()
       this.planModalVisible = true
@@ -1104,7 +1118,10 @@ export default {
         user_id: record.user_id,
         source_subscription_id: record.id,
         grant_request_id: `admin-${record.user_id}-${Date.now()}`,
-        duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100
+        duration_mode: 'fixed_days',
+        duration_days: 10,
+        daily_quota_usd: 100,
+        model_series: []
       }
       this.bonusModalVisible = true
     },
@@ -1118,6 +1135,7 @@ export default {
         await createBonusGrant(this.bonusForm)
         this.$message.success('赠送额度创建成功')
         this.bonusModalVisible = false
+        await this.fetchActiveUsers()
       } finally {
         this.bonusSaving = false
       }

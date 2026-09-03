@@ -671,14 +671,6 @@ export default {
       if (summary.current_cycle || summary.next_refresh_at) return '无限套餐 / 每24小时刷新'
       return '无限套餐'
     },
-    formatBonusUsd(value) {
-      return `$${Number(value || 0).toFixed(6)}`
-    },
-    formatBonusModels(grant) {
-      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
-      if (!grant || !grant.model_series || !grant.model_series.length) return '全部赠送模型'
-      return grant.model_series.map(item => labels[item] || item).join('、')
-    },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
     },
@@ -698,6 +690,14 @@ export default {
     this.initData()
   },
   methods: {
+    formatBonusUsd(value) {
+      return `$${Number(value || 0).toFixed(6)}`
+    },
+    formatBonusModels(grant) {
+      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
+      if (!grant || !grant.model_series || !grant.model_series.length) return '全部赠送模型'
+      return grant.model_series.map(item => labels[item] || item).join('、')
+    },
     initData() {
       this.fetchLogs()
       this.fetchSummary()

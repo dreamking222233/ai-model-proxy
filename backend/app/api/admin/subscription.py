@@ -1,5 +1,6 @@
 """Admin API for subscription management."""
 from typing import Optional
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -10,6 +11,8 @@ from app.core.dependencies import require_admin
 from app.models.user import SysUser
 from app.services.subscription_service import SubscriptionService
 from app.schemas.common import ResponseModel
+from app.schemas.subscription import SubscriptionBonusGrantCreate, SubscriptionBonusGrantCancel
+from app.services.subscription_bonus_service import SubscriptionBonusService
 
 
 class ActivateSubscriptionRequest(BaseModel):
@@ -20,13 +23,14 @@ class ActivateSubscriptionRequest(BaseModel):
 
 
 class SubscriptionPlanRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
     plan_code: str = Field(..., min_length=2, max_length=64, description="套餐编码")
     plan_name: str = Field(..., min_length=1, max_length=64, description="套餐名称")
     plan_kind: str = Field(..., description="套餐模式: unlimited/daily_quota")
     duration_mode: str = Field("custom", description="时长模式")
     duration_days: int = Field(..., gt=0, description="套餐时长（天）")
     quota_metric: Optional[str] = Field(None, description="限额口径: total_tokens/cost_usd")
-    quota_value: Optional[float] = Field(None, description="每日额度值")
+    quota_value: Optional[Decimal] = Field(None, description="每日额度值")
     reset_period: Optional[str] = Field("day", description="刷新周期")
     reset_timezone: Optional[str] = Field("Asia/Shanghai", description="刷新时区")
     sort_order: Optional[int] = Field(0, description="排序")
@@ -35,6 +39,8 @@ class SubscriptionPlanRequest(BaseModel):
     agent_cost_price_cny: Optional[float] = Field(0, ge=0, description="代理拿货价 RMB")
     online_sale_enabled: Optional[int] = Field(0, ge=0, le=1, description="是否允许前台购买")
     description: Optional[str] = Field(None, max_length=255, description="描述")
+    model_scope: str = Field("all_models", description="all_models/selected_series")
+    model_series: list[str] = Field(default_factory=list)
 
 
 class ActivatePlanSubscriptionRequest(BaseModel):
@@ -103,7 +109,7 @@ def update_subscription_plan(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    result = SubscriptionService.update_plan(db, plan_id, data.model_dump())
+    result = SubscriptionService.update_plan(db, plan_id, data.model_dump(exclude_unset=True))
     return ResponseModel(data=result, message="套餐模板更新成功")
 
 
@@ -132,6 +138,38 @@ def cancel_subscription(
     """取消用户套餐，切换为按量计费模式"""
     result = SubscriptionService.cancel_subscription(db, user_id)
     return ResponseModel(data=result, message="套餐已取消")
+
+
+@router.post("/bonus-grants", response_model=ResponseModel)
+def create_bonus_grant(
+    data: SubscriptionBonusGrantCreate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    result = SubscriptionBonusService.create_grant(
+        db, data.model_dump(), operator_id=current_user.id,
+    )
+    return ResponseModel(data=result, message="赠送额度创建成功")
+
+
+@router.get("/bonus-grants/{user_id}", response_model=ResponseModel)
+def list_bonus_grants(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=SubscriptionBonusService.list_grants(db, user_id))
+
+
+@router.post("/bonus-grants/{grant_id}/cancel", response_model=ResponseModel)
+def cancel_bonus_grant(
+    grant_id: int,
+    data: SubscriptionBonusGrantCancel,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    result = SubscriptionBonusService.cancel_grant(db, grant_id, current_user.id, data.reason)
+    return ResponseModel(data=result, message="赠送额度已取消")
 
 
 @router.get("/user/{user_id}", response_model=ResponseModel)

@@ -18,6 +18,7 @@ class ChannelCreate(BaseModel):
     api_key: str = Field(..., min_length=1)
     protocol_type: str = Field(default="openai", max_length=20)
     provider_variant: Optional[str] = Field(None, max_length=32)
+    video_billing_evidence_mode: str = Field(default="external_reconcile", max_length=32)
     auth_header_type: Optional[str] = Field(None, max_length=32)
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: int = Field(default=10, ge=1)
@@ -34,6 +35,7 @@ class ChannelUpdate(BaseModel):
     api_key: Optional[str] = Field(None, min_length=1)
     protocol_type: Optional[str] = Field(None, max_length=20)
     provider_variant: Optional[str] = Field(None, max_length=32)
+    video_billing_evidence_mode: Optional[str] = Field(None, max_length=32)
     auth_header_type: Optional[str] = Field(None, max_length=32)
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: Optional[int] = Field(None, ge=1)
@@ -66,6 +68,7 @@ class ChannelInfo(BaseModel):
     )
     protocol_type: str
     provider_variant: str
+    video_billing_evidence_mode: str = "external_reconcile"
     priority: int
     enabled: int
     health_check_enabled: int

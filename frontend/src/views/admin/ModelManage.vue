@@ -570,6 +570,15 @@
             <a-select-option value="free">免费</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item label="允许使用赠送额度">
+          <a-switch
+            :checked="!!modelForm.bonus_quota_enabled"
+            checked-children="开启"
+            un-checked-children="关闭"
+            @change="value => modelForm.bonus_quota_enabled = value ? 1 : 0"
+          />
+          <div class="form-tip">开启后，该模型可使用用户的赠送套餐额度。</div>
+        </a-form-item>
         <a-form-item v-if="supportsLongContextBilling(modelForm)" label="长上下文双倍计费">
           <a-switch
             :checked="!!modelForm.long_context_billing_enabled"
@@ -793,6 +802,7 @@ import {
   listOverrideRules, createOverrideRule, updateOverrideRule, deleteOverrideRule
 } from '@/api/model'
 import { listChannels } from '@/api/channel'
+import { MODEL_SERIES_OPTIONS as SHARED_MODEL_SERIES_OPTIONS } from '@/constants/modelSeries'
 
 const IMAGE_RESOLUTION_RULE_PRESETS = {
   'gemini-2.5-flash-image': [
@@ -816,13 +826,7 @@ const IMAGE_RESOLUTION_RULE_PRESETS = {
   ]
 }
 
-const MODEL_SERIES_OPTIONS = [
-  { value: 'gpt', label: 'GPT', color: 'green' },
-  { value: 'claude', label: 'Claude', color: 'orange' },
-  { value: 'grok', label: 'Grok', color: 'black' },
-  { value: 'gemini', label: 'Gemini', color: 'blue' },
-  { value: 'other', label: '其他', color: 'default' }
-]
+const MODEL_SERIES_OPTIONS = SHARED_MODEL_SERIES_OPTIONS
 
 export default {
   name: 'ModelManage',
@@ -885,6 +889,7 @@ export default {
         long_context_billing_enabled: 0,
         long_context_token_threshold: 262144,
         security_monitor_enabled: 0,
+        bonus_quota_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         cache_read_price_per_million: null,
@@ -1247,6 +1252,7 @@ export default {
         long_context_billing_enabled: 0,
         long_context_token_threshold: 262144,
         security_monitor_enabled: 0,
+        bonus_quota_enabled: 0,
         input_price_per_million: 0,
         output_price_per_million: 0,
         cache_read_price_per_million: null,
@@ -1280,6 +1286,7 @@ export default {
           long_context_billing_enabled: Number(model.long_context_billing_enabled || 0),
           long_context_token_threshold: Number(model.long_context_token_threshold || 262144),
           security_monitor_enabled: Number(model.security_monitor_enabled || 0),
+          bonus_quota_enabled: Number(model.bonus_quota_enabled || 0),
           image_resolution_rules: Array.isArray(data.image_resolution_rules) ? data.image_resolution_rules.map(item => ({
             resolution_code: item.resolution_code,
             enabled: Number(item.enabled || 0),

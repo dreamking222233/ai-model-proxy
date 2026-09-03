@@ -55,6 +55,7 @@ from app.services.price_adjustment_service import PriceAdjustmentService
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
 from app.services.subscription_service import SubscriptionService
+from app.services.subscription_bonus_service import SubscriptionBonusService
 from app.services.security_detection_service import SecurityDetectionService
 from app.services.billing_concurrency_service import (
     BillingAdmissionDecision,
@@ -11822,7 +11823,17 @@ class ProxyService:
             quota_cost = float(quota_cost_decimal)
             request_log_billing_type = billing_type if billing_type in {"request", "free"} else "token"
 
-            billing_mode = "balance"
+            # Promotional quota is consumed first for models explicitly marked by admins.
+            bonus_consumed_amount = Decimal("0")
+            if int(getattr(unified_model, "bonus_quota_enabled", 0) or 0) and total_cost_decimal > 0:
+                bonus_consumed_amount = SubscriptionBonusService.consume_available(
+                    write_db, fresh_user.id, total_cost_decimal, usage_now
+                )
+                total_cost_decimal -= bonus_consumed_amount
+            quota_cost_for_request = Decimal(str(quota_cost or 0))
+            if bonus_consumed_amount > 0 and total_cost > 0:
+                quota_cost_for_request *= total_cost_decimal / Decimal(str(total_cost))
+            billing_mode = "bonus" if bonus_consumed_amount > 0 else "balance"
             subscription_id: int | None = None
             subscription_cycle_id: int | None = None
             quota_metric: str | None = None
@@ -11892,8 +11903,8 @@ class ProxyService:
                         quota_consumed_amount = SubscriptionService._get_quota_consumed_amount(
                             active_subscription,
                             raw_total_tokens=raw_total_tokens,
-                            total_cost=total_cost,
-                            quota_cost=quota_cost,
+                            total_cost=float(total_cost_decimal),
+                            quota_cost=float(quota_cost_for_request),
                         )
                         cycle = SubscriptionService._get_or_create_cycle(write_db, active_subscription, usage_now)
                         quota_remaining_amount = (
@@ -12085,6 +12096,7 @@ class ProxyService:
                     balance_before=Decimal(str(balance_before)),
                     balance_after=Decimal(str(balance_after)),
                     billing_mode=billing_mode,
+                    bonus_quota_consumed=bonus_consumed_amount,
                     subscription_id=subscription_id,
                     subscription_cycle_id=subscription_cycle_id,
                     quota_metric=quota_metric,
@@ -12111,6 +12123,7 @@ class ProxyService:
                         protocol_type=channel.protocol_type,
                         request_type=request_type,
                         billing_type=final_request_log_billing_type,
+                        bonus_quota_consumed=bonus_consumed_amount,
                     is_stream=1 if is_stream else 0,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,

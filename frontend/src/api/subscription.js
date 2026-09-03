@@ -88,6 +88,18 @@ export function checkExpiredSubscriptions() {
   })
 }
 
+export function createBonusGrant(data) {
+  return request({ url: '/api/admin/subscription/bonus-grants', method: 'post', data })
+}
+
+export function listBonusGrants(userId) {
+  return request({ url: `/api/admin/subscription/bonus-grants/${userId}`, method: 'get' })
+}
+
+export function cancelBonusGrant(grantId, data = {}) {
+  return request({ url: `/api/admin/subscription/bonus-grants/${grantId}/cancel`, method: 'post', data })
+}
+
 export function getAdminSubscriptionSaleSummary(params) {
   return request({
     url: '/api/admin/subscription-sales/summary',

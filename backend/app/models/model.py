@@ -29,6 +29,8 @@ class UnifiedModel(Base):
     long_context_billing_enabled = Column(SmallInteger, nullable=False, default=0, comment="Whether to apply 2x billing above the configured context token threshold")
     long_context_token_threshold = Column(Integer, nullable=False, default=262144, comment="Context token threshold for long-context 2x billing")
     security_monitor_enabled = Column(SmallInteger, nullable=False, default=0, comment="Whether security risk monitoring is enabled for this model")
+    bonus_quota_enabled = Column(SmallInteger, nullable=False, default=0, comment="Whether model may consume promotional bonus quota")
+    billing_config_version = Column(BigInteger, nullable=False, default=1, comment="Billing configuration optimistic-lock version")
     enabled = Column(SmallInteger, nullable=False, default=1)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())

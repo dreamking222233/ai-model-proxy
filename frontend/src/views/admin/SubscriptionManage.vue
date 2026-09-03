@@ -249,6 +249,9 @@
               <a-button type="link" size="small" @click="openUsageModal(record)">
                 查看使用情况
               </a-button>
+              <a-button type="link" size="small" @click="openBonusModal(record)">
+                赠送额外套餐
+              </a-button>
             </template>
           </a-table>
         </a-tab-pane>
@@ -430,6 +433,22 @@
             </a-col>
           </a-row>
         </template>
+        <a-form-item label="适用模型范围">
+          <a-radio-group v-model="planForm.model_scope">
+            <a-radio value="all_models">全部模型</a-radio>
+            <a-radio value="selected_series">指定系列</a-radio>
+          </a-radio-group>
+          <a-select
+            v-if="planForm.model_scope === 'selected_series'"
+            v-model="planForm.model_series"
+            mode="multiple"
+            placeholder="选择模型系列"
+            style="width: 100%; margin-top: 8px"
+          >
+            <a-select-option v-for="item in modelSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <div v-if="planForm.model_scope === 'selected_series'" class="form-tip">多个系列共享同一份每日额度，不会分别获得额度。</div>
+        </a-form-item>
         <a-row :gutter="12">
           <a-col :span="8">
             <a-form-item label="用户售价（元）">
@@ -538,6 +557,22 @@
         </div>
       </a-spin>
     </a-modal>
+    <a-modal v-model="bonusModalVisible" title="赠送额外套餐额度" :confirm-loading="bonusSaving" @ok="saveBonusGrant">
+      <a-form layout="vertical">
+        <a-form-item label="赠送时长">
+          <a-radio-group v-model="bonusForm.duration_mode">
+            <a-radio value="fixed_days">固定天数</a-radio>
+            <a-radio value="subscription_end">跟随套餐到期</a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <a-form-item v-if="bonusForm.duration_mode === 'fixed_days'" label="赠送天数">
+          <a-input-number v-model="bonusForm.duration_days" :min="1" :max="3650" style="width:100%" />
+        </a-form-item>
+        <a-form-item label="每日赠送额度（美元）">
+          <a-input-number v-model="bonusForm.daily_quota_usd" :min="0.000001" :precision="6" style="width:100%" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -551,7 +586,8 @@ import {
   listActiveSubscriptionUsers,
   listAllSubscriptions,
   listSubscriptionPlans,
-  updateSubscriptionPlan
+  updateSubscriptionPlan,
+  createBonusGrant
 } from '@/api/subscription'
 import { getUser, listUsers } from '@/api/user'
 import { formatBeijingTime as formatDate } from '@/utils'
@@ -577,7 +613,9 @@ const defaultPlanForm = () => ({
   sale_price_cny: 0,
   agent_cost_price_cny: 0,
   online_sale_enabled: 0,
-  description: ''
+  description: '',
+  model_scope: 'all_models',
+  model_series: []
 })
 
 export default {
@@ -590,6 +628,10 @@ export default {
       planModalVisible: false,
       editingPlanId: null,
       planForm: defaultPlanForm(),
+      modelSeriesOptions: [
+        { value: 'gpt', label: 'GPT' }, { value: 'claude', label: 'Claude' },
+        { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }, { value: 'other', label: '其他' }
+      ],
       grantLoading: false,
       legacyLoading: false,
       userSearchLoading: false,
@@ -619,6 +661,9 @@ export default {
       activeUserList: [],
       activeUserLoading: false,
       usageModalVisible: false,
+      bonusModalVisible: false,
+      bonusSaving: false,
+      bonusForm: { user_id: null, source_subscription_id: null, grant_request_id: '', duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100 },
       usageLoading: false,
       selectedSubscription: null,
       usageSummary: defaultUsageSummary(),
@@ -880,6 +925,10 @@ export default {
         this.$message.warning('请填写套餐编码和名称')
         return
       }
+      if (this.planForm.model_scope === 'selected_series' && (!Array.isArray(this.planForm.model_series) || !this.planForm.model_series.length)) {
+        this.$message.warning('指定系列套餐至少选择一个模型系列')
+        return
+      }
       if (this.planForm.plan_kind === 'daily_quota' && (!this.planForm.quota_value || Number(this.planForm.quota_value) <= 0)) {
         this.$message.warning('请填写有效的每日额度值')
         return
@@ -1038,6 +1087,29 @@ export default {
       this.usagePagination.current = 1
       this.usageModalVisible = true
       await this.fetchUsageDetail()
+    },
+    openBonusModal(record) {
+      this.bonusForm = {
+        user_id: record.user_id,
+        source_subscription_id: record.id,
+        grant_request_id: `admin-${record.user_id}-${Date.now()}`,
+        duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100
+      }
+      this.bonusModalVisible = true
+    },
+    async saveBonusGrant() {
+      if (this.bonusForm.duration_mode === 'fixed_days' && !this.bonusForm.duration_days) {
+        this.$message.warning('请输入赠送天数')
+        return
+      }
+      this.bonusSaving = true
+      try {
+        await createBonusGrant(this.bonusForm)
+        this.$message.success('赠送额度创建成功')
+        this.bonusModalVisible = false
+      } finally {
+        this.bonusSaving = false
+      }
     },
     async fetchUsageDetail() {
       if (!this.selectedSubscription) return

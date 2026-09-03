@@ -23,6 +23,10 @@ class Channel(Base):
         default="default",
         comment="Provider subtype such as default/google-official/google-vertex-image",
     )
+    video_billing_evidence_mode = Column(
+        String(32), nullable=False, default="external_reconcile",
+        comment="completed_usage/accepted_create/external_reconcile",
+    )
     auth_header_type = Column(
         String(32),
         nullable=False,

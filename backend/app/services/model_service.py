@@ -634,6 +634,8 @@ class ModelService:
                 getattr(model, "long_context_token_threshold", None)
             ),
             "security_monitor_enabled": int(getattr(model, "security_monitor_enabled", 0) or 0),
+            "bonus_quota_enabled": int(getattr(model, "bonus_quota_enabled", 0) or 0),
+            "billing_config_version": int(getattr(model, "billing_config_version", 1) or 1),
             "image_size_capabilities": list(ModelService.get_image_resolution_capabilities(model.model_name)),
             "supports_image_edit": ModelService.supports_image_edit(model.model_name),
             "video_size_capabilities": list(ModelService.get_video_size_capabilities(model.model_name)),
@@ -726,6 +728,8 @@ class ModelService:
             raise ServiceException(400, f"模型名称 '{d['model_name']}' 已存在", "DUPLICATE_MODEL")
 
         billing_type = ModelService._normalize_billing_type(d.get("billing_type", "token"))
+        if int(d.get("bonus_quota_enabled", 0) or 0) and billing_type in {"image_credit", "free"}:
+            raise ServiceException(400, "图片积分或免费模型不支持赠送额度", "INVALID_BONUS_QUOTA_MODEL")
         request_price = ModelService._normalize_request_price(d.get("request_price", 0), billing_type)
         model_series = ModelService.normalize_model_series(d.get("model_series"), d["model_name"])
         long_context_billing_enabled = ModelService._normalize_long_context_billing_enabled(
@@ -770,6 +774,8 @@ class ModelService:
             long_context_billing_enabled=long_context_billing_enabled,
             long_context_token_threshold=long_context_token_threshold,
             security_monitor_enabled=security_monitor_enabled,
+            bonus_quota_enabled=int(d.get("bonus_quota_enabled", 0) or 0),
+            billing_config_version=1,
             enabled=d.get("enabled", 1),
             description=d.get("description"),
         )
@@ -799,6 +805,9 @@ class ModelService:
         )
         next_protocol_type = d.get("protocol_type", model.protocol_type)
         next_billing_type = ModelService._normalize_billing_type(d.get("billing_type", model.billing_type))
+        next_bonus_enabled = int(d.get("bonus_quota_enabled", getattr(model, "bonus_quota_enabled", 0)) or 0)
+        if next_bonus_enabled and next_billing_type in {"image_credit", "free"}:
+            raise ServiceException(400, "图片积分或免费模型不支持赠送额度", "INVALID_BONUS_QUOTA_MODEL")
         next_request_price = ModelService._normalize_request_price(
             d.get("request_price", getattr(model, "request_price", 0)),
             next_billing_type,
@@ -849,7 +858,16 @@ class ModelService:
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
             "model_series", "long_context_billing_enabled", "long_context_token_threshold",
             "security_monitor_enabled",
+            "bonus_quota_enabled",
         ]
+        billing_fields = {
+            "model_name", "model_type", "model_series", "protocol_type",
+            "input_price_per_million", "output_price_per_million",
+            "cache_read_price_per_million", "cache_creation_price_per_million",
+            "billing_type", "request_price", "image_credit_multiplier",
+            "bonus_quota_enabled",
+        }
+        billing_changed = any(field in d and d.get(field) != getattr(model, field, None) for field in billing_fields)
         for field in updatable_fields:
             value = d.get(field)
             # The cache-read price is tri-state: an explicit NULL restores
@@ -866,6 +884,9 @@ class ModelService:
 
         if resolution_rules is not None:
             ModelService._replace_resolution_rules(db, model.id, resolution_rules)
+
+        if billing_changed:
+            model.billing_config_version = int(getattr(model, "billing_config_version", 1) or 1) + 1
 
         db.commit()
         db.refresh(model)

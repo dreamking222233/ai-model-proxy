@@ -26,6 +26,14 @@ class ChannelService:
     PROVIDER_VARIANT_ZZ1CC_VIDEO = "zz1cc-video"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
+    VIDEO_BILLING_EVIDENCE_MODES = {"completed_usage", "accepted_create", "external_reconcile"}
+
+    @staticmethod
+    def _normalize_video_billing_evidence_mode(value: Optional[str]) -> str:
+        mode = str(value or "external_reconcile").strip().lower()
+        if mode not in ChannelService.VIDEO_BILLING_EVIDENCE_MODES:
+            raise ServiceException(400, "无效的视频计费证据模式", "INVALID_VIDEO_BILLING_EVIDENCE_MODE")
+        return mode
 
     @staticmethod
     def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
@@ -157,6 +165,9 @@ class ChannelService:
             "api_key_display": masked_key,
             "protocol_type": channel.protocol_type,
             "provider_variant": provider_variant,
+            "video_billing_evidence_mode": ChannelService._normalize_video_billing_evidence_mode(
+                getattr(channel, "video_billing_evidence_mode", None)
+            ),
             "supported_image_sizes": supported_image_sizes,
             "supports_image_edit": (
                 ChannelService.supports_openai_image_edit(provider_variant)
@@ -206,6 +217,9 @@ class ChannelService:
             api_key=d["api_key"],
             protocol_type=protocol_value,
             provider_variant=provider_variant,
+            video_billing_evidence_mode=ChannelService._normalize_video_billing_evidence_mode(
+                d.get("video_billing_evidence_mode")
+            ),
             auth_header_type=(
                 d.get("auth_header_type")
                 or ChannelService._resolve_default_auth_header_type(protocol_value)
@@ -247,12 +261,15 @@ class ChannelService:
         updatable_fields = [
             "name", "base_url", "api_key", "protocol_type", "auth_header_type",
             "priority", "enabled", "health_check_enabled", "description",
+            "video_billing_evidence_mode",
         ]
         for field in updatable_fields:
             value = d.get(field)
             if value is not None:
                 if field == "base_url":
                     value = value.rstrip("/")
+                if field == "video_billing_evidence_mode":
+                    value = ChannelService._normalize_video_billing_evidence_mode(value)
                 setattr(channel, field, value)
 
         if "health_check_model" in d:

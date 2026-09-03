@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import json
 from typing import Optional
 
 from datetime import date, datetime, timedelta
@@ -20,6 +21,7 @@ from app.models.log import (
 )
 from app.models.payment import PaymentRechargeOrder
 from app.models.user import SysUser
+from app.models.subscription_bonus import SubscriptionPlanModelSeries, UserSubscriptionModelSeries
 
 
 class SubscriptionService:
@@ -601,6 +603,19 @@ class SubscriptionService:
     @staticmethod
     def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
         payload = dict(data)
+        scope = str(payload.get("model_scope", "all_models") or "all_models").strip().lower()
+        if scope not in {"all_models", "selected_series"}:
+            raise ServiceException(400, "套餐模型范围不合法", "INVALID_MODEL_SCOPE")
+        series = [str(v).strip().lower() for v in (payload.get("model_series") or [])]
+        allowed_series = {"gpt", "claude", "grok", "gemini", "other"}
+        if scope == "selected_series" and (not series or any(v not in allowed_series for v in series) or len(set(series)) != len(series)):
+            raise ServiceException(400, "套餐模型系列必须为非空且合法的集合", "INVALID_MODEL_SERIES")
+        if scope == "all_models" and series:
+            raise ServiceException(400, "全部模型套餐不应设置模型系列", "MODEL_SERIES_SCOPE_CONFLICT")
+        if (not is_update) or "model_scope" in payload:
+            payload["model_scope"] = scope
+        if (not is_update) or "model_series" in payload:
+            payload["model_series"] = series
         plan_kind = str(payload.get("plan_kind") or "").strip() or None
         if not is_update or plan_kind is not None:
             if plan_kind not in {SubscriptionService.PLAN_KIND_UNLIMITED, SubscriptionService.PLAN_KIND_DAILY_QUOTA}:
@@ -691,6 +706,7 @@ class SubscriptionService:
                     sort_order=plan_data["sort_order"],
                     status="active",
                     description=plan_data["description"],
+                    model_scope="all_models", model_series=None,
                 )
             )
         db.commit()
@@ -730,6 +746,8 @@ class SubscriptionService:
             ),
             "online_sale_enabled": int(getattr(plan, "online_sale_enabled", 0) or 0),
             "description": plan.description,
+            "model_scope": getattr(plan, "model_scope", "all_models") or "all_models",
+            "model_series": json.loads(plan.model_series) if getattr(plan, "model_series", None) else [],
             "created_at": SubscriptionService._serialize_beijing_dt(plan.created_at),
             "updated_at": SubscriptionService._serialize_beijing_dt(plan.updated_at),
         }
@@ -777,8 +795,14 @@ class SubscriptionService:
             agent_cost_price_cny=payload.get("agent_cost_price_cny") or Decimal("0"),
             online_sale_enabled=int(payload.get("online_sale_enabled") or 0),
             description=payload.get("description"),
+            model_scope=payload.get("model_scope", "all_models"),
+            model_series=json.dumps(payload.get("model_series", []), ensure_ascii=False),
+            config_version=1,
         )
         db.add(plan)
+        db.flush()
+        for series in payload.get("model_series", []):
+            db.add(SubscriptionPlanModelSeries(plan_id=plan.id, model_series=series))
         db.commit()
         db.refresh(plan)
         return SubscriptionService._serialize_plan(plan)
@@ -817,9 +841,17 @@ class SubscriptionService:
             "agent_cost_price_cny",
             "online_sale_enabled",
             "description",
+            "model_scope",
         ):
             if field in payload and payload[field] is not None:
                 setattr(plan, field, payload[field])
+
+        if "model_series" in payload:
+            plan.model_series = json.dumps(payload.get("model_series") or [], ensure_ascii=False)
+            db.query(SubscriptionPlanModelSeries).filter(SubscriptionPlanModelSeries.plan_id == plan.id).delete(synchronize_session=False)
+            for series in payload.get("model_series") or []:
+                db.add(SubscriptionPlanModelSeries(plan_id=plan.id, model_series=series))
+        plan.config_version = int(getattr(plan, "config_version", 1) or 1) + 1
 
         db.commit()
         db.refresh(plan)
@@ -935,6 +967,8 @@ class SubscriptionService:
             "reset_period": subscription.reset_period,
             "reset_timezone": subscription.reset_timezone,
             "activation_mode": subscription.activation_mode,
+            "model_scope": getattr(subscription, "model_scope_snapshot", "all_models") or "all_models",
+            "model_series": json.loads(subscription.model_series_snapshot) if getattr(subscription, "model_series_snapshot", None) else [],
             "start_time": SubscriptionService._serialize_beijing_dt(subscription.start_time),
             "end_time": SubscriptionService._serialize_beijing_dt(subscription.end_time),
             "status": SubscriptionService._normalized_subscription_status(subscription),
@@ -1872,8 +1906,13 @@ class SubscriptionService:
             reset_timezone=plan.reset_timezone,
             agent_id=agent_id if agent_id is not None else user.agent_id,
         )
+        subscription.model_scope_snapshot = getattr(plan, "model_scope", "all_models") or "all_models"
+        subscription.config_version_snapshot = int(getattr(plan, "config_version", 1) or 1)
+        subscription.model_series_snapshot = getattr(plan, "model_series", None)
         db.add(subscription)
         db.flush()
+        for series in json.loads(subscription.model_series_snapshot or "[]"):
+            db.add(UserSubscriptionModelSeries(subscription_id=subscription.id, model_series=series))
         SubscriptionService.refresh_user_subscription_state(db, user_id, now)
         if auto_commit:
             db.commit()

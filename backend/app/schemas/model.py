@@ -37,6 +37,7 @@ class UnifiedModelCreate(BaseModel):
     long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
     long_context_token_threshold: Optional[int] = Field(None, gt=0, le=2147483647)
     security_monitor_enabled: Optional[int] = Field(None, ge=0, le=1)
+    bonus_quota_enabled: int = Field(default=0, ge=0, le=1)
     enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
@@ -66,6 +67,7 @@ class UnifiedModelUpdate(BaseModel):
     long_context_billing_enabled: Optional[int] = Field(None, ge=0, le=1)
     long_context_token_threshold: Optional[int] = Field(None, gt=0, le=2147483647)
     security_monitor_enabled: Optional[int] = Field(None, ge=0, le=1)
+    bonus_quota_enabled: Optional[int] = Field(None, ge=0, le=1)
     enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInput"]] = None
@@ -96,6 +98,8 @@ class UnifiedModelInfo(BaseModel):
     long_context_billing_enabled: int
     long_context_token_threshold: int
     security_monitor_enabled: int
+    bonus_quota_enabled: int = 0
+    billing_config_version: int = 1
     enabled: int
     description: Optional[str] = None
     image_resolution_rules: Optional[List["ModelImageResolutionRuleInfo"]] = None

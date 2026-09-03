@@ -129,8 +129,7 @@ class SubscriptionService:
 
     @staticmethod
     def _empty_usage_summary() -> dict:
-        from app.services.subscription_bonus_service import SubscriptionBonusService
-        result = {
+        return {
             "request_count": 0,
             "input_tokens": 0,
             "output_tokens": 0,

@@ -11,6 +11,7 @@ from app.core.exceptions import ServiceException
 from app.models.user import SysUser
 from app.models.log import UserSubscription
 from app.models.subscription_bonus import SubscriptionBonusGrant, SubscriptionBonusUsageCycle
+from app.models.model import UnifiedModel
 from app.services.subscription_service import SubscriptionService
 
 
@@ -95,6 +96,12 @@ class SubscriptionBonusService:
             SubscriptionBonusGrant.start_time <= now,
             SubscriptionBonusGrant.end_time > now,
         ).order_by(SubscriptionBonusGrant.end_time.asc(), SubscriptionBonusGrant.id.asc()).all()
+        enabled_series = [row[0] for row in db.query(UnifiedModel.model_series).filter(
+            UnifiedModel.enabled == 1,
+            UnifiedModel.bonus_quota_enabled == 1,
+        ).distinct().all() if row[0]]
+        # Keep the configured series when available and infer legacy rows defensively.
+        enabled_series = sorted({str(series).strip().lower() for series in enabled_series if series})
         result = []
         for grant in grants:
             index = int((now - grant.start_time).total_seconds() // 86400)
@@ -113,6 +120,7 @@ class SubscriptionBonusService:
                 "end_time": grant.end_time.isoformat(),
                 "next_reset_at": (cycle.cycle_end_at if cycle else cycle_end).isoformat(),
                 "model_series": json.loads(grant.model_series) if grant.model_series else [],
+                "eligible_model_series": enabled_series,
                 "model_scope": "selected_series" if grant.model_series else "all_bonus_models",
             })
         return result

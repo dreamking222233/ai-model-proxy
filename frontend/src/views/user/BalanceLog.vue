@@ -695,8 +695,12 @@ export default {
     },
     formatBonusModels(grant) {
       const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
-      if (!grant || !grant.model_series || !grant.model_series.length) return '全部赠送模型'
-      return grant.model_series.map(item => labels[item] || item).join('、')
+      if (!grant) return '-'
+      if (grant.model_series && grant.model_series.length) {
+        return grant.model_series.map(item => labels[item] || item).join('、')
+      }
+      const eligible = (grant.eligible_model_series || []).map(item => labels[item] || item)
+      return eligible.length ? `全部赠送模型（当前：${eligible.join('、')}）` : '暂无已启用赠送模型'
     },
     initData() {
       this.fetchLogs()

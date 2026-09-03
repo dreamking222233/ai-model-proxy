@@ -262,6 +262,9 @@
               <a-button type="link" size="small" @click="openBonusModal(record)">
                 赠送额外套餐
               </a-button>
+              <a-button type="link" size="small" @click="openBonusManageModal(record)">
+                管理赠送
+              </a-button>
             </template>
           </a-table>
         </a-tab-pane>
@@ -595,6 +598,44 @@
         </a-form-item>
       </a-form>
     </a-modal>
+    <a-modal
+      v-model="bonusManageModalVisible"
+      title="管理额外赠送套餐"
+      :footer="null"
+      width="760px"
+    >
+      <a-spin :spinning="bonusManageLoading">
+        <a-alert
+          v-if="bonusManageRecord"
+          type="info"
+          show-icon
+          :message="`用户 ${bonusManageRecord.username || bonusManageRecord.user_id} 的赠送批次`"
+          description="此处仅操作额外赠送额度，不会取消或修改用户的正常套餐。"
+          style="margin-bottom: 16px"
+        />
+        <a-empty v-if="!bonusManageGrants.length" description="暂无赠送批次" />
+        <div v-else class="bonus-manage-list">
+          <div v-for="grant in bonusManageGrants" :key="grant.id" class="bonus-manage-item">
+            <div class="bonus-manage-main">
+              <div><strong>批次 #{{ grant.id }}</strong> · {{ formatBonusModels(grant) }}</div>
+              <div class="sub-text">
+                每日 ${{ Number(grant.daily_quota_usd || 0).toFixed(6) }} · {{ formatBonusGrantStatus(grant.status) }}
+              </div>
+              <div class="sub-text">有效期：{{ formatDate(grant.start_time) }} 至 {{ formatDate(grant.end_time) }}</div>
+            </div>
+            <a-popconfirm
+              v-if="grant.status === 'active'"
+              title="确认取消该赠送批次？正常套餐不会受到影响。"
+              ok-text="取消赠送"
+              cancel-text="返回"
+              @confirm="cancelBonusGrantBatch(grant)"
+            >
+              <a-button type="danger" size="small" :loading="bonusCancellingId === grant.id">取消赠送</a-button>
+            </a-popconfirm>
+          </div>
+        </div>
+      </a-spin>
+    </a-modal>
   </div>
 </template>
 
@@ -609,7 +650,9 @@ import {
   listAllSubscriptions,
   listSubscriptionPlans,
   updateSubscriptionPlan,
-  createBonusGrant
+  createBonusGrant,
+  listBonusGrants,
+  cancelBonusGrant
 } from '@/api/subscription'
 import { getUser, listUsers } from '@/api/user'
 import { formatBeijingTime as formatDate } from '@/utils'
@@ -686,6 +729,11 @@ export default {
       bonusModalVisible: false,
       bonusSaving: false,
       bonusForm: { user_id: null, source_subscription_id: null, grant_request_id: '', duration_mode: 'fixed_days', duration_days: 10, daily_quota_usd: 100, model_series: [] },
+      bonusManageModalVisible: false,
+      bonusManageLoading: false,
+      bonusManageRecord: null,
+      bonusManageGrants: [],
+      bonusCancellingId: null,
       usageLoading: false,
       selectedSubscription: null,
       usageSummary: defaultUsageSummary(),
@@ -1140,6 +1188,36 @@ export default {
         this.bonusSaving = false
       }
     },
+    async openBonusManageModal(record) {
+      this.bonusManageRecord = record
+      this.bonusManageGrants = []
+      this.bonusManageModalVisible = true
+      this.bonusManageLoading = true
+      try {
+        const res = await listBonusGrants(record.user_id)
+        const data = res.data
+        this.bonusManageGrants = Array.isArray(data) ? data : (data && (data.items || data.list)) || []
+      } finally {
+        this.bonusManageLoading = false
+      }
+    },
+    formatBonusGrantStatus(status) {
+      const labels = { active: '生效中', cancelled: '已取消', expired: '已过期' }
+      return labels[status] || status || '-'
+    },
+    async cancelBonusGrantBatch(grant) {
+      this.bonusCancellingId = grant.id
+      try {
+        await cancelBonusGrant(grant.id, { reason: '管理员重新发放赠送额度' })
+        this.$message.success('赠送批次已取消，正常套餐保持不变')
+        const res = await listBonusGrants(this.bonusManageRecord.user_id)
+        const data = res.data
+        this.bonusManageGrants = Array.isArray(data) ? data : (data && (data.items || data.list)) || []
+        await this.fetchActiveUsers()
+      } finally {
+        this.bonusCancellingId = null
+      }
+    },
     formatBonusModels(grant) {
       const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
       if (!grant) return '-'
@@ -1369,5 +1447,27 @@ export default {
     color: #312e81;
     white-space: nowrap;
   }
+}
+
+.bonus-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bonus-manage-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.bonus-manage-main {
+  min-width: 0;
+  line-height: 1.7;
 }
 </style>

@@ -248,7 +248,7 @@
             <template slot="active_bonus" slot-scope="text, record">
               <div v-if="record.bonus_grants && record.bonus_grants.length" class="bonus-summary-cell">
                 <div v-for="grant in record.bonus_grants" :key="grant.grant_id" class="bonus-summary-item">
-                  <div>剩余 ${{ Number(grant.remaining_amount_usd || 0).toFixed(6) }} / 日 ${{ Number(grant.daily_quota_usd || 0).toFixed(6) }}</div>
+                  <div>已用 ${{ Number(grant.used_amount_usd || 0).toFixed(6) }} · 剩余 ${{ Number(grant.remaining_amount_usd || 0).toFixed(6) }} / 日 ${{ Number(grant.daily_quota_usd || 0).toFixed(6) }}</div>
                   <div class="sub-text">模型：{{ formatBonusModels(grant) }}</div>
                 </div>
               </div>

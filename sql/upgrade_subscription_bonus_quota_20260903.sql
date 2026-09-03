@@ -29,6 +29,8 @@ BEGIN
   IF n=0 THEN ALTER TABLE request_log ADD COLUMN bonus_quota_consumed DECIMAL(20,6) NULL DEFAULT 0; END IF;
   SELECT COUNT(*) INTO n FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='consumption_record' AND column_name='bonus_quota_consumed';
   IF n=0 THEN ALTER TABLE consumption_record ADD COLUMN bonus_quota_consumed DECIMAL(20,6) NULL DEFAULT 0; END IF;
+  SELECT COUNT(*) INTO n FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='subscription_bonus_grant' AND column_name='model_series';
+  IF n=0 THEN ALTER TABLE subscription_bonus_grant ADD COLUMN model_series TEXT NULL; END IF;
 END$$
 DELIMITER ;
 CALL upgrade_bonus_quota_20260903();
@@ -56,7 +58,7 @@ CREATE TABLE IF NOT EXISTS subscription_bonus_grant (
   normalized_payload_hash VARCHAR(64), user_id BIGINT NOT NULL,
   agent_id BIGINT NULL, source_subscription_id BIGINT NOT NULL,
   duration_mode VARCHAR(20) NOT NULL, duration_days INT NULL,
-  daily_quota_usd DECIMAL(20,6) NOT NULL, start_time DATETIME NOT NULL,
+  daily_quota_usd DECIMAL(20,6) NOT NULL, model_series TEXT NULL, start_time DATETIME NOT NULL,
   end_time DATETIME NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'active',
   created_by BIGINT NULL, cancelled_by BIGINT NULL, cancel_reason VARCHAR(255),
   cancelled_at DATETIME NULL, remark TEXT NULL,

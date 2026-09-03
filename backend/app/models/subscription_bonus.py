@@ -14,6 +14,7 @@ class SubscriptionBonusGrant(Base):
     duration_mode = Column(String(20), nullable=False)
     duration_days = Column(Integer, nullable=True)
     daily_quota_usd = Column(DECIMAL(20, 6), nullable=False, default=0)
+    model_series = Column(Text, nullable=True, comment="JSON array; empty means all bonus-enabled models")
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     status = Column(String(16), nullable=False, default="active", index=True)

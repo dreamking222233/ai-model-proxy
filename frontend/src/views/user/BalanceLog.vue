@@ -99,6 +99,27 @@
           </div>
         </div>
       </div>
+      <div v-if="subscriptionSummary.bonus_grants && subscriptionSummary.bonus_grants.length" class="package-card bonus-package-card animate__animated animate__fadeInUp">
+        <div class="card-glass"></div>
+        <div class="card-content">
+          <div class="card-header">
+            <a-icon type="gift" class="package-icon" />
+            <span class="card-title">额外赠送套餐</span>
+          </div>
+          <div v-for="grant in subscriptionSummary.bonus_grants" :key="grant.grant_id" class="bonus-grant-row">
+            <div class="bonus-grant-title">
+              <span>赠送批次 #{{ grant.grant_id }}</span>
+              <span class="bonus-models">模型：{{ formatBonusModels(grant) }}</span>
+            </div>
+            <div class="bonus-grant-meta">
+              <span>每日 {{ formatBonusUsd(grant.daily_quota_usd) }}</span>
+              <span>已用 {{ formatBonusUsd(grant.used_amount_usd) }}</span>
+              <span class="highlight-text">剩余 {{ formatBonusUsd(grant.remaining_amount_usd) }}</span>
+              <span>到期 {{ formatTime(grant.end_time).split(' ')[0] }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Main Content Section -->
@@ -650,6 +671,14 @@ export default {
       if (summary.current_cycle || summary.next_refresh_at) return '无限套餐 / 每24小时刷新'
       return '无限套餐'
     },
+    formatBonusUsd(value) {
+      return `$${Number(value || 0).toFixed(6)}`
+    },
+    formatBonusModels(grant) {
+      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
+      if (!grant || !grant.model_series || !grant.model_series.length) return '全部赠送模型'
+      return grant.model_series.map(item => labels[item] || item).join('、')
+    },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
     },
@@ -985,6 +1014,36 @@ export default {
 </script>
 
 <style lang="less" scoped>
+.bonus-package-card {
+  margin-top: 16px;
+}
+.bonus-grant-row {
+  padding: 12px 0;
+  border-top: 1px solid rgba(120, 130, 170, 0.14);
+}
+.bonus-grant-title,
+.bonus-grant-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+.bonus-grant-title {
+  font-weight: 600;
+}
+.bonus-models {
+  color: #667085;
+  font-weight: 400;
+}
+.bonus-grant-meta {
+  margin-top: 6px;
+  color: #667085;
+  font-size: 13px;
+}
+.highlight-text {
+  color: #635bdb;
+  font-weight: 600;
+}
 .billing-usage-page {
   position: relative;
   min-height: calc(100vh - 100px);

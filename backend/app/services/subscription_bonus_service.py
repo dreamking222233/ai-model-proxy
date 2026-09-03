@@ -22,6 +22,7 @@ class SubscriptionBonusService:
             "user_id": grant.user_id, "source_subscription_id": grant.source_subscription_id,
             "duration_mode": grant.duration_mode, "duration_days": grant.duration_days,
             "daily_quota_usd": str(grant.daily_quota_usd),
+            "model_series": json.loads(grant.model_series) if grant.model_series else [],
             "start_time": grant.start_time.isoformat(), "end_time": grant.end_time.isoformat(),
             "status": grant.status, "remark": grant.remark,
         }
@@ -72,6 +73,7 @@ class SubscriptionBonusService:
             source_subscription_id=subscription.id, duration_mode=mode, duration_days=days,
             daily_quota_usd=Decimal(str(payload["daily_quota_usd"])), start_time=now,
             end_time=end_time, status="active", created_by=operator_id, remark=payload.get("remark"),
+            model_series=json.dumps(payload.get("model_series") or [], ensure_ascii=False),
         )
         db.add(grant)
         db.commit(); db.refresh(grant)
@@ -83,6 +85,37 @@ class SubscriptionBonusService:
             SubscriptionBonusGrant.user_id == user_id
         ).order_by(SubscriptionBonusGrant.end_time.asc(), SubscriptionBonusGrant.id.asc()).all()
         return [SubscriptionBonusService._serialize(row) for row in rows]
+
+    @staticmethod
+    def active_summary(db: Session, user_id: int, now=None) -> list[dict]:
+        now = now or SubscriptionService.get_current_time()
+        grants = db.query(SubscriptionBonusGrant).filter(
+            SubscriptionBonusGrant.user_id == user_id,
+            SubscriptionBonusGrant.status == "active",
+            SubscriptionBonusGrant.start_time <= now,
+            SubscriptionBonusGrant.end_time > now,
+        ).order_by(SubscriptionBonusGrant.end_time.asc(), SubscriptionBonusGrant.id.asc()).all()
+        result = []
+        for grant in grants:
+            index = int((now - grant.start_time).total_seconds() // 86400)
+            cycle = db.query(SubscriptionBonusUsageCycle).filter_by(bonus_grant_id=grant.id, cycle_index=index).first()
+            quota = Decimal(str((cycle.quota_limit_usd if cycle else grant.daily_quota_usd) or 0))
+            used = Decimal(str((cycle.used_amount_usd if cycle else 0) or 0))
+            reserved = Decimal(str((cycle.reserved_amount_usd if cycle else 0) or 0))
+            cycle_end = min(grant.start_time + timedelta(days=index + 1), grant.end_time)
+            result.append({
+                "grant_id": grant.id,
+                "daily_quota_usd": float(quota),
+                "used_amount_usd": float(used),
+                "reserved_amount_usd": float(reserved),
+                "remaining_amount_usd": float(max(quota - used - reserved, Decimal("0"))),
+                "start_time": grant.start_time.isoformat(),
+                "end_time": grant.end_time.isoformat(),
+                "next_reset_at": (cycle.cycle_end_at if cycle else cycle_end).isoformat(),
+                "model_series": json.loads(grant.model_series) if grant.model_series else [],
+                "model_scope": "selected_series" if grant.model_series else "all_bonus_models",
+            })
+        return result
 
     @staticmethod
     def cancel_grant(db: Session, grant_id: int, operator_id: int, reason: str | None = None) -> dict:

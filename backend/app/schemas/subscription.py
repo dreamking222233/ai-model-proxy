@@ -41,6 +41,7 @@ class SubscriptionBonusGrantCreate(BaseModel):
     duration_mode: str = "fixed_days"
     duration_days: Optional[int] = Field(None, gt=0)
     daily_quota_usd: Decimal = Field(..., gt=0)
+    model_series: List[str] = Field(default_factory=list)
     remark: Optional[str] = None
 
 

@@ -245,6 +245,16 @@
               <span v-else>-</span>
             </template>
 
+            <template slot="active_bonus" slot-scope="text, record">
+              <div v-if="record.bonus_grants && record.bonus_grants.length" class="bonus-summary-cell">
+                <div v-for="grant in record.bonus_grants" :key="grant.grant_id" class="bonus-summary-item">
+                  <div>剩余 ${{ Number(grant.remaining_amount_usd || 0).toFixed(6) }} / 日 ${{ Number(grant.daily_quota_usd || 0).toFixed(6) }}</div>
+                  <div class="sub-text">模型：{{ formatBonusModels(grant) }}</div>
+                </div>
+              </div>
+              <span v-else>-</span>
+            </template>
+
             <template slot="active_actions" slot-scope="text, record">
               <a-button type="link" size="small" @click="openUsageModal(record)">
                 查看使用情况
@@ -720,6 +730,7 @@ export default {
         { title: '剩余时长', key: 'active_remaining', width: 180, scopedSlots: { customRender: 'active_remaining' } },
         { title: '有效期', key: 'active_time_range', width: 220, scopedSlots: { customRender: 'active_time_range' } },
         { title: '当前周期', key: 'active_cycle', width: 190, scopedSlots: { customRender: 'active_cycle' } },
+        { title: '额外套餐', key: 'active_bonus', width: 260, scopedSlots: { customRender: 'active_bonus' } },
         { title: '操作', key: 'active_actions', width: 130, scopedSlots: { customRender: 'active_actions' } }
       ],
       usageColumns: [
@@ -1110,6 +1121,11 @@ export default {
       } finally {
         this.bonusSaving = false
       }
+    },
+    formatBonusModels(grant) {
+      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
+      if (!grant || !grant.model_series || !grant.model_series.length) return '全部赠送模型'
+      return grant.model_series.map(item => labels[item] || item).join('、')
     },
     async fetchUsageDetail() {
       if (!this.selectedSubscription) return

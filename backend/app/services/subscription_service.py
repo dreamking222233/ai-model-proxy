@@ -129,7 +129,8 @@ class SubscriptionService:
 
     @staticmethod
     def _empty_usage_summary() -> dict:
-        return {
+        from app.services.subscription_bonus_service import SubscriptionBonusService
+        result = {
             "request_count": 0,
             "input_tokens": 0,
             "output_tokens": 0,
@@ -184,6 +185,7 @@ class SubscriptionService:
             "resolved_quota_value": 0.0,
             "unlimited_daily_token_limit": None,
             "current_cycle": None,
+            "bonus_grants": [],
             "refresh_anchor_at": None,
             "next_refresh_at": None,
             "refresh_period_hours": None,
@@ -289,7 +291,8 @@ class SubscriptionService:
         hard_limit: bool,
         use_official_cost: bool,
     ) -> dict:
-        return {
+        from app.services.subscription_bonus_service import SubscriptionBonusService
+        result = {
             "quota_metric": quota_metric,
             "quota_limit": SubscriptionService._normalize_decimal(quota_limit),
             "hard_limit": hard_limit,
@@ -1639,7 +1642,8 @@ class SubscriptionService:
         next_refresh_at = current_cycle.get("next_refresh_at") if isinstance(current_cycle, dict) else None
         requires_daily_cycle = SubscriptionService._requires_daily_cycle(active_subscription)
 
-        return {
+        from app.services.subscription_bonus_service import SubscriptionBonusService
+        result = {
             "subscription_type": "quota"
             if plan_kind == SubscriptionService.PLAN_KIND_DAILY_QUOTA
             else "unlimited",
@@ -1666,6 +1670,8 @@ class SubscriptionService:
             "next_refresh_at": next_refresh_at,
             "refresh_period_hours": 24 if requires_daily_cycle else None,
         }
+        result["bonus_grants"] = SubscriptionBonusService.active_summary(db, user_id, usage_now)
+        return result
 
     @staticmethod
     def check_quota_before_request(
@@ -2123,6 +2129,8 @@ class SubscriptionService:
             )
             item["remaining_seconds"] = remaining_seconds
             item["remaining_days"] = int((remaining_seconds + 86399) // 86400) if remaining_seconds > 0 else 0
+            from app.services.subscription_bonus_service import SubscriptionBonusService
+            item["bonus_grants"] = SubscriptionBonusService.active_summary(db, user.id, usage_now)
             result.append(item)
         return result, total
 

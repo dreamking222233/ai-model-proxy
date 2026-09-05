@@ -110,9 +110,19 @@ def list_chat_models(
 
         mappings = [row[0] for row in mapping_rows]
         video_workbench_capabilities = {}
+        image_workbench_capabilities = {}
         if m.model_type == "video":
             video_workbench_capabilities = ModelService.merge_video_workbench_capabilities([
                 ModelService.resolve_video_workbench_capabilities(
+                    m.model_name,
+                    provider_variant=getattr(channel, "provider_variant", None),
+                    actual_model_name=mapping.actual_model_name,
+                )
+                for mapping, channel in mapping_rows
+            ])
+        if m.model_type == "image":
+            image_workbench_capabilities = ModelService.merge_image_workbench_capabilities([
+                ModelService.resolve_image_workbench_capabilities(
                     m.model_name,
                     provider_variant=getattr(channel, "provider_variant", None),
                     actual_model_name=mapping.actual_model_name,
@@ -167,11 +177,12 @@ def list_chat_models(
                 else []
             ),
             "video_workbench_capabilities": video_workbench_capabilities,
+            "image_workbench_capabilities": image_workbench_capabilities,
             "supports_image_edit": (
-                ModelService.supports_image_edit(m.model_name)
-                if m.model_type == "image"
-                else False
-            ),
+                bool(image_workbench_capabilities.get("supports_edit"))
+                if image_workbench_capabilities
+                else ModelService.supports_image_edit(m.model_name)
+            ) if m.model_type == "image" else False,
         })
 
     return ResponseModel(data=result)

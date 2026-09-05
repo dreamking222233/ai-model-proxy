@@ -40,6 +40,7 @@ async def _parse_video_form(request: Request) -> dict:
         "aspect_ratio": form.get("aspect_ratio"),
         "resolution_name": form.get("resolution_name"),
         "preset": form.get("preset"),
+        "video_mode": form.get("video_mode"),
         "input_references": parsed_references,
     }
 

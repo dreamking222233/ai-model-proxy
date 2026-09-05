@@ -19,6 +19,7 @@ from app.models.model import (
 from app.models.channel import Channel
 from app.core.exceptions import ServiceException
 from app.services.channel_service import ChannelService
+from app.services import grok_imagine_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,12 @@ class ModelService:
     }
     IMAGE_EDIT_CAPABILITIES: set[str] = {
         "gpt-image-2",
+        "grok-imagine-image",
+        "grok-imagine-image-2.0",
+    }
+    GROK_IMAGINE_IMAGE_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
+        "grok-imagine-image": ("1K", "2K"),
+        "grok-imagine-image-2.0": ("1K", "2K"),
     }
     VIDEO_SIZE_CAPABILITIES: dict[str, tuple[str, ...]] = {
         "grok-imagine-video": (
@@ -81,6 +88,17 @@ class ModelService:
             "1696x960",
             "1920x1080",
         ),
+        "grok-imagine-video-1.5": (
+            "720x1280",
+            "1280x720",
+            "1024x1024",
+            "1024x1792",
+            "1792x1024",
+            "960x720",
+            "720x960",
+            "1080x720",
+            "720x1080",
+        ),
         "video-ds-2.0": (
             "720x1280",
             "1280x720",
@@ -106,6 +124,7 @@ class ModelService:
         "grok-imagine-video": tuple(range(1, 16)),
         "grok-video": tuple(range(1, 16)),
         "grok-imagine-video-1.5-preview": tuple(range(1, 16)),
+        "grok-imagine-video-1.5": tuple(range(1, 16)),
         "video-ds-2.0": (15,),
         "video-ds-2.0-fast": (15,),
     }
@@ -133,6 +152,9 @@ class ModelService:
         variant = str(provider_variant or "default").strip().lower()
         common_seconds = [4, 6, 8, 10, 12, 15]
         common_ratios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+
+        if variant == ChannelService.PROVIDER_VARIANT_GROK_IMAGINE:
+            return grok_imagine_adapter.video_workbench_capabilities(actual_name or unified_name)
 
         if variant == ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337:
             if actual_name == "grok-video-1.5" or unified_name == "grok-imagine-video-1.5-preview":
@@ -245,6 +267,7 @@ class ModelService:
         boolean_fields = (
             "supports_text_to_video",
             "supports_image_to_video",
+            "supports_reference_to_video",
             "supports_video_to_video",
             "supports_preset",
         )
@@ -252,8 +275,11 @@ class ModelService:
             "reference_media_types",
             "seconds_options_without_reference",
             "seconds_options_with_reference",
+            "seconds_options_i2v",
+            "seconds_options_r2v",
             "aspect_ratio_options",
             "resolution_options",
+            "r2v_resolution_options",
         )
         for item in items[1:]:
             for field in boolean_fields:
@@ -264,6 +290,18 @@ class ModelService:
             merged["reference_required"] = bool(merged.get("reference_required")) or bool(item.get("reference_required"))
             merged["reference_min_count"] = max(int(merged.get("reference_min_count") or 0), int(item.get("reference_min_count") or 0))
             merged["reference_max_count"] = min(int(merged.get("reference_max_count") or 7), int(item.get("reference_max_count") or 7))
+            if "i2v_max_count" in merged or "i2v_max_count" in item:
+                merged["i2v_max_count"] = min(
+                    int(merged.get("i2v_max_count") or item.get("i2v_max_count") or 1),
+                    int(item.get("i2v_max_count") or merged.get("i2v_max_count") or 1),
+                )
+            poll_values = [
+                int(value)
+                for value in (merged.get("poll_timeout_seconds"), item.get("poll_timeout_seconds"))
+                if value
+            ]
+            if poll_values:
+                merged["poll_timeout_seconds"] = min(poll_values)
         families = sorted({str(item.get("upstream_family") or "default") for item in items})
         merged["upstream_family"] = families[0] if len(families) == 1 else "mixed"
         for default_field, options_field in (
@@ -377,8 +415,79 @@ class ModelService:
         return (
             ModelService.GOOGLE_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
             or ModelService.PROMPT_ADAPTED_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
+            or ModelService.GROK_IMAGINE_IMAGE_SIZE_CAPABILITIES.get(normalized_name)
             or ()
         )
+
+    @staticmethod
+    def resolve_image_workbench_capabilities(
+        model_name: str,
+        *,
+        provider_variant: Optional[str] = None,
+        actual_model_name: Optional[str] = None,
+    ) -> dict[str, Any]:
+        variant = str(provider_variant or "default").strip().lower()
+        actual_name = str(actual_model_name or model_name or "").strip()
+        unified_name = str(model_name or "").strip()
+        if variant == ChannelService.PROVIDER_VARIANT_GROK_IMAGINE:
+            return grok_imagine_adapter.image_workbench_capabilities(actual_name or unified_name)
+        if unified_name in ModelService.GROK_IMAGINE_IMAGE_SIZE_CAPABILITIES:
+            return grok_imagine_adapter.image_workbench_capabilities(unified_name)
+        sizes = list(ModelService.get_image_resolution_capabilities(unified_name) or ("1K",))
+        return {
+            "supports_text_to_image": True,
+            "supports_edit": ModelService.supports_image_edit(unified_name),
+            "resolution_options": sizes,
+            "quality_options": ["low", "medium", "high"],
+            "aspect_ratio_options": ["1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4"],
+            "n_max": 4,
+            "n_options": [1, 2, 4],
+            "edit_min_images": 1,
+            "edit_max_images": 7,
+            "default_resolution": sizes[0] if sizes else "1K",
+            "default_quality": "high",
+            "default_aspect_ratio": "1:1",
+            "default_n": 1,
+            "upstream_family": variant or "default",
+        }
+
+    @staticmethod
+    def merge_image_workbench_capabilities(capabilities: list[dict[str, Any]]) -> dict[str, Any]:
+        items = [item for item in capabilities if isinstance(item, dict)]
+        if not items:
+            return {}
+        merged = dict(items[0])
+        for item in items[1:]:
+            merged["supports_text_to_image"] = bool(merged.get("supports_text_to_image")) and bool(
+                item.get("supports_text_to_image")
+            )
+            merged["supports_edit"] = bool(merged.get("supports_edit")) and bool(item.get("supports_edit"))
+            for field in ("resolution_options", "quality_options", "aspect_ratio_options", "n_options"):
+                allowed = set(item.get(field) or [])
+                merged[field] = [value for value in (merged.get(field) or []) if value in allowed]
+            merged["n_max"] = min(int(merged.get("n_max") or 1), int(item.get("n_max") or 1))
+            merged["edit_min_images"] = max(
+                int(merged.get("edit_min_images") or 1),
+                int(item.get("edit_min_images") or 1),
+            )
+            merged["edit_max_images"] = min(
+                int(merged.get("edit_max_images") or 1),
+                int(item.get("edit_max_images") or 1),
+            )
+        families = sorted({str(item.get("upstream_family") or "default") for item in items})
+        merged["upstream_family"] = families[0] if len(families) == 1 else "mixed"
+        for default_field, options_field in (
+            ("default_resolution", "resolution_options"),
+            ("default_quality", "quality_options"),
+            ("default_aspect_ratio", "aspect_ratio_options"),
+        ):
+            options = merged.get(options_field) or []
+            if options and merged.get(default_field) not in options:
+                merged[default_field] = options[0]
+        n_options = merged.get("n_options") or []
+        if n_options and merged.get("default_n") not in n_options:
+            merged["default_n"] = n_options[0]
+        return merged
 
     @staticmethod
     def supports_image_resolution_rules(

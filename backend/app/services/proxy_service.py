@@ -47,6 +47,7 @@ from app.models.log import (
     VideoTaskBillingSnapshot,
 )
 from app.services.channel_service import ChannelService
+from app.services import grok_imagine_adapter
 from app.services.google_vertex_image_service import GoogleVertexImageService
 from app.services.model_service import ModelService
 from app.services.image_credit_service import ImageCreditService
@@ -242,6 +243,7 @@ class ProxyService:
     _CPA_GROK_VIDEO_VARIANT = "cpa-grok-video"
     _GROK_VIDEO_119337_VARIANT = "grok-video-119337"
     _ZZ1CC_VIDEO_VARIANT = "zz1cc-video"
+    _GROK_IMAGINE_VARIANT = grok_imagine_adapter.PROVIDER_VARIANT
     _VIDEO_FAILURE_TEXT_PATTERNS = (
         "video_generation_failed",
         "video generation failed",
@@ -12750,6 +12752,10 @@ class ProxyService:
         return str(getattr(channel, "provider_variant", "") or "").strip().lower() == ProxyService._ZZ1CC_VIDEO_VARIANT
 
     @staticmethod
+    def _is_grok_imagine_channel(channel: Optional[Channel]) -> bool:
+        return grok_imagine_adapter.is_grok_imagine_variant(getattr(channel, "provider_variant", None))
+
+    @staticmethod
     def _resolve_cpa_grok_video_create_url(base_url: str) -> str:
         normalized = str(base_url or "").rstrip("/")
         if normalized.endswith("/v1"):
@@ -12800,6 +12806,8 @@ class ProxyService:
                 return 15
             if ProxyService._is_grok_video_119337_channel(channel):
                 return 4
+            if ProxyService._is_grok_imagine_channel(channel):
+                return grok_imagine_adapter.DEFAULT_VIDEO_DURATION
             return 4 if ProxyService._is_cpa_grok_video_channel(channel) else 6
         try:
             seconds = int(value)
@@ -12813,6 +12821,10 @@ class ProxyService:
             return min(15, max(1, seconds))
         if ProxyService._is_grok_video_119337_channel(channel):
             return ProxyService._normalize_grok_video_119337_seconds(seconds)
+        if ProxyService._is_grok_imagine_channel(channel):
+            if seconds < 1 or seconds > 15:
+                raise ServiceException(400, "seconds 仅支持 1 到 15", "INVALID_VIDEO_SECONDS")
+            return seconds
         if seconds not in {6, 10, 12, 16, 20}:
             raise ServiceException(400, "seconds 仅支持 6、10、12、16、20", "INVALID_VIDEO_SECONDS")
         return seconds
@@ -12930,6 +12942,19 @@ class ProxyService:
                 "1696x960",
                 "1920x1080",
             }
+        if ProxyService._is_grok_imagine_channel(channel):
+            raw = str(value or "").strip()
+            if not raw:
+                return grok_imagine_adapter.log_size_from_aspect_ratio(
+                    grok_imagine_adapter.DEFAULT_VIDEO_ASPECT_RATIO
+                )
+            if raw in grok_imagine_adapter.VIDEO_ASPECT_RATIO_SIZE_MAP:
+                return grok_imagine_adapter.VIDEO_ASPECT_RATIO_SIZE_MAP[raw]
+            lowered = raw.lower()
+            for size in grok_imagine_adapter.VIDEO_ASPECT_RATIO_SIZE_MAP.values():
+                if size.lower() == lowered:
+                    return size
+            raise ServiceException(400, "size 参数无效", "INVALID_VIDEO_SIZE")
         if normalized not in allowed:
             raise ServiceException(400, "size 参数无效", "INVALID_VIDEO_SIZE")
         return normalized
@@ -12942,10 +12967,14 @@ class ProxyService:
             return None
 
     @staticmethod
-    def _normalize_video_resolution_name(value: Any) -> Optional[str]:
+    def _normalize_video_resolution_name(value: Any, channel: Optional[Channel] = None) -> Optional[str]:
         if value in (None, ""):
             return None
         normalized = str(value).strip().lower()
+        if ProxyService._is_grok_imagine_channel(channel):
+            if normalized not in {"480p", "720p", "1080p"}:
+                raise ServiceException(400, "resolution_name 仅支持 480p、720p 或 1080p", "INVALID_VIDEO_RESOLUTION")
+            return normalized
         if normalized not in {"480p", "720p"}:
             raise ServiceException(400, "resolution_name 仅支持 480p 或 720p", "INVALID_VIDEO_RESOLUTION")
         return normalized
@@ -13933,6 +13962,163 @@ class ProxyService:
         return JSONResponse(content=normalized_body, headers={"X-Request-ID": request_id})
 
     @staticmethod
+    async def _non_stream_grok_imagine_video_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        model_multiplier: Decimal,
+        request_headers: Optional[dict[str, str]] = None,
+        bill_on_create: bool = False,
+        adjustment_multiplier: Optional[Decimal] = None,
+        price_adjustment_source: Optional[str] = None,
+        price_adjustment_rule_id: Optional[int] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        payload = request_data.get("_grok_imagine_payload")
+        if not isinstance(payload, dict):
+            reference_files = ProxyService._extract_video_reference_inputs(request_data)
+            payload = grok_imagine_adapter.build_video_generation_payload(
+                model=upstream_model_name,
+                prompt=prompt,
+                mode=request_data.get("video_mode"),
+                reference_data_urls=[
+                    ProxyService._video_reference_to_data_url(item) for item in reference_files
+                ],
+                seconds=request_data.get("_normalized_video_seconds") or request_data.get("seconds"),
+                aspect_ratio=request_data.get("_normalized_video_aspect_ratio") or request_data.get("aspect_ratio"),
+                resolution=request_data.get("_normalized_video_resolution_name") or request_data.get("resolution_name"),
+            )
+        seconds = int(payload.get("duration") or grok_imagine_adapter.DEFAULT_VIDEO_DURATION)
+        aspect_ratio = str(payload.get("aspect_ratio") or grok_imagine_adapter.DEFAULT_VIDEO_ASPECT_RATIO)
+        size = grok_imagine_adapter.log_size_from_aspect_ratio(aspect_ratio)
+        url = grok_imagine_adapter.resolve_video_create_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="Grok Imagine video create",
+        )
+        if not 200 <= response.status_code < 300:
+            body_text = response.text[:1000]
+            upstream_detail = f"Grok Imagine 视频任务创建失败（HTTP {response.status_code}）：{body_text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
+                "OPENAI_VIDEO_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
+            )
+        response_body = response.json()
+        if not isinstance(response_body, dict):
+            raise ServiceException(
+                503,
+                "Grok Imagine 视频任务创建响应格式无效",
+                "OPENAI_VIDEO_GENERATION_FAILED",
+            )
+        normalized_body = grok_imagine_adapter.normalize_video_create_response(
+            response_body,
+            model=upstream_model_name,
+            prompt=prompt,
+            seconds=seconds,
+            size=size,
+            aspect_ratio=aspect_ratio,
+            resolution=payload.get("resolution"),
+        )
+        video_id = str(normalized_body.get("id") or "").strip()
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+        if bill_on_create:
+            try:
+                if billing_type == "request":
+                    ProxyService._log_video_request_success(
+                        db,
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        unified_model,
+                        client_ip,
+                        response_time_ms,
+                        video_size=size,
+                    )
+                else:
+                    ProxyService._log_video_success(
+                        user,
+                        api_key_record,
+                        request_id,
+                        video_id,
+                        requested_model,
+                        upstream_model_name,
+                        channel,
+                        client_ip,
+                        response_time_ms,
+                        billing_type=billing_type,
+                        charged_credits=charged_credits,
+                        model_multiplier=model_multiplier,
+                        video_size=size,
+                        video_seconds=int(seconds),
+                        adjustment_multiplier=adjustment_multiplier,
+                        price_adjustment_source=price_adjustment_source,
+                        price_adjustment_rule_id=price_adjustment_rule_id,
+                    )
+            except ServiceException:
+                raise
+            except Exception as exc:
+                logger.error("Grok Imagine video billing / logging failed after upstream success: %s", exc)
+                raise ServiceException(
+                    500,
+                    "视频任务创建成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                    "VIDEO_BILLING_FAILED",
+                ) from exc
+        ProxyService._store_video_task_route(
+            video_id,
+            user_id=ProxyService._safe_object_id(user),
+            channel_id=ProxyService._safe_object_id(channel),
+            requested_model=requested_model,
+            actual_model=upstream_model_name,
+            request_id=request_id,
+            billing_type=billing_type,
+            charged_credits=charged_credits,
+            model_multiplier=model_multiplier,
+            video_size=size,
+            video_seconds=int(seconds),
+            adjustment_multiplier=adjustment_multiplier,
+            price_adjustment_source=price_adjustment_source,
+            price_adjustment_rule_id=price_adjustment_rule_id,
+            billed=bill_on_create,
+        )
+        normalized_body.setdefault("request_id", request_id)
+        normalized_body["usage"] = {
+            "billing_type": billing_type,
+            "image_credits_charged": float(charged_credits if bill_on_create else Decimal("0.000")),
+            "model_multiplier": float(model_multiplier),
+            "video_credit_rate_per_second": float(model_multiplier),
+            "request_type": "video_generation",
+            "video_count": 1,
+            "size": size,
+            "seconds": int(seconds),
+            "billing_status": "charged" if bill_on_create else "pending_completion",
+        }
+        return JSONResponse(content=normalized_body, headers={"X-Request-ID": request_id})
+
+    @staticmethod
     async def _non_stream_zz1cc_video_request(
         db: Session,
         user: SysUser,
@@ -14573,7 +14759,6 @@ class ProxyService:
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
 
-        normalized_resolution_name = ProxyService._normalize_video_resolution_name(request_data.get("resolution_name"))
         normalized_preset = ProxyService._normalize_video_preset(request_data.get("preset"))
 
         channels = ModelService.get_available_channels(db, unified_model_id)
@@ -14596,6 +14781,8 @@ class ProxyService:
             "INVALID_VIDEO_RESOLUTION",
             "INVALID_VIDEO_PRESET",
             "INVALID_VIDEO_REFERENCE",
+            "INVALID_VIDEO_MODE",
+            "VIDEO_MODE_REQUIRED",
         }
         invalid_video_request_error_codes = {
             "INVALID_VIDEO_SECONDS",
@@ -14603,6 +14790,8 @@ class ProxyService:
             "INVALID_VIDEO_RESOLUTION",
             "INVALID_VIDEO_PRESET",
             "INVALID_VIDEO_REFERENCE",
+            "INVALID_VIDEO_MODE",
+            "VIDEO_MODE_REQUIRED",
         }
         for channel, actual_model_name in channels:
             ProxyService._apply_runtime_retry_config(db, channel)
@@ -14618,15 +14807,36 @@ class ProxyService:
                 )
                 normalized_seconds = ProxyService._normalize_video_seconds(request_data.get("seconds"), channel)
                 normalized_size = ProxyService._normalize_video_size(request_data.get("size"), channel)
-                channel_resolution_name = normalized_resolution_name
+                channel_resolution_name = ProxyService._normalize_video_resolution_name(
+                    request_data.get("resolution_name"),
+                    channel,
+                )
                 normalized_aspect_ratio = None
+                grok_imagine_payload = None
+                if ProxyService._is_grok_imagine_channel(channel):
+                    reference_files = ProxyService._extract_video_reference_inputs(request_data)
+                    grok_imagine_payload = grok_imagine_adapter.build_video_generation_payload(
+                        model=upstream_model_name,
+                        prompt=prompt,
+                        mode=request_data.get("video_mode"),
+                        reference_data_urls=[
+                            ProxyService._video_reference_to_data_url(item) for item in reference_files
+                        ],
+                        seconds=request_data.get("seconds") or request_data.get("duration"),
+                        aspect_ratio=request_data.get("aspect_ratio"),
+                        resolution=request_data.get("resolution_name") or request_data.get("resolution"),
+                    )
+                    normalized_seconds = int(grok_imagine_payload["duration"])
+                    normalized_aspect_ratio = grok_imagine_payload["aspect_ratio"]
+                    channel_resolution_name = grok_imagine_payload["resolution"]
+                    normalized_size = grok_imagine_adapter.log_size_from_aspect_ratio(normalized_aspect_ratio)
                 if ProxyService._is_grok_video_119337_channel(channel):
                     normalized_options = ProxyService._normalize_grok_video_119337_request_options(
                         upstream_model_name,
                         request_data,
                         seconds=normalized_seconds,
                         size=normalized_size,
-                        resolution_name=normalized_resolution_name,
+                        resolution_name=channel_resolution_name,
                     )
                     normalized_seconds = normalized_options["seconds"]
                     normalized_size = normalized_options["size"]
@@ -14638,6 +14848,8 @@ class ProxyService:
                     normalized_seconds,
                     user_id=ProxyService._safe_object_id(user),
                 )
+                if ProxyService._is_grok_imagine_channel(channel):
+                    resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
                 admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
@@ -14652,7 +14864,33 @@ class ProxyService:
                     "_normalized_video_resolution_name": channel_resolution_name,
                     "_normalized_video_preset": normalized_preset,
                     "_resolved_billing_type": billing_type,
+                    "_grok_imagine_payload": grok_imagine_payload,
                 }
+                if ProxyService._is_grok_imagine_channel(channel):
+                    return await ProxyService._run_with_billing_concurrency(
+                        db,
+                        admission_decision,
+                        request_id,
+                        lambda: ProxyService._non_stream_grok_imagine_video_request(
+                            db,
+                            user,
+                            api_key_record,
+                            channel,
+                            current_unified_model,
+                            channel_request_data,
+                            request_id,
+                            requested_model,
+                            upstream_model_name,
+                            client_ip,
+                            video_credit_cost,
+                            model_multiplier,
+                            request_headers=request_headers,
+                            bill_on_create=bill_on_create,
+                            adjustment_multiplier=price_adjustment.multiplier,
+                            price_adjustment_source=price_adjustment.source,
+                            price_adjustment_rule_id=price_adjustment.rule_id,
+                        ),
+                    )
                 if ProxyService._is_cpa_grok_video_channel(channel):
                     return await ProxyService._run_with_billing_concurrency(
                         db,
@@ -14877,6 +15115,8 @@ class ProxyService:
                     normalized_seconds,
                     user_id=ProxyService._safe_object_id(user),
                 )
+                if ProxyService._is_grok_imagine_channel(channel):
+                    resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
                 admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
@@ -15511,11 +15751,18 @@ class ProxyService:
             )
 
         try:
+            create_route = ProxyService._resolve_stored_video_route(db, user, video_id)
+            wait_timeout = (
+                float(grok_imagine_adapter.POLL_TIMEOUT_SECONDS)
+                if create_route and ProxyService._is_grok_imagine_channel(create_route[0])
+                else None
+            )
             final_status, elapsed_seconds = await ProxyService._wait_for_video_completion(
                 db,
                 user,
                 video_id,
                 request_headers=request_headers,
+                timeout_seconds=wait_timeout,
             )
         except ServiceException as exc:
             if exc.error_code in {"OPENAI_VIDEO_RETRIEVE_FAILED", "VIDEO_GENERATION_FAILED", "VIDEO_WAIT_TIMEOUT"}:
@@ -15577,6 +15824,8 @@ class ProxyService:
                 normalized_seconds,
                 user_id=ProxyService._safe_object_id(user),
             )
+            if ProxyService._is_grok_imagine_channel(channel):
+                resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
             charged_credits = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
         request_id = str(response_body.get("request_id") or uuid.uuid4())
         try:
@@ -15638,7 +15887,11 @@ class ProxyService:
             "completed": True,
             "elapsed_seconds": round(elapsed_seconds, 3),
             "poll_interval_seconds": ProxyService._VIDEO_WAIT_POLL_INTERVAL_SECONDS,
-            "timeout_seconds": ProxyService._VIDEO_WAIT_TIMEOUT_SECONDS,
+            "timeout_seconds": (
+                wait_timeout
+                if wait_timeout is not None
+                else ProxyService._VIDEO_WAIT_TIMEOUT_SECONDS
+            ),
         }
         return JSONResponse(
             content=response_body,
@@ -15875,6 +16128,89 @@ class ProxyService:
         return body
 
     @staticmethod
+    async def _request_grok_imagine_video_status(
+        channel: Channel,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        url = grok_imagine_adapter.resolve_video_retrieve_url(channel.base_url, video_id)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        headers.pop("Content-Type", None)
+        timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            if response.status_code in {400, 422}:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = None
+                if isinstance(body, dict) and (body.get("error") or body.get("code") or body.get("status")):
+                    body.setdefault("status", "failed")
+                    return body
+            upstream_detail = f"Grok Imagine 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    503,
+                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                ),
+                upstream_detail,
+            )
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise ServiceException(
+                503,
+                "Grok Imagine 视频任务查询响应解析失败",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            ) from exc
+        if not isinstance(body, dict):
+            raise ServiceException(
+                503,
+                "Grok Imagine 视频任务查询响应格式无效",
+                "OPENAI_VIDEO_RETRIEVE_FAILED",
+            )
+        return body
+
+    @staticmethod
+    async def _resolve_grok_imagine_download_url(
+        channel: Channel,
+        video_id: str,
+        *,
+        request_headers: Optional[dict[str, str]] = None,
+    ) -> str:
+        body = await ProxyService._request_grok_imagine_video_status(
+            channel,
+            video_id,
+            request_headers=request_headers,
+        )
+        normalized = grok_imagine_adapter.normalize_video_status_response(
+            body,
+            video_id=video_id,
+            channel_base_url=channel.base_url,
+        )
+        status = ProxyService._video_status_value(normalized)
+        if not ProxyService._is_video_completed_status(status):
+            raise ProxyService._attach_upstream_detail(
+                ServiceException(
+                    409,
+                    "视频任务尚未完成，请稍后再试",
+                    "OPENAI_VIDEO_CONTENT_FAILED",
+                ),
+                f"Grok Imagine 视频任务尚未完成：video_id={video_id} status={status}",
+            )
+        probe = grok_imagine_adapter.content_probe_request(
+            channel.base_url,
+            grok_imagine_adapter.extract_video_url(body) or normalized.get("video_url"),
+            video_id,
+        )
+        if probe.get("method") != "GET":
+            raise ServiceException(500, "视频内容探测必须使用 GET", "OPENAI_VIDEO_CONTENT_FAILED")
+        return probe["url"]
+
+    @staticmethod
     async def _request_zz1cc_video_status(
         channel: Channel,
         video_id: str,
@@ -16106,6 +16442,18 @@ class ProxyService:
                 request_headers=request_headers,
             )
             return
+        if ProxyService._is_grok_imagine_channel(channel):
+            video_url = await ProxyService._resolve_grok_imagine_download_url(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+            await ProxyService._validate_video_url_content_or_raise(
+                channel,
+                video_url,
+                request_headers=request_headers,
+            )
+            return
         if ProxyService._is_grok_video_119337_channel(channel):
             video_url = await ProxyService._resolve_grok_video_119337_download_url(
                 channel,
@@ -16158,7 +16506,37 @@ class ProxyService:
                         }
                     },
                 )
-        if ProxyService._is_grok_video_119337_channel(channel):
+        if ProxyService._is_grok_imagine_channel(channel):
+            if content:
+                url = await ProxyService._resolve_grok_imagine_download_url(
+                    channel,
+                    video_id,
+                    request_headers=request_headers,
+                )
+            else:
+                try:
+                    body = await ProxyService._request_grok_imagine_video_status(
+                        channel,
+                        video_id,
+                        request_headers=request_headers,
+                    )
+                    normalized = grok_imagine_adapter.normalize_video_status_response(
+                        body,
+                        video_id=video_id,
+                        channel_base_url=channel.base_url,
+                    )
+                    return httpx.Response(200, json=normalized)
+                except ServiceException as exc:
+                    return httpx.Response(
+                        int(exc.status_code or 503),
+                        json={
+                            "error": {
+                                "message": str(exc.detail or _UPSTREAM_FAILURE_VISIBLE_MESSAGE),
+                                "code": exc.error_code,
+                            }
+                        },
+                    )
+        elif ProxyService._is_grok_video_119337_channel(channel):
             if content:
                 url = await ProxyService._resolve_grok_video_119337_download_url(
                     channel,
@@ -16229,6 +16607,12 @@ class ProxyService:
     ) -> StreamingResponse:
         if ProxyService._is_cpa_grok_video_channel(channel):
             url = await ProxyService._resolve_cpa_grok_video_download_url(
+                channel,
+                video_id,
+                request_headers=request_headers,
+            )
+        elif ProxyService._is_grok_imagine_channel(channel):
+            url = await ProxyService._resolve_grok_imagine_download_url(
                 channel,
                 video_id,
                 request_headers=request_headers,
@@ -17998,6 +18382,249 @@ class ProxyService:
         return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
 
     @staticmethod
+    async def _hydrate_image_urls_to_b64(response_body: dict[str, Any]) -> None:
+        data = response_body.get("data") if isinstance(response_body, dict) else None
+        if not isinstance(data, list):
+            return
+        timeout = httpx.Timeout(60.0, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            for item in data:
+                if not isinstance(item, dict) or item.get("b64_json"):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url.startswith("http://") and not url.startswith("https://"):
+                    continue
+                response = await client.get(url)
+                if not 200 <= response.status_code < 300 or not response.content:
+                    continue
+                item["b64_json"] = base64.b64encode(response.content).decode("ascii")
+
+    @staticmethod
+    async def _non_stream_grok_imagine_image_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        requested_image_count: int = 1,
+        model_multiplier: Optional[Decimal] = None,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+        adjustment_multiplier: Optional[Decimal] = None,
+        price_adjustment_source: Optional[str] = None,
+        price_adjustment_rule_id: Optional[int] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        ProxyService._validate_supported_image_count(
+            requested_image_count,
+            max_count=10,
+            provider_label="Grok Imagine 图片渠道",
+        )
+        start_time = time.time()
+        prompt = str(request_data.get("prompt", "") or "").strip()
+        payload = grok_imagine_adapter.build_image_generation_payload(
+            model=upstream_model_name,
+            prompt=prompt,
+            n=requested_image_count,
+            aspect_ratio=request_data.get("aspect_ratio"),
+            resolution=image_size or request_data.get("image_size") or request_data.get("resolution"),
+            quality=request_data.get("quality"),
+        )
+        url = grok_imagine_adapter.resolve_image_generations_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="Grok Imagine image generations",
+        )
+        if response.status_code != 200:
+            upstream_detail = f"Grok Imagine 图片生成失败（HTTP {response.status_code}）：{response.text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
+                "OPENAI_IMAGE_GENERATION_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
+            )
+        response_body = response.json()
+        if not isinstance(response_body, dict):
+            raise ServiceException(503, "Grok Imagine 图片响应格式无效", "OPENAI_IMAGE_GENERATION_FAILED")
+        await ProxyService._hydrate_image_urls_to_b64(response_body)
+        images, extra_text, invalid_image_count = ProxyService._parse_openai_image_response(response_body)
+        if not images:
+            raise ServiceException(
+                503,
+                "Grok Imagine 图片生成成功，但未返回有效图片数据",
+                "OPENAI_IMAGE_GENERATION_FAILED",
+            )
+        actual_charged_credits = ProxyService._calculate_total_image_credits(
+            model_multiplier or charged_credits,
+            len(images),
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=actual_charged_credits,
+                model_multiplier=model_multiplier or charged_credits,
+                image_size=image_size,
+                image_count=len(images),
+                request_type="image_generation",
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
+            )
+        except ServiceException:
+            raise
+        except Exception as exc:
+            logger.error("Grok Imagine image billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片生成成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            actual_charged_credits,
+            model_multiplier or charged_credits,
+            image_size,
+            request_type="image_generation",
+            extra_text=extra_text,
+        )
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
+    async def _non_stream_grok_imagine_image_edit_request(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        channel: Channel,
+        unified_model: UnifiedModel,
+        request_data: dict,
+        request_id: str,
+        requested_model: str,
+        upstream_model_name: str,
+        client_ip: str,
+        charged_credits: Decimal,
+        image_size: Optional[str] = None,
+        request_headers: Optional[dict[str, str]] = None,
+        adjustment_multiplier: Optional[Decimal] = None,
+        price_adjustment_source: Optional[str] = None,
+        price_adjustment_rule_id: Optional[int] = None,
+    ) -> JSONResponse:
+        release_session_connection(db)
+        start_time = time.time()
+        image_files = ProxyService._extract_image_edit_inputs(request_data)
+        requested_n = ProxyService._resolve_requested_image_count(request_data)
+        payload = grok_imagine_adapter.build_image_edit_payload(
+            model=upstream_model_name,
+            prompt=str(request_data.get("prompt", "") or "").strip(),
+            images=image_files,
+            n=requested_n,
+            aspect_ratio=request_data.get("aspect_ratio"),
+            resolution=image_size or request_data.get("image_size") or request_data.get("resolution"),
+            quality=request_data.get("quality"),
+        )
+        url = grok_imagine_adapter.resolve_image_edits_url(channel.base_url)
+        headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
+        timeout = httpx.Timeout(_IMAGE_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        response = await ProxyService._post_with_retries(
+            url,
+            payload,
+            headers,
+            request_id=request_id,
+            channel=channel,
+            timeout=timeout,
+            log_label="Grok Imagine image edits",
+        )
+        if response.status_code != 200:
+            upstream_detail = f"Grok Imagine 图片编辑失败（HTTP {response.status_code}）：{response.text}"
+            raise ProxyService._build_user_visible_upstream_request_error(
+                "OPENAI_IMAGE_EDIT_FAILED",
+                upstream_detail=upstream_detail,
+                status_code=response.status_code,
+            )
+        response_body = response.json()
+        if not isinstance(response_body, dict):
+            raise ServiceException(503, "Grok Imagine 图片编辑响应格式无效", "OPENAI_IMAGE_EDIT_FAILED")
+        await ProxyService._hydrate_image_urls_to_b64(response_body)
+        images, extra_text, _invalid = ProxyService._parse_openai_image_response(response_body)
+        if not images:
+            raise ServiceException(
+                503,
+                "Grok Imagine 图片编辑成功，但未返回有效图片数据",
+                "OPENAI_IMAGE_EDIT_FAILED",
+            )
+        per_image = charged_credits
+        if requested_n > 1:
+            per_image = (charged_credits / Decimal(requested_n)).quantize(Decimal("0.001"))
+        actual_charged_credits = ProxyService._calculate_total_image_credits(per_image, len(images))
+        response_time_ms = int((time.time() - start_time) * 1000)
+        ProxyService._record_success(db, channel)
+        try:
+            ProxyService._deduct_image_credits_and_log(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                channel,
+                client_ip,
+                response_time_ms,
+                charged_credits=actual_charged_credits,
+                model_multiplier=per_image,
+                image_size=image_size,
+                image_count=len(images),
+                request_type="image_edit",
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
+            )
+        except ServiceException:
+            raise
+        except Exception as exc:
+            logger.error("Grok Imagine image edit billing / logging failed after upstream success: %s", exc)
+            raise ServiceException(
+                500,
+                "图片编辑成功，但本地计费或记账失败，系统已中断返回，请稍后重试",
+                "IMAGE_BILLING_FAILED",
+            ) from exc
+        response_payload = ProxyService._build_image_response_payload(
+            requested_model,
+            request_id,
+            images,
+            actual_charged_credits,
+            charged_credits,
+            image_size,
+            request_type="image_edit",
+            extra_text=extra_text,
+        )
+        return JSONResponse(content=response_payload, headers={"X-Request-ID": request_id})
+
+    @staticmethod
     async def _non_stream_image_request(
         db: Session,
         user: SysUser,
@@ -18023,6 +18650,27 @@ class ProxyService:
             getattr(channel, "protocol_type", None),
             getattr(channel, "provider_variant", None),
         )
+        if ProxyService._is_grok_imagine_channel(channel):
+            return await ProxyService._non_stream_grok_imagine_image_request(
+                db,
+                user,
+                api_key_record,
+                channel,
+                unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                client_ip,
+                charged_credits,
+                requested_image_count=requested_image_count,
+                model_multiplier=model_multiplier,
+                image_size=image_size,
+                request_headers=request_headers,
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
+            )
         if protocol_type == "openai":
             return await ProxyService._non_stream_openai_image_request(
                 db,
@@ -18110,6 +18758,25 @@ class ProxyService:
                 400,
                 "当前渠道不支持图片编辑",
                 "IMAGE_EDIT_NOT_SUPPORTED",
+            )
+        if ProxyService._is_grok_imagine_channel(channel):
+            return await ProxyService._non_stream_grok_imagine_image_edit_request(
+                db,
+                user,
+                api_key_record,
+                channel,
+                unified_model,
+                request_data,
+                request_id,
+                requested_model,
+                upstream_model_name,
+                client_ip,
+                charged_credits,
+                image_size=image_size,
+                request_headers=request_headers,
+                adjustment_multiplier=adjustment_multiplier,
+                price_adjustment_source=price_adjustment_source,
+                price_adjustment_rule_id=price_adjustment_rule_id,
             )
         return await ProxyService._non_stream_openai_image_edit_request(
             db,
@@ -18243,6 +18910,15 @@ class ProxyService:
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
         requested_image_count = ProxyService._resolve_requested_image_count(request_data)
+        if str(unified_model.model_name or "") in {
+            grok_imagine_adapter.IMAGE_MODEL_V1,
+            grok_imagine_adapter.IMAGE_MODEL_V2,
+        }:
+            ProxyService._validate_supported_image_count(
+                requested_image_count,
+                max_count=10,
+                provider_label="Grok Imagine 图片渠道",
+            )
 
         if str(unified_model.model_type or "") != "image":
             raise ServiceException(400, "当前模型不是图片模型", "IMAGE_MODEL_NOT_SUPPORTED")
@@ -18441,7 +19117,19 @@ class ProxyService:
                 "仅支持 b64_json 格式返回图片结果",
                 "IMAGE_RESPONSE_FORMAT_NOT_SUPPORTED",
             )
-        ProxyService._validate_single_image_count(request_data)
+        requested_image_count = ProxyService._resolve_requested_image_count(request_data)
+        if str(unified_model.model_name or "") in {
+            grok_imagine_adapter.IMAGE_MODEL_V1,
+            grok_imagine_adapter.IMAGE_MODEL_V2,
+        }:
+            ProxyService._validate_supported_image_count(
+                requested_image_count,
+                max_count=10,
+                provider_label="Grok Imagine 图片渠道",
+            )
+        else:
+            ProxyService._validate_single_image_count(request_data)
+            requested_image_count = 1
         image_files = ProxyService._extract_image_edit_inputs(request_data)
         if not image_files:
             raise ServiceException(400, "缺少必填字段：image", "INVALID_IMAGE_FILE")
@@ -18462,11 +19150,15 @@ class ProxyService:
             )
 
         image_size, base_image_credit_cost = ProxyService._resolve_image_billing_rule(db, unified_model, request_data)
-        image_credit_cost, price_adjustment = ProxyService._resolve_media_credit_price_adjustment(
+        model_multiplier, price_adjustment = ProxyService._resolve_media_credit_price_adjustment(
             db,
             unified_model,
             base_image_credit_cost,
             user_id=ProxyService._safe_object_id(user),
+        )
+        image_credit_cost = ProxyService._calculate_total_image_credits(
+            model_multiplier,
+            requested_image_count,
         )
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 

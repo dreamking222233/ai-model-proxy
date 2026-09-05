@@ -24,6 +24,7 @@ class ChannelService:
     PROVIDER_VARIANT_CPA_GROK_VIDEO = "cpa-grok-video"
     PROVIDER_VARIANT_GROK_VIDEO_119337 = "grok-video-119337"
     PROVIDER_VARIANT_ZZ1CC_VIDEO = "zz1cc-video"
+    PROVIDER_VARIANT_GROK_IMAGINE = "grok-imagine"
     PROVIDER_VARIANT_GOOGLE_OFFICIAL = "google-official"
     PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE = "google-vertex-image"
     VIDEO_BILLING_EVIDENCE_MODES = {"completed_usage", "accepted_create", "external_reconcile"}
@@ -79,6 +80,8 @@ class ChannelService:
             return 0
         if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO:
             return 0
+        if protocol == "openai" and normalized_variant == ChannelService.PROVIDER_VARIANT_GROK_IMAGINE:
+            return 0
         if protocol == "google" and normalized_variant in {
             ChannelService.PROVIDER_VARIANT_GOOGLE_OFFICIAL,
             ChannelService.PROVIDER_VARIANT_GOOGLE_VERTEX_IMAGE,
@@ -102,6 +105,7 @@ class ChannelService:
                 ChannelService.PROVIDER_VARIANT_CPA_GROK_VIDEO,
                 ChannelService.PROVIDER_VARIANT_GROK_VIDEO_119337,
                 ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO,
+                ChannelService.PROVIDER_VARIANT_GROK_IMAGINE,
             }:
                 return raw_variant
             return ChannelService.PROVIDER_VARIANT_DEFAULT
@@ -123,6 +127,8 @@ class ChannelService:
             return ()
         if normalized_variant == ChannelService.PROVIDER_VARIANT_ZZ1CC_VIDEO:
             return ()
+        if normalized_variant == ChannelService.PROVIDER_VARIANT_GROK_IMAGINE:
+            return ("1K", "2K")
         if normalized_variant == ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE:
             return ("1K", "2K", "4K")
         if normalized_variant == ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE:
@@ -141,6 +147,7 @@ class ChannelService:
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_NATIVE_SIZE,
             ChannelService.PROVIDER_VARIANT_OPENAI_IMAGE_MODELINVOKE,
             ChannelService.PROVIDER_VARIANT_GEEK2API_IMAGE,
+            ChannelService.PROVIDER_VARIANT_GROK_IMAGINE,
         }
 
     @staticmethod

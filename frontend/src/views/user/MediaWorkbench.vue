@@ -55,7 +55,7 @@
               v-model="prompt"
               :maxLength="2000"
               :autoSize="{ minRows: 5, maxRows: 8 }"
-              :placeholder="mode === 'image' ? '描述画面主体、风格、镜头、光线和细节' : '描述参考图如何动起来、镜头运动和氛围'"
+              :placeholder="promptPlaceholder"
             />
             <div class="prompt-footer">
               <span class="prompt-char-count">{{ prompt.length }} / 2000</span>
@@ -71,8 +71,9 @@
             <label>图片模式</label>
             <a-radio-group v-model="imageMode" button-style="solid" class="image-mode-switch">
               <a-radio-button value="text">文生图</a-radio-button>
-              <a-radio-button value="reference" :disabled="!currentImageSupportsEdit">参考图生图</a-radio-button>
+              <a-radio-button value="reference" :disabled="!currentImageSupportsEdit">参考图编辑/合成</a-radio-button>
             </a-radio-group>
+            <div v-if="imageMode === 'reference'" class="field-hint">{{ imageEditHint }}</div>
           </div>
 
           <div v-if="imageMode === 'reference'" class="reference-panel" :class="{ filled: imageReferenceFiles.length }">
@@ -112,13 +113,13 @@
           <div class="field-grid">
             <div class="field-block">
               <label>数量</label>
-              <a-select v-model="imageCount" :disabled="imageMode === 'reference'">
+              <a-select v-model="imageCount">
                 <a-select-option v-for="count in imageCountOptions" :key="count" :value="count">
                   {{ count }} 张
                 </a-select-option>
               </a-select>
             </div>
-            <div class="field-block">
+            <div v-if="imageQualityOptions.length" class="field-block">
               <label>质量</label>
               <a-select v-model="imageQuality">
                 <a-select-option v-for="option in imageQualityOptions" :key="option.value" :value="option.value">
@@ -133,21 +134,22 @@
           <div class="field-block">
             <label>视频模式</label>
             <a-radio-group v-model="videoMode" button-style="solid" class="video-mode-switch">
-              <a-radio-button value="text" :disabled="!currentVideoSupportsText">文生视频</a-radio-button>
-              <a-radio-button value="image" :disabled="!currentVideoSupportsImage">图生视频</a-radio-button>
+              <a-radio-button value="t2v" :disabled="!currentVideoSupportsText">文生视频</a-radio-button>
+              <a-radio-button value="i2v" :disabled="!currentVideoSupportsImage">图生视频</a-radio-button>
+              <a-radio-button value="r2v" :disabled="!currentVideoSupportsReference">参考生视频</a-radio-button>
             </a-radio-group>
             <div class="field-hint">
               {{ videoModeHint }}
             </div>
           </div>
 
-          <div v-if="videoMode === 'image'" class="reference-panel" :class="{ filled: referenceFiles.length }">
+          <div v-if="needsVideoReference" class="reference-panel" :class="{ filled: referenceFiles.length }">
             <input ref="referenceInput" type="file" accept="image/*" multiple class="hidden-input" @change="handleReferenceChange">
             <button type="button" class="reference-drop" @click="pickReference">
-              <span><a-icon type="upload" /> 上传参考图（最多 {{ videoReferenceMaxCount }} 张）</span>
+              <span><a-icon type="upload" /> {{ videoReferenceUploadLabel }}</span>
             </button>
-            <div v-if="isVideoImageRequired && !referenceFiles.length" class="reference-required">
-              当前模型必须上传参考图后才能生成视频。
+            <div v-if="needsVideoReference && !referenceFiles.length" class="reference-required">
+              {{ videoReferenceRequiredText }}
             </div>
             <div v-if="referenceFiles.length" class="reference-thumb-grid">
               <div v-for="item in referenceFiles" :key="item.id" class="reference-thumb" @click="previewReference(item)">
@@ -315,7 +317,7 @@ import {
 
 const IMAGE_TIMEOUT_MS = 10 * 60 * 1000
 const VIDEO_CREATE_TIMEOUT_MS = 300 * 1000
-const VIDEO_POLL_TIMEOUT_MS = 20 * 60 * 1000
+const VIDEO_POLL_TIMEOUT_MS = 600 * 1000
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
 const VIDEO_POLL_INTERVAL_MS = 3000
 const VIDEO_COMPLETED_STATUSES = ['completed', 'succeeded', 'success', 'done']
@@ -341,16 +343,43 @@ const VIDEO_PRESET_OPTIONS = [
   { value: 'custom', label: '自定义' }
 ]
 const VIDEO_MODEL_CAPABILITIES = {
+  'grok-imagine-video-1.5': {
+    supports_text_to_video: true,
+    supports_image_to_video: true,
+    supports_reference_to_video: true,
+    reference_required: false,
+    reference_max_count: 7,
+    i2v_max_count: 1,
+    seconds_options_without_reference: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    seconds_options_with_reference: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    seconds_options_i2v: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    seconds_options_r2v: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    aspect_ratio_options: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'],
+    resolution_options: ['480p', '720p', '1080p'],
+    r2v_resolution_options: ['480p', '720p'],
+    default_seconds: 8,
+    default_resolution: '480p',
+    poll_timeout_seconds: 600,
+    supports_preset: false
+  },
   'grok-imagine-video': {
     supports_text_to_video: true,
     supports_image_to_video: true,
+    supports_reference_to_video: true,
     reference_required: false,
-    reference_max_count: 3,
-    seconds_options_without_reference: VIDEO_SECONDS_OPTIONS,
-    seconds_options_with_reference: VIDEO_SECONDS_OPTIONS,
-    aspect_ratio_options: ['1:1', '16:9', '9:16'],
-    resolution_options: ['720p', '480p'],
-    supports_preset: true
+    reference_max_count: 7,
+    i2v_max_count: 1,
+    seconds_options_without_reference: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    seconds_options_with_reference: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    seconds_options_i2v: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    seconds_options_r2v: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    aspect_ratio_options: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'],
+    resolution_options: ['480p', '720p'],
+    r2v_resolution_options: ['480p', '720p'],
+    default_seconds: 8,
+    default_resolution: '480p',
+    poll_timeout_seconds: 600,
+    supports_preset: false
   },
   'grok-video': {
     supports_text_to_video: true,
@@ -410,14 +439,14 @@ export default {
       prompt: '',
       imageMode: 'text',
       imageSize: '1K',
-      aspectRatio: '1:1',
+      aspectRatio: 'auto',
       imageCount: 1,
-      imageQuality: 'high',
-      videoSeconds: 15,
-      videoMode: 'text',
+      imageQuality: 'auto',
+      videoSeconds: 8,
+      videoMode: 't2v',
       videoSize: '1280x720',
       videoAspectRatio: '16:9',
-      videoResolution: '720p',
+      videoResolution: '480p',
       videoPreset: 'normal',
       activeVideoTaskId: '',
       videoTaskStage: '',
@@ -457,54 +486,91 @@ export default {
     currentImageModelMeta() {
       return this.imageModels.find(model => model.model_name === this.selectedImageModel) || {}
     },
+    currentImageCapability() {
+      const serverCapabilities = this.currentImageModelMeta.image_workbench_capabilities
+      if (serverCapabilities && typeof serverCapabilities === 'object' && Object.keys(serverCapabilities).length) {
+        return serverCapabilities
+      }
+      return {
+        supports_edit: !!this.currentImageModelMeta.supports_image_edit,
+        resolution_options: this.currentImageModelMeta.image_size_capabilities || IMAGE_SIZE_OPTIONS,
+        quality_options: [],
+        aspect_ratio_options: [],
+        n_options: [1, 2, 4],
+        n_max: 4,
+        edit_max_images: MAX_REFERENCE_FILES,
+        default_quality: '',
+        default_aspect_ratio: '1:1',
+        default_resolution: '1K'
+      }
+    },
     currentImageSupportsEdit() {
-      return !!this.currentImageModelMeta.supports_image_edit
+      if (this.currentImageCapability.supports_edit === false) return false
+      return !!(this.currentImageCapability.supports_edit || this.currentImageModelMeta.supports_image_edit)
+    },
+    imageEditHint() {
+      const max = Number(this.currentImageCapability.edit_max_images || 5)
+      if (max <= 1) return '上传 1 张图进行编辑。'
+      return `上传 1 张为单图编辑，2–${max} 张为多图合成。`
     },
     currentVideoModelMeta() {
       return this.videoModels.find(model => model.model_name === this.selectedVideoModel) || {}
     },
     imageSizeOptions() {
+      const fromCapability = Array.isArray(this.currentImageCapability.resolution_options)
+        ? this.currentImageCapability.resolution_options.filter(Boolean)
+        : []
+      if (fromCapability.length) return fromCapability
       const rules = Array.isArray(this.currentImageModelMeta.image_resolution_rules)
         ? this.currentImageModelMeta.image_resolution_rules.filter(rule => Number(rule.enabled) === 1)
         : []
       if (rules.length) {
-        const allowedRules = rules
-          .map(rule => rule.resolution_code)
-          .filter(size => IMAGE_SIZE_OPTIONS.includes(size))
-        return allowedRules.length ? allowedRules : IMAGE_SIZE_OPTIONS
+        return rules.map(rule => rule.resolution_code).filter(Boolean)
       }
       const capabilities = Array.isArray(this.currentImageModelMeta.image_size_capabilities)
-        ? this.currentImageModelMeta.image_size_capabilities
+        ? this.currentImageModelMeta.image_size_capabilities.filter(Boolean)
         : []
-      if (capabilities.length) {
-        const allowedCapabilities = capabilities.filter(size => IMAGE_SIZE_OPTIONS.includes(size))
-        return allowedCapabilities.length ? allowedCapabilities : IMAGE_SIZE_OPTIONS
-      }
-      return IMAGE_SIZE_OPTIONS
+      return capabilities.length ? capabilities : ['1K', '2K']
     },
     aspectRatios() {
-      return [
-        { value: '1:1', label: '1:1 方图' },
-        { value: '16:9', label: '16:9 横图' },
-        { value: '9:16', label: '9:16 竖图' },
-        { value: '3:2', label: '3:2 横图' },
-        { value: '2:3', label: '2:3 竖图' },
-        { value: '4:3', label: '4:3 横图' },
-        { value: '3:4', label: '3:4 竖图' },
-        { value: '5:4', label: '5:4 横图' },
-        { value: '4:5', label: '4:5 竖图' },
-        { value: '21:9', label: '21:9 超宽' }
-      ]
+      const labels = {
+        '1:1': '1:1 方图',
+        '16:9': '16:9 横图',
+        '9:16': '9:16 竖图',
+        '3:2': '3:2 横图',
+        '2:3': '2:3 竖图',
+        '4:3': '4:3 横图',
+        '3:4': '3:4 竖图',
+        '2:1': '2:1 横幅',
+        '1:2': '1:2 竖幅',
+        '19.5:9': '19.5:9',
+        '9:19.5': '9:19.5',
+        '20:9': '20:9',
+        '9:20': '9:20',
+        '21:9': '21:9 超宽',
+        '5:2': '5:2 超宽',
+        auto: 'auto 自动'
+      }
+      const options = Array.isArray(this.currentImageCapability.aspect_ratio_options)
+        ? this.currentImageCapability.aspect_ratio_options.filter(Boolean)
+        : []
+      const values = options.length ? options : ['1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', 'auto']
+      return values.map(value => ({ value, label: labels[value] || value }))
     },
     imageCountOptions() {
-      return [1, 2, 4]
+      const options = Array.isArray(this.currentImageCapability.n_options)
+        ? this.currentImageCapability.n_options.map(item => Number(item)).filter(item => item > 0)
+        : []
+      if (options.length) return options
+      const max = Number(this.currentImageCapability.n_max || 10)
+      return Array.from({ length: Math.min(10, Math.max(1, max)) }, (_, index) => index + 1)
     },
     imageQualityOptions() {
-      return [
-        { value: 'low', label: '低' },
-        { value: 'medium', label: '中' },
-        { value: 'high', label: '高' }
-      ]
+      const options = Array.isArray(this.currentImageCapability.quality_options)
+        ? this.currentImageCapability.quality_options.filter(Boolean)
+        : []
+      const labels = { low: '低', medium: '中', high: '高', auto: '自动' }
+      return options.map(value => ({ value, label: labels[value] || value }))
     },
     videoSizeOptions() {
       const capabilities = Array.isArray(this.currentVideoModelMeta.video_size_capabilities)
@@ -516,7 +582,16 @@ export default {
       return VIDEO_PRESET_OPTIONS
     },
     videoSecondsOptions() {
-      const field = this.videoMode === 'image' ? 'seconds_options_with_reference' : 'seconds_options_without_reference'
+      let field = 'seconds_options_without_reference'
+      if (this.videoMode === 'i2v') {
+        field = Array.isArray(this.currentVideoCapability.seconds_options_i2v) && this.currentVideoCapability.seconds_options_i2v.length
+          ? 'seconds_options_i2v'
+          : 'seconds_options_with_reference'
+      } else if (this.videoMode === 'r2v') {
+        field = Array.isArray(this.currentVideoCapability.seconds_options_r2v) && this.currentVideoCapability.seconds_options_r2v.length
+          ? 'seconds_options_r2v'
+          : 'seconds_options_with_reference'
+      }
       const capabilityOptions = Array.isArray(this.currentVideoCapability[field])
         ? this.currentVideoCapability[field].map(item => Number(item)).filter(item => item > 0)
         : []
@@ -548,7 +623,9 @@ export default {
         seconds_options_with_reference: VIDEO_SECONDS_OPTIONS,
         aspect_ratio_options: ['16:9', '9:16', '1:1'],
         resolution_options: ['720p', '480p'],
-        supports_preset: true
+        r2v_resolution_options: ['720p', '480p'],
+        supports_preset: false,
+        poll_timeout_seconds: 600
       }
     },
     currentVideoSupportsText() {
@@ -557,12 +634,35 @@ export default {
     currentVideoSupportsImage() {
       return this.currentVideoCapability.supports_image_to_video !== false
     },
+    currentVideoSupportsReference() {
+      return this.currentVideoCapability.supports_reference_to_video === true
+    },
     isVideoImageRequired() {
       return !!this.currentVideoCapability.reference_required
     },
+    needsVideoReference() {
+      return this.videoMode === 'i2v' || this.videoMode === 'r2v'
+    },
     videoReferenceMaxCount() {
+      if (this.videoMode === 'i2v') {
+        const i2vMax = Number(this.currentVideoCapability.i2v_max_count || 1)
+        return Math.max(1, Math.min(1, i2vMax))
+      }
       const value = Number(this.currentVideoCapability.reference_max_count || MAX_REFERENCE_FILES)
       return Math.max(1, Math.min(MAX_REFERENCE_FILES, value))
+    },
+    videoReferenceUploadLabel() {
+      if (this.videoMode === 'i2v') return '上传 1 张图作为第一帧'
+      return `上传参考图（最多 ${this.videoReferenceMaxCount} 张，不锁第一帧）`
+    },
+    videoReferenceRequiredText() {
+      if (this.videoMode === 'i2v') return '图生视频必须上传恰好 1 张参考图作为第一帧。'
+      return '参考生视频至少上传 1 张参考图。'
+    },
+    videoPollTimeoutMs() {
+      const seconds = Number(this.currentVideoCapability.poll_timeout_seconds)
+      if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000
+      return VIDEO_POLL_TIMEOUT_MS
     },
     videoAspectRatioOptions() {
       const options = Array.isArray(this.currentVideoCapability.aspect_ratio_options)
@@ -573,6 +673,12 @@ export default {
       return Array.from(new Set(fromSizes.length ? fromSizes : ['16:9', '9:16', '1:1']))
     },
     videoResolutionOptions() {
+      if (this.videoMode === 'r2v') {
+        const r2v = Array.isArray(this.currentVideoCapability.r2v_resolution_options)
+          ? this.currentVideoCapability.r2v_resolution_options.filter(Boolean)
+          : []
+        if (r2v.length) return r2v
+      }
       return Array.isArray(this.currentVideoCapability.resolution_options)
         ? this.currentVideoCapability.resolution_options.filter(Boolean)
         : ['720p', '480p']
@@ -580,13 +686,24 @@ export default {
     currentVideoSupportsPreset() {
       return !!this.currentVideoCapability.supports_preset
     },
+    promptPlaceholder() {
+      if (this.mode === 'image') return '描述画面主体、风格、镜头、光线和细节'
+      if (this.videoMode === 'i2v') return '描述第一帧如何动起来、镜头运动和氛围'
+      if (this.videoMode === 'r2v') return '描述参考图中的人物/物体如何出现在画面中，可用 <IMAGE_1> 引用'
+      return '描述画面主体、运镜、动作和氛围'
+    },
     videoModeHint() {
-      const maxText = `参考图最多 ${this.videoReferenceMaxCount} 张`
       const secondsText = this.videoSecondsOptions.length === 1 ? `，固定 ${this.videoSecondsOptions[0]} 秒` : ''
-      if (this.isVideoImageRequired) {
-        return `当前模型仅支持图生视频，${maxText}${secondsText}`
+      if (this.videoMode === 'i2v') {
+        return `图生视频会把上传的 1 张图当作第一帧再动画${secondsText}`
       }
-      return `当前模型支持文生视频和图生视频，${maxText}${secondsText}`
+      if (this.videoMode === 'r2v') {
+        return `参考生视频参考人物/物体/场景，不锁第一帧；最多 ${this.videoReferenceMaxCount} 张${secondsText}`
+      }
+      if (!this.currentVideoSupportsText) {
+        return `当前模型不支持纯文生视频${secondsText}`
+      }
+      return `文生视频只需提示词${secondsText}`
     },
     videoSecondsHint() {
       if (this.videoSecondsOptions.length === 1) {
@@ -597,7 +714,7 @@ export default {
     healthItems() {
       const items = this.health.items || {}
       return [
-        items.image_gpt_image_2 || this.emptyHealth('image_gpt_image_2', '生图 gpt-image-2'),
+        items.image_gpt_image_2 || this.emptyHealth('image_gpt_image_2', '生图'),
         items.video_grok || this.emptyHealth('video_grok', '视频生成')
       ]
     },
@@ -659,27 +776,27 @@ export default {
         return !!this.selectedImageModel && (this.imageMode !== 'reference' || (this.currentImageSupportsEdit && this.imageReferenceFiles.length > 0))
       }
       if (!this.selectedVideoModel || !this.videoSecondsOptions.length || !this.videoAspectRatioOptions.length) return false
-      if (this.videoMode === 'text') return this.currentVideoSupportsText && !this.isVideoImageRequired
+      if (this.videoMode === 't2v') return this.currentVideoSupportsText && !this.isVideoImageRequired
+      if (this.videoMode === 'r2v') {
+        return this.currentVideoSupportsReference && this.referenceFiles.length > 0
+      }
       return this.currentVideoSupportsImage && this.referenceFiles.length > 0
     }
   },
   watch: {
-    imageSizeOptions(options) {
-      if (options.length && !options.includes(this.imageSize)) {
-        this.imageSize = options[0]
-      }
-    },
     currentImageSupportsEdit(supported) {
       if (!supported && this.imageMode === 'reference') {
         this.imageMode = 'text'
       }
     },
     selectedImageModel() {
+      this.applyImageCapabilityDefaults()
       if (!this.currentImageSupportsEdit && this.imageMode === 'reference') {
         this.imageMode = 'text'
       }
     },
     selectedVideoModel() {
+      this.applyVideoCapabilityDefaults()
       this.ensureVideoOptions()
       this.ensureVideoModeAndReferences()
     },
@@ -706,8 +823,31 @@ export default {
       this.trimVideoReferencesToLimit()
     },
     isVideoImageRequired(required) {
-      if (required) {
-        this.videoMode = 'image'
+      if (required && this.videoMode === 't2v') {
+        this.videoMode = this.currentVideoSupportsImage ? 'i2v' : 'r2v'
+      }
+    },
+    imageSizeOptions(options) {
+      if (options.length && !options.includes(this.imageSize)) {
+        this.imageSize = this.currentImageCapability.default_resolution || options[0]
+      }
+    },
+    imageQualityOptions(options) {
+      if (!options.length) return
+      const values = options.map(item => item.value)
+      if (!values.includes(this.imageQuality)) {
+        this.imageQuality = this.currentImageCapability.default_quality || values[0]
+      }
+    },
+    aspectRatios(options) {
+      const values = (options || []).map(item => item.value)
+      if (values.length && !values.includes(this.aspectRatio)) {
+        this.aspectRatio = this.currentImageCapability.default_aspect_ratio || values[0]
+      }
+    },
+    imageCountOptions(options) {
+      if (options.length && !options.includes(this.imageCount)) {
+        this.imageCount = this.currentImageCapability.default_n || options[0]
       }
     }
   },
@@ -766,9 +906,13 @@ export default {
       try {
         const res = await getChatModels()
         this.models = Array.isArray(res.data) ? res.data : []
-        const preferredImage = this.imageModels.find(model => model.model_name === 'gpt-image-2') || this.imageModels[0]
-        const preferredVideo = this.videoModels.find(model => model.model_name === 'grok-video') ||
+        const preferredImage = this.imageModels.find(model => model.model_name === 'grok-imagine-image-2.0') ||
+          this.imageModels.find(model => model.model_name === 'grok-imagine-image') ||
+          this.imageModels.find(model => model.model_name === 'gpt-image-2') ||
+          this.imageModels[0]
+        const preferredVideo = this.videoModels.find(model => model.model_name === 'grok-imagine-video-1.5') ||
           this.videoModels.find(model => model.model_name === 'grok-imagine-video') ||
+          this.videoModels.find(model => model.model_name === 'grok-video') ||
           this.videoModels.find(model => model.model_name === 'grok-imagine-video-1.5-preview') ||
           this.videoModels.find(model => model.model_name === 'video-ds-2.0-fast') ||
           this.videoModels.find(model => model.model_name === 'video-ds-2.0') ||
@@ -831,6 +975,19 @@ export default {
         health_level: 'unknown'
       }
     },
+    applyImageCapabilityDefaults() {
+      const cap = this.currentImageCapability || {}
+      if (cap.default_resolution) this.imageSize = cap.default_resolution
+      if (cap.default_aspect_ratio) this.aspectRatio = cap.default_aspect_ratio
+      if (cap.default_quality) this.imageQuality = cap.default_quality
+      if (cap.default_n) this.imageCount = cap.default_n
+    },
+    applyVideoCapabilityDefaults() {
+      const cap = this.currentVideoCapability || {}
+      if (cap.default_seconds) this.videoSeconds = cap.default_seconds
+      if (cap.default_aspect_ratio) this.videoAspectRatio = cap.default_aspect_ratio
+      if (cap.default_resolution) this.videoResolution = cap.default_resolution
+    },
     ensureVideoOptions() {
       this.videoSeconds = this.normalizeVideoSeconds(this.videoSeconds)
       if (this.videoAspectRatioOptions.length && !this.videoAspectRatioOptions.includes(this.videoAspectRatio)) {
@@ -842,10 +999,14 @@ export default {
       this.videoSize = this.getVideoAspectRatioSize(this.videoAspectRatio, false)
     },
     ensureVideoModeAndReferences() {
-      if (this.isVideoImageRequired) {
-        this.videoMode = 'image'
-      } else if (!this.currentVideoSupportsImage && this.videoMode === 'image') {
-        this.videoMode = 'text'
+      if (this.isVideoImageRequired && this.videoMode === 't2v') {
+        this.videoMode = this.currentVideoSupportsImage ? 'i2v' : 'r2v'
+      } else if (this.videoMode === 't2v' && !this.currentVideoSupportsText) {
+        this.videoMode = this.currentVideoSupportsImage ? 'i2v' : 'r2v'
+      } else if (this.videoMode === 'i2v' && !this.currentVideoSupportsImage) {
+        this.videoMode = this.currentVideoSupportsText ? 't2v' : 'r2v'
+      } else if (this.videoMode === 'r2v' && !this.currentVideoSupportsReference) {
+        this.videoMode = this.currentVideoSupportsText ? 't2v' : 'i2v'
       }
       this.trimVideoReferencesToLimit()
     },
@@ -922,7 +1083,9 @@ export default {
         this.errorMessage = '请上传图片文件'
         return
       }
-      const maxFiles = kind === 'video' ? this.videoReferenceMaxCount : MAX_REFERENCE_FILES
+      const maxFiles = kind === 'video'
+        ? this.videoReferenceMaxCount
+        : Number(this.currentImageCapability.edit_max_images || 5)
       const available = Math.max(0, maxFiles - current.length)
       if (available <= 0) {
         this.errorMessage = `参考图最多支持 ${maxFiles} 张`
@@ -963,6 +1126,20 @@ export default {
         this.referenceFiles = next
       }
     },
+    buildImageRequestBody() {
+      const body = {
+        model: this.selectedImageModel,
+        prompt: this.prompt.trim(),
+        response_format: 'b64_json',
+        image_size: this.imageSize,
+        aspect_ratio: this.aspectRatio,
+        n: Number(this.imageCount) || 1
+      }
+      if (this.imageQualityOptions.length) {
+        body.quality = this.imageQuality
+      }
+      return body
+    },
     submit() {
       if (this.mode === 'image') {
         if (this.imageMode === 'reference') {
@@ -984,15 +1161,7 @@ export default {
             'Authorization': 'Bearer ' + this.apiKey,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            model: this.selectedImageModel,
-            prompt: this.prompt.trim(),
-            response_format: 'b64_json',
-            image_size: this.imageSize,
-            aspect_ratio: this.aspectRatio,
-            quality: this.imageQuality,
-            n: Number(this.imageCount) || 1
-          })
+          body: JSON.stringify(this.buildImageRequestBody())
         }, IMAGE_TIMEOUT_MS, '生图等待超过 10 分钟，请稍后重试')
         this.rawResponse = JSON.stringify(result, null, 2)
         this.setImageResults(result)
@@ -1018,8 +1187,10 @@ export default {
         form.append('response_format', 'b64_json')
         form.append('image_size', this.imageSize)
         form.append('aspect_ratio', this.aspectRatio)
-        form.append('quality', this.imageQuality)
-        form.append('n', '1')
+        form.append('n', String(Number(this.imageCount) || 1))
+        if (this.imageQualityOptions.length) {
+          form.append('quality', this.imageQuality)
+        }
         this.imageReferenceFiles.forEach(item => {
           form.append('image', item.file, item.name || 'reference.png')
         })
@@ -1041,9 +1212,12 @@ export default {
       }
     },
     async generateVideo() {
-      if (this.videoMode === 'image' && !this.referenceFiles.length) {
-        this.videoMode = 'image'
-        this.errorMessage = this.isVideoImageRequired ? '当前模型需要上传参考图' : '图生视频需要先上传参考图'
+      if (this.needsVideoReference && !this.referenceFiles.length) {
+        this.errorMessage = this.videoReferenceRequiredText
+        return
+      }
+      if (this.videoMode === 'i2v' && this.referenceFiles.length !== 1) {
+        this.errorMessage = '图生视频必须恰好上传 1 张参考图作为第一帧'
         return
       }
       this.busy = true
@@ -1057,13 +1231,14 @@ export default {
         form.append('seconds', String(this.normalizeVideoSeconds(this.videoSeconds)))
         form.append('aspect_ratio', this.videoAspectRatio)
         form.append('size', this.getVideoAspectRatioSize(this.videoAspectRatio, false))
+        form.append('video_mode', this.videoMode)
         if (this.videoResolutionOptions.length) {
           form.append('resolution_name', this.videoResolution)
         }
         if (this.currentVideoSupportsPreset) {
           form.append('preset', this.videoPreset)
         }
-        if (this.videoMode === 'image' && this.referenceFiles.length) {
+        if (this.needsVideoReference && this.referenceFiles.length) {
           this.referenceFiles.forEach(item => {
             form.append('input_reference[]', item.file, item.name || 'reference.png')
           })
@@ -1194,7 +1369,7 @@ export default {
       }
     },
     async waitForVideoCompletion(videoId, videoRunId) {
-      const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
+      const deadline = Date.now() + this.videoPollTimeoutMs
       let lastStatus = null
       while (Date.now() < deadline) {
         const sleepMs = Math.min(VIDEO_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
@@ -1204,7 +1379,7 @@ export default {
         if (remainingMs <= 0) break
         const requestTimeoutMs = Math.min(VIDEO_CREATE_TIMEOUT_MS, remainingMs)
         const timeoutMessage = requestTimeoutMs < VIDEO_CREATE_TIMEOUT_MS
-          ? '视频生成等待超过 20 分钟'
+          ? '视频生成等待超过 10 分钟'
           : '视频状态查询请求超过 300 秒，请稍后重试'
         const status = await this.fetchWithTimeout(`/v1/videos/${encodeURIComponent(videoId)}`, {
           method: 'GET',
@@ -1225,7 +1400,7 @@ export default {
         }
       }
       const suffix = lastStatus && lastStatus.status ? `，最后状态：${lastStatus.status}` : ''
-      throw new Error(`视频生成等待超过 20 分钟${suffix}`)
+      throw new Error(`视频生成等待超过 10 分钟${suffix}`)
     },
     videoStatusErrorMessage(status) {
       const error = status && status.error
@@ -1468,7 +1643,11 @@ export default {
     },
     getVideoModelCapabilityText(modelName) {
       const capability = this.getVideoModelCapability(modelName)
-      const label = capability.reference_required ? '需参考图' : (capability.supports_text_to_video === false ? '仅图生' : '文生/图生')
+      const modes = []
+      if (capability.supports_text_to_video !== false) modes.push('文生')
+      if (capability.supports_image_to_video !== false) modes.push('图生')
+      if (capability.supports_reference_to_video) modes.push('参考生')
+      const label = modes.length ? modes.join('/') : (capability.reference_required ? '需参考图' : '视频')
       return `${label} · 参考图最多 ${capability.reference_max_count || MAX_REFERENCE_FILES} 张`
     },
     getVideoAspectRatioSize(ratio, display = true) {

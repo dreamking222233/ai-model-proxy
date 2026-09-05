@@ -1515,6 +1515,12 @@ export default {
         if (normalized === 'zz1cc-video') {
           return 'zz1cc 视频'
         }
+        if (normalized === 'grok-video-119337') {
+          return '119337 Grok 视频'
+        }
+        if (normalized === 'grok-imagine') {
+          return 'Grok Imagine 图片/视频'
+        }
         return 'OpenAI 默认'
       }
       if (protocol === 'google') {
@@ -1545,6 +1551,12 @@ export default {
       }
       if (protocol === 'openai' && normalized === 'zz1cc-video') {
         return 'magenta'
+      }
+      if (protocol === 'openai' && normalized === 'grok-video-119337') {
+        return 'orange'
+      }
+      if (protocol === 'openai' && normalized === 'grok-imagine') {
+        return 'purple'
       }
       if (protocol === 'openai' && normalized === 'openai-image-compatible') {
         return 'orange'

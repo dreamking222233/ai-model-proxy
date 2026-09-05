@@ -14,9 +14,16 @@ from app.services.log_service import LogService
 class MediaWorkbenchService:
     """Build user-facing media invocation health summaries."""
 
-    IMAGE_MODELS = ("gpt-image-2", "codex-gpt-image-2", "plus-codex-gpt-image-2")
+    IMAGE_MODELS = (
+        "grok-imagine-image-2.0",
+        "grok-imagine-image",
+        "gpt-image-2",
+        "codex-gpt-image-2",
+        "plus-codex-gpt-image-2",
+    )
     IMAGE_REQUEST_TYPES = ("image_generation", "image_edit")
     VIDEO_MODELS = (
+        "grok-imagine-video-1.5",
         "grok-imagine-video",
         "grok-video",
         "grok-imagine-video-1.5-preview",

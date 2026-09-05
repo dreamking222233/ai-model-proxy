@@ -99,13 +99,45 @@ function saveStoredResults(results, namespace) {
   }
 }
 
+export function dataUrlToBlob(dataUrl) {
+  var raw = String(dataUrl || '')
+  var comma = raw.indexOf(',')
+  if (comma < 0 || raw.indexOf('data:') !== 0) return null
+  var header = raw.slice(0, comma)
+  var body = raw.slice(comma + 1)
+  var mimeMatch = /^data:([^;,]+)/i.exec(header)
+  var mimeType = mimeMatch && mimeMatch[1] ? mimeMatch[1] : 'application/octet-stream'
+  try {
+    if (/;base64/i.test(header)) {
+      var binary = atob(body)
+      var bytes = new Uint8Array(binary.length)
+      for (var i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return new Blob([bytes], { type: mimeType })
+    }
+    return new Blob([decodeURIComponent(body)], { type: mimeType })
+  } catch (e) {
+    return null
+  }
+}
+
+function normalizeAssetValue(value) {
+  if (typeof value === 'string' && value.indexOf('data:') === 0) {
+    return dataUrlToBlob(value) || value
+  }
+  return value
+}
+
 export function saveMediaAsset(key, value, contentType) {
   if (!key || !value) return Promise.resolve(false)
+  var storedValue = normalizeAssetValue(value)
+  var storedType = contentType || (storedValue && storedValue.type) || ''
   return runTransaction('readwrite', function (store) {
     store.put({
       key: key,
-      value: value,
-      contentType: contentType || '',
+      value: storedValue,
+      contentType: storedType,
       updatedAt: Date.now()
     })
     return true

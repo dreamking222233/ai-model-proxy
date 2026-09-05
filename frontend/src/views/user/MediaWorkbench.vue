@@ -270,9 +270,9 @@
                 <button class="image-preview-btn" type="button" @click="previewImage(item)">
                   <img :src="item.url" :alt="item.name">
                 </button>
-                <div class="media-hover-overlay">
+                <div class="media-hover-overlay" @click="previewImage(item)">
                   <div class="overlay-actions">
-                    <button class="action-icon-btn" title="在新窗口打开" @click.stop="openItem(item)">
+                    <button class="action-icon-btn" title="预览" @click.stop="previewImage(item)">
                       <a-icon type="eye" />
                     </button>
                     <button class="action-icon-btn" title="下载" @click.stop="downloadItem(item)">
@@ -329,7 +329,8 @@ import {
   getMediaResults,
   removeMediaResults,
   saveMediaAsset,
-  saveMediaResult
+  saveMediaResult,
+  dataUrlToBlob
 } from '@/utils/mediaWorkbenchStorage'
 
 const IMAGE_TIMEOUT_MS = 10 * 60 * 1000
@@ -916,13 +917,7 @@ export default {
       for (const item of cached) {
         const asset = await getMediaAsset(item.assetKey)
         if (!asset || !asset.value) continue
-        let url = ''
-        if (item.type === 'video' && asset.value instanceof Blob) {
-          url = URL.createObjectURL(asset.value)
-          this.objectUrls.push(url)
-        } else if (item.type === 'image') {
-          url = asset.value
-        }
+        const url = this.createAssetDisplayUrl(asset.value)
         if (!url) continue
         restored.push({
           id: item.id,
@@ -1522,17 +1517,22 @@ export default {
       const data = Array.isArray(result.data) ? result.data : []
       const rawResponse = JSON.stringify(result, null, 2)
       const nextResults = data.map((item, index) => {
+        const mimeType = item.mime_type || 'image/png'
         const dataUrl = item.b64_json
-          ? `data:${item.mime_type || 'image/png'};base64,${item.b64_json}`
+          ? `data:${mimeType};base64,${item.b64_json}`
           : item.url
+        const blob = dataUrl && String(dataUrl).indexOf('data:') === 0 ? dataUrlToBlob(dataUrl) : null
+        const url = this.createAssetDisplayUrl(blob || dataUrl)
         const id = createMediaResultId()
+        const extension = (mimeType.split('/')[1] || 'png').replace('jpeg', 'jpg')
         return {
           id,
           type: 'image',
-          url: dataUrl,
-          name: `media-image-${index + 1}.png`,
+          url,
+          name: `media-image-${index + 1}.${extension}`,
           meta: `${this.selectedImageModel} · ${sourceMode === 'reference' ? '参考图' : '文生图'} · ${this.imageSize} · ${this.aspectRatio}`,
           assetKey: `${id}-asset`,
+          assetValue: blob || dataUrl,
           rawResponse,
           createdAt: Date.now()
         }
@@ -1542,7 +1542,7 @@ export default {
       }
       this.results = this.limitDisplayedResults(nextResults.concat(this.results))
       nextResults.forEach(item => {
-        saveMediaAsset(item.assetKey, item.url, 'image').then(saved => {
+        saveMediaAsset(item.assetKey, item.assetValue || item.url, item.assetValue && item.assetValue.type ? item.assetValue.type : 'image').then(saved => {
           if (!saved) return
           saveMediaResult({
             id: item.id,
@@ -1669,24 +1669,73 @@ export default {
       this.errorMessage = ''
       clearMediaResults(this.storageNamespace)
     },
+    createAssetDisplayUrl(value) {
+      if (!value) return ''
+      if (typeof Blob !== 'undefined' && value instanceof Blob) {
+        const url = URL.createObjectURL(value)
+        this.objectUrls.push(url)
+        return url
+      }
+      const raw = String(value)
+      if (raw.indexOf('data:') === 0) {
+        const blob = dataUrlToBlob(raw)
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          this.objectUrls.push(url)
+          return url
+        }
+      }
+      return raw
+    },
     previewImage(item) {
-      this.previewImageUrl = item.url
-      this.previewVisible = true
+      this.previewImageUrl = item && item.url ? item.url : ''
+      this.previewVisible = !!this.previewImageUrl
     },
     previewReference(item) {
-      this.previewImageUrl = item.url
-      this.previewVisible = true
+      this.previewImageUrl = item && item.url ? item.url : ''
+      this.previewVisible = !!this.previewImageUrl
     },
-    openItem(item) {
-      window.open(item.url, '_blank', 'noopener,noreferrer')
-    },
-    downloadItem(item) {
+    openExternalUrl(url) {
+      if (!url) return
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (opened) return
       const link = document.createElement('a')
-      link.href = item.url
-      link.download = item.name
+      link.href = url
+      link.target = '_blank'
+      link.rel = 'noopener noreferrer'
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
+    },
+    openItem(item) {
+      if (!item || !item.url) return
+      if (item.type === 'image') {
+        this.previewImage(item)
+        return
+      }
+      this.openExternalUrl(item.url)
+    },
+    downloadItem(item) {
+      if (!item || !item.url) return
+      let href = item.url
+      let revoke = false
+      if (String(href).indexOf('data:') === 0) {
+        const blob = dataUrlToBlob(href)
+        if (!blob) return
+        href = URL.createObjectURL(blob)
+        revoke = true
+      }
+      const link = document.createElement('a')
+      link.href = href
+      link.download = item.name || (item.type === 'video' ? 'media-video.mp4' : 'media-image.png')
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      if (revoke) {
+        setTimeout(function () {
+          URL.revokeObjectURL(href)
+        }, 1000)
+      }
     },
     getAspectRatioMeta(ratio) {
       const value = String(ratio || '').trim()

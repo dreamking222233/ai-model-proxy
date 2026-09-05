@@ -15,6 +15,7 @@ from app.core.exceptions import ServiceException
 PROVIDER_VARIANT = "grok-imagine"
 POLL_TIMEOUT_SECONDS = 600
 CONTENT_HTTP_METHOD = "GET"
+VIDEO_STATUS_HTTP_OK = frozenset({200, 202})
 
 IMAGE_MODEL_V1 = "grok-imagine-image"
 IMAGE_MODEL_V2 = "grok-imagine-image-2.0"
@@ -81,6 +82,22 @@ def _raise(detail: str, error_code: str, status_code: int = 400) -> None:
 
 def is_grok_imagine_variant(provider_variant: Optional[str]) -> bool:
     return str(provider_variant or "").strip().lower() == PROVIDER_VARIANT
+
+
+def is_video_status_http_ok(status_code: Any) -> bool:
+    try:
+        return int(status_code) in VIDEO_STATUS_HTTP_OK
+    except (TypeError, ValueError):
+        return False
+
+
+def pending_video_status_body(video_id: Optional[str] = None) -> dict[str, Any]:
+    request_id = str(video_id or "").strip()
+    body: dict[str, Any] = {"status": "pending"}
+    if request_id:
+        body["id"] = request_id
+        body["request_id"] = request_id
+    return body
 
 
 def normalize_upstream_model_slug(model_name: Optional[str]) -> str:

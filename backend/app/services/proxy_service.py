@@ -16140,39 +16140,45 @@ class ProxyService:
         timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            if response.status_code in {400, 422}:
-                try:
-                    body = response.json()
-                except Exception:
-                    body = None
-                if isinstance(body, dict) and (body.get("error") or body.get("code") or body.get("status")):
-                    body.setdefault("status", "failed")
-                    return body
-            upstream_detail = f"Grok Imagine 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
-            raise ProxyService._attach_upstream_detail(
-                ServiceException(
+        if grok_imagine_adapter.is_video_status_http_ok(response.status_code):
+            try:
+                body = response.json()
+            except Exception as exc:
+                if response.status_code == 202:
+                    return grok_imagine_adapter.pending_video_status_body(video_id)
+                raise ServiceException(
                     503,
-                    _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
+                    "Grok Imagine 视频任务查询响应解析失败",
                     "OPENAI_VIDEO_RETRIEVE_FAILED",
-                ),
-                upstream_detail,
-            )
-        try:
-            body = response.json()
-        except Exception as exc:
-            raise ServiceException(
+                ) from exc
+            if not isinstance(body, dict):
+                if response.status_code == 202:
+                    return grok_imagine_adapter.pending_video_status_body(video_id)
+                raise ServiceException(
+                    503,
+                    "Grok Imagine 视频任务查询响应格式无效",
+                    "OPENAI_VIDEO_RETRIEVE_FAILED",
+                )
+            if response.status_code == 202:
+                body.setdefault("status", "pending")
+            return body
+        if response.status_code in {400, 422}:
+            try:
+                body = response.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and (body.get("error") or body.get("code") or body.get("status")):
+                body.setdefault("status", "failed")
+                return body
+        upstream_detail = f"Grok Imagine 视频任务查询失败（HTTP {response.status_code}）：{response.text[:1000]}"
+        raise ProxyService._attach_upstream_detail(
+            ServiceException(
                 503,
-                "Grok Imagine 视频任务查询响应解析失败",
+                _UPSTREAM_FAILURE_VISIBLE_MESSAGE,
                 "OPENAI_VIDEO_RETRIEVE_FAILED",
-            ) from exc
-        if not isinstance(body, dict):
-            raise ServiceException(
-                503,
-                "Grok Imagine 视频任务查询响应格式无效",
-                "OPENAI_VIDEO_RETRIEVE_FAILED",
-            )
-        return body
+            ),
+            upstream_detail,
+        )
 
     @staticmethod
     async def _resolve_grok_imagine_download_url(

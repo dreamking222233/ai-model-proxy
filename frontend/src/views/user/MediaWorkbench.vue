@@ -1381,12 +1381,21 @@ export default {
         const timeoutMessage = requestTimeoutMs < VIDEO_CREATE_TIMEOUT_MS
           ? '视频生成等待超过 10 分钟'
           : '视频状态查询请求超过 300 秒，请稍后重试'
-        const status = await this.fetchWithTimeout(`/v1/videos/${encodeURIComponent(videoId)}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': 'Bearer ' + this.apiKey
+        let status
+        try {
+          status = await this.fetchWithTimeout(`/v1/videos/${encodeURIComponent(videoId)}`, {
+            method: 'GET',
+            headers: {
+              'Authorization': 'Bearer ' + this.apiKey
+            }
+          }, requestTimeoutMs, timeoutMessage, videoRunId)
+        } catch (e) {
+          if (this.isTransientVideoPollError(e) && Date.now() < deadline) {
+            this.videoTaskStage = '任务生成中，正在查询进度'
+            continue
           }
-        }, requestTimeoutMs, timeoutMessage, videoRunId)
+          throw e
+        }
         this.assertVideoTaskActive(videoRunId)
         lastStatus = status
         const normalizedStatus = String((status && status.status) || '').toLowerCase()
@@ -1434,7 +1443,9 @@ export default {
         })
         if (!response.ok) {
           const text = await response.text()
-          throw new Error(this.parseErrorMessage(text, response.status))
+          const error = new Error(this.parseErrorMessage(text, response.status))
+          error.status = response.status
+          throw error
         }
         const body = await response.json()
         if (videoRunId !== null && videoRunId !== undefined) this.assertVideoTaskActive(videoRunId)
@@ -1451,6 +1462,12 @@ export default {
         if (timeoutId) clearTimeout(timeoutId)
         this.unregisterVideoRequestController(controller)
       }
+    },
+    isTransientVideoPollError(error) {
+      const status = Number(error && error.status)
+      if ([408, 425, 429, 500, 502, 503, 504].includes(status)) return true
+      const message = String((error && error.message) || '')
+      return message.includes('渠道异常')
     },
     parseErrorMessage(text, status) {
       try {

@@ -40,10 +40,7 @@
           </a-select>
           <a-select v-else v-model="selectedVideoModel" style="width: 100%" :getPopupContainer="(triggerNode) => triggerNode.parentNode">
             <a-select-option v-for="model in videoModels" :key="model.model_name" :value="model.model_name">
-              <div class="video-model-option">
-                <span class="video-model-name">{{ model.display_name || model.model_name }}</span>
-                <span class="video-model-tags">{{ getVideoModelCapabilityText(model.model_name) }}</span>
-              </div>
+              {{ model.display_name || model.model_name }}
             </a-select-option>
           </a-select>
         </div>
@@ -102,16 +99,6 @@
               </a-select>
             </div>
             <div class="field-block">
-              <label>比例</label>
-              <a-select v-model="aspectRatio">
-                <a-select-option v-for="ratio in aspectRatios" :key="ratio.value" :value="ratio.value">
-                  {{ ratio.label }}
-                </a-select-option>
-              </a-select>
-            </div>
-          </div>
-          <div class="field-grid">
-            <div class="field-block">
               <label>数量</label>
               <a-select v-model="imageCount">
                 <a-select-option v-for="count in imageCountOptions" :key="count" :value="count">
@@ -119,14 +106,37 @@
                 </a-select-option>
               </a-select>
             </div>
-            <div v-if="imageQualityOptions.length" class="field-block">
-              <label>质量</label>
-              <a-select v-model="imageQuality">
-                <a-select-option v-for="option in imageQualityOptions" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </a-select-option>
-              </a-select>
-            </div>
+          </div>
+          <div class="field-block">
+            <label>比例</label>
+            <a-select
+              v-model="aspectRatio"
+              option-label-prop="label"
+              :dropdownMatchSelectWidth="false"
+              dropdownClassName="video-size-dropdown"
+              :getPopupContainer="(triggerNode) => triggerNode.parentNode"
+            >
+              <a-select-option
+                v-for="ratio in aspectRatios"
+                :key="ratio.value"
+                :value="ratio.value"
+                :label="getImageAspectRatioLabel(ratio.value)"
+              >
+                <div class="video-size-option">
+                  <a-icon :type="getImageAspectRatioIcon(ratio.value)" />
+                  <span class="video-size-option-main">{{ ratio.value }}</span>
+                  <span class="video-size-option-ratio">{{ getImageAspectRatioShort(ratio.value) }}</span>
+                </div>
+              </a-select-option>
+            </a-select>
+          </div>
+          <div v-if="imageQualityOptions.length" class="field-block">
+            <label>质量</label>
+            <a-select v-model="imageQuality">
+              <a-select-option v-for="option in imageQualityOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </a-select-option>
+            </a-select>
           </div>
         </template>
 
@@ -162,24 +172,31 @@
             <a-button v-if="referenceFiles.length" size="small" @click="clearReference">清除参考图</a-button>
           </div>
 
-          <div class="field-grid">
-            <div class="field-block">
+          <div class="field-block duration-field">
+            <div class="duration-label-row">
               <label>时长</label>
-              <a-select v-model="videoSeconds" style="width: 100%" @change="handleVideoSecondsChange">
-                <a-select-option v-for="seconds in videoSecondsOptions" :key="seconds" :value="seconds">
-                  {{ seconds }} 秒
-                </a-select-option>
-              </a-select>
-              <div class="field-hint">{{ videoSecondsHint }}</div>
+              <span class="duration-current">{{ videoSeconds }} 秒</span>
             </div>
-            <div v-if="videoResolutionOptions.length" class="field-block">
-              <label>清晰度</label>
-              <a-select v-model="videoResolution">
-                <a-select-option v-for="resolution in videoResolutionOptions" :key="resolution" :value="resolution">
-                  {{ resolution }}
-                </a-select-option>
-              </a-select>
-            </div>
+            <a-slider
+              class="duration-slider"
+              :value="videoSeconds"
+              :min="videoSecondsMin"
+              :max="videoSecondsMax"
+              :step="videoSecondsSliderStep"
+              :marks="videoSecondsSliderMarks"
+              :disabled="videoSecondsOptions.length <= 1"
+              :tipFormatter="formatVideoSecondsTip"
+              @change="handleVideoSecondsChange"
+            />
+            <div class="field-hint">{{ videoSecondsHint }}</div>
+          </div>
+          <div v-if="videoResolutionOptions.length" class="field-block">
+            <label>清晰度</label>
+            <a-select v-model="videoResolution">
+              <a-select-option v-for="resolution in videoResolutionOptions" :key="resolution" :value="resolution">
+                {{ resolution }}
+              </a-select-option>
+            </a-select>
           </div>
           <div class="field-block">
             <label>画面比例</label>
@@ -609,6 +626,24 @@ export default {
     videoSecondsMax() {
       return this.videoSecondsOptions.length ? Math.max(...this.videoSecondsOptions) : 15
     },
+    videoSecondsSliderStep() {
+      const options = this.videoSecondsOptions
+      if (options.length <= 1) return 1
+      const min = Math.min(...options)
+      const max = Math.max(...options)
+      const consecutive = options.length === (max - min + 1) && options.every(item => Number.isInteger(Number(item)))
+      return consecutive ? 1 : null
+    },
+    videoSecondsSliderMarks() {
+      const options = this.videoSecondsOptions
+      const marks = {}
+      if (!options.length) return marks
+      const labeled = options.length <= 8 ? options : [options[0], options[options.length - 1]]
+      labeled.forEach(item => {
+        marks[item] = String(item)
+      })
+      return marks
+    },
     currentVideoCapability() {
       const serverCapabilities = this.currentVideoModelMeta.video_workbench_capabilities
       if (serverCapabilities && typeof serverCapabilities === 'object' && Object.keys(serverCapabilities).length) {
@@ -706,10 +741,13 @@ export default {
       return `文生视频只需提示词${secondsText}`
     },
     videoSecondsHint() {
-      if (this.videoSecondsOptions.length === 1) {
-        return `当前模型固定 ${this.videoSecondsOptions[0]} 秒。`
+      if (this.videoSecondsOptions.length <= 1) {
+        return `当前模型固定 ${this.videoSecondsOptions[0] || this.videoSeconds} 秒。`
       }
-      return `支持 ${this.videoSecondsOptions.join('、')} 秒。`
+      if (this.videoSecondsSliderStep === 1) {
+        return `左右滑动选择 ${this.videoSecondsMin}–${this.videoSecondsMax} 秒。`
+      }
+      return `可选择 ${this.videoSecondsOptions.join('、')} 秒。`
     },
     healthItems() {
       const items = this.health.items || {}
@@ -1035,6 +1073,9 @@ export default {
     },
     handleVideoSecondsChange(value) {
       this.videoSeconds = this.normalizeVideoSeconds(value)
+    },
+    formatVideoSecondsTip(value) {
+      return `${value} 秒`
     },
     formatCredit(value) {
       const num = Number(value || 0)
@@ -1647,25 +1688,36 @@ export default {
       link.click()
       document.body.removeChild(link)
     },
-    getVideoModelCapability(modelName) {
-      const model = this.videoModels.find(item => item.model_name === modelName)
-      const serverCapabilities = model && model.video_workbench_capabilities
-      return (serverCapabilities && Object.keys(serverCapabilities).length)
-        ? serverCapabilities
-        : (VIDEO_MODEL_CAPABILITIES[modelName] || {
-            supports_text_to_video: true,
-            supports_image_to_video: true,
-            reference_max_count: MAX_REFERENCE_FILES
-          })
+    getAspectRatioMeta(ratio) {
+      const value = String(ratio || '').trim()
+      if (!value || value === 'auto') {
+        return { icon: 'sync', short: '自动', label: 'auto（自动）' }
+      }
+      const parts = value.split(':')
+      if (parts.length !== 2) {
+        return { icon: 'fullscreen', short: value, label: value }
+      }
+      const width = Number(parts[0])
+      const height = Number(parts[1])
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return { icon: 'fullscreen', short: value, label: value }
+      }
+      if (width === height) {
+        return { icon: 'border', short: '方图', label: `${value}（方图）` }
+      }
+      if (width > height) {
+        return { icon: 'desktop', short: '横图', label: `${value}（横图）` }
+      }
+      return { icon: 'mobile', short: '竖图', label: `${value}（竖图）` }
     },
-    getVideoModelCapabilityText(modelName) {
-      const capability = this.getVideoModelCapability(modelName)
-      const modes = []
-      if (capability.supports_text_to_video !== false) modes.push('文生')
-      if (capability.supports_image_to_video !== false) modes.push('图生')
-      if (capability.supports_reference_to_video) modes.push('参考生')
-      const label = modes.length ? modes.join('/') : (capability.reference_required ? '需参考图' : '视频')
-      return `${label} · 参考图最多 ${capability.reference_max_count || MAX_REFERENCE_FILES} 张`
+    getImageAspectRatioIcon(ratio) {
+      return this.getAspectRatioMeta(ratio).icon
+    },
+    getImageAspectRatioShort(ratio) {
+      return this.getAspectRatioMeta(ratio).short
+    },
+    getImageAspectRatioLabel(ratio) {
+      return this.getAspectRatioMeta(ratio).label
     },
     getVideoAspectRatioSize(ratio, display = true) {
       const value = VIDEO_ASPECT_RATIO_SIZE_MAP[ratio] || '1280×720'
@@ -1937,26 +1989,58 @@ export default {
   gap: 16px;
 }
 
-.video-model-option {
+.duration-label-row {
   display: flex;
-  min-width: 0;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  margin-bottom: 2px;
 }
 
-.video-model-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary, #18181b);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.duration-label-row label {
+  margin-bottom: 0;
 }
 
-.video-model-tags {
-  flex: 0 0 auto;
-  color: var(--text-secondary, #71717a);
+.duration-current {
+  color: var(--primary-color);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.duration-slider {
+  margin: 4px 8px 12px;
+}
+
+.duration-slider >>> .ant-slider-rail {
+  background-color: #e4e4e7;
+}
+
+.duration-slider >>> .ant-slider-track {
+  background-color: var(--primary-color);
+}
+
+.duration-slider >>> .ant-slider-handle {
+  border-color: var(--primary-color);
+}
+
+.duration-slider >>> .ant-slider-handle:focus,
+.duration-slider >>> .ant-slider-handle.ant-tooltip-open {
+  border-color: var(--primary-hover);
+  box-shadow: 0 0 0 4px var(--focus-ring);
+}
+
+.duration-slider >>> .ant-slider-dot-active {
+  border-color: var(--primary-color);
+}
+
+.duration-slider >>> .ant-slider-mark-text {
+  color: var(--text-secondary);
   font-size: 11px;
+}
+
+.duration-slider >>> .ant-slider-disabled .ant-slider-track {
+  background-color: #c4c4c8;
 }
 
 .video-size-option {

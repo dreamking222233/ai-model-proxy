@@ -15,13 +15,13 @@ INSERT INTO `unified_model` (
     `image_credit_multiplier`, `security_monitor_enabled`, `enabled`, `description`
 ) VALUES
 ('grok-imagine-image', 'Grok Imagine Image', 'image', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1,
- 'Grok Imagine 图片 1.0：每张 0.5 媒体积分，分辨率 1K/2K'),
+ 'Grok Imagine 图片 1.0：1K 每张 0.5 媒体积分，2K 每张 1 媒体积分'),
 ('grok-imagine-image-2.0', 'Grok Imagine Image 2.0', 'image', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1,
- 'Grok Imagine 图片 2.0：每张 0.5 媒体积分，quality=low/medium/auto'),
+ 'Grok Imagine 图片 2.0：1K 每张 0.5 媒体积分，2K 每张 1 媒体积分'),
 ('grok-imagine-video', 'Grok Imagine Video', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1,
- 'Grok Imagine 视频 1.0：每条 0.5 媒体积分，文生/图生最长 15 秒，参考生最长 10 秒'),
+ 'Grok Imagine 视频 1.0：480p/720p 每秒 0.5 媒体积分，最长 15 秒，参考生最长 10 秒'),
 ('grok-imagine-video-1.5', 'Grok Imagine Video 1.5', 'video', 'grok', 'openai', NULL, 0, 0, 'image_credit', 0, 0.500, 0, 1,
- 'Grok Imagine 视频 1.5：每条 0.5 媒体积分，T2V/I2V 可到 1080p，R2V 最高 720p')
+ 'Grok Imagine 视频 1.5：480p/720p 每秒 0.5 媒体积分，1080p 每秒 1 媒体积分')
 ON DUPLICATE KEY UPDATE
     `display_name` = VALUES(`display_name`),
     `model_type` = VALUES(`model_type`),
@@ -48,7 +48,7 @@ WHERE um.model_name IN ('grok-imagine-image', 'grok-imagine-image-2.0')
 INSERT INTO `model_image_resolution_rule` (
     `unified_model_id`, `resolution_code`, `enabled`, `credit_cost`, `is_default`, `sort_order`
 )
-SELECT um.id, '2K', 1, 0.500, 0, 20
+SELECT um.id, '2K', 1, 1.000, 0, 20
 FROM `unified_model` um
 WHERE um.model_name IN ('grok-imagine-image', 'grok-imagine-image-2.0')
   AND NOT EXISTS (
@@ -58,7 +58,11 @@ WHERE um.model_name IN ('grok-imagine-image', 'grok-imagine-image-2.0')
 
 UPDATE `model_image_resolution_rule` r
 JOIN `unified_model` um ON um.id = r.unified_model_id
-SET r.credit_cost = 0.500
+SET r.credit_cost = CASE r.resolution_code
+    WHEN '1K' THEN 0.500
+    WHEN '2K' THEN 1.000
+    ELSE r.credit_cost
+END
 WHERE um.model_name IN ('grok-imagine-image', 'grok-imagine-image-2.0');
 
 -- 管理员创建 grok-imagine 渠道后执行（替换渠道名称）：

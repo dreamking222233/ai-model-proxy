@@ -229,10 +229,13 @@
         <a-alert v-if="errorMessage" type="error" :message="errorMessage" show-icon />
 
         <div class="action-row">
-          <a-button type="primary" size="large" :loading="busy" :disabled="!canSubmit" @click="submit">
-            <a-icon :type="mode === 'image' ? 'picture' : 'video-camera'" />
-            {{ submitText }}
-          </a-button>
+          <div class="action-submit">
+            <a-button type="primary" size="large" :loading="busy" :disabled="!canSubmit" @click="submit">
+              <a-icon :type="mode === 'image' ? 'picture' : 'video-camera'" />
+              {{ submitText }}
+            </a-button>
+            <span class="credit-estimate">当前预估 {{ formatCredit(estimatedCredits) }} 积分</span>
+          </div>
           <a-button size="large" :disabled="busy || !results.length" @click="clearResults">
             清空结果
           </a-button>
@@ -760,6 +763,35 @@ export default {
     submitText() {
       if (this.mode === 'video') return '生成视频'
       return this.imageMode === 'reference' ? '基于参考图生成' : '开始生图'
+    },
+    estimatedCredits() {
+      if (this.mode === 'image') {
+        const rules = Array.isArray(this.currentImageModelMeta.image_resolution_rules)
+          ? this.currentImageModelMeta.image_resolution_rules.filter(rule => Number(rule.enabled) === 1)
+          : []
+        const matched = rules.find(rule => String(rule.resolution_code || '').toUpperCase() === String(this.imageSize || '').toUpperCase())
+        const fallback = rules.find(rule => Number(rule.is_default) === 1) || rules[0]
+        let perImage = Number(
+          (matched && matched.credit_cost) ||
+          (fallback && fallback.credit_cost) ||
+          this.currentImageModelMeta.image_credit_multiplier ||
+          0.5
+        )
+        if (!Number.isFinite(perImage) || perImage < 0) perImage = 0
+        const count = Number(this.imageCount) || 1
+        return perImage * count
+      }
+      const seconds = Number(this.videoSeconds) || 0
+      const resolution = String(this.videoResolution || '').toLowerCase()
+      const rates = this.currentVideoCapability.credit_per_second_by_resolution || {}
+      let rate = Number(rates[resolution])
+      if (!Number.isFinite(rate) || rate < 0) {
+        rate = resolution === '1080p'
+          ? 1
+          : Number(this.currentVideoModelMeta.image_credit_multiplier || 0.5)
+      }
+      if (!Number.isFinite(rate) || rate < 0) rate = 0
+      return rate * seconds
     },
     runtimeRelayBase() {
       const configured = String(this.apiBase || '').replace(/\/+$/, '').replace(/\/v1$/i, '')
@@ -2322,6 +2354,26 @@ export default {
   grid-template-columns: 1fr auto;
   gap: 12px;
   margin-top: 20px;
+  align-items: center;
+}
+
+.action-submit {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-submit >>> .ant-btn-primary {
+  flex: 1;
+}
+
+.credit-estimate {
+  flex: 0 0 auto;
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .action-row >>> .ant-btn {
@@ -2708,6 +2760,10 @@ export default {
   .action-row {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .action-submit {
+    width: 100%;
   }
 
   .result-empty {

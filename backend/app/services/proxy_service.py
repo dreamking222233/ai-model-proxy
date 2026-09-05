@@ -14849,7 +14849,12 @@ class ProxyService:
                     user_id=ProxyService._safe_object_id(user),
                 )
                 if ProxyService._is_grok_imagine_channel(channel):
-                    resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
+                    model_multiplier, resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_charge(
+                        normalized_seconds,
+                        channel_resolution_name,
+                        None,
+                        getattr(price_adjustment, "multiplier", 1),
+                    )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
                 admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
@@ -15116,7 +15121,16 @@ class ProxyService:
                     user_id=ProxyService._safe_object_id(user),
                 )
                 if ProxyService._is_grok_imagine_channel(channel):
-                    resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
+                    grok_resolution = ProxyService._normalize_video_resolution_name(
+                        video_config.get("resolution_name") or normalized_resolution_name,
+                        channel,
+                    )
+                    model_multiplier, resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_charge(
+                        normalized_seconds,
+                        grok_resolution,
+                        None,
+                        getattr(price_adjustment, "multiplier", 1),
+                    )
                 video_credit_cost = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
                 admission_decision: Optional[BillingAdmissionDecision] = None
                 if billing_type == "image_credit":
@@ -15825,7 +15839,17 @@ class ProxyService:
                 user_id=ProxyService._safe_object_id(user),
             )
             if ProxyService._is_grok_imagine_channel(channel):
-                resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_total(model_multiplier)
+                grok_resolution = (
+                    request_data.get("resolution_name")
+                    or request_data.get("resolution")
+                    or video_config.get("resolution_name")
+                )
+                model_multiplier, resolved_video_credit_cost = grok_imagine_adapter.resolve_video_credit_charge(
+                    normalized_seconds,
+                    grok_resolution,
+                    None,
+                    route_info.get("adjustment_multiplier") or 1,
+                )
             charged_credits = resolved_video_credit_cost if billing_type == "image_credit" else Decimal("0.000")
         request_id = str(response_body.get("request_id") or uuid.uuid4())
         try:

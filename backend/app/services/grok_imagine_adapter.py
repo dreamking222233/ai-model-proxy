@@ -70,6 +70,12 @@ DEFAULT_VIDEO_ASPECT_RATIO = "16:9"
 DEFAULT_VIDEO_DURATION = 8
 DEFAULT_IMAGE_ASPECT_RATIO = "auto"
 DEFAULT_IMAGE_QUALITY_V2 = "auto"
+VIDEO_CREDIT_PER_SECOND_DEFAULT = Decimal("0.500")
+VIDEO_CREDIT_PER_SECOND = {
+    "480p": Decimal("0.500"),
+    "720p": Decimal("0.500"),
+    "1080p": Decimal("1.000"),
+}
 
 _CONTINUE_STATUSES = {"pending", "queued", "in_progress", "processing", "running", "submitted", "not_start"}
 _COMPLETED_STATUSES = {"completed", "succeeded", "success", "done"}
@@ -562,13 +568,56 @@ def poll_timeout_seconds() -> int:
     return POLL_TIMEOUT_SECONDS
 
 
-def resolve_video_credit_total(adjusted_rate: Any) -> Decimal:
-    """Charge a flat per-video credit amount; duration does not multiply cost."""
+def resolve_video_credit_rate(resolution: Any = None, adjusted_rate: Any = None) -> Decimal:
+    res = str(resolution or "").strip().lower()
+    if res in VIDEO_CREDIT_PER_SECOND:
+        return VIDEO_CREDIT_PER_SECOND[res]
     try:
-        amount = Decimal(str(adjusted_rate or 0)).quantize(Decimal("0.001"))
+        amount = Decimal(str(adjusted_rate if adjusted_rate is not None else VIDEO_CREDIT_PER_SECOND_DEFAULT))
+        return amount.quantize(Decimal("0.001"))
     except (InvalidOperation, TypeError, ValueError):
-        amount = Decimal("0.000")
-    return amount
+        return VIDEO_CREDIT_PER_SECOND_DEFAULT
+
+
+def resolve_video_credit_total(
+    seconds: Any = None,
+    resolution: Any = None,
+    adjusted_rate: Any = None,
+    adjustment_multiplier: Any = None,
+) -> Decimal:
+    """Charge per second: 480p/720p 0.5, 1080p 1.0, then optional price adjustment."""
+    rate = resolve_video_credit_rate(resolution, adjusted_rate)
+    try:
+        adj = Decimal(str(adjustment_multiplier if adjustment_multiplier is not None else 1))
+    except (InvalidOperation, TypeError, ValueError):
+        adj = Decimal("1")
+    if adj <= Decimal("0"):
+        adj = Decimal("1")
+    try:
+        secs = int(seconds or 0)
+    except (TypeError, ValueError):
+        secs = 0
+    if secs < 0:
+        secs = 0
+    return (rate * adj * Decimal(secs)).quantize(Decimal("0.001"))
+
+
+def resolve_video_credit_charge(
+    seconds: Any = None,
+    resolution: Any = None,
+    adjusted_rate: Any = None,
+    adjustment_multiplier: Any = None,
+) -> tuple[Decimal, Decimal]:
+    rate = resolve_video_credit_rate(resolution, adjusted_rate)
+    try:
+        adj = Decimal(str(adjustment_multiplier if adjustment_multiplier is not None else 1))
+    except (InvalidOperation, TypeError, ValueError):
+        adj = Decimal("1")
+    if adj <= Decimal("0"):
+        adj = Decimal("1")
+    charged_rate = (rate * adj).quantize(Decimal("0.001"))
+    total = resolve_video_credit_total(seconds, resolution, adjusted_rate, adj)
+    return charged_rate, total
 
 
 def image_workbench_capabilities(model_name: Optional[str]) -> dict[str, Any]:
@@ -620,4 +669,7 @@ def video_workbench_capabilities(model_name: Optional[str]) -> dict[str, Any]:
         "poll_timeout_seconds": POLL_TIMEOUT_SECONDS,
         "supports_preset": False,
         "upstream_family": PROVIDER_VARIANT,
+        "credit_per_second_by_resolution": {
+            key: float(value) for key, value in VIDEO_CREDIT_PER_SECOND.items()
+        },
     }

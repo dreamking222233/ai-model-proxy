@@ -321,10 +321,13 @@
           <div v-if="isImageRequest(record)" class="token-cell token-cell--image">
             <div class="image-credit-row">
               <span class="image-credit-main">{{ formatNumber(getImageCreditsDisplay(record)) }} 图片积分</span>
-              <span class="image-credit-meta">{{ getImageCountDisplay(record) }} 张<span v-if="getImageSizeText(record)"> · {{ getImageSizeText(record) }}</span> · {{ getRequestTypeText(record) }}</span>
+              <span class="image-credit-meta">
+                <template v-if="isVideoRequest(record)">{{ getImageSizeText(record) || '视频生成' }}</template>
+                <template v-else>{{ getImageCountDisplay(record) }} 张<span v-if="getImageSizeText(record)"> · {{ getImageSizeText(record) }}</span> · {{ getRequestTypeText(record) }}</template>
+              </span>
             </div>
             <div class="cache-detail cache-detail--image">
-              <span class="cache-chip cache-chip--token">图片生成</span>
+              <span class="cache-chip cache-chip--token">{{ isVideoRequest(record) ? '视频生成' : '图片生成' }}</span>
               <span class="cache-chip cache-chip--miss">Non-stream</span>
             </div>
           </div>
@@ -850,6 +853,9 @@ export default {
       }
       return map[status] || 'default'
     },
+    isVideoRequest(record) {
+      return !!record && String(record.request_type || '') === 'video_generation'
+    },
     isImageRequest(record) {
       return record && (record.request_type === 'image_generation' || record.billing_type === 'image_credit')
     },
@@ -878,6 +884,7 @@ export default {
     getRequestTypeText(record) {
       const map = {
         image_generation: '图片请求',
+        video_generation: '视频生成',
         responses: 'Responses',
         chat: '文本请求'
       }

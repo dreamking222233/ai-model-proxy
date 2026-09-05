@@ -402,6 +402,23 @@ def log_size_from_aspect_ratio(aspect_ratio: str) -> str:
     return VIDEO_ASPECT_RATIO_SIZE_MAP.get(aspect_ratio, "1280x720")
 
 
+def format_video_log_size(seconds: Any = None, resolution: Any = None) -> str:
+    res = str(resolution or DEFAULT_VIDEO_RESOLUTION).strip().lower() or DEFAULT_VIDEO_RESOLUTION
+    try:
+        secs = int(seconds or 0)
+    except (TypeError, ValueError):
+        secs = 0
+    return f"{secs}s {res}"[:16]
+
+
+def resolution_from_log_size(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace(" ", "")
+    for token in ("1080p", "720p", "480p"):
+        if token in raw:
+            return token
+    return ""
+
+
 def build_video_generation_payload(
     *,
     model: str,

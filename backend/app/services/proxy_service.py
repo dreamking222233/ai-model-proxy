@@ -14001,7 +14001,9 @@ class ProxyService:
             )
         seconds = int(payload.get("duration") or grok_imagine_adapter.DEFAULT_VIDEO_DURATION)
         aspect_ratio = str(payload.get("aspect_ratio") or grok_imagine_adapter.DEFAULT_VIDEO_ASPECT_RATIO)
-        size = grok_imagine_adapter.log_size_from_aspect_ratio(aspect_ratio)
+        resolution = str(payload.get("resolution") or grok_imagine_adapter.DEFAULT_VIDEO_RESOLUTION)
+        pixel_size = grok_imagine_adapter.log_size_from_aspect_ratio(aspect_ratio)
+        size = grok_imagine_adapter.format_video_log_size(seconds, resolution)
         url = grok_imagine_adapter.resolve_video_create_url(channel.base_url)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
@@ -14034,9 +14036,9 @@ class ProxyService:
             model=upstream_model_name,
             prompt=prompt,
             seconds=seconds,
-            size=size,
+            size=pixel_size,
             aspect_ratio=aspect_ratio,
-            resolution=payload.get("resolution"),
+            resolution=resolution,
         )
         video_id = str(normalized_body.get("id") or "").strip()
         response_time_ms = int((time.time() - start_time) * 1000)
@@ -14112,7 +14114,8 @@ class ProxyService:
             "video_credit_rate_per_second": float(model_multiplier),
             "request_type": "video_generation",
             "video_count": 1,
-            "size": size,
+            "size": pixel_size,
+            "resolution": resolution,
             "seconds": int(seconds),
             "billing_status": "charged" if bill_on_create else "pending_completion",
         }
@@ -16059,6 +16062,15 @@ class ProxyService:
             model_multiplier = Decimal("1.000")
         if billing_type == "image_credit" and charged_credits <= Decimal("0"):
             return False
+
+        if ProxyService._is_grok_imagine_channel(channel) and billing_type == "image_credit" and video_seconds > 0:
+            grok_resolution = grok_imagine_adapter.resolution_from_log_size(video_size)
+            model_multiplier, charged_credits = grok_imagine_adapter.resolve_video_credit_charge(
+                video_seconds,
+                grok_resolution,
+                None,
+                adjustment_multiplier if adjustment_multiplier is not None else 1,
+            )
 
         if billing_type == "request":
             unified_model = ProxyService._resolve_requested_model_or_raise(

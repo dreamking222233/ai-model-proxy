@@ -16,12 +16,20 @@ async def trigger_manual_check():
 
 def update_check_interval(interval_seconds: int):
     """Update the health check interval dynamically"""
+    if interval_seconds <= 0:
+        raise ValueError("health check interval must be positive")
     try:
+        job = scheduler.get_job('health_check')
+        if job is None:
+            logger.warning("Health check job is not registered; interval will apply on next startup")
+            return False
         scheduler.reschedule_job(
             'health_check',
             trigger='interval',
             seconds=interval_seconds,
         )
         logger.info(f"Health check interval updated to {interval_seconds}s")
+        return True
     except Exception as e:
         logger.error(f"Failed to update health check interval: {e}")
+        return False

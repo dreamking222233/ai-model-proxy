@@ -67,6 +67,17 @@ def _upsert_config(db: Session, key: str, value: str, description: str) -> None:
     ))
 
 
+def _parse_health_check_interval(value: str) -> int:
+    """Validate the scheduler interval before persisting it."""
+    try:
+        interval = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ServiceException(400, "健康检查间隔必须是正整数", "INVALID_HEALTH_CHECK_INTERVAL")
+    if interval <= 0:
+        raise ServiceException(400, "健康检查间隔必须是正整数", "INVALID_HEALTH_CHECK_INTERVAL")
+    return interval
+
+
 def _announcement_to_dict(item: PlatformAnnouncement) -> dict:
     return {
         "id": item.id,
@@ -133,6 +144,10 @@ def update_config(
         from app.core.exceptions import ServiceException
         raise ServiceException(404, "Config not found")
     config_value = data.config_value
+    health_check_interval = None
+    if config.config_key == "health_check_interval":
+        health_check_interval = _parse_health_check_interval(config_value)
+        config_value = str(health_check_interval)
     if config.config_key == "api_base_url":
         from app.services.agent_service import AgentService
 
@@ -142,6 +157,12 @@ def update_config(
         config.description = data.description
     db.commit()
     db.refresh(config)
+    if health_check_interval is not None:
+        # The scheduler reads this setting at startup; reschedule it immediately
+        # so an admin change does not require a backend restart.
+        from app.tasks.health_check import update_check_interval
+
+        update_check_interval(health_check_interval)
     return ResponseModel(data={
         "id": config.id,
         "config_key": config.config_key,

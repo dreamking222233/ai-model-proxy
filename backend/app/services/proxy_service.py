@@ -317,10 +317,35 @@ class ProxyService:
         return resolved_model
 
     @staticmethod
+    def _resolve_request_model_series(
+        unified_model: Optional[UnifiedModel] = None,
+        requested_model: Optional[str] = None,
+    ) -> str:
+        model_name = getattr(unified_model, "model_name", None) or requested_model
+        raw_series = getattr(unified_model, "model_series", None)
+        try:
+            return ModelService.normalize_model_series(raw_series, model_name)
+        except ServiceException:
+            return ModelService.infer_model_series(model_name)
+
+    @staticmethod
+    def _subscription_covers_request(
+        subscription,
+        unified_model: Optional[UnifiedModel] = None,
+        requested_model: Optional[str] = None,
+    ) -> bool:
+        return SubscriptionService.subscription_covers_model_series(
+            subscription,
+            ProxyService._resolve_request_model_series(unified_model, requested_model),
+        )
+
+    @staticmethod
     def _assert_text_request_allowed(
         db: Session,
         user: SysUser,
         quota_precheck: Optional[dict[str, Decimal]] = None,
+        unified_model: Optional[UnifiedModel] = None,
+        requested_model: Optional[str] = None,
     ) -> BillingAdmissionDecision:
         """Validate whether a text request can proceed under the user's current billing mode."""
         had_subscription_cache = user.subscription_type in {"unlimited", "quota"} or bool(user.subscription_expires_at)
@@ -332,6 +357,18 @@ class ProxyService:
         # Persist subscription-state refresh before the request session is proactively released.
         db.commit()
         if active_subscription:
+            if not ProxyService._subscription_covers_request(
+                active_subscription,
+                unified_model,
+                requested_model,
+            ):
+                if ProxyService._can_balance_cover_text_precheck(db, user.id, quota_precheck):
+                    return ProxyService._build_billing_admission_decision(
+                        db,
+                        user.id,
+                        active_subscription=active_subscription,
+                    )
+                raise ProxyService._build_balance_precheck_insufficient_error()
             plan_kind = active_subscription.plan_kind_snapshot or SubscriptionService.PLAN_KIND_UNLIMITED
             if plan_kind in {
                 SubscriptionService.PLAN_KIND_DAILY_QUOTA,
@@ -345,7 +382,13 @@ class ProxyService:
                         "SUBSCRIPTION_DAILY_QUOTA_EXCEEDED",
                     }:
                         raise
-                    if ProxyService._can_fallback_to_balance_for_quota_precheck(db, user.id, quota_precheck):
+                    if ProxyService._can_fallback_to_balance_for_quota_precheck(
+                        db,
+                        user.id,
+                        quota_precheck,
+                        unified_model=unified_model,
+                        requested_model=requested_model,
+                    ):
                         return ProxyService._build_billing_admission_decision(
                             db,
                             user.id,
@@ -357,6 +400,8 @@ class ProxyService:
                         db,
                         user.id,
                         quota_precheck,
+                        unified_model=unified_model,
+                        requested_model=requested_model,
                     )
                     if not ProxyService._can_balance_cover_exact_amount(
                         db,
@@ -615,6 +660,8 @@ class ProxyService:
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
+        unified_model: Optional[UnifiedModel] = None,
+        requested_model: Optional[str] = None,
     ) -> bool:
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
@@ -626,6 +673,8 @@ class ProxyService:
             db,
             user_id,
             quota_precheck,
+            unified_model=unified_model,
+            requested_model=requested_model,
         )
         requested_amount = SubscriptionService._normalize_decimal(estimated_balance_charge)
         exact_cost = ProxyService._precheck_requires_exact_cost(quota_precheck)
@@ -668,6 +717,8 @@ class ProxyService:
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
+        unified_model: Optional[UnifiedModel] = None,
+        requested_model: Optional[str] = None,
     ) -> Optional[Decimal]:
         estimated_total_cost = None
         if quota_precheck:
@@ -681,7 +732,15 @@ class ProxyService:
             user_id,
             SubscriptionService.get_current_time(),
         )
-        if not active_subscription or not SubscriptionService._requires_daily_cycle(active_subscription):
+        if (
+            not active_subscription
+            or not SubscriptionService._requires_daily_cycle(active_subscription)
+            or not ProxyService._subscription_covers_request(
+                active_subscription,
+                unified_model,
+                requested_model,
+            )
+        ):
             return estimated_total_cost
 
         cycle = SubscriptionService._get_or_create_cycle(
@@ -6147,7 +6206,13 @@ class ProxyService:
                 unified_model,
                 user_id=ProxyService._safe_object_id(user),
             )
-        admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+        admission_decision = ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck=quota_precheck,
+            unified_model=unified_model,
+            requested_model=requested_model,
+        )
 
         channels = ProxyService._prioritize_channels_for_request(
             ModelService.get_available_channels(db, unified_model.id),
@@ -7556,7 +7621,13 @@ class ProxyService:
                 )
 
                 # 1. Check user entitlement before request
-                admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+                admission_decision = ProxyService._assert_text_request_allowed(
+                    db,
+                    user,
+                    quota_precheck=quota_precheck,
+                    unified_model=unified_model,
+                    requested_model=requested_model,
+                )
 
                 # 3. Get available channels sorted by priority
                 channels = ProxyService._prioritize_channels_for_request(
@@ -7840,7 +7911,13 @@ class ProxyService:
             )
 
             # 1. Check user entitlement before request
-            admission_decision = ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+            admission_decision = ProxyService._assert_text_request_allowed(
+                db,
+                user,
+                quota_precheck=quota_precheck,
+                unified_model=unified_model,
+                requested_model=requested_model,
+            )
 
             # 3. Get available channels
             channels = ProxyService._prioritize_channels_for_request(
@@ -11829,7 +11906,14 @@ class ProxyService:
             bonus_consumed_amount = Decimal("0")
             if int(getattr(unified_model, "bonus_quota_enabled", 0) or 0) and total_cost_decimal > 0:
                 bonus_consumed_amount = SubscriptionBonusService.consume_available(
-                    write_db, fresh_user.id, total_cost_decimal, usage_now
+                    write_db,
+                    fresh_user.id,
+                    total_cost_decimal,
+                    usage_now,
+                    model_series=ProxyService._resolve_request_model_series(
+                        unified_model,
+                        requested_model,
+                    ),
                 )
                 total_cost_decimal -= bonus_consumed_amount
             quota_cost_for_request = Decimal(str(quota_cost or 0))
@@ -11883,10 +11967,17 @@ class ProxyService:
                     fresh_user.id,
                     usage_now,
                 )
-                if not active_subscription:
+                subscription_covers_model = ProxyService._subscription_covers_request(
+                    active_subscription,
+                    unified_model,
+                    requested_model,
+                )
+                if not active_subscription or not subscription_covers_model:
                     if balance_can_pay_next_charge(total_cost_decimal):
                         billing_mode = "balance"
                         balance_before, balance_after = apply_balance_charge(total_cost_decimal)
+                    elif active_subscription and not subscription_covers_model:
+                        raise ProxyService._build_balance_precheck_insufficient_error()
                     else:
                         raise ServiceException(
                             403,
@@ -13648,7 +13739,12 @@ class ProxyService:
             unified_model,
             user_id=ProxyService._safe_object_id(user),
         )
-        return ProxyService._assert_text_request_allowed(db, user, quota_precheck=quota_precheck)
+        return ProxyService._assert_text_request_allowed(
+            db,
+            user,
+            quota_precheck=quota_precheck,
+            unified_model=unified_model,
+        )
 
     @staticmethod
     def _log_video_request_success(

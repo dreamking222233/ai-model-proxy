@@ -407,6 +407,46 @@ class SubscriptionService:
         }
 
     @staticmethod
+    def parse_model_series_list(raw) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        else:
+            text = str(raw).strip()
+            if not text or text in {"[]", "null", "none"}:
+                return []
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = [part.strip() for part in text.split(",") if part.strip()]
+            values = parsed if isinstance(parsed, list) else []
+        result = []
+        seen = set()
+        for item in values:
+            series = str(item or "").strip().lower()
+            if series and series not in seen:
+                seen.add(series)
+                result.append(series)
+        return result
+
+    @staticmethod
+    def subscription_covers_model_series(subscription: Optional[UserSubscription], model_series: Optional[str]) -> bool:
+        if subscription is None:
+            return False
+        scope = str(getattr(subscription, "model_scope_snapshot", None) or "all_models").strip().lower()
+        if scope != "selected_series":
+            return True
+        allowed = set(
+            SubscriptionService.parse_model_series_list(
+                getattr(subscription, "model_series_snapshot", None)
+            )
+        )
+        if not allowed:
+            return False
+        return str(model_series or "").strip().lower() in allowed
+
+    @staticmethod
     def _get_effective_quota_metric(subscription: UserSubscription) -> str:
         return SubscriptionService._resolve_subscription_quota_strategy(subscription)["quota_metric"]
 

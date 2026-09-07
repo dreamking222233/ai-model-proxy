@@ -157,7 +157,15 @@ class SubscriptionBonusService:
         return cycle
 
     @staticmethod
-    def consume_available(db: Session, user_id: int, amount: Decimal, now) -> Decimal:
+    def _grant_covers_model_series(grant: SubscriptionBonusGrant, model_series: str | None) -> bool:
+        allowed = set(SubscriptionService.parse_model_series_list(grant.model_series))
+        if not allowed:
+            return True
+        series = str(model_series or "").strip().lower()
+        return bool(series) and series in allowed
+
+    @staticmethod
+    def consume_available(db: Session, user_id: int, amount: Decimal, now, model_series: str | None = None) -> Decimal:
         """Consume promotional USD quota from earliest-expiring active grants."""
         remaining = Decimal(str(amount or 0))
         consumed = Decimal("0")
@@ -172,6 +180,8 @@ class SubscriptionBonusService:
         for grant in grants:
             if remaining <= 0:
                 break
+            if not SubscriptionBonusService._grant_covers_model_series(grant, model_series):
+                continue
             cycle = SubscriptionBonusService.get_or_create_cycle(db, grant, now)
             if not cycle:
                 continue

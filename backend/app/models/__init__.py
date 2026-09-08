@@ -62,7 +62,8 @@ from app.models.promotion import (
 from app.models.activity import DragonBoatLotteryEntry
 from app.models.subscription_bonus import (
     SubscriptionBonusGrant, SubscriptionBonusUsageCycle,
-    SubscriptionPlanModelSeries, UserSubscriptionModelSeries,
+    SubscriptionPlanModel, SubscriptionPlanModelSeries,
+    UserSubscriptionModel, UserSubscriptionModelSeries,
 )
 
 __all__ = [
@@ -119,4 +120,5 @@ __all__ = [
     "DragonBoatLotteryEntry",
     "SubscriptionBonusGrant", "SubscriptionBonusUsageCycle",
     "SubscriptionPlanModelSeries", "UserSubscriptionModelSeries",
+    "SubscriptionPlanModel", "UserSubscriptionModel",
 ]

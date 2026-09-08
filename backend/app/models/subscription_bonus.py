@@ -62,3 +62,21 @@ class UserSubscriptionModelSeries(Base):
     subscription_id = Column(BigInteger, nullable=False, index=True)
     model_series = Column(String(32), nullable=False, index=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class SubscriptionPlanModel(Base):
+    __tablename__ = "subscription_plan_model"
+    __table_args__ = (UniqueConstraint("plan_id", "unified_model_id", name="uk_plan_model"),)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    plan_id = Column(BigInteger, nullable=False, index=True)
+    unified_model_id = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class UserSubscriptionModel(Base):
+    __tablename__ = "user_subscription_model"
+    __table_args__ = (UniqueConstraint("subscription_id", "unified_model_id", name="uk_subscription_model"),)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    subscription_id = Column(BigInteger, nullable=False, index=True)
+    unified_model_id = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())

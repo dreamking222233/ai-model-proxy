@@ -21,7 +21,13 @@ from app.models.log import (
 )
 from app.models.payment import PaymentRechargeOrder
 from app.models.user import SysUser
-from app.models.subscription_bonus import SubscriptionPlanModelSeries, UserSubscriptionModelSeries
+from app.models.model import UnifiedModel
+from app.models.subscription_bonus import (
+    SubscriptionPlanModel,
+    SubscriptionPlanModelSeries,
+    UserSubscriptionModel,
+    UserSubscriptionModelSeries,
+)
 
 
 class SubscriptionService:
@@ -431,20 +437,90 @@ class SubscriptionService:
         return result
 
     @staticmethod
+    def _assert_allowed_model_ids_exist(db: Session, model_ids: list[int]) -> None:
+        if not model_ids:
+            return
+        existing_ids = {
+            int(row[0])
+            for row in db.query(UnifiedModel.id).filter(UnifiedModel.id.in_(model_ids)).all()
+        }
+        missing = [model_id for model_id in model_ids if model_id not in existing_ids]
+        if missing:
+            raise ServiceException(400, "指定模型不存在或已删除", "ALLOWED_MODEL_NOT_FOUND")
+
+    @staticmethod
+    def parse_model_id_list(raw) -> list[int]:
+        if raw is None:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        else:
+            text = str(raw).strip()
+            if not text or text in {"[]", "null", "none"}:
+                return []
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = [part.strip() for part in text.split(",") if part.strip()]
+            values = parsed if isinstance(parsed, list) else []
+        result = []
+        seen = set()
+        for item in values:
+            try:
+                model_id = int(item)
+            except (TypeError, ValueError):
+                continue
+            if model_id > 0 and model_id not in seen:
+                seen.add(model_id)
+                result.append(model_id)
+        return result
+
+    @staticmethod
     def subscription_covers_model_series(subscription: Optional[UserSubscription], model_series: Optional[str]) -> bool:
+        return SubscriptionService.subscription_covers_request(
+            subscription,
+            model_series=model_series,
+        )
+
+    @staticmethod
+    def subscription_covers_request(
+        subscription: Optional[UserSubscription],
+        unified_model=None,
+        model_series: Optional[str] = None,
+        requested_model: Optional[str] = None,
+    ) -> bool:
+        """Return whether this subscription quota may cover the requested model.
+
+        ``all_models`` and any unrecognized/legacy scope keep current behavior:
+        the package still covers every model and still deducts quota. Only the
+        explicit restricted scopes skip quota for unmatched models.
+        """
         if subscription is None:
             return False
         scope = str(getattr(subscription, "model_scope_snapshot", None) or "all_models").strip().lower()
-        if scope != "selected_series":
+        if scope not in {"selected_series", "selected_models"}:
             return True
-        allowed = set(
-            SubscriptionService.parse_model_series_list(
-                getattr(subscription, "model_series_snapshot", None)
+        if scope == "selected_series":
+            allowed = set(
+                SubscriptionService.parse_model_series_list(
+                    getattr(subscription, "model_series_snapshot", None)
+                )
+            )
+            if not allowed:
+                return False
+            return str(model_series or "").strip().lower() in allowed
+        allowed_ids = set(
+            SubscriptionService.parse_model_id_list(
+                getattr(subscription, "allowed_model_ids_snapshot", None)
             )
         )
-        if not allowed:
+        if not allowed_ids:
             return False
-        return str(model_series or "").strip().lower() in allowed
+        model_id = getattr(unified_model, "id", None)
+        try:
+            return int(model_id) in allowed_ids
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _get_effective_quota_metric(subscription: UserSubscription) -> str:
@@ -645,18 +721,29 @@ class SubscriptionService:
     def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
         payload = dict(data)
         scope = str(payload.get("model_scope", "all_models") or "all_models").strip().lower()
-        if scope not in {"all_models", "selected_series"}:
+        if scope not in {"all_models", "selected_series", "selected_models"}:
             raise ServiceException(400, "套餐模型范围不合法", "INVALID_MODEL_SCOPE")
         series = [str(v).strip().lower() for v in (payload.get("model_series") or [])]
         allowed_series = {"gpt", "claude", "grok", "gemini", "other"}
+        allowed_model_ids = SubscriptionService.parse_model_id_list(payload.get("allowed_model_ids") or [])
         if scope == "selected_series" and (not series or any(v not in allowed_series for v in series) or len(set(series)) != len(series)):
             raise ServiceException(400, "套餐模型系列必须为非空且合法的集合", "INVALID_MODEL_SERIES")
+        if scope == "selected_models" and not allowed_model_ids:
+            raise ServiceException(400, "指定模型套餐必须选择至少一个模型", "INVALID_ALLOWED_MODELS")
         if scope == "all_models" and series:
             raise ServiceException(400, "全部模型套餐不应设置模型系列", "MODEL_SERIES_SCOPE_CONFLICT")
-        if (not is_update) or "model_scope" in payload:
+        if scope == "all_models" and allowed_model_ids:
+            raise ServiceException(400, "全部模型套餐不应指定模型名单", "ALLOWED_MODELS_SCOPE_CONFLICT")
+        if scope == "selected_series" and allowed_model_ids:
+            raise ServiceException(400, "指定系列套餐不应同时指定模型名单", "ALLOWED_MODELS_SCOPE_CONFLICT")
+        if scope == "selected_models" and series:
+            raise ServiceException(400, "指定模型套餐不应同时设置模型系列", "MODEL_SERIES_SCOPE_CONFLICT")
+        if (not is_update) or "model_scope" in data:
             payload["model_scope"] = scope
-        if (not is_update) or "model_series" in payload:
-            payload["model_series"] = series
+        if (not is_update) or "model_series" in data or "model_scope" in data:
+            payload["model_series"] = series if scope == "selected_series" else []
+        if (not is_update) or "allowed_model_ids" in data or "model_scope" in data:
+            payload["allowed_model_ids"] = allowed_model_ids if scope == "selected_models" else []
         plan_kind = str(payload.get("plan_kind") or "").strip() or None
         if not is_update or plan_kind is not None:
             if plan_kind not in {SubscriptionService.PLAN_KIND_UNLIMITED, SubscriptionService.PLAN_KIND_DAILY_QUOTA}:
@@ -789,6 +876,9 @@ class SubscriptionService:
             "description": plan.description,
             "model_scope": getattr(plan, "model_scope", "all_models") or "all_models",
             "model_series": json.loads(plan.model_series) if getattr(plan, "model_series", None) else [],
+            "allowed_model_ids": SubscriptionService.parse_model_id_list(
+                getattr(plan, "allowed_model_ids", None)
+            ),
             "created_at": SubscriptionService._serialize_beijing_dt(plan.created_at),
             "updated_at": SubscriptionService._serialize_beijing_dt(plan.updated_at),
         }
@@ -838,12 +928,16 @@ class SubscriptionService:
             description=payload.get("description"),
             model_scope=payload.get("model_scope", "all_models"),
             model_series=json.dumps(payload.get("model_series", []), ensure_ascii=False),
+            allowed_model_ids=json.dumps(payload.get("allowed_model_ids", []), ensure_ascii=False),
             config_version=1,
         )
         db.add(plan)
         db.flush()
+        SubscriptionService._assert_allowed_model_ids_exist(db, payload.get("allowed_model_ids") or [])
         for series in payload.get("model_series", []):
             db.add(SubscriptionPlanModelSeries(plan_id=plan.id, model_series=series))
+        for model_id in payload.get("allowed_model_ids", []):
+            db.add(SubscriptionPlanModel(plan_id=plan.id, unified_model_id=model_id))
         db.commit()
         db.refresh(plan)
         return SubscriptionService._serialize_plan(plan)
@@ -892,6 +986,13 @@ class SubscriptionService:
             db.query(SubscriptionPlanModelSeries).filter(SubscriptionPlanModelSeries.plan_id == plan.id).delete(synchronize_session=False)
             for series in payload.get("model_series") or []:
                 db.add(SubscriptionPlanModelSeries(plan_id=plan.id, model_series=series))
+        if "allowed_model_ids" in payload:
+            allowed_model_ids = payload.get("allowed_model_ids") or []
+            SubscriptionService._assert_allowed_model_ids_exist(db, allowed_model_ids)
+            plan.allowed_model_ids = json.dumps(allowed_model_ids, ensure_ascii=False)
+            db.query(SubscriptionPlanModel).filter(SubscriptionPlanModel.plan_id == plan.id).delete(synchronize_session=False)
+            for model_id in allowed_model_ids:
+                db.add(SubscriptionPlanModel(plan_id=plan.id, unified_model_id=model_id))
         plan.config_version = int(getattr(plan, "config_version", 1) or 1) + 1
 
         db.commit()
@@ -1010,6 +1111,9 @@ class SubscriptionService:
             "activation_mode": subscription.activation_mode,
             "model_scope": getattr(subscription, "model_scope_snapshot", "all_models") or "all_models",
             "model_series": json.loads(subscription.model_series_snapshot) if getattr(subscription, "model_series_snapshot", None) else [],
+            "allowed_model_ids": SubscriptionService.parse_model_id_list(
+                getattr(subscription, "allowed_model_ids_snapshot", None)
+            ),
             "start_time": SubscriptionService._serialize_beijing_dt(subscription.start_time),
             "end_time": SubscriptionService._serialize_beijing_dt(subscription.end_time),
             "status": SubscriptionService._normalized_subscription_status(subscription),
@@ -1953,10 +2057,13 @@ class SubscriptionService:
         subscription.model_scope_snapshot = getattr(plan, "model_scope", "all_models") or "all_models"
         subscription.config_version_snapshot = int(getattr(plan, "config_version", 1) or 1)
         subscription.model_series_snapshot = getattr(plan, "model_series", None)
+        subscription.allowed_model_ids_snapshot = getattr(plan, "allowed_model_ids", None)
         db.add(subscription)
         db.flush()
         for series in json.loads(subscription.model_series_snapshot or "[]"):
             db.add(UserSubscriptionModelSeries(subscription_id=subscription.id, model_series=series))
+        for model_id in SubscriptionService.parse_model_id_list(subscription.allowed_model_ids_snapshot):
+            db.add(UserSubscriptionModel(subscription_id=subscription.id, unified_model_id=model_id))
         SubscriptionService.refresh_user_subscription_state(db, user_id, now)
         if auto_commit:
             db.commit()

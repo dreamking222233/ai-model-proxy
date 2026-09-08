@@ -450,6 +450,7 @@
           <a-radio-group v-model="planForm.model_scope">
             <a-radio value="all_models">全部模型</a-radio>
             <a-radio value="selected_series">指定系列</a-radio>
+            <a-radio value="selected_models">指定模型</a-radio>
           </a-radio-group>
           <a-select
             v-if="planForm.model_scope === 'selected_series'"
@@ -460,7 +461,19 @@
           >
             <a-select-option v-for="item in modelSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
+          <a-select
+            v-if="planForm.model_scope === 'selected_models'"
+            v-model="planForm.allowed_model_ids"
+            mode="multiple"
+            showSearch
+            optionFilterProp="children"
+            placeholder="选择可抵扣额度的模型"
+            style="width: 100%; margin-top: 8px"
+          >
+            <a-select-option v-for="item in modelOptions" :key="item.id" :value="item.id">{{ item.model_name }}</a-select-option>
+          </a-select>
           <div v-if="planForm.model_scope === 'selected_series'" class="form-tip">多个系列共享同一份每日额度，不会分别获得额度。</div>
+          <div v-if="planForm.model_scope === 'selected_models'" class="form-tip">仅勾选的模型走该套餐额度，其它模型按余额计费并记账。已开通用户以开通时的模型名单为准。</div>
         </a-form-item>
         <a-row :gutter="12">
           <a-col :span="8">
@@ -655,6 +668,7 @@ import {
   cancelBonusGrant
 } from '@/api/subscription'
 import { getUser, listUsers } from '@/api/user'
+import { listModels } from '@/api/model'
 import { formatBeijingTime as formatDate } from '@/utils'
 
 const defaultUsageSummary = () => ({
@@ -680,7 +694,8 @@ const defaultPlanForm = () => ({
   online_sale_enabled: 0,
   description: '',
   model_scope: 'all_models',
-  model_series: []
+  model_series: [],
+  allowed_model_ids: []
 })
 
 export default {
@@ -697,6 +712,7 @@ export default {
         { value: 'gpt', label: 'GPT' }, { value: 'claude', label: 'Claude' },
         { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }, { value: 'other', label: '其他' }
       ],
+      modelOptions: [],
       grantLoading: false,
       legacyLoading: false,
       userSearchLoading: false,
@@ -822,6 +838,7 @@ export default {
       }
     }
     this.fetchPlans()
+    this.fetchModelOptions()
     this.fetchActiveUsers()
     this.fetchList()
   },
@@ -958,6 +975,25 @@ export default {
         console.error('Failed to preload user option:', error)
       }
     },
+    async fetchModelOptions() {
+      try {
+        const pageSize = 100
+        let page = 1
+        let total = 0
+        const models = []
+        do {
+          const res = await listModels({ page, page_size: pageSize })
+          const data = res.data || {}
+          const list = data.list || data.items || []
+          models.push(...list)
+          total = Number(data.total || models.length)
+          page += 1
+        } while (models.length < total && page <= 20)
+        this.modelOptions = models
+      } catch (error) {
+        console.error('Failed to load model options:', error)
+      }
+    },
     async fetchPlans() {
       this.planLoading = true
       try {
@@ -988,7 +1024,8 @@ export default {
           online_sale_enabled: Number(record.online_sale_enabled || 0),
           description: record.description,
           model_scope: record.model_scope || (record.model_series && record.model_series.length ? 'selected_series' : 'all_models'),
-          model_series: Array.isArray(record.model_series) ? [...record.model_series] : []
+          model_series: Array.isArray(record.model_series) ? [...record.model_series] : [],
+          allowed_model_ids: Array.isArray(record.allowed_model_ids) ? record.allowed_model_ids.map(id => Number(id)) : []
         }
         : defaultPlanForm()
       this.planModalVisible = true
@@ -1000,6 +1037,10 @@ export default {
       }
       if (this.planForm.model_scope === 'selected_series' && (!Array.isArray(this.planForm.model_series) || !this.planForm.model_series.length)) {
         this.$message.warning('指定系列套餐至少选择一个模型系列')
+        return
+      }
+      if (this.planForm.model_scope === 'selected_models' && (!Array.isArray(this.planForm.allowed_model_ids) || !this.planForm.allowed_model_ids.length)) {
+        this.$message.warning('指定模型套餐至少选择一个模型')
         return
       }
       if (this.planForm.plan_kind === 'daily_quota' && (!this.planForm.quota_value || Number(this.planForm.quota_value) <= 0)) {
@@ -1016,10 +1057,17 @@ export default {
       }
       this.planSaving = true
       try {
+        const payload = {
+          ...this.planForm,
+          model_series: this.planForm.model_scope === 'selected_series' ? this.planForm.model_series : [],
+          allowed_model_ids: this.planForm.model_scope === 'selected_models'
+            ? (this.planForm.allowed_model_ids || []).map(id => Number(id))
+            : []
+        }
         if (this.editingPlanId) {
-          await updateSubscriptionPlan(this.editingPlanId, this.planForm)
+          await updateSubscriptionPlan(this.editingPlanId, payload)
         } else {
-          await createSubscriptionPlan(this.planForm)
+          await createSubscriptionPlan(payload)
         }
         this.$message.success(this.editingPlanId ? '套餐模板更新成功' : '套餐模板创建成功')
         this.planModalVisible = false

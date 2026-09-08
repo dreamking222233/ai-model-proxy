@@ -39,8 +39,9 @@ class SubscriptionPlanRequest(BaseModel):
     agent_cost_price_cny: Optional[float] = Field(0, ge=0, description="代理拿货价 RMB")
     online_sale_enabled: Optional[int] = Field(0, ge=0, le=1, description="是否允许前台购买")
     description: Optional[str] = Field(None, max_length=255, description="描述")
-    model_scope: str = Field("all_models", description="all_models/selected_series")
+    model_scope: str = Field("all_models", description="all_models/selected_series/selected_models")
     model_series: list[str] = Field(default_factory=list)
+    allowed_model_ids: list[int] = Field(default_factory=list)
 
 
 class ActivatePlanSubscriptionRequest(BaseModel):

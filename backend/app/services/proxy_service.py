@@ -334,9 +334,11 @@ class ProxyService:
         unified_model: Optional[UnifiedModel] = None,
         requested_model: Optional[str] = None,
     ) -> bool:
-        return SubscriptionService.subscription_covers_model_series(
+        return SubscriptionService.subscription_covers_request(
             subscription,
-            ProxyService._resolve_request_model_series(unified_model, requested_model),
+            unified_model=unified_model,
+            model_series=ProxyService._resolve_request_model_series(unified_model, requested_model),
+            requested_model=requested_model,
         )
 
     @staticmethod

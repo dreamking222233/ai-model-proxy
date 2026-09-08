@@ -467,6 +467,7 @@ class UserSubscription(Base):
     model_scope_snapshot = Column(String(20), nullable=False, default="all_models")
     config_version_snapshot = Column(BigInteger, nullable=False, default=1)
     model_series_snapshot = Column(Text, nullable=True, comment="JSON array of subscribed model series")
+    allowed_model_ids_snapshot = Column(Text, nullable=True, comment="JSON array of allowed unified_model IDs")
     reset_period = Column(String(20), nullable=True, default="day")
     reset_timezone = Column(String(64), nullable=True, default="Asia/Shanghai")
     activation_mode = Column(String(20), nullable=True, default="append")
@@ -503,6 +504,7 @@ class SubscriptionPlan(Base):
     model_scope = Column(String(20), nullable=False, default="all_models")
     config_version = Column(BigInteger, nullable=False, default=1)
     model_series = Column(Text, nullable=True, comment="JSON array of selected model series")
+    allowed_model_ids = Column(Text, nullable=True, comment="JSON array of allowed unified_model IDs")
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

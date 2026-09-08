@@ -17,11 +17,12 @@ class SubscriptionPlanPayload(BaseModel):
     quota_value: Optional[Decimal] = Field(None, ge=0)
     model_scope: str = "all_models"
     model_series: List[str] = Field(default_factory=list)
+    allowed_model_ids: List[int] = Field(default_factory=list)
 
     @field_validator("model_scope")
     @classmethod
     def validate_scope(cls, value: str) -> str:
-        if value not in {"all_models", "selected_series"}:
+        if value not in {"all_models", "selected_series", "selected_models"}:
             raise ValueError("model_scope 不合法")
         return value
 
@@ -32,6 +33,20 @@ class SubscriptionPlanPayload(BaseModel):
         if len(set(normalized)) != len(normalized) or any(v not in MODEL_SERIES for v in normalized):
             raise ValueError("model_series 不合法")
         return normalized
+
+    @field_validator("allowed_model_ids")
+    @classmethod
+    def validate_allowed_model_ids(cls, values: List[int]) -> List[int]:
+        result = []
+        seen = set()
+        for item in values or []:
+            model_id = int(item)
+            if model_id <= 0:
+                raise ValueError("allowed_model_ids 不合法")
+            if model_id not in seen:
+                seen.add(model_id)
+                result.append(model_id)
+        return result
 
 
 class SubscriptionBonusGrantCreate(BaseModel):

@@ -2422,8 +2422,18 @@ class ProxyService:
     ) -> dict[str, Any]:
         """Parse CPA/OpenAI cached_tokens into the same upstream-cache shape."""
         usage = usage or {}
-        prompt_tokens = int(usage.get("prompt_tokens") or 0)
-        completion_tokens = int(usage.get("completion_tokens") or 0)
+        prompt_tokens = int(
+            usage.get("prompt_tokens")
+            if usage.get("prompt_tokens") is not None
+            else usage.get("input_tokens")
+            or 0
+        )
+        completion_tokens = int(
+            usage.get("completion_tokens")
+            if usage.get("completion_tokens") is not None
+            else usage.get("output_tokens")
+            or 0
+        )
         details = usage.get("prompt_tokens_details")
         has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
         cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0
@@ -2452,6 +2462,70 @@ class ProxyService:
             "cache_creation_1h_input_tokens": 0,
             "prompt_cache_status": status,
         }
+
+    @staticmethod
+    def _resolve_stream_billing_tokens(
+        request_data: dict,
+        billing_input_tokens: int,
+        billing_output_tokens: int,
+        cache_state: Optional[dict[str, Any]] = None,
+        *,
+        estimate_input: Callable[[dict], int],
+    ) -> tuple[int, int]:
+        """Prefer upstream usage; if the client closed early, fall back to estimates."""
+        usage_map = (cache_state or {}).get("collected_usage") or {}
+        input_tokens = int(billing_input_tokens or 0) or int(usage_map.get("prompt_tokens") or 0)
+        output_tokens = int(billing_output_tokens or 0) or int(usage_map.get("completion_tokens") or 0)
+        if input_tokens <= 0:
+            input_tokens = int(estimate_input(request_data) or 0)
+        if output_tokens <= 0:
+            collector = (cache_state or {}).get("stream_collector")
+            chunks = getattr(collector, "chunks", None) or []
+            text = "".join(
+                str(chunk.get("content") or "")
+                for chunk in chunks
+                if isinstance(chunk, dict)
+            )
+            if text.strip():
+                output_tokens = max(1, int(len(text) / 2.5))
+        return input_tokens, output_tokens
+
+    @staticmethod
+    def _resolve_openai_stream_billing_tokens(
+        request_data: dict,
+        billing_input_tokens: int,
+        billing_output_tokens: int,
+        cache_state: Optional[dict[str, Any]] = None,
+    ) -> tuple[int, int]:
+        """Prefer upstream usage; if the client closed early, fall back to estimates.
+
+        OpenAI-compatible streams often send `usage` only in the last SSE chunk.
+        Codex-like clients may disconnect after the first token or `[DONE]`, which
+        used to finalize the request as success with 0/0 tokens.
+        """
+        return ProxyService._resolve_stream_billing_tokens(
+            request_data,
+            billing_input_tokens,
+            billing_output_tokens,
+            cache_state,
+            estimate_input=ProxyService.estimate_openai_input_tokens,
+        )
+
+    @staticmethod
+    def _resolve_responses_stream_billing_tokens(
+        request_data: dict,
+        billing_input_tokens: int,
+        billing_output_tokens: int,
+        cache_state: Optional[dict[str, Any]] = None,
+    ) -> tuple[int, int]:
+        """Same early-close fallback for Codex /v1/responses streams."""
+        return ProxyService._resolve_stream_billing_tokens(
+            request_data,
+            billing_input_tokens,
+            billing_output_tokens,
+            cache_state,
+            estimate_input=ProxyService.estimate_responses_input_tokens,
+        )
 
     @staticmethod
     def _merge_upstream_cache_usage_into_cache_info(
@@ -6880,6 +6954,12 @@ class ProxyService:
                             (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
                             source="responses_input_tokens_details",
                         )
+                        billed_input, billed_output = ProxyService._resolve_responses_stream_billing_tokens(
+                            request_data,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            cache_state,
+                        )
                         ProxyService._finalize_successful_text_request(
                             db,
                             user,
@@ -6887,8 +6967,8 @@ class ProxyService:
                             unified_model,
                             request_id,
                             requested_model,
-                            billing_input_tokens,
-                            billing_output_tokens,
+                            billed_input,
+                            billed_output,
                             channel,
                             client_ip,
                             response_time_ms,
@@ -8230,9 +8310,15 @@ class ProxyService:
 
         # Ensure stream flag is set
         request_data["stream"] = True
-        # Request usage in streaming (OpenAI supports stream_options)
-        if "stream_options" not in request_data:
-            request_data["stream_options"] = {"include_usage": True}
+        # Always ask upstream for a final usage chunk. Some clients send
+        # stream_options without include_usage, and x5m5x/vLLM then omit it.
+        stream_options = request_data.get("stream_options")
+        if not isinstance(stream_options, dict):
+            stream_options = {}
+        else:
+            stream_options = dict(stream_options)
+        stream_options["include_usage"] = True
+        request_data["stream_options"] = stream_options
 
         model_name = request_data.get("model", requested_model)
 
@@ -8325,13 +8411,20 @@ class ProxyService:
                                 "prompt_cache_status", "BYPASS"
                             )
                             collected_usage["_upstream_cache_usage"] = usage_summary
+                            # Snapshot before yielding. Clients may close as soon as
+                            # they see usage or [DONE], same as Responses streams.
+                            billing_callback(input_tokens, output_tokens, False)
 
                         # 收集文本内容（包括 reasoning_content 和 content）
                         choices = chunk.get("choices", [])
                         if choices:
                             delta = choices[0].get("delta", {})
                             content = delta.get("content", "")
-                            reasoning_content = delta.get("reasoning_content", "")
+                            reasoning_content = (
+                                delta.get("reasoning_content")
+                                or delta.get("reasoning")
+                                or ""
+                            )
                             finish_reason = choices[0].get("finish_reason")
                             if content or reasoning_content or finish_reason:
                                 # 优先收集 reasoning_content，然后是 content
@@ -8446,6 +8539,12 @@ class ProxyService:
                             (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
                             source="openai_prompt_tokens_details",
                         )
+                        billed_input, billed_output = ProxyService._resolve_openai_stream_billing_tokens(
+                            request_data,
+                            billing_input_tokens,
+                            billing_output_tokens,
+                            cache_state,
+                        )
                         ProxyService._finalize_successful_text_request(
                             db,
                             user,
@@ -8453,8 +8552,8 @@ class ProxyService:
                             unified_model,
                             request_id,
                             requested_model,
-                            billing_input_tokens,
-                            billing_output_tokens,
+                            billed_input,
+                            billed_output,
                             channel,
                             client_ip,
                             response_time_ms,
@@ -8543,18 +8642,20 @@ class ProxyService:
             # Some upstreams always return SSE even with stream=false.
             # Detect and parse SSE to reconstruct a non-streaming response.
             content_type = resp.headers.get("content-type", "")
+            parsed_input_tokens = 0
+            parsed_output_tokens = 0
             if "text/event-stream" in content_type or resp.text.lstrip().startswith("data: "):
-                response_body, input_tokens, output_tokens = (
+                response_body, parsed_input_tokens, parsed_output_tokens = (
                     ProxyService._parse_sse_to_non_stream_openai(resp.text)
                 )
                 usage = response_body.get("usage", {}) if isinstance(response_body, dict) else {}
             else:
                 response_body = resp.json()
                 usage = response_body.get("usage", {})
-                input_tokens = usage.get("prompt_tokens", 0)
-                output_tokens = usage.get("completion_tokens", 0)
             response_body = ProxyService._rewrite_openai_payload_model(response_body, requested_model)
             usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
+            input_tokens = int(usage_summary.get("input_tokens", 0) or 0) or int(parsed_input_tokens or 0)
+            output_tokens = int(usage_summary.get("output_tokens", 0) or 0) or int(parsed_output_tokens or 0)
 
             # Return standardized response format for the shared middleware contract
             return {

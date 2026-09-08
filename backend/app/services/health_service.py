@@ -35,6 +35,13 @@ def _normalize_health_check_model(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+def _looks_like_html_upstream_response(content_type: Optional[str], body: Optional[str]) -> bool:
+    """Detect website HTML returned from a misconfigured OpenAI-compatible base_url."""
+    ctype = str(content_type or "").lower()
+    head = str(body or "").lstrip()[:64].lower()
+    return "text/html" in ctype or head.startswith("<!doctype") or head.startswith("<html")
+
+
 def get_system_config(db: Session, key: str, default=None):
     """Read a typed value from the system_config table."""
     config = db.query(SystemConfig).filter(SystemConfig.config_key == key).first()
@@ -529,6 +536,12 @@ class HealthService:
             elapsed_ms = int((time.time() - start) * 1000)
 
             if resp.status_code == 200:
+                if _looks_like_html_upstream_response(resp.headers.get("content-type"), resp.text):
+                    return (
+                        False,
+                        elapsed_ms,
+                        "Upstream returned HTML instead of API JSON; check whether base_url is missing /v1",
+                    )
                 return True, elapsed_ms, None
             else:
                 error_body = resp.text[:500]

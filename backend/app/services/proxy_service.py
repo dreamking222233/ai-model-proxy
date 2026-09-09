@@ -173,8 +173,11 @@ class _SecurityRiskMarkerStreamBuffer:
         return "".join(self._visible_parts)
 
 
-# Default timeout for upstream requests (seconds)
-_UPSTREAM_TIMEOUT = 120.0
+# Default timeout for upstream text requests (seconds).
+# A single Codex/Responses turn can run about 5 minutes; cap at 600s.
+_UPSTREAM_TIMEOUT = 600.0
+# Streaming read timeout. Same 600s cap as non-stream text requests.
+_UPSTREAM_STREAM_READ_TIMEOUT = 600.0
 # Longer timeout for image generation requests (seconds)
 _IMAGE_UPSTREAM_TIMEOUT = 600.0
 # Longer timeout for async video task creation and content proxying (seconds)
@@ -2466,30 +2469,60 @@ class ProxyService:
         }
 
     @staticmethod
+    def _collect_stream_billing_tokens(
+        billing_input_tokens: int,
+        billing_output_tokens: int,
+        cache_state: Optional[dict[str, Any]] = None,
+    ) -> tuple[int, int, bool]:
+        """Collect stream billing tokens from upstream usage only.
+
+        Request-body JSON length estimates are never used for charging. A sudden
+        million-token context from ``len(json.dumps(tools))/2.5`` is a billing
+        bug, not real model usage.
+        """
+        usage_map = (cache_state or {}).get("collected_usage") or {}
+        upstream = usage_map.get("_upstream_cache_usage") or {}
+        if not isinstance(upstream, dict):
+            upstream = {}
+        input_tokens = (
+            int(billing_input_tokens or 0)
+            or int(usage_map.get("prompt_tokens") or 0)
+            or int(upstream.get("input_tokens") or 0)
+        )
+        output_tokens = (
+            int(billing_output_tokens or 0)
+            or int(usage_map.get("completion_tokens") or 0)
+            or int(upstream.get("output_tokens") or 0)
+        )
+        cache_read = int(usage_map.get("cache_read_input_tokens") or 0) or int(
+            upstream.get("cache_read_input_tokens") or 0
+        )
+        cache_creation = int(usage_map.get("cache_creation_input_tokens") or 0) or int(
+            upstream.get("cache_creation_input_tokens") or 0
+        )
+        logical_input = int(usage_map.get("logical_input_tokens") or 0) or int(
+            upstream.get("logical_input_tokens") or 0
+        )
+        has_usage = bool(
+            input_tokens or output_tokens or cache_read or cache_creation or logical_input
+        )
+        return input_tokens, output_tokens, has_usage
+
+    @staticmethod
     def _resolve_stream_billing_tokens(
         request_data: dict,
         billing_input_tokens: int,
         billing_output_tokens: int,
         cache_state: Optional[dict[str, Any]] = None,
         *,
-        estimate_input: Callable[[dict], int],
+        estimate_input: Optional[Callable[[dict], int]] = None,
     ) -> tuple[int, int]:
-        """Prefer upstream usage; if the client closed early, fall back to estimates."""
-        usage_map = (cache_state or {}).get("collected_usage") or {}
-        input_tokens = int(billing_input_tokens or 0) or int(usage_map.get("prompt_tokens") or 0)
-        output_tokens = int(billing_output_tokens or 0) or int(usage_map.get("completion_tokens") or 0)
-        if input_tokens <= 0:
-            input_tokens = int(estimate_input(request_data) or 0)
-        if output_tokens <= 0:
-            collector = (cache_state or {}).get("stream_collector")
-            chunks = getattr(collector, "chunks", None) or []
-            text = "".join(
-                str(chunk.get("content") or "")
-                for chunk in chunks
-                if isinstance(chunk, dict)
-            )
-            if text.strip():
-                output_tokens = max(1, int(len(text) / 2.5))
+        """Return upstream stream usage. ``estimate_input`` is ignored on purpose."""
+        input_tokens, output_tokens, _ = ProxyService._collect_stream_billing_tokens(
+            billing_input_tokens,
+            billing_output_tokens,
+            cache_state,
+        )
         return input_tokens, output_tokens
 
     @staticmethod
@@ -2499,18 +2532,12 @@ class ProxyService:
         billing_output_tokens: int,
         cache_state: Optional[dict[str, Any]] = None,
     ) -> tuple[int, int]:
-        """Prefer upstream usage; if the client closed early, fall back to estimates.
-
-        OpenAI-compatible streams often send `usage` only in the last SSE chunk.
-        Codex-like clients may disconnect after the first token or `[DONE]`, which
-        used to finalize the request as success with 0/0 tokens.
-        """
+        """Prefer upstream usage. Never estimate request JSON for charging."""
         return ProxyService._resolve_stream_billing_tokens(
             request_data,
             billing_input_tokens,
             billing_output_tokens,
             cache_state,
-            estimate_input=ProxyService.estimate_openai_input_tokens,
         )
 
     @staticmethod
@@ -2520,13 +2547,165 @@ class ProxyService:
         billing_output_tokens: int,
         cache_state: Optional[dict[str, Any]] = None,
     ) -> tuple[int, int]:
-        """Same early-close fallback for Codex /v1/responses streams."""
+        """Prefer upstream Responses usage. Never estimate request JSON for charging."""
         return ProxyService._resolve_stream_billing_tokens(
             request_data,
             billing_input_tokens,
             billing_output_tokens,
             cache_state,
-            estimate_input=ProxyService.estimate_responses_input_tokens,
+        )
+
+    @staticmethod
+    async def _await_uncancellable(task: asyncio.Task) -> None:
+        """Wait for a background task even if the current task is cancelled."""
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+
+    @staticmethod
+    async def _forward_sse_keep_upstream_on_disconnect(source):
+        """Yield SSE to the client without cancelling the already-forwarded upstream.
+
+        If the client disconnects, keep reading the upstream iterator until it
+        finishes so ``usage`` can still be collected for billing.
+        """
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _pump() -> None:
+            try:
+                async for item in source:
+                    await queue.put(("data", item))
+            except Exception as exc:
+                await queue.put(("error", exc))
+            finally:
+                await queue.put(("done", None))
+
+        pump_task = asyncio.create_task(_pump())
+        try:
+            while True:
+                try:
+                    kind, payload = await queue.get()
+                except asyncio.CancelledError:
+                    break
+                if kind == "done":
+                    return
+                if kind == "error":
+                    raise payload
+                try:
+                    yield payload
+                except GeneratorExit:
+                    break
+        finally:
+            await ProxyService._await_uncancellable(pump_task)
+
+    @staticmethod
+    def _build_upstream_stream_timeout() -> httpx.Timeout:
+        return httpx.Timeout(
+            None,
+            connect=_UPSTREAM_CONNECT_TIMEOUT,
+            read=_UPSTREAM_STREAM_READ_TIMEOUT,
+            write=_UPSTREAM_TIMEOUT,
+            pool=_UPSTREAM_TIMEOUT,
+        )
+
+    @staticmethod
+    def _finalize_forwarded_stream_accounting(
+        db: Session,
+        user: SysUser,
+        api_key_record: UserApiKey,
+        unified_model: UnifiedModel,
+        request_id: str,
+        requested_model: str,
+        billing_input_tokens: int,
+        billing_output_tokens: int,
+        cache_state: Optional[dict[str, Any]],
+        stream_error: Optional[BaseException],
+        channel: Channel,
+        client_ip: str,
+        start_time: float,
+        billing_context: Optional[dict[str, Any]],
+        *,
+        request_type: str = "chat",
+        usage_source: str,
+        actual_model: Optional[str] = None,
+        conversation_state_info: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Charge only when upstream usage exists; otherwise log failure with no deduction."""
+        response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
+        billed_input, billed_output, has_usage = ProxyService._collect_stream_billing_tokens(
+            billing_input_tokens,
+            billing_output_tokens,
+            cache_state,
+        )
+        stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+            (cache_state or {}).get("cache_info"),
+            ((cache_state or {}).get("collected_usage") or {}).get("_upstream_cache_usage"),
+            source=usage_source,
+        )
+        if has_usage:
+            ProxyService._finalize_successful_text_request(
+                db,
+                user,
+                api_key_record,
+                unified_model,
+                request_id,
+                requested_model,
+                billed_input,
+                billed_output,
+                channel,
+                client_ip,
+                response_time_ms,
+                is_stream=True,
+                actual_model=actual_model,
+                cache_info=stream_cache_info,
+                conversation_state_info=conversation_state_info,
+                request_type=request_type,
+                billing_context=billing_context,
+            )
+            return
+
+        mapped_request_error = (
+            ProxyService._map_upstream_request_error(stream_error)
+            if isinstance(stream_error, Exception)
+            else None
+        )
+        if (
+            stream_error
+            and not mapped_request_error
+            and isinstance(stream_error, Exception)
+        ):
+            ProxyService._record_channel_failure(db, channel, stream_error)
+        error_cache_info = stream_cache_info or (
+            ProxyService._extract_cache_info_from_error(stream_error)
+            if isinstance(stream_error, Exception)
+            else None
+        )
+        if mapped_request_error and isinstance(stream_error, Exception):
+            error_log_detail = ProxyService._stream_error_log_detail(
+                stream_error,
+                mapped_request_error,
+            )
+        elif isinstance(stream_error, Exception):
+            error_log_detail = ProxyService._stream_error_log_detail(stream_error, None)
+        else:
+            error_log_detail = "客户端中断流式请求或上游未返回用量"
+        ProxyService._log_failed_request(
+            db,
+            user,
+            api_key_record,
+            request_id,
+            requested_model,
+            client_ip,
+            True,
+            error_log_detail,
+            channel=channel,
+            response_time_ms=response_time_ms,
+            cache_info=error_cache_info,
+            request_type=request_type,
+            actual_model=actual_model,
+            billing_context=billing_context,
         )
 
     @staticmethod
@@ -2536,13 +2715,8 @@ class ProxyService:
         *,
         source: str,
     ) -> Optional[dict[str, Any]]:
-        """Merge upstream CPA/provider cache usage without internal cache segment data."""
+        """Merge upstream provider usage into request-log cache fields."""
         if not usage_summary:
-            return cache_info
-        if (
-            int(usage_summary.get("cache_read_input_tokens", 0) or 0) <= 0
-            and int(usage_summary.get("cache_creation_input_tokens", 0) or 0) <= 0
-        ):
             return cache_info
         merged = copy.deepcopy(cache_info or {})
         details = copy.deepcopy(merged.get("details") or {})
@@ -6796,6 +6970,15 @@ class ProxyService:
                     request_id=request_id,
                 ):
                     payload_type = str(payload.get("type", "") or "")
+                    if not collected_usage.get("_first_upstream_event_type"):
+                        collected_usage["_first_upstream_event_type"] = payload_type
+                        collected_usage["_first_upstream_event_time"] = time.time()
+                        logger.info(
+                            "Responses first upstream event request_id=%s channel=%s type=%s",
+                            request_id,
+                            channel.name,
+                            payload_type,
+                        )
                     if payload_type == "response.completed":
                         payload = ProxyService._clean_responses_completed_payload(unified_model, payload)
                         completed = True
@@ -6885,23 +7068,28 @@ class ProxyService:
             cache_state: dict[str, Any] = {}
 
             try:
-                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
-                    request_body=request_data,
-                    headers=request_headers or {},
-                    user=user,
-                    db=db,
-                    upstream_call=upstream_call,
-                    unified_model=unified_model,
-                    protocol="responses",
-                    request_format="responses",
-                    model=model_name,
-                    billing_callback=billing_callback,
-                    cache_state=cache_state,
+                async for sse_line in ProxyService._forward_sse_keep_upstream_on_disconnect(
+                    StreamCacheMiddleware.wrap_stream_request(
+                        request_body=request_data,
+                        headers=request_headers or {},
+                        user=user,
+                        db=db,
+                        upstream_call=upstream_call,
+                        unified_model=unified_model,
+                        protocol="responses",
+                        request_format="responses",
+                        model=model_name,
+                        billing_callback=billing_callback,
+                        cache_state=cache_state,
+                    )
                 ):
                     if (
                         cache_state.get("first_stream_output_time") is None
                         and isinstance(sse_line, str)
-                        and "response.output_text.delta" in sse_line
+                        and (
+                            "response.created" in sse_line
+                            or "response.output_text.delta" in sse_line
+                        )
                     ):
                         cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
@@ -6930,56 +7118,26 @@ class ProxyService:
                     )
                 )
             finally:
-                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
-                    if stream_error:
-                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
-                        if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel, stream_error)
-                        error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
-                        error_log_detail = ProxyService._stream_error_log_detail(
-                            stream_error,
-                            mapped_request_error,
-                        )
-                        ProxyService._log_failed_request(
-                            db, user, api_key_record, request_id, requested_model,
-                            client_ip, True,
-                            error_log_detail,
-                            channel=channel,
-                            response_time_ms=response_time_ms,
-                            cache_info=error_cache_info,
-                            billing_context=billing_context,
-                        )
-                    else:
-                        stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
-                            cache_state.get("cache_info"),
-                            (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
-                            source="responses_input_tokens_details",
-                        )
-                        billed_input, billed_output = ProxyService._resolve_responses_stream_billing_tokens(
-                            request_data,
-                            billing_input_tokens,
-                            billing_output_tokens,
-                            cache_state,
-                        )
-                        ProxyService._finalize_successful_text_request(
-                            db,
-                            user,
-                            api_key_record,
-                            unified_model,
-                            request_id,
-                            requested_model,
-                            billed_input,
-                            billed_output,
-                            channel,
-                            client_ip,
-                            response_time_ms,
-                            is_stream=True,
-                            actual_model=request_data.get("model"),
-                            cache_info=stream_cache_info,
-                            request_type="responses",
-                            billing_context=billing_context,
-                        )
+                    ProxyService._finalize_forwarded_stream_accounting(
+                        db,
+                        user,
+                        api_key_record,
+                        unified_model,
+                        request_id,
+                        requested_model,
+                        billing_input_tokens,
+                        billing_output_tokens,
+                        cache_state,
+                        stream_error,
+                        channel,
+                        client_ip,
+                        start_time,
+                        billing_context,
+                        request_type="responses",
+                        usage_source="responses_input_tokens_details",
+                        actual_model=request_data.get("model"),
+                    )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
                 ProxyService._scan_stream_security_output(
@@ -7177,7 +7335,7 @@ class ProxyService:
         start_url = channel.base_url.rstrip("/")
         url = f"{start_url}/responses"
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
-        timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+        timeout = ProxyService._build_upstream_stream_timeout()
         resolved_request_id = str(request_id or request_data.get("_request_id") or "responses")
         max_attempts = ProxyService._resolve_runtime_retry_attempts(channel, None)
         attempt = 0
@@ -7373,14 +7531,14 @@ class ProxyService:
                 yield chunk
                 pending = asyncio.create_task(iterator.__anext__())
         finally:
-            if pending and not pending.done():
-                pending.cancel()
-                with suppress(asyncio.CancelledError):
-                    await pending
             aclose = getattr(iterator, "aclose", None)
             if callable(aclose):
                 with suppress(Exception):
                     await aclose()
+            if pending and not pending.done():
+                pending.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                    await pending
 
     @staticmethod
     def _build_streaming_response(source, request_id: str) -> StreamingResponse:
@@ -8343,7 +8501,7 @@ class ProxyService:
             cache_creation_input_tokens = 0
             text_buffer = _PassthroughTextBuffer()
 
-            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            timeout = ProxyService._build_upstream_stream_timeout()
             async for line in ProxyService._stream_lines_with_retries(
                 url,
                 request_data,
@@ -8466,18 +8624,20 @@ class ProxyService:
             cache_state: dict[str, Any] = {}
 
             try:
-                async for sse_line in StreamCacheMiddleware.wrap_stream_request(
-                    request_body=request_data,
-                    headers=request_headers or {},
-                    user=user,
-                    db=db,
-                    upstream_call=upstream_call,
-                    unified_model=unified_model,
-                    protocol="openai",
-                    request_format="openai_chat",
-                    model=model_name,
-                    billing_callback=billing_callback,
-                    cache_state=cache_state,
+                async for sse_line in ProxyService._forward_sse_keep_upstream_on_disconnect(
+                    StreamCacheMiddleware.wrap_stream_request(
+                        request_body=request_data,
+                        headers=request_headers or {},
+                        user=user,
+                        db=db,
+                        upstream_call=upstream_call,
+                        unified_model=unified_model,
+                        protocol="openai",
+                        request_format="openai_chat",
+                        model=model_name,
+                        billing_callback=billing_callback,
+                        cache_state=cache_state,
+                    )
                 ):
                     # Record first streamed output time for request timing.
                     if (
@@ -8515,55 +8675,25 @@ class ProxyService:
                 yield f"data: {error_payload}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
-                response_time_ms = ProxyService._resolve_stream_response_time_ms(start_time, cache_state)
                 try:
-                    if stream_error:
-                        mapped_request_error = ProxyService._map_upstream_request_error(stream_error)
-                        if not mapped_request_error:
-                            ProxyService._record_channel_failure(db, channel, stream_error)
-                        error_cache_info = cache_state.get("cache_info") or ProxyService._extract_cache_info_from_error(stream_error)
-                        error_log_detail = ProxyService._stream_error_log_detail(
-                            stream_error,
-                            mapped_request_error,
-                        )
-                        ProxyService._log_failed_request(
-                            db, user, api_key_record, request_id, requested_model,
-                            client_ip, True,
-                            error_log_detail,
-                            channel=channel,
-                            response_time_ms=response_time_ms,
-                            cache_info=error_cache_info,
-                            billing_context=billing_context,
-                        )
-                    else:
-                        stream_cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
-                            cache_state.get("cache_info"),
-                            (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
-                            source="openai_prompt_tokens_details",
-                        )
-                        billed_input, billed_output = ProxyService._resolve_openai_stream_billing_tokens(
-                            request_data,
-                            billing_input_tokens,
-                            billing_output_tokens,
-                            cache_state,
-                        )
-                        ProxyService._finalize_successful_text_request(
-                            db,
-                            user,
-                            api_key_record,
-                            unified_model,
-                            request_id,
-                            requested_model,
-                            billed_input,
-                            billed_output,
-                            channel,
-                            client_ip,
-                            response_time_ms,
-                            is_stream=True,
-                            actual_model=request_data.get("model"),
-                            cache_info=stream_cache_info,
-                            billing_context=billing_context,
-                        )
+                    ProxyService._finalize_forwarded_stream_accounting(
+                        db,
+                        user,
+                        api_key_record,
+                        unified_model,
+                        request_id,
+                        requested_model,
+                        billing_input_tokens,
+                        billing_output_tokens,
+                        cache_state,
+                        stream_error,
+                        channel,
+                        client_ip,
+                        start_time,
+                        billing_context,
+                        usage_source="openai_prompt_tokens_details",
+                        actual_model=request_data.get("model"),
+                    )
                 except Exception as accounting_err:
                     logger.error("Post-stream accounting error: %s", accounting_err)
                 ProxyService._scan_stream_security_output(
@@ -8795,7 +8925,7 @@ class ProxyService:
             role_sent = False
             content_block_meta: dict[int, dict] = {}
 
-            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            timeout = ProxyService._build_upstream_stream_timeout()
             async for line in ProxyService._stream_lines_with_retries(
                 url,
                 anthropic_request,
@@ -10425,7 +10555,7 @@ class ProxyService:
 
         async def upstream_call(collector, collected_usage):
             """上游流式调用，同时通过 collector 收集 chunks"""
-            timeout = httpx.Timeout(_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
+            timeout = ProxyService._build_upstream_stream_timeout()
             async with httpx.AsyncClient(timeout=timeout) as client:
                 compression_fallback_reason: Optional[str] = None
                 request_attempts: list[dict[str, Any]] = []

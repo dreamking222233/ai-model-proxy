@@ -186,16 +186,22 @@
                         <span class="value">免费使用</span>
                       </div>
                     </template>
-                    <template v-else>
+                    <template v-else-if="model.billing_type === 'token'">
                       <div class="price-row">
                         <div class="price-item">
                           <span class="label">Input</span>
-                          <span class="value">${{ model.input_price || 0 }} <small>/1M</small></span>
+                          <span class="value">
+                            ${{ model.input_price || 0 }} <small>/1M</small>
+                            <small v-if="shouldShowCnyPrice(model)" class="cny-price">= ¥{{ formatCnyPrice(model.input_price, model.cny_price_rate) }} /1M</small>
+                          </span>
                         </div>
                         <div class="price-divider"></div>
                         <div class="price-item">
                           <span class="label">Output</span>
-                          <span class="value">${{ model.output_price || 0 }} <small>/1M</small></span>
+                          <span class="value">
+                            ${{ model.output_price || 0 }} <small>/1M</small>
+                            <small v-if="shouldShowCnyPrice(model)" class="cny-price">= ¥{{ formatCnyPrice(model.output_price, model.cny_price_rate) }} /1M</small>
+                          </span>
                         </div>
                       </div>
                     </template>
@@ -394,6 +400,13 @@ export default {
     },
     getRequestPriceText(model) {
       return `$${Number(model.request_price || 0).toFixed(6)} / 次`
+    },
+    shouldShowCnyPrice(model) {
+      return Boolean(model && model.cny_price_enabled && Number(model.cny_price_rate) > 0)
+    },
+    formatCnyPrice(price, rate) {
+      const value = Number(price || 0) / Number(rate || 1)
+      return value.toFixed(6).replace(/\.?(0+)$/, '')
     },
     handleCopy(model) {
       this.copyText(model.model_name)
@@ -860,6 +873,12 @@ export default {
             font-size: 10px;
             font-weight: 400;
             color: #718096;
+          }
+
+          .cny-price {
+            display: block;
+            color: #38a169;
+            line-height: 1.4;
           }
         }
       }

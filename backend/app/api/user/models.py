@@ -1,5 +1,7 @@
 """User-facing endpoint to list available models."""
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -10,8 +12,22 @@ from app.models.model import UnifiedModel, ModelChannelMapping
 from app.models.channel import Channel
 from app.schemas.common import ResponseModel
 from app.services.model_service import ModelService
+from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/api/user", tags=["用户-模型列表"])
+
+
+def _cny_pricing_context(db: Session, current_user: SysUser) -> dict:
+    """Return whether token prices can include the standard RMB reference price."""
+    policy = AgentService.resolve_user_recharge_policy(db, current_user)
+    enabled = (
+        policy.online_recharge_enabled
+        and policy.balance_recharge_rate == Decimal("5")
+    )
+    return {
+        "cny_price_enabled": enabled,
+        "cny_price_rate": 5 if enabled else None,
+    }
 
 
 @router.get("/models", response_model=ResponseModel)
@@ -20,6 +36,7 @@ def list_available_models(
     current_user: SysUser = Depends(get_current_user),
 ):
     """Return all enabled models with pricing info for the current user."""
+    cny_pricing = _cny_pricing_context(db, current_user)
     models = (
         db.query(UnifiedModel)
         .filter(UnifiedModel.enabled == 1)
@@ -71,6 +88,7 @@ def list_available_models(
             ),
             "channel_count": channel_count,
             "description": m.description,
+            **cny_pricing,
         })
 
     return ResponseModel(data=result)

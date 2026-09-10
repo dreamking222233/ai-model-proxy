@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.exceptions import ServiceException
+from app.core.model_series import MODEL_SERIES_VALUES
 from app.models.log import (
     ConsumptionRecord,
     SubscriptionPlan,
@@ -724,9 +725,8 @@ class SubscriptionService:
         if scope not in {"all_models", "selected_series", "selected_models"}:
             raise ServiceException(400, "套餐模型范围不合法", "INVALID_MODEL_SCOPE")
         series = [str(v).strip().lower() for v in (payload.get("model_series") or [])]
-        allowed_series = {"gpt", "claude", "grok", "gemini", "other"}
         allowed_model_ids = SubscriptionService.parse_model_id_list(payload.get("allowed_model_ids") or [])
-        if scope == "selected_series" and (not series or any(v not in allowed_series for v in series) or len(set(series)) != len(series)):
+        if scope == "selected_series" and (not series or any(v not in MODEL_SERIES_VALUES for v in series) or len(set(series)) != len(series)):
             raise ServiceException(400, "套餐模型系列必须为非空且合法的集合", "INVALID_MODEL_SERIES")
         if scope == "selected_models" and not allowed_model_ids:
             raise ServiceException(400, "指定模型套餐必须选择至少一个模型", "INVALID_ALLOWED_MODELS")

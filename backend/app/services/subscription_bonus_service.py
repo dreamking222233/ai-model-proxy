@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from app.core.exceptions import ServiceException
+from app.core.model_series import MODEL_SERIES_VALUES
 from app.models.user import SysUser
 from app.models.log import UserSubscription
 from app.models.subscription_bonus import SubscriptionBonusGrant, SubscriptionBonusUsageCycle
@@ -68,13 +69,16 @@ class SubscriptionBonusService:
             end_time = now + timedelta(days=days)
             if end_time > subscription.end_time:
                 raise ServiceException(400, "赠送期限超过套餐到期时间", "BONUS_END_EXCEEDS_SUBSCRIPTION")
+        series = [str(v).strip().lower() for v in (payload.get("model_series") or [])]
+        if any(v not in MODEL_SERIES_VALUES for v in series) or len(set(series)) != len(series):
+            raise ServiceException(400, "赠送模型系列不合法", "INVALID_MODEL_SERIES")
         grant = SubscriptionBonusGrant(
             grant_request_id=payload["grant_request_id"], normalized_payload_hash=digest,
             user_id=user_id, agent_id=getattr(user, "agent_id", None),
             source_subscription_id=subscription.id, duration_mode=mode, duration_days=days,
             daily_quota_usd=Decimal(str(payload["daily_quota_usd"])), start_time=now,
             end_time=end_time, status="active", created_by=operator_id, remark=payload.get("remark"),
-            model_series=json.dumps(payload.get("model_series") or [], ensure_ascii=False),
+            model_series=json.dumps(series, ensure_ascii=False),
         )
         db.add(grant)
         db.commit(); db.refresh(grant)

@@ -553,7 +553,7 @@
               {{ item.label }}
             </a-select-option>
           </a-select>
-          <div class="form-tip">用于价格调控规则匹配，可按 GPT、Claude、Grok、Gemini 等系列设置倍率。</div>
+          <div class="form-tip">用于价格调控规则匹配，可按 GPT、Claude、Grok、Gemini、DeepSeek、国产模型 等系列设置倍率。</div>
         </a-form-item>
         <a-form-item label="协议">
           <a-select v-model="modelForm.protocol_type" placeholder="Select protocol">
@@ -802,7 +802,7 @@ import {
   listOverrideRules, createOverrideRule, updateOverrideRule, deleteOverrideRule
 } from '@/api/model'
 import { listChannels } from '@/api/channel'
-import { MODEL_SERIES_OPTIONS as SHARED_MODEL_SERIES_OPTIONS } from '@/constants/modelSeries'
+import { MODEL_SERIES_OPTIONS as SHARED_MODEL_SERIES_OPTIONS, inferModelSeries as inferSeriesFromName } from '@/constants/modelSeries'
 
 const IMAGE_RESOLUTION_RULE_PRESETS = {
   'gemini-2.5-flash-image': [
@@ -1068,12 +1068,7 @@ export default {
       return this.isMobile ? 'calc(100vw - 24px)' : width
     },
     inferModelSeries(modelName) {
-      const name = String(modelName || '').trim().toLowerCase()
-      if (name.startsWith('gpt') || name.startsWith('o1') || name.startsWith('o3') || name.startsWith('o4')) return 'gpt'
-      if (name.startsWith('claude')) return 'claude'
-      if (name.startsWith('grok')) return 'grok'
-      if (name.startsWith('gemini')) return 'gemini'
-      return 'other'
+      return inferSeriesFromName(modelName)
     },
     getSeriesLabel(value) {
       const item = MODEL_SERIES_OPTIONS.find(opt => opt.value === value)

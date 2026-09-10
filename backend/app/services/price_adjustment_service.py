@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ServiceException
+from app.core.model_series import MODEL_SERIES_LABELS, MODEL_SERIES_ORDER
 from app.models.model import ModelPriceAdjustmentRule, UnifiedModel, UserPriceAdjustmentRule
 from app.models.user import SysUser
 from app.services.model_service import ModelService
@@ -464,7 +465,7 @@ class PriceAdjustmentService:
         user = PriceAdjustmentService._ensure_user_exists(db, user_id)
         now = PriceAdjustmentService.now_beijing()
         rows = []
-        for series in ("gpt", "claude", "grok", "gemini", "other"):
+        for series in MODEL_SERIES_ORDER:
             for model_type in ("chat", "image", "video"):
                 fake_model = UnifiedModel(
                     model_name=f"{series}-{model_type}",
@@ -490,11 +491,10 @@ class PriceAdjustmentService:
         return {
             "model_series": [
                 {"value": "all", "label": "全部系列"},
-                {"value": "gpt", "label": "GPT"},
-                {"value": "claude", "label": "Claude"},
-                {"value": "grok", "label": "Grok"},
-                {"value": "gemini", "label": "Gemini"},
-                {"value": "other", "label": "其他"},
+                *[
+                    {"value": series, "label": MODEL_SERIES_LABELS[series]}
+                    for series in MODEL_SERIES_ORDER
+                ],
             ],
             "model_types": [
                 {"value": "all", "label": "全部类型"},
@@ -521,7 +521,7 @@ class PriceAdjustmentService:
     def list_effective_matrix(db: Session) -> list[dict]:
         now = PriceAdjustmentService.now_beijing()
         rows = []
-        for series in ("gpt", "claude", "grok", "gemini", "other"):
+        for series in MODEL_SERIES_ORDER:
             for model_type in ("chat", "image", "video"):
                 fake_model = UnifiedModel(
                     model_name=f"{series}-{model_type}",

@@ -18,6 +18,13 @@ from app.models.model import (
 )
 from app.models.channel import Channel
 from app.core.exceptions import ServiceException
+from app.core.model_series import (
+    MODEL_SERIES_LABELS,
+    MODEL_SERIES_ORDER,
+    MODEL_SERIES_VALUES,
+    allowed_series_message,
+    infer_model_series as infer_series_from_name,
+)
 from app.services.channel_service import ChannelService
 from app.services import grok_imagine_adapter
 
@@ -28,7 +35,9 @@ class ModelService:
     """CRUD operations for models, mappings, override rules, and model resolution."""
 
     REASONING_EFFORT_VALUES = {"minimal", "low", "medium", "high", "xhigh"}
-    MODEL_SERIES_VALUES = {"gpt", "claude", "grok", "gemini", "other"}
+    MODEL_SERIES_VALUES = set(MODEL_SERIES_VALUES)
+    MODEL_SERIES_ORDER = MODEL_SERIES_ORDER
+    MODEL_SERIES_LABELS = MODEL_SERIES_LABELS
     CACHE_READ_FALLBACK_RATE = Decimal("0.1")
     PRICE_QUANTUM = Decimal("0.000001")
     LONG_CONTEXT_TOKEN_THRESHOLD_DEFAULT = 262144
@@ -316,16 +325,7 @@ class ModelService:
 
     @staticmethod
     def infer_model_series(model_name: object) -> str:
-        name = str(model_name or "").strip().lower()
-        if name.startswith(("gpt", "o1", "o3", "o4")):
-            return "gpt"
-        if name.startswith("claude"):
-            return "claude"
-        if name.startswith("grok"):
-            return "grok"
-        if name.startswith("gemini"):
-            return "gemini"
-        return "other"
+        return infer_series_from_name(model_name)
 
     @staticmethod
     def normalize_model_series(value: object, model_name: object = None) -> str:
@@ -333,7 +333,11 @@ class ModelService:
         if not normalized:
             normalized = ModelService.infer_model_series(model_name)
         if normalized not in ModelService.MODEL_SERIES_VALUES:
-            raise ServiceException(400, "模型系列只能是 gpt、claude、grok、gemini、other", "INVALID_MODEL_SERIES")
+            raise ServiceException(
+                400,
+                f"模型系列只能是 {allowed_series_message()}",
+                "INVALID_MODEL_SERIES",
+            )
         return normalized
 
     @staticmethod

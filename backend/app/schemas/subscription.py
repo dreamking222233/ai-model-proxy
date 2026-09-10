@@ -2,8 +2,7 @@ from decimal import Decimal
 from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator
 
-
-MODEL_SERIES = {"gpt", "claude", "grok", "gemini", "other"}
+from app.core.model_series import MODEL_SERIES_VALUES as MODEL_SERIES
 
 
 class SubscriptionPlanPayload(BaseModel):
@@ -50,6 +49,7 @@ class SubscriptionPlanPayload(BaseModel):
 
 
 class SubscriptionBonusGrantCreate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     user_id: int
     source_subscription_id: int
     grant_request_id: str = Field(..., min_length=1, max_length=64)
@@ -58,6 +58,14 @@ class SubscriptionBonusGrantCreate(BaseModel):
     daily_quota_usd: Decimal = Field(..., gt=0)
     model_series: List[str] = Field(default_factory=list)
     remark: Optional[str] = None
+
+    @field_validator("model_series")
+    @classmethod
+    def validate_bonus_series(cls, values: List[str]) -> List[str]:
+        normalized = [str(v).strip().lower() for v in values]
+        if len(set(normalized)) != len(normalized) or any(v not in MODEL_SERIES for v in normalized):
+            raise ValueError("model_series 不合法")
+        return normalized
 
 
 class SubscriptionBonusGrantCancel(BaseModel):

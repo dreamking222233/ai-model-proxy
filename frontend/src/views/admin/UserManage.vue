@@ -587,6 +587,7 @@ import {
   deleteUserPriceAdjustment
 } from '@/api/user'
 import { formatDate, formatUtcDate } from '@/utils'
+import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
 
 export default {
   name: 'UserManage',
@@ -621,11 +622,7 @@ export default {
       ],
       priceSeriesOptions: [
         { value: 'all', label: '全部系列' },
-        { value: 'gpt', label: 'GPT' },
-        { value: 'claude', label: 'Claude' },
-        { value: 'grok', label: 'Grok' },
-        { value: 'gemini', label: 'Gemini' },
-        { value: 'other', label: '其他' }
+        ...MODEL_SERIES_OPTIONS
       ],
       priceModelTypeOptions: [
         { value: 'all', label: '全部类型' },
@@ -922,7 +919,7 @@ export default {
     },
     getSeriesLabel(value) {
       const item = this.priceSeriesOptions.find(option => option.value === value)
-      return item ? item.label : (value || '-')
+      return item ? item.label : getModelSeriesLabel(value)
     },
     getModelTypeLabel(value) {
       const item = this.priceModelTypeOptions.find(option => option.value === value)

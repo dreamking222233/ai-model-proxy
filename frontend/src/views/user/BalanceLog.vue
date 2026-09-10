@@ -615,6 +615,7 @@
 <script>
 import { getUsageLogs, getProfile, getModelUsageStats, getSiteConfig } from '@/api/user'
 import { formatDate as formatLocalDate } from '@/utils'
+import { getModelSeriesLabel } from '@/constants/modelSeries'
 
 export default {
   name: 'BalanceLog',
@@ -694,12 +695,11 @@ export default {
       return `$${Number(value || 0).toFixed(6)}`
     },
     formatBonusModels(grant) {
-      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
       if (!grant) return '-'
       if (grant.model_series && grant.model_series.length) {
-        return grant.model_series.map(item => labels[item] || item).join('、')
+        return grant.model_series.map(item => getModelSeriesLabel(item)).join('、')
       }
-      const eligible = (grant.eligible_model_series || []).map(item => labels[item] || item)
+      const eligible = (grant.eligible_model_series || []).map(item => getModelSeriesLabel(item))
       return eligible.length ? `全部赠送模型（当前：${eligible.join('、')}）` : '暂无已启用赠送模型'
     },
     initData() {

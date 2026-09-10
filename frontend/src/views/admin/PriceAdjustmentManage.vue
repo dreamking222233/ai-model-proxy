@@ -248,6 +248,7 @@ import {
   updatePriceAdjustmentRule,
   deletePriceAdjustmentRule
 } from '@/api/priceAdjustment'
+import { getModelSeriesColor, getModelSeriesLabel } from '@/constants/modelSeries'
 
 export default {
   name: 'PriceAdjustmentManage',
@@ -498,12 +499,11 @@ export default {
       this.fetchAll()
     },
     getSeriesLabel(value) {
-      const map = { all: '全部系列', gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
-      return map[value] || value || '-'
+      const item = this.seriesOptions.find(opt => opt.value === value)
+      return item ? item.label : getModelSeriesLabel(value)
     },
     getSeriesColor(value) {
-      const map = { all: 'purple', gpt: 'green', claude: 'orange', grok: 'default', gemini: 'blue', other: 'default' }
-      return map[value] || 'default'
+      return getModelSeriesColor(value)
     },
     getTypeLabel(value) {
       const item = this.typeOptions.find(opt => opt.value === value)

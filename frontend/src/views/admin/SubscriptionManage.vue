@@ -670,6 +670,7 @@ import {
 import { getUser, listUsers } from '@/api/user'
 import { listModels } from '@/api/model'
 import { formatBeijingTime as formatDate } from '@/utils'
+import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
 
 const defaultUsageSummary = () => ({
   request_count: 0,
@@ -708,10 +709,7 @@ export default {
       planModalVisible: false,
       editingPlanId: null,
       planForm: defaultPlanForm(),
-      modelSeriesOptions: [
-        { value: 'gpt', label: 'GPT' }, { value: 'claude', label: 'Claude' },
-        { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }, { value: 'other', label: '其他' }
-      ],
+      modelSeriesOptions: MODEL_SERIES_OPTIONS,
       modelOptions: [],
       grantLoading: false,
       legacyLoading: false,
@@ -1267,12 +1265,11 @@ export default {
       }
     },
     formatBonusModels(grant) {
-      const labels = { gpt: 'GPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini', other: '其他' }
       if (!grant) return '-'
       if (grant.model_series && grant.model_series.length) {
-        return grant.model_series.map(item => labels[item] || item).join('、')
+        return grant.model_series.map(item => getModelSeriesLabel(item)).join('、')
       }
-      const eligible = (grant.eligible_model_series || []).map(item => labels[item] || item)
+      const eligible = (grant.eligible_model_series || []).map(item => getModelSeriesLabel(item))
       return eligible.length ? `全部赠送模型（当前：${eligible.join('、')}）` : '暂无已启用赠送模型'
     },
     async fetchUsageDetail() {

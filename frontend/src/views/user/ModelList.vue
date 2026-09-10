@@ -356,7 +356,8 @@ export default {
         gpt: 'OpenAI',
         claude: 'Anthropic',
         gemini: 'Google',
-        grok: 'Grok'
+        grok: 'Grok',
+        deepseek: 'DeepSeek'
       }
       if (seriesMap[series]) {
         const label = seriesMap[series]

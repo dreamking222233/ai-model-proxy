@@ -431,6 +431,7 @@ export default {
       autoSyncRemaining: 0,
       userBalance: 0,
       imageCreditBalance: 0,
+      subscriptionSummary: {},
       subscriptionPlans: [],
       subscriptionPlansLoading: false,
       pricingPackages: [
@@ -498,7 +499,9 @@ export default {
     },
     currentRateText() {
       if (this.form.recharge_type === 'subscription') {
-        return '套餐购买后自动顺延当前有效期'
+        return this.hasActiveSubscription
+          ? '已有套餐时继续购买会覆盖当前套餐'
+          : '当前没有套餐，购买后立即生效'
       }
       return this.form.recharge_type === 'image_credit'
         ? `1人民币 = ${this.formatRate(this.imageCreditRechargeRate)}图片积分`
@@ -539,6 +542,16 @@ export default {
     },
     supportQq() {
       return this.siteConfig.support_qq || '-'
+    },
+    hasActiveSubscription() {
+      const summary = this.subscriptionSummary || {}
+      return Boolean(summary.subscription_type && summary.subscription_type !== 'balance' && summary.end_time)
+    },
+    activeSubscriptionLabel() {
+      const summary = this.subscriptionSummary || {}
+      const planName = summary.plan_name || '当前套餐'
+      const endTime = summary.end_time ? this.formatTime(summary.end_time) : ''
+      return endTime ? `${planName}（有效期至 ${endTime}）` : planName
     }
   },
   async mounted() {
@@ -688,6 +701,7 @@ export default {
         const res = await getBalance()
         this.userBalance = res.data?.balance || 0
         this.imageCreditBalance = res.data?.image_credit_balance || 0
+        this.subscriptionSummary = res.data?.subscription_summary || {}
       } catch (e) {
         console.error('Fetch balance failed', e)
       }
@@ -771,6 +785,19 @@ export default {
         this.$message.warning('充值金额最低为 1 元')
         return
       }
+      if (this.form.recharge_type === 'subscription' && this.hasActiveSubscription) {
+        try {
+          await this.$confirm({
+            title: '当前周期内已有套餐',
+            content: `当前周期内已有套餐「${this.activeSubscriptionLabel}」。如果继续购买会覆盖该套餐，请慎重选择！`,
+            okText: '确认覆盖并支付',
+            cancelText: '取消',
+            okType: 'danger'
+          })
+        } catch (e) {
+          return
+        }
+      }
       this.creating = true
       try {
         const payloadData = {
@@ -779,6 +806,7 @@ export default {
         }
         if (this.form.recharge_type === 'subscription') {
           payloadData.subscription_plan_id = this.form.subscription_plan_id
+          payloadData.subscription_activation_mode = 'override'
         } else {
           payloadData.amount_cny = amount
         }

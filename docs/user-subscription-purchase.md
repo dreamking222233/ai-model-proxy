@@ -4,7 +4,7 @@
 
 - 管理端 `admin/subscription` 的套餐模板支持配置用户售价、代理拿货价、前台购买开关。
 - 用户端 `user/recharge` 支持在余额充值、图片积分充值之外选择套餐购买。
-- 线上购买套餐支付成功后统一复用 `SubscriptionService.activate_plan_subscription`，固定以 `append` 方式追加开通。
+- 线上购买套餐支付成功后统一复用 `SubscriptionService.activate_plan_subscription`。用户前台 `/user/recharge` 购买固定以 `override` 覆盖开通；若当前已有套餐，点击立即支付时先确认再下单。管理端/代理端发放仍可选择追加或覆盖。
 - 代理名下用户购买套餐后生成代理套餐销售记录，管理员可在 `admin/subscription-sales` 查看并核销，代理可在 `agent/subscription-sales` 查看销售数据。
 
 ## 关键业务规则

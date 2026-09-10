@@ -30,6 +30,10 @@ def create_recharge_order(
     agent_context=Depends(get_current_agent_context),
 ):
     user = _require_end_user(current_user)
+    activation_mode = None
+    if data.recharge_type == "subscription":
+        # User-facing purchases always replace the current package after the recharge page confirm.
+        activation_mode = "override"
     result = PaymentService.create_recharge_order(
         db,
         user=user,
@@ -37,6 +41,7 @@ def create_recharge_order(
         payment_channel=data.payment_channel,
         recharge_type=data.recharge_type,
         subscription_plan_id=data.subscription_plan_id,
+        subscription_activation_mode=activation_mode,
         site_context=agent_context,
     )
     return ResponseModel(data=result, message="充值订单创建成功")

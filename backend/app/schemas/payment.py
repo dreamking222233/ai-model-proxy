@@ -13,6 +13,7 @@ class UserRechargeOrderCreateRequest(BaseModel):
     payment_channel: str = Field("alipay", pattern="^(alipay|wechat)$")
     recharge_type: str = Field("balance", pattern="^(balance|image_credit|subscription)$")
     subscription_plan_id: Optional[int] = Field(None, gt=0)
+    subscription_activation_mode: Optional[str] = Field(None, pattern="^(append|override)$")
 
     @model_validator(mode="after")
     def validate_recharge_payload(self):
@@ -20,6 +21,8 @@ class UserRechargeOrderCreateRequest(BaseModel):
             if not self.subscription_plan_id:
                 raise ValueError("套餐订单必须选择套餐模板")
             return self
+        if self.subscription_activation_mode:
+            raise ValueError("仅套餐订单可以指定开通方式")
 
         if self.amount_cny is None:
             raise ValueError("充值金额不能为空")

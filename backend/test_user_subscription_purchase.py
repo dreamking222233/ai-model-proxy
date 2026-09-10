@@ -90,6 +90,7 @@ class UserSubscriptionPurchaseTest(unittest.TestCase):
             agent_id=20,
             subscription_plan_id=30,
             subscription_id=None,
+            subscription_activation_mode="append",
         )
 
         with (
@@ -109,10 +110,41 @@ class UserSubscriptionPurchaseTest(unittest.TestCase):
         self.assertEqual(kwargs["plan_id"], 30)
         self.assertIsNone(kwargs["operator_id"])
         self.assertEqual(kwargs["activation_mode"], "append")
+        self.assertEqual(order.subscription_activation_mode, "append")
         self.assertFalse(kwargs["auto_commit"])
         self.assertEqual(kwargs["agent_id"], 20)
         self.assertEqual(order.subscription_id, 88)
         sale_mock.assert_called_once()
+
+    def test_subscription_activation_uses_order_override_mode(self):
+        order = SimpleNamespace(
+            user_id=10,
+            agent_id=20,
+            subscription_plan_id=30,
+            subscription_id=None,
+            subscription_activation_mode="override",
+        )
+
+        with (
+            patch(
+                "app.services.payment_service.SubscriptionService.activate_plan_subscription",
+                return_value={"id": 91},
+            ) as activate_mock,
+            patch(
+                "app.services.agent_subscription_sale_service.AgentSubscriptionSaleService.create_from_paid_order",
+            ),
+        ):
+            PaymentService._activate_subscription_order(SimpleNamespace(), order)
+
+        self.assertEqual(activate_mock.call_args.kwargs["activation_mode"], "override")
+        self.assertEqual(order.subscription_id, 91)
+
+    def test_user_subscription_order_defaults_activation_mode_to_override(self):
+        payload = UserRechargeOrderCreateRequest(
+            recharge_type="subscription",
+            subscription_plan_id=12,
+        )
+        self.assertIsNone(payload.subscription_activation_mode)
 
 
 if __name__ == "__main__":

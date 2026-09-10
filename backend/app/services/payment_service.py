@@ -470,6 +470,7 @@ class PaymentService:
         payment_channel: str = DEFAULT_CHANNEL,
         recharge_type: str = "balance",
         subscription_plan_id: int | None = None,
+        subscription_activation_mode: str | None = None,
         site_context: AgentSiteContext | None = None,
     ) -> dict:
         channel = PaymentService._normalize_payment_channel(payment_channel)
@@ -493,7 +494,11 @@ class PaymentService:
             agent_rate = Decimal("0.000000")
             agent_income_cny = Decimal("0.00")
             quota_snapshot = SubscriptionService._get_plan_subscription_quota_snapshot(subscription_plan)
+            activation_mode = str(subscription_activation_mode or "override").strip().lower()
+            if activation_mode not in {"append", "override"}:
+                raise ServiceException(400, "套餐开通方式不合法", "INVALID_ACTIVATION_MODE")
         else:
+            activation_mode = "append"
             amount_decimal = PaymentService._normalize_cny(amount_cny)
             user_recharge_rate = recharge_policy.user_rate_for(normalized_type)
             credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(
@@ -525,7 +530,7 @@ class PaymentService:
             duration_days_snapshot=int(subscription_plan.duration_days) if subscription_plan else None,
             quota_metric_snapshot=quota_snapshot["quota_metric"] if quota_snapshot else None,
             quota_value_snapshot=quota_snapshot["quota_limit"] if quota_snapshot else None,
-            subscription_activation_mode="append",
+            subscription_activation_mode=activation_mode,
             subscription_sale_price_cny=amount_decimal if subscription_plan else Decimal("0.00"),
             subscription_agent_cost_cny=subscription_agent_cost_cny,
             subscription_agent_rebate_cny=subscription_rebate_cny,
@@ -1265,12 +1270,15 @@ class PaymentService:
         if order.subscription_id:
             return
 
+        activation_mode = str(getattr(order, "subscription_activation_mode", None) or "override").strip().lower()
+        if activation_mode not in {"append", "override"}:
+            activation_mode = "override"
         subscription = SubscriptionService.activate_plan_subscription(
             db,
             user_id=int(order.user_id),
             plan_id=int(order.subscription_plan_id),
             operator_id=None,
-            activation_mode="append",
+            activation_mode=activation_mode,
             auto_commit=False,
             agent_id=int(order.agent_id) if order.agent_id else None,
         )

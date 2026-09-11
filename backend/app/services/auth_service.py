@@ -170,6 +170,7 @@ class AuthService:
         )
 
         # Update login metadata
+        is_first_login = user.last_login_at is None
         user.last_login_at = datetime.utcnow()
         if client_ip:
             user.last_login_ip = client_ip
@@ -179,6 +180,7 @@ class AuthService:
 
         return {
             "token": token,
+            "is_first_login": is_first_login,
             "user": {
                 "id": user.id,
                 "username": user.username,

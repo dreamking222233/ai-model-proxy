@@ -2,6 +2,7 @@ import Vue from 'vue'
 import Vuex from 'vuex'
 import { login as loginApi, register as registerApi, logout as logoutApi } from '@/api/auth'
 import { getToken, setToken, getUser, setUser, clearSiteClientCache } from '@/utils/auth'
+import { consumeRegisterOnboardingHint, markOnboardingPending, markRegisterOnboardingHint } from '@/utils/onboarding'
 
 Vue.use(Vuex)
 
@@ -44,14 +45,22 @@ export default new Vuex.Store({
   actions: {
     async login({ commit }, { username, password }) {
       const res = await loginApi(username, password)
-      const { token, user } = res.data
+      const payload = res.data || {}
+      const { token, user } = payload
       commit('SET_TOKEN', token)
       commit('SET_USER', user)
+      if (user && user.role === 'user') {
+        consumeRegisterOnboardingHint(user)
+        if (payload.is_first_login) {
+          markOnboardingPending(user.id)
+        }
+      }
       return res
     },
 
     async register(_, { username, email, password, email_code, invite_code }) {
       const res = await registerApi(username, email, password, email_code, invite_code)
+      markRegisterOnboardingHint(username)
       return res
     },
 

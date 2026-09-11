@@ -55,13 +55,14 @@
       </section>
 
       <!-- Step 2: Tool Configuration -->
-      <section class="step-section animate__animated animate__fadeInUp" id="section-config" style="animation-delay: 0.2s">
+      <section class="step-section animate__animated animate__fadeInUp" id="section-config" data-tour="quickstart-tools" style="animation-delay: 0.2s">
         <div class="section-card-glass">
           <div class="section-badge">02</div>
           <div class="section-content">
             <h2 class="section-title">配置开发工具</h2>
             <p>本平台原生兼容各类顶级开源 AI 框架。选择您的常用工具，获取即插即用的配置代码。</p>
 
+            <div id="tour-quickstart-tools">
             <a-tabs v-model="activeTab" class="modern-tabs">
               <!-- Claude Code -->
               <a-tab-pane key="claude-code" tab="Claude Code">
@@ -171,6 +172,7 @@
                 </div>
               </a-tab-pane>
             </a-tabs>
+            </div>
           </div>
         </div>
       </section>
@@ -568,6 +570,7 @@ export default {
     }
   },
   created() {
+    this.applyRouteTab()
     this.fetchSiteConfig()
   },
   mounted() {
@@ -587,6 +590,9 @@ export default {
     }
   },
   watch: {
+    '$route.query.tab'() {
+      this.applyRouteTab()
+    },
     activeTab(value) {
       if (this.activeSection === 'claude-code' || this.activeSection === 'codex' || this.activeSection === 'cc-switch' || this.activeSection === 'openclaw') {
         this.activeSection = value
@@ -1077,6 +1083,13 @@ curl -L "${this.relayOpenaiBase}/videos/video_xxx/content" \\
     }
   },
   methods: {
+    applyRouteTab() {
+      const tab = this.$route.query && this.$route.query.tab
+      const allowed = ['claude-code', 'codex', 'cc-switch', 'openclaw']
+      if (tab && allowed.indexOf(tab) >= 0) {
+        this.activeTab = tab
+      }
+    },
     async fetchSiteConfig() {
       try {
         const res = await getSiteConfig()

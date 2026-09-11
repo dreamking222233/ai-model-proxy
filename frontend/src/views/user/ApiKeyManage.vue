@@ -10,7 +10,7 @@
             <p class="page-desc">管理您的访问密钥，监控实时用量，并确保调用安全。</p>
           </div>
           <div class="header-right">
-            <a-button type="primary" class="create-btn" @click="showCreateModal">
+            <a-button id="tour-create-api-key" type="primary" class="create-btn" @click="showCreateModal">
               <a-icon type="plus" /> 创建 API 密钥
             </a-button>
           </div>
@@ -441,6 +441,13 @@ export default {
     },
     totalCost() {
       return this.apiKeys.reduce((sum, k) => sum + (k.total_cost || 0), 0)
+    }
+  },
+  watch: {
+    showKeyModalVisible(val, oldVal) {
+      if (oldVal && !val) {
+        this.$root.$emit('user-onboarding:api-key-created')
+      }
     }
   },
   created() {

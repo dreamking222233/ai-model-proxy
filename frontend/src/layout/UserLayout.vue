@@ -44,7 +44,7 @@
           </a-menu-item>
           <a-menu-item key="/user/api-keys">
             <a-icon type="key" />
-            <span>API 密钥</span>
+            <span id="tour-menu-api-keys">API 密钥</span>
           </a-menu-item>
           <a-menu-item key="/user/balance">
             <a-icon type="file-text" />
@@ -80,7 +80,7 @@
           </a-menu-item>
           <a-menu-item key="/user/quickstart">
             <a-icon type="rocket" />
-            <span>快速开始</span>
+            <span id="tour-menu-quickstart">快速开始</span>
           </a-menu-item>
         </a-menu>
       </div>
@@ -167,6 +167,8 @@
         <a-empty v-else description="暂无公告" />
       </a-spin>
     </a-drawer>
+
+    <UserOnboardingTour @expand-sidebar="collapsed = false" />
   </a-layout>
 </template>
 
@@ -174,9 +176,14 @@
 import { getUser, clearSiteClientCache } from '@/utils/auth'
 import { getAnnouncements, getSiteConfig } from '@/api/user'
 import { logout as logoutApi } from '@/api/auth'
+import UserOnboardingTour from '@/components/common/UserOnboardingTour.vue'
+import { isOnboardingActive } from '@/utils/onboarding'
 
 export default {
   name: 'UserLayout',
+  components: {
+    UserOnboardingTour
+  },
   data() {
     return {
       collapsed: false,
@@ -218,6 +225,7 @@ export default {
   },
   methods: {
     syncMobileCollapsed() {
+      if (isOnboardingActive()) return
       if (window.innerWidth <= 768) {
         this.collapsed = true
       }

@@ -143,6 +143,7 @@ import CountTo from 'vue-count-to'
 import { getAnnouncements, getBalance, getUsageLogs, getProfile, getSiteConfig } from '@/api/user'
 import { getUser } from '@/utils/auth'
 import { formatDate } from '@/utils'
+import { isOnboardingActive, shouldStartOnboarding } from '@/utils/onboarding'
 
 export default {
   name: 'UserDashboard',
@@ -299,7 +300,10 @@ export default {
     this.reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     await this.fetchSiteConfig()
     await this.fetchAnnouncements()
-    this.showAnnouncementQueue()
+    const user = getUser()
+    if (!shouldStartOnboarding(user) && !isOnboardingActive()) {
+      this.showAnnouncementQueue()
+    }
   },
   methods: {
     formatDate,

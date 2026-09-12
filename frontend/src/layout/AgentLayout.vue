@@ -154,6 +154,10 @@ export default {
 
 <style lang="less" scoped>
 .fixed-layout { height: 100vh; overflow: hidden; }
+.main-layout {
+  min-width: 0;
+  overflow: hidden;
+}
 .agent-sider {
   height: 100vh;
   position: fixed;
@@ -283,6 +287,7 @@ export default {
 }
 .agent-content {
   min-height: calc(100vh - 64px);
+  min-width: 0;
   overflow: auto;
   background: #f5f7fb;
   padding: 24px;

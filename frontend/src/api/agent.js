@@ -217,7 +217,11 @@ export function getAgentWorkbenchSummary() {
   })
 }
 
-export function getAgentRequestStats(params) {
+export function getAgentRequestStats(rangeOrDays) {
+  const params = typeof rangeOrDays === 'number'
+    ? { days: rangeOrDays }
+    : (rangeOrDays ? { range: rangeOrDays } : undefined)
+
   return request({
     url: '/api/agent/stats/requests',
     method: 'get',

@@ -1,18 +1,29 @@
 <template>
   <div class="agent-dashboard-page">
     <div class="dashboard-header">
-      <div>
+      <div class="header-copy">
         <h2 class="page-title">
           <a-icon type="dashboard" class="title-icon" />
           代理仪表盘
         </h2>
-        <p class="page-subtitle">{{ config.site_name || '当前代理站点' }} 的用户、请求和 Token 使用概览</p>
+        <p class="page-subtitle">{{ config.site_name || '当前代理站点' }} 的用户、请求、Token 和消耗概览</p>
       </div>
       <div class="header-actions">
         <a-tooltip title="自动刷新">
-          <a-switch v-model="autoRefresh" checked-children="ON" un-checked-children="OFF" @change="toggleAutoRefresh" />
+          <a-switch
+            v-model="autoRefresh"
+            checked-children="ON"
+            un-checked-children="OFF"
+            @change="toggleAutoRefresh"
+          />
         </a-tooltip>
-        <a-button type="primary" icon="reload" :loading="loading" @click="refreshAll">
+        <a-button
+          type="primary"
+          icon="reload"
+          class="refresh-btn"
+          :loading="loading"
+          @click="refreshAll"
+        >
           刷新数据
         </a-button>
       </div>
@@ -20,96 +31,153 @@
 
     <a-spin :spinning="loading" tip="加载中...">
       <a-row :gutter="16" class="stat-row">
-        <a-col v-for="card in statCards" :key="card.title" :xs="24" :sm="12" :lg="6">
-          <a-card class="stat-card" :class="card.class" @click="card.onClick">
-            <div class="stat-card-content">
-              <div class="stat-icon" :style="{ background: card.color }">
-                <a-icon :type="card.icon" />
-              </div>
-              <div class="stat-info">
-                <div class="stat-title">{{ card.title }}</div>
-                <div class="stat-value">
-                  <count-to :start-val="0" :end-val="card.value" :duration="1200" />
+        <a-col
+          v-for="(card, index) in statCards"
+          :key="card.title"
+          :xs="index === statCards.length - 1 ? 24 : 12"
+          :sm="12"
+          :xl="8"
+        >
+          <div class="stat-card-wrapper" :style="{ animationDelay: `${index * 0.08}s` }">
+            <a-card :class="['stat-card', card.class]" @click="card.onClick">
+              <div class="stat-card-content">
+                <div class="stat-icon" :style="{ background: card.gradient }">
+                  <a-icon :type="card.icon" />
+                </div>
+                <div class="stat-info">
+                  <div class="stat-title">{{ card.title }}</div>
+                  <div v-if="card.format === 'usd'" class="stat-value amount-value" :title="formatUsd(card.value)">
+                    {{ formatUsd(card.value) }}
+                  </div>
+                  <div v-else class="stat-value" :title="formatNumber(card.value)">
+                    <count-to
+                      :start-val="0"
+                      :end-val="card.value"
+                      :duration="1500"
+                      :separator="','"
+                    />
+                  </div>
+                  <div class="stat-desc">
+                    <span>{{ card.desc }}</span>
+                    <span v-if="card.todayIncrement !== undefined" class="stat-increment">
+                      <a-icon type="rise" />
+                      今日新增 {{ formatNumber(card.todayIncrement) }} 人
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
-          </a-card>
+              <div class="stat-card-bg"></div>
+            </a-card>
+          </div>
         </a-col>
       </a-row>
 
-      <a-row :gutter="16" class="progress-row">
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="code" class="progress-icon" />
-              <span>今日 Token 使用</span>
-            </div>
-            <div class="progress-value">
-              <count-to :start-val="0" :end-val="stats.today_tokens || 0" :duration="1200" />
-            </div>
-            <a-progress :percent="tokenProgress" :show-info="false" stroke-color="#1890ff" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="check-circle" class="progress-icon success" />
-              <span>成功率</span>
-            </div>
-            <div class="progress-value">
-              <count-to :start-val="0" :end-val="successRate" :duration="1200" :decimals="1" />%
-            </div>
-            <a-progress :percent="successRate" :show-info="false" stroke-color="#52c41a" />
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :lg="8">
-          <a-card class="progress-card">
-            <div class="progress-header">
-              <a-icon type="warning" class="progress-icon error" />
-              <span>今日失败</span>
-            </div>
-            <div class="progress-value" :class="{ error: stats.today_errors > 0 }">
-              <count-to :start-val="0" :end-val="stats.today_errors || 0" :duration="1200" />
-            </div>
-            <a-progress :percent="errorRate" :show-info="false" :stroke-color="stats.today_errors > 0 ? '#f5222d' : '#52c41a'" />
-          </a-card>
-        </a-col>
-      </a-row>
-
-      <a-row :gutter="16" class="content-row">
-        <a-col :span="24">
-          <a-card class="panel-card chart-card">
+      <a-row :gutter="16" class="chart-row">
+        <a-col :span="24" class="chart-col">
+          <a-card class="chart-card">
             <template slot="title">
-              <span class="card-title-main">请求趋势（近 7 天）</span>
+              <div class="card-title-block">
+                <span class="card-title-main">请求趋势（{{ currentRangeLabel }}）</span>
+                <span class="card-title-sub">图表和表格使用同一统计口径</span>
+              </div>
+            </template>
+            <template slot="extra">
+              <a-radio-group
+                :value="selectedRange"
+                size="small"
+                button-style="solid"
+                @change="handleRangeChange"
+              >
+                <a-radio-button value="today">当天</a-radio-button>
+                <a-radio-button value="7d">七天</a-radio-button>
+                <a-radio-button value="30d">一个月</a-radio-button>
+              </a-radio-group>
             </template>
             <div ref="requestChart" class="chart"></div>
           </a-card>
         </a-col>
       </a-row>
 
-      <a-card title="详细统计" class="panel-card table-card">
-        <a-table
-          :columns="requestStatsColumns"
-          :data-source="requestStats"
-          :pagination="false"
-          :loading="statsLoading"
-          row-key="date"
-          size="middle"
-        >
-          <template slot="date" slot-scope="text">
-            <a-tag color="blue">{{ text }}</a-tag>
-          </template>
-          <template slot="number" slot-scope="text">
-            <span class="table-number">{{ Number(text || 0).toLocaleString('zh-CN') }}</span>
-          </template>
-          <template slot="success" slot-scope="text">
-            <a-badge :count="Number(text || 0)" :number-style="{ backgroundColor: '#52c41a' }" />
-          </template>
-          <template slot="failed" slot-scope="text">
-            <a-badge :count="Number(text || 0)" :number-style="{ backgroundColor: Number(text || 0) > 0 ? '#f5222d' : '#d9d9d9' }" />
-          </template>
-        </a-table>
-      </a-card>
+      <a-row :gutter="16" class="table-row">
+        <a-col :span="24">
+          <a-card class="table-card">
+            <template slot="title">
+              <div class="card-title-block">
+                <span class="card-title-main">详细统计</span>
+                <span class="card-title-sub">{{ tableSubtitle }}</span>
+              </div>
+            </template>
+            <a-table
+              v-if="!isMobile"
+              :columns="requestStatsColumns"
+              :data-source="requestStats"
+              :pagination="false"
+              :loading="statsLoading"
+              :row-key="getRowKey"
+              size="middle"
+              :scroll="{ x: 920 }"
+              :row-class-name="(_, index) => index % 2 === 0 ? 'table-row-light' : 'table-row-dark'"
+            >
+              <template slot="date" slot-scope="text">
+                <a-tag :color="selectedRange === 'today' ? 'cyan' : 'blue'">{{ text }}</a-tag>
+              </template>
+              <template slot="total_requests" slot-scope="text">
+                <a-tag class="metric-tag metric-tag-total">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="active_users" slot-scope="text">
+                <a-tag class="user-tag user-tag-active">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="new_users" slot-scope="text">
+                <a-tag class="user-tag user-tag-new">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="total_tokens" slot-scope="text">
+                <a-tag class="token-tag token-tag-total">{{ formatNumber(text) }}</a-tag>
+              </template>
+              <template slot="total_cost" slot-scope="text">
+                <a-tag class="cost-tag">{{ formatUsd(text) }}</a-tag>
+              </template>
+            </a-table>
+
+            <div v-else class="mobile-stats-list">
+              <a-spin v-if="statsLoading" />
+              <template v-else-if="requestStats.length">
+                <div
+                  v-for="record in requestStats"
+                  :key="getRowKey(record)"
+                  class="mobile-stat-row"
+                >
+                  <div class="mobile-stat-date">
+                    <a-tag :color="selectedRange === 'today' ? 'cyan' : 'blue'">{{ record.label || record.date }}</a-tag>
+                  </div>
+                  <div class="mobile-stat-grid">
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">请求次数</span>
+                      <span class="mobile-stat-value total">{{ formatNumber(record.total_requests) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">活跃用户</span>
+                      <span class="mobile-stat-value active-user">{{ formatNumber(record.active_users) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">新增用户</span>
+                      <span class="mobile-stat-value new-user">{{ formatNumber(record.new_users) }}</span>
+                    </div>
+                    <div class="mobile-stat-item">
+                      <span class="mobile-stat-label">使用 Token</span>
+                      <span class="mobile-stat-value token">{{ formatNumber(record.total_tokens) }}</span>
+                    </div>
+                    <div class="mobile-stat-item full">
+                      <span class="mobile-stat-label">消耗金额</span>
+                      <span class="mobile-stat-value cost">{{ formatUsd(record.total_cost) }}</span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="mobile-empty">暂无统计数据</div>
+            </div>
+          </a-card>
+        </a-col>
+      </a-row>
     </a-spin>
   </div>
 </template>
@@ -117,6 +185,12 @@
 <script>
 import CountTo from 'vue-count-to'
 import { getAgentDashboardStats, getAgentRequestStats, getAgentSiteConfig } from '@/api/agent'
+
+const RANGE_LABEL_MAP = {
+  today: '当天',
+  '7d': '近 7 天',
+  '30d': '近 30 天'
+}
 
 export default {
   name: 'AgentDashboard',
@@ -127,19 +201,58 @@ export default {
       statsLoading: false,
       autoRefresh: false,
       refreshTimer: null,
+      resizeHandler: null,
+      isMobile: false,
+      selectedRange: '7d',
+      statsRequestId: 0,
       stats: {},
       config: {},
       requestStats: [],
-      requestChart: null,
       requestStatsColumns: [
-        { title: '日期', dataIndex: 'date', key: 'date', scopedSlots: { customRender: 'date' } },
-        { title: '总请求数', dataIndex: 'total_requests', key: 'total_requests', scopedSlots: { customRender: 'number' } },
-        { title: '成功', dataIndex: 'success_requests', key: 'success_requests', scopedSlots: { customRender: 'success' } },
-        { title: '失败', dataIndex: 'failed_requests', key: 'failed_requests', scopedSlots: { customRender: 'failed' } },
-        { title: '输入 Token', dataIndex: 'total_input_tokens', key: 'total_input_tokens', scopedSlots: { customRender: 'number' } },
-        { title: '输出 Token', dataIndex: 'total_output_tokens', key: 'total_output_tokens', scopedSlots: { customRender: 'number' } },
-        { title: '总 Token', dataIndex: 'total_tokens', key: 'total_tokens', scopedSlots: { customRender: 'number' } }
-      ]
+        {
+          title: '时间',
+          dataIndex: 'label',
+          key: 'label',
+          width: 120,
+          scopedSlots: { customRender: 'date' }
+        },
+        {
+          title: '请求次数',
+          dataIndex: 'total_requests',
+          key: 'total_requests',
+          width: 140,
+          scopedSlots: { customRender: 'total_requests' }
+        },
+        {
+          title: '活跃用户',
+          dataIndex: 'active_users',
+          key: 'active_users',
+          width: 140,
+          scopedSlots: { customRender: 'active_users' }
+        },
+        {
+          title: '新增用户',
+          dataIndex: 'new_users',
+          key: 'new_users',
+          width: 140,
+          scopedSlots: { customRender: 'new_users' }
+        },
+        {
+          title: '使用 Token',
+          dataIndex: 'total_tokens',
+          key: 'total_tokens',
+          width: 180,
+          scopedSlots: { customRender: 'total_tokens' }
+        },
+        {
+          title: '消耗金额',
+          dataIndex: 'total_cost',
+          key: 'total_cost',
+          width: 200,
+          scopedSlots: { customRender: 'total_cost' }
+        }
+      ],
+      requestChart: null
     }
   },
   computed: {
@@ -149,127 +262,303 @@ export default {
           title: '用户总数',
           value: this.stats.total_users || 0,
           icon: 'team',
-          color: '#667eea',
+          gradient: 'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
           class: 'users-card',
+          desc: '当前站点注册用户',
+          todayIncrement: this.stats.today_new_users || 0,
           onClick: () => this.$router.push('/agent/users')
         },
         {
-          title: '今日请求',
+          title: '今日活跃用户',
+          value: this.stats.today_active_users || 0,
+          icon: 'usergroup-add',
+          gradient: 'linear-gradient(135deg, #db2777 0%, #f472b6 100%)',
+          class: 'active-users-card',
+          desc: '今日至少使用一次',
+          onClick: () => this.$router.push('/agent/logs')
+        },
+        {
+          title: '今日请求总数',
           value: this.stats.today_requests || 0,
           icon: 'thunderbolt',
-          color: '#fa8c16',
+          gradient: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
           class: 'requests-card',
+          desc: '今日累计调用',
           onClick: () => this.$router.push('/agent/logs')
         },
         {
-          title: '今日 Token',
+          title: '今日 Token 使用总数',
           value: this.stats.today_tokens || 0,
           icon: 'code',
-          color: '#8b5cf6',
+          gradient: 'linear-gradient(135deg, #10b981 0%, #14b8a6 100%)',
           class: 'tokens-card',
+          desc: '今日累计 Token',
           onClick: () => this.$router.push('/agent/logs')
         },
         {
-          title: '失败次数',
-          value: this.stats.today_errors || 0,
-          icon: 'warning',
-          color: '#ef4444',
-          class: 'errors-card',
+          title: '今日金额总数',
+          value: this.stats.today_cost || 0,
+          icon: 'dollar',
+          gradient: 'linear-gradient(135deg, #f97316 0%, #fb7185 100%)',
+          class: 'cost-card',
+          desc: '今日累计 USD',
+          format: 'usd',
           onClick: () => this.$router.push('/agent/logs')
         }
       ]
     },
-    tokenProgress() {
-      const max = 1000000
-      return Math.min((this.stats.today_tokens || 0) / max * 100, 100)
+    currentRangeLabel() {
+      return RANGE_LABEL_MAP[this.selectedRange] || RANGE_LABEL_MAP['7d']
     },
-    successRate() {
-      const total = this.stats.today_requests || 0
-      const errors = this.stats.today_errors || 0
-      if (total === 0) return 100
-      return Number(((total - errors) / total * 100).toFixed(1))
-    },
-    errorRate() {
-      const total = this.stats.today_requests || 0
-      const errors = this.stats.today_errors || 0
-      if (total === 0) return 0
-      return Number((errors / total * 100).toFixed(1))
+    tableSubtitle() {
+      return this.selectedRange === 'today'
+        ? '按当天每 2 小时聚合'
+        : `按${this.currentRangeLabel.replace('近 ', '')}每日聚合`
     }
   },
   mounted() {
-    this.refreshAll()
+    this.updateViewport()
     this.initChart()
+    this.refreshAll()
   },
   beforeDestroy() {
-    if (this.refreshTimer) clearInterval(this.refreshTimer)
-    if (this.requestChart) this.requestChart.dispose()
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer)
+    }
+    if (this.resizeHandler) {
+      window.removeEventListener('resize', this.resizeHandler)
+    }
+    if (this.requestChart) {
+      this.requestChart.dispose()
+    }
   },
   methods: {
-    async refreshAll() {
-      await Promise.all([this.fetchConfig(), this.fetchDashboardStats(), this.fetchRequestStats()])
+    updateViewport() {
+      this.isMobile = window.innerWidth <= 767
+    },
+    formatNumber(value) {
+      return Number(value || 0).toLocaleString('zh-CN')
+    },
+    formatUsd(value) {
+      const amount = Number(value || 0)
+      return `$${amount.toLocaleString('en-US', {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 6
+      })}`
+    },
+    getRowKey(record) {
+      return record.bucket_key || record.date || record.label
     },
     async fetchConfig() {
-      const res = await getAgentSiteConfig()
-      this.config = res.data || {}
+      try {
+        const res = await getAgentSiteConfig()
+        this.config = res.data || {}
+      } catch (err) {
+        console.error('Failed to fetch agent site config:', err)
+      }
     },
     async fetchDashboardStats() {
       this.loading = true
       try {
         const res = await getAgentDashboardStats()
         this.stats = res.data || {}
+      } catch (err) {
+        this.$message.error('获取统计数据失败')
+        console.error('Failed to fetch dashboard stats:', err)
       } finally {
         this.loading = false
       }
     },
     async fetchRequestStats() {
+      const requestId = ++this.statsRequestId
       this.statsLoading = true
       try {
-        const res = await getAgentRequestStats({ days: 7 })
+        const res = await getAgentRequestStats(this.selectedRange)
+        if (requestId !== this.statsRequestId) {
+          return
+        }
         this.requestStats = res.data || []
         this.updateRequestChart()
+      } catch (err) {
+        if (requestId !== this.statsRequestId) {
+          return
+        }
+        this.$message.error('获取趋势统计失败')
+        console.error('Failed to fetch request stats:', err)
       } finally {
-        this.statsLoading = false
+        if (requestId === this.statsRequestId) {
+          this.statsLoading = false
+        }
       }
     },
+    async refreshAll() {
+      await Promise.all([this.fetchConfig(), this.fetchDashboardStats(), this.fetchRequestStats()])
+    },
+    handleRangeChange(event) {
+      const nextRange = event && event.target ? event.target.value : event
+      if (!nextRange || nextRange === this.selectedRange) {
+        return
+      }
+      this.selectedRange = nextRange
+      this.fetchRequestStats()
+    },
     toggleAutoRefresh(checked) {
+      if (this.refreshTimer) {
+        clearInterval(this.refreshTimer)
+        this.refreshTimer = null
+      }
       if (checked) {
         this.refreshTimer = setInterval(this.refreshAll, 30000)
         this.$message.success('已开启自动刷新（30秒）')
       } else {
-        if (this.refreshTimer) clearInterval(this.refreshTimer)
-        this.refreshTimer = null
         this.$message.info('已关闭自动刷新')
       }
     },
     initChart() {
       import('echarts').then(echarts => {
-        if (!this.$refs.requestChart) return
-        this.requestChart = echarts.init(this.$refs.requestChart)
+        if (this._isDestroyed) {
+          return
+        }
+        if (this.$refs.requestChart && !this.requestChart) {
+          this.requestChart = echarts.init(this.$refs.requestChart)
+        }
+
         this.updateRequestChart()
-        window.addEventListener('resize', () => {
-          if (this.requestChart) this.requestChart.resize()
-        })
+
+        if (!this.resizeHandler) {
+          this.resizeHandler = () => {
+            const previous = this.isMobile
+            this.updateViewport()
+            if (previous !== this.isMobile) {
+              this.updateRequestChart()
+            }
+            this.requestChart && this.requestChart.resize()
+          }
+          window.addEventListener('resize', this.resizeHandler)
+        }
       })
     },
     updateRequestChart() {
-      if (!this.requestChart) return
-      const dates = this.requestStats.map(item => item.date)
-      const requests = this.requestStats.map(item => item.total_requests)
-      const success = this.requestStats.map(item => item.success_requests)
-      const failed = this.requestStats.map(item => item.failed_requests)
+      if (!this.requestChart) {
+        return
+      }
+
+      const labels = this.requestStats.map(item => item.label || item.date)
+      const requests = this.requestStats.map(item => Number(item.total_requests || 0))
+      const tokens = this.requestStats.map(item => Number(item.total_tokens || 0))
+      const costs = this.requestStats.map(item => Number(item.total_cost || 0))
 
       this.requestChart.setOption({
-        tooltip: { trigger: 'axis', axisPointer: { type: 'cross', label: { backgroundColor: '#667eea' } } },
-        legend: { data: ['总请求', '成功', '失败'], textStyle: { color: '#94a3b8' } },
-        grid: { left: '2%', right: '2%', bottom: '3%', top: '15%', containLabel: true },
-        xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: 'rgba(102, 126, 234, 0.1)' } }, axisLabel: { color: '#94a3b8' } },
-        yAxis: { type: 'value', axisLine: { show: false }, axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { type: 'dashed', color: 'rgba(102, 126, 234, 0.05)' } } },
+        tooltip: {
+          trigger: 'axis',
+          confine: true,
+          axisPointer: { type: 'shadow' },
+          formatter: params => {
+            return params.map(item => {
+              const value = item.seriesName === '消耗金额'
+                ? this.formatUsd(item.value)
+                : this.formatNumber(item.value)
+              return `${item.marker}${item.seriesName}：${value}`
+            }).join('<br/>')
+          }
+        },
+        legend: {
+          top: 0,
+          left: this.isMobile ? 0 : 'center',
+          itemWidth: this.isMobile ? 12 : 25,
+          itemHeight: this.isMobile ? 8 : 14,
+          textStyle: {
+            fontSize: this.isMobile ? 11 : 12
+          },
+          data: ['请求次数', '使用 Token', '消耗金额']
+        },
+        grid: {
+          left: this.isMobile ? 4 : 84,
+          right: this.isMobile ? 8 : 176,
+          bottom: this.isMobile ? 36 : '3%',
+          top: this.isMobile ? 64 : 48,
+          containLabel: true
+        },
+        xAxis: {
+          type: 'category',
+          data: labels,
+          axisLine: { lineStyle: { color: '#d4d4d8' } },
+          axisTick: { alignWithLabel: true },
+          axisLabel: {
+            color: '#64748b',
+            interval: this.isMobile ? 'auto' : 0,
+            rotate: this.isMobile ? 35 : (this.selectedRange === '30d' ? 35 : 0)
+          }
+        },
+        yAxis: [
+          {
+            type: 'value',
+            name: this.isMobile ? '' : '请求次数',
+            position: 'left',
+            nameTextStyle: { color: '#2563eb' },
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
+            axisLabel: {
+              show: !this.isMobile,
+              color: '#2563eb',
+              formatter: value => this.formatNumber(value)
+            }
+          },
+          {
+            type: 'value',
+            name: this.isMobile ? '' : 'Token',
+            position: 'right',
+            nameTextStyle: { color: '#10b981' },
+            axisLine: { show: false },
+            splitLine: { show: false },
+            axisLabel: {
+              show: !this.isMobile,
+              color: '#10b981',
+              formatter: value => this.formatNumber(value)
+            }
+          },
+          {
+            type: 'value',
+            name: this.isMobile ? '' : 'USD',
+            position: 'right',
+            offset: 104,
+            nameTextStyle: { color: '#f97316' },
+            axisLine: { show: false },
+            splitLine: { show: false },
+            axisLabel: {
+              show: !this.isMobile,
+              color: '#f97316',
+              formatter: value => `$${Number(value || 0).toFixed(6)}`
+            }
+          }
+        ],
         series: [
-          { name: '总请求', type: 'line', data: requests, smooth: true, symbol: 'circle', symbolSize: 8, itemStyle: { color: '#667eea' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(102, 126, 234, 0.2)' }, { offset: 1, color: 'rgba(102, 126, 234, 0)' }] } } },
-          { name: '成功', type: 'bar', data: success, barWidth: '15%', itemStyle: { borderRadius: [4, 4, 0, 0], color: '#52c41a' } },
-          { name: '失败', type: 'bar', data: failed, barWidth: '15%', itemStyle: { borderRadius: [4, 4, 0, 0], color: '#ef4444' } }
+          {
+            name: '请求次数',
+            type: 'bar',
+            yAxisIndex: 0,
+            barMaxWidth: 24,
+            data: requests,
+            itemStyle: { color: '#2563eb', borderRadius: [6, 6, 0, 0] }
+          },
+          {
+            name: '使用 Token',
+            type: 'bar',
+            yAxisIndex: 1,
+            barMaxWidth: 24,
+            data: tokens,
+            itemStyle: { color: '#10b981', borderRadius: [6, 6, 0, 0] }
+          },
+          {
+            name: '消耗金额',
+            type: 'bar',
+            yAxisIndex: 2,
+            barMaxWidth: 24,
+            data: costs,
+            itemStyle: { color: '#f97316', borderRadius: [6, 6, 0, 0] }
+          }
         ]
-      })
+      }, true)
     }
   }
 }
@@ -277,199 +566,600 @@ export default {
 
 <style lang="less" scoped>
 .agent-dashboard-page {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+
   .dashboard-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 20px;
     margin-bottom: 24px;
-    padding: 32px 40px;
-    background: radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.15), transparent 40%),
-                linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 28px;
-    box-shadow: 0 20px 50px rgba(102, 126, 234, 0.2);
-    color: #fff;
+    padding: 24px 32px;
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(20px);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.05);
+    min-width: 0;
+
+    .header-copy {
+      min-width: 0;
+      flex: 1;
+    }
 
     .page-title {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 800;
+      color: #0f172a;
       display: flex;
       align-items: center;
-      margin: 0;
-      color: #fff;
-      font-size: 28px;
-      font-weight: 900;
-      letter-spacing: -1px;
 
       .title-icon {
         margin-right: 14px;
-        color: rgba(255, 255, 255, 0.9);
+        color: #667eea;
+        font-size: 30px;
       }
     }
 
     .page-subtitle {
       margin: 8px 0 0;
-      color: rgba(255, 255, 255, 0.8);
+      color: #64748b;
       font-size: 14px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .header-actions {
       display: flex;
-      align-items: center;
       gap: 16px;
-      
-      .ant-btn {
-        background: rgba(255, 255, 255, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        color: #fff;
-        height: 42px;
-        border-radius: 12px;
-        font-weight: 700;
-        &:hover { background: #fff; color: #667eea; }
-      }
+      align-items: center;
+      flex-shrink: 0;
     }
   }
 
   .stat-row {
-    margin-bottom: 24px;
+    margin-bottom: 20px;
+
+    .stat-card-wrapper {
+      animation: slideInUp 0.55s ease-out;
+      animation-fill-mode: both;
+    }
 
     .stat-card {
-      height: 150px;
-      margin-bottom: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.6);
-      background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(20px);
       border-radius: 24px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      background: rgba(255, 255, 255, 0.78);
+      backdrop-filter: blur(15px);
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+      transition: all 0.35s ease;
+      position: relative;
+      overflow: hidden;
       cursor: pointer;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      /deep/ .ant-card-body { padding: 24px; display: flex; align-items: center; }
+      height: 158px;
+      margin-bottom: 16px;
 
       &:hover {
+        box-shadow: 0 18px 45px rgba(102, 126, 234, 0.12);
         transform: translateY(-6px);
         background: rgba(255, 255, 255, 0.9);
-        box-shadow: 0 20px 40px rgba(102, 126, 234, 0.12);
-        border-color: rgba(102, 126, 234, 0.2);
+
+        .stat-card-bg {
+          transform: scale(1.15);
+          opacity: 0.28;
+        }
+      }
+
+      /deep/ .ant-card-body {
+        height: 100%;
+        padding: 20px;
+        overflow: hidden;
       }
 
       .stat-card-content {
         display: flex;
         align-items: center;
-        gap: 20px;
-        width: 100%;
+        gap: 16px;
+        position: relative;
+        z-index: 2;
+        min-width: 0;
+        height: 100%;
 
         .stat-icon {
-          width: 68px;
-          height: 68px;
+          width: 56px;
+          height: 56px;
+          flex-shrink: 0;
+          border-radius: 18px;
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 20px;
+          font-size: 24px;
           color: #fff;
-          font-size: 32px;
-          box-shadow: 0 10px 20px -5px rgba(0,0,0,0.2);
-          transition: all 0.3s;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
         }
 
-        .stat-info { flex: 1; }
+        .stat-info {
+          flex: 1;
+          min-width: 0;
 
-        .stat-title {
-          margin-bottom: 4px;
-          color: #94a3b8;
-          font-size: 13px;
-          font-weight: 800;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
+          .stat-title {
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: 0.4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
 
-        .stat-value {
-          color: #1e293b;
-          font-size: 34px;
-          font-weight: 900;
-          line-height: 1;
-          font-family: 'JetBrains Mono', monospace;
+          .stat-value {
+            color: #0f172a;
+            font-size: 28px;
+            font-weight: 800;
+            line-height: 1.15;
+            margin-bottom: 8px;
+            font-family: 'JetBrains Mono', 'MonoLisa', monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+
+            /deep/ span {
+              display: block;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            &.amount-value {
+              color: #c2410c;
+              font-size: 20px;
+            }
+          }
+
+          .stat-desc {
+            color: #94a3b8;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+
+            .stat-increment {
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              color: #16a34a;
+              white-space: nowrap;
+            }
+          }
         }
+      }
+
+      .stat-card-bg {
+        position: absolute;
+        top: -42%;
+        right: -10%;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(102, 126, 234, 0.16) 0%, transparent 70%);
+        transition: all 0.5s ease;
+        opacity: 0.14;
+        z-index: 1;
       }
     }
   }
 
-  .progress-row,
-  .content-row {
-    margin-bottom: 24px;
+  .chart-row,
+  .table-row {
+    margin-top: 20px;
   }
 
-  .progress-card,
-  .panel-card {
-    margin-bottom: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.6);
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(20px);
-    border-radius: 24px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
-  }
-
-  .progress-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    color: #64748b;
-    font-weight: 800;
-    text-transform: uppercase;
-    font-size: 13px;
-
-    .progress-icon {
-      font-size: 18px;
-      color: #667eea;
-
-      &.success { color: #52c41a; }
-      &.error { color: #ef4444; }
+  .chart-row {
+    .chart-col {
+      display: flex;
+      align-items: stretch;
+      min-width: 0;
     }
   }
 
-  .progress-value {
-    margin: 16px 0 12px;
-    color: #1e293b;
-    font-size: 36px;
-    font-weight: 900;
-    font-family: 'JetBrains Mono', monospace;
+  .chart-card,
+  .table-card {
+    border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.68);
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(20px);
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.05);
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
 
-    &.error { color: #ef4444; }
+    /deep/ .ant-card-head {
+      border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+      padding: 0 24px;
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+
+      .ant-card-head-title {
+        padding: 0;
+        overflow: hidden;
+      }
+    }
+
+    /deep/ .ant-card-extra {
+      padding: 0;
+    }
+
+    /deep/ .ant-card-body {
+      padding: 24px;
+      overflow: hidden;
+    }
   }
 
-  .card-title-main { font-size: 18px; font-weight: 900; color: #1e293b; }
+  .chart-row {
+    .chart-card {
+      min-height: 468px;
+
+      /deep/ .ant-card-body {
+        height: calc(100% - 64px);
+        display: flex;
+        flex-direction: column;
+      }
+    }
+  }
+
+  .card-title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .card-title-main {
+    font-size: 16px;
+    font-weight: 800;
+    color: #0f172a;
+  }
+
+  .card-title-sub {
+    font-size: 12px;
+    color: #94a3b8;
+    font-weight: 600;
+  }
 
   .chart {
-    height: 360px;
-    padding: 10px;
+    height: 320px;
+    min-width: 0;
   }
 
   .table-card {
-    /deep/ .ant-card-head { border-bottom: 1px solid rgba(102, 126, 234, 0.05); padding: 0 28px; height: 64px; display: flex; align-items: center; }
-    /deep/ .ant-card-head-title { font-size: 18px; font-weight: 900; color: #1e293b; }
-    /deep/ .ant-card-body { padding: 0; }
-    
+    /deep/ .ant-table-wrapper {
+      overflow: hidden;
+    }
+
     /deep/ .ant-table {
       background: transparent;
+
       .ant-table-thead > tr > th {
-        background: rgba(245, 247, 255, 0.7); font-weight: 800; color: #475569; border-bottom: 1px solid #eef2f6; padding: 20px 28px;
+        background: rgba(102, 126, 234, 0.05);
+        color: #475569;
+        font-weight: 700;
+        white-space: nowrap;
       }
-      .ant-table-tbody > tr > td { border-bottom: 1px solid #f1f5f9; padding: 24px 28px; }
-      .ant-table-tbody > tr:hover > td { background: rgba(102, 126, 234, 0.04) !important; }
+
+      .ant-table-tbody > tr > td {
+        overflow: hidden;
+      }
+
+      .ant-table-tbody > tr:hover > td {
+        background: rgba(102, 126, 234, 0.04) !important;
+      }
     }
-    .table-number { font-weight: 700; color: #334155; font-family: 'JetBrains Mono', monospace; }
+
+    .metric-tag,
+    .token-tag,
+    .cost-tag,
+    .user-tag {
+      max-width: 100%;
+      text-align: center;
+      border-radius: 999px;
+      border: none;
+      font-weight: 800;
+      padding: 3px 12px;
+      font-family: 'JetBrains Mono', 'MonoLisa', monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    .metric-tag {
+      min-width: 72px;
+      color: #1d4ed8;
+      background: rgba(37, 99, 235, 0.12);
+    }
+
+    .token-tag {
+      min-width: 96px;
+      color: #7c2d12;
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.18), rgba(249, 115, 22, 0.18));
+      box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.1);
+    }
+
+    .cost-tag {
+      min-width: 108px;
+      color: #c2410c;
+      background: rgba(249, 115, 22, 0.14);
+    }
+
+    .user-tag {
+      min-width: 72px;
+    }
+
+    .user-tag-active {
+      color: #be185d;
+      background: rgba(236, 72, 153, 0.12);
+    }
+
+    .user-tag-new {
+      color: #15803d;
+      background: rgba(34, 197, 94, 0.12);
+    }
+  }
+
+  .mobile-stats-list {
+    display: none;
   }
 }
 
-@media (max-width: 768px) {
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 1199px) {
   .agent-dashboard-page {
     .dashboard-header {
-      padding: 24px;
       flex-direction: column;
       align-items: flex-start;
+      gap: 16px;
+    }
+
+    .chart {
+      height: 300px;
+    }
+  }
+}
+
+@media (max-width: 767px) {
+  .agent-dashboard-page {
+    .dashboard-header {
+      margin-bottom: 12px;
+      padding: 14px;
+      border-radius: 10px;
+
+      .page-title {
+        font-size: 20px;
+
+        .title-icon {
+          margin-right: 8px;
+          font-size: 22px;
+        }
+      }
+
+      .page-subtitle {
+        white-space: normal;
+      }
 
       .header-actions {
         width: 100%;
-        margin-top: 16px;
-        justify-content: space-between;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 10px;
+
+        .refresh-btn {
+          flex: 1;
+          min-width: 150px;
+        }
       }
+    }
+
+    .stat-row {
+      margin-bottom: 8px;
+
+      /deep/ .ant-col {
+        margin-bottom: 12px;
+      }
+
+      .stat-card {
+        height: auto;
+        min-height: 152px;
+        border-radius: 10px;
+
+        &:hover {
+          transform: none;
+        }
+
+        /deep/ .ant-card-body {
+          height: 100%;
+          padding: 14px;
+        }
+
+        .stat-card-content {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .stat-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          font-size: 17px;
+        }
+
+        .stat-info {
+          width: 100%;
+          min-width: 0;
+
+          .stat-title {
+            margin-bottom: 4px;
+            font-size: 12px;
+          }
+
+          .stat-value {
+            margin-bottom: 4px;
+            font-size: 22px;
+
+            &.amount-value {
+              font-size: 16px;
+            }
+          }
+
+          .stat-desc {
+            font-size: 11px;
+            gap: 2px 6px;
+          }
+        }
+      }
+    }
+
+    .chart-card,
+    .table-card {
+      border-radius: 10px;
+
+      /deep/ .ant-card-head {
+        min-height: auto;
+        padding: 12px 14px;
+        align-items: flex-start;
+      }
+
+      /deep/ .ant-card-head-wrapper {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        width: 100%;
+      }
+
+      /deep/ .ant-card-extra {
+        width: 100%;
+
+        .ant-radio-group {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          width: 100%;
+
+          .ant-radio-button-wrapper {
+            padding: 0 6px;
+            text-align: center;
+          }
+        }
+      }
+
+      /deep/ .ant-card-body {
+        padding: 14px;
+      }
+    }
+
+    .chart-row,
+    .table-row {
+      margin-top: 12px;
+    }
+
+    .chart-row .chart-card {
+      min-height: 360px;
+    }
+
+    .chart {
+      height: 260px;
+    }
+
+    .mobile-stats-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mobile-stat-row {
+      padding: 12px;
+      background: rgba(248, 250, 252, 0.78);
+      border: 1px solid #edf0f5;
+      border-radius: 8px;
+    }
+
+    .mobile-stat-date {
+      margin-bottom: 10px;
+    }
+
+    .mobile-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mobile-stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+
+      &.full {
+        grid-column: 1 / -1;
+      }
+    }
+
+    .mobile-stat-label {
+      color: #8c8c8c;
+      font-size: 12px;
+    }
+
+    .mobile-stat-value {
+      font-family: 'JetBrains Mono', 'MonoLisa', monospace;
+      font-size: 14px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+
+      &.total {
+        color: #1d4ed8;
+      }
+
+      &.active-user {
+        color: #be185d;
+      }
+
+      &.new-user {
+        color: #15803d;
+      }
+
+      &.token {
+        color: #7c2d12;
+      }
+
+      &.cost {
+        color: #c2410c;
+      }
+    }
+
+    .mobile-empty {
+      padding: 36px 12px;
+      color: #8c8c8c;
+      text-align: center;
+      background: #fafafa;
+      border-radius: 8px;
     }
   }
 }

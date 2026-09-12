@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import require_agent_admin
 from app.models.agent import AgentBalance
-from app.models.log import RequestLog
+from app.models.log import ConsumptionRecord, RequestLog
 from app.models.redemption import RedemptionCode
 from app.models.user import SysUser
 from app.schemas.common import ResponseModel
@@ -76,31 +77,63 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_agent_admin),
 ):
-    start_time, _end_time = LogService._get_timezone_day_window(1)
+    today, now = LogService._get_timezone_day_window(1)
     agent_id = int(current_user.agent_id)
 
     total_users = db.query(func.count(SysUser.id)).filter(
         SysUser.agent_id == agent_id,
         SysUser.role == "user",
     ).scalar()
+    today_new_users = db.query(func.count(SysUser.id)).filter(
+        SysUser.agent_id == agent_id,
+        SysUser.role == "user",
+        SysUser.created_at >= today,
+        SysUser.created_at <= now,
+    ).scalar()
     today_requests = db.query(func.count(RequestLog.id)).filter(
         RequestLog.agent_id == agent_id,
-        RequestLog.created_at >= start_time,
+        RequestLog.created_at >= today,
+        RequestLog.created_at <= now,
     ).scalar()
+    today_active_users = (
+        db.query(func.count(func.distinct(RequestLog.user_id)))
+        .join(SysUser, SysUser.id == RequestLog.user_id)
+        .filter(
+            SysUser.role == "user",
+            SysUser.agent_id == agent_id,
+            RequestLog.agent_id == agent_id,
+            RequestLog.created_at >= today,
+            RequestLog.created_at <= now,
+        )
+        .scalar()
+    )
     today_tokens = db.query(func.coalesce(func.sum(RequestLog.total_tokens), 0)).filter(
         RequestLog.agent_id == agent_id,
-        RequestLog.created_at >= start_time,
+        RequestLog.created_at >= today,
+        RequestLog.created_at <= now,
+    ).scalar()
+    today_cost = db.query(func.coalesce(func.sum(ConsumptionRecord.total_cost), 0)).filter(
+        ConsumptionRecord.agent_id == agent_id,
+        ConsumptionRecord.created_at >= today,
+        ConsumptionRecord.created_at <= now,
+        ConsumptionRecord.total_cost > 0,
+        ConsumptionRecord.request_id.isnot(None),
+        ConsumptionRecord.model_name.isnot(None),
     ).scalar()
     today_errors = db.query(func.count(RequestLog.id)).filter(
         RequestLog.agent_id == agent_id,
-        RequestLog.created_at >= start_time,
+        RequestLog.created_at >= today,
+        RequestLog.created_at <= now,
         RequestLog.status != "success",
     ).scalar()
 
     return ResponseModel(data={
         "total_users": int(total_users or 0),
+        "today_new_users": int(today_new_users or 0),
+        "today_active_users": int(today_active_users or 0),
         "today_requests": int(today_requests or 0),
         "today_tokens": int(today_tokens or 0),
+        "today_cost": float(today_cost or 0),
         "today_errors": int(today_errors or 0),
     })
 
@@ -108,6 +141,7 @@ def get_dashboard_stats(
 @router.get("/requests", response_model=ResponseModel)
 def get_request_stats(
     days: int = Query(7, ge=1, le=30),
+    range_key: Optional[str] = Query(None, alias="range"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_agent_admin),
 ):
@@ -115,6 +149,7 @@ def get_request_stats(
         db,
         days=days,
         agent_id=int(current_user.agent_id),
+        range_key=range_key,
     )
     return ResponseModel(data=stats)
 

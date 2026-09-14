@@ -8772,18 +8772,27 @@ class ProxyService:
                 )
 
             # Some upstreams always return SSE even with stream=false.
-            # Detect and parse SSE to reconstruct a non-streaming response.
+            # NewAPI/glm long-context may also mislabel a JSON body as event-stream.
             content_type = resp.headers.get("content-type", "")
-            parsed_input_tokens = 0
-            parsed_output_tokens = 0
-            if "text/event-stream" in content_type or resp.text.lstrip().startswith("data: "):
-                response_body, parsed_input_tokens, parsed_output_tokens = (
-                    ProxyService._parse_sse_to_non_stream_openai(resp.text)
+            response_body, parsed_input_tokens, parsed_output_tokens = (
+                ProxyService._parse_openai_non_stream_upstream_body(
+                    resp.text,
+                    content_type,
                 )
-                usage = response_body.get("usage", {}) if isinstance(response_body, dict) else {}
-            else:
-                response_body = resp.json()
-                usage = response_body.get("usage", {})
+            )
+            if (
+                "text/event-stream" in (content_type or "").lower()
+                and ProxyService._body_looks_like_json_payload(resp.text)
+            ):
+                logger.info(
+                    "OpenAI non-stream recovered JSON labelled as event-stream "
+                    "request_id=%s channel=%s channel_id=%s body_len=%s",
+                    request_id,
+                    channel.name,
+                    channel.id,
+                    len(resp.text or ""),
+                )
+            usage = response_body.get("usage", {}) if isinstance(response_body, dict) else {}
             response_body = ProxyService._rewrite_openai_payload_model(response_body, requested_model)
             usage_summary = ProxyService._extract_openai_prompt_cache_summary(usage, channel)
             input_tokens = int(usage_summary.get("input_tokens", 0) or 0) or int(parsed_input_tokens or 0)
@@ -9277,19 +9286,12 @@ class ProxyService:
                 )
 
             content_type = resp.headers.get("content-type", "")
-            if (
-                "text/event-stream" in content_type
-                or resp.text.lstrip().startswith("event: ")
-                or resp.text.lstrip().startswith("data: ")
-            ):
-                anthropic_response, input_tokens, output_tokens = (
-                    ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
+            anthropic_response, input_tokens, output_tokens = (
+                ProxyService._parse_anthropic_non_stream_upstream_body(
+                    resp.text,
+                    content_type,
                 )
-            else:
-                anthropic_response = resp.json()
-                usage = anthropic_response.get("usage", {})
-                input_tokens = usage.get("input_tokens", 0)
-                output_tokens = usage.get("output_tokens", 0)
+            )
             anthropic_response = ProxyService._rewrite_anthropic_payload_model(
                 anthropic_response,
                 requested_model,
@@ -11251,15 +11253,12 @@ class ProxyService:
                         prompt_cache_state["fallback_reason"] = prompt_fallback_reason
 
                         content_type = resp.headers.get("content-type", "")
-                        if "text/event-stream" in content_type or resp.text.lstrip().startswith("event: "):
-                            response_body, input_tokens, output_tokens = (
-                                ProxyService._parse_sse_to_non_stream_anthropic(resp.text)
+                        response_body, input_tokens, output_tokens = (
+                            ProxyService._parse_anthropic_non_stream_upstream_body(
+                                resp.text,
+                                content_type,
                             )
-                        else:
-                            response_body = resp.json()
-                            usage = response_body.get("usage", {})
-                            input_tokens = usage.get("input_tokens", 0)
-                            output_tokens = usage.get("output_tokens", 0)
+                        )
                         response_body = ProxyService._rewrite_anthropic_payload_model(
                             response_body,
                             requested_model,
@@ -11398,6 +11397,119 @@ class ProxyService:
     # ===================================================================
 
     @staticmethod
+    def _body_looks_like_json_payload(raw_text: str) -> bool:
+        """Return whether a response body is a JSON object/array, ignoring BOM/whitespace."""
+        stripped = (raw_text or "").lstrip("\ufeff \t\r\n")
+        return stripped.startswith("{") or stripped.startswith("[")
+
+    @staticmethod
+    def _extract_openai_usage_token_counts(usage: Optional[dict[str, Any]]) -> tuple[int, int]:
+        """Read prompt/completion counts from OpenAI or Responses-style usage keys."""
+        usage = usage if isinstance(usage, dict) else {}
+        prompt_tokens = int(
+            usage.get("prompt_tokens")
+            if usage.get("prompt_tokens") is not None
+            else usage.get("input_tokens")
+            or 0
+        )
+        completion_tokens = int(
+            usage.get("completion_tokens")
+            if usage.get("completion_tokens") is not None
+            else usage.get("output_tokens")
+            or 0
+        )
+        return prompt_tokens, completion_tokens
+
+    @staticmethod
+    def _parse_json_object_payload(raw_text: str) -> Optional[dict[str, Any]]:
+        """Parse a JSON object payload; return None when the body is not an object."""
+        stripped = (raw_text or "").lstrip("\ufeff \t\r\n")
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _parse_openai_non_stream_upstream_body(
+        raw_text: str,
+        content_type: str = "",
+    ) -> tuple[dict, int, int]:
+        """Parse a non-stream OpenAI body, even if mislabelled as event-stream.
+
+        Some NewAPI/glm thinking responses set ``Content-Type: text/event-stream``
+        while returning a single ``chat.completion`` JSON object. Prefer JSON
+        whenever the body starts with ``{`` / ``[``.
+        """
+        payload = ProxyService._parse_json_object_payload(raw_text)
+        if isinstance(payload, dict) and (
+            payload.get("object") == "chat.completion"
+            or payload.get("choices") is not None
+            or payload.get("usage") is not None
+        ):
+            prompt_tokens, completion_tokens = ProxyService._extract_openai_usage_token_counts(
+                payload.get("usage")
+            )
+            return payload, prompt_tokens, completion_tokens
+
+        stripped = (raw_text or "").lstrip("\ufeff \t\r\n")
+        if (
+            "text/event-stream" in (content_type or "").lower()
+            or stripped.startswith("data:")
+            or stripped.startswith("event:")
+        ):
+            return ProxyService._parse_sse_to_non_stream_openai(raw_text or "")
+
+        if payload is not None:
+            prompt_tokens, completion_tokens = ProxyService._extract_openai_usage_token_counts(
+                payload.get("usage")
+            )
+            return payload, prompt_tokens, completion_tokens
+        if stripped:
+            raise json.JSONDecodeError("Expecting JSON object", stripped, 0)
+        return {}, 0, 0
+
+    @staticmethod
+    def _parse_anthropic_non_stream_upstream_body(
+        raw_text: str,
+        content_type: str = "",
+    ) -> tuple[dict, int, int]:
+        """Parse a non-stream Anthropic body, even if mislabelled as event-stream."""
+        payload = ProxyService._parse_json_object_payload(raw_text)
+        if isinstance(payload, dict) and (
+            payload.get("type") == "message"
+            or isinstance(payload.get("content"), list)
+            or isinstance(payload.get("usage"), dict)
+        ):
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            return (
+                payload,
+                int(usage.get("input_tokens") or 0),
+                int(usage.get("output_tokens") or 0),
+            )
+
+        stripped = (raw_text or "").lstrip("\ufeff \t\r\n")
+        if (
+            "text/event-stream" in (content_type or "").lower()
+            or stripped.startswith("data:")
+            or stripped.startswith("event:")
+        ):
+            return ProxyService._parse_sse_to_non_stream_anthropic(raw_text or "")
+
+        if payload is not None:
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            return (
+                payload,
+                int(usage.get("input_tokens") or 0),
+                int(usage.get("output_tokens") or 0),
+            )
+        if stripped:
+            raise json.JSONDecodeError("Expecting JSON object", stripped, 0)
+        return {}, 0, 0
+
+    @staticmethod
     def _parse_sse_to_non_stream_openai(raw_text: str) -> tuple[dict, int, int]:
         """
         Parse an SSE text body (from an upstream that always streams) into
@@ -11418,11 +11530,11 @@ class ProxyService:
         last_model = None
         finish_reason = None
 
-        for line in raw_text.split("\n"):
+        for line in (raw_text or "").split("\n"):
             line = line.strip()
-            if not line or not line.startswith("data: "):
+            if not line or not line.startswith("data:"):
                 continue
-            data_str = line[6:]
+            data_str = line[5:].lstrip()
             if data_str.strip() == "[DONE]":
                 break
             try:
@@ -11437,7 +11549,10 @@ class ProxyService:
                     content = delta.get("content")
                     if content:
                         collected_content.append(content)
-                    reasoning_content = delta.get("reasoning_content")
+                    reasoning_content = (
+                        delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                    )
                     if reasoning_content:
                         collected_reasoning_content.append(reasoning_content)
                     fr = choice.get("finish_reason")
@@ -11447,14 +11562,33 @@ class ProxyService:
                 # Extract usage
                 usage = chunk.get("usage")
                 if usage:
-                    input_tokens = usage.get("prompt_tokens", input_tokens)
-                    output_tokens = usage.get("completion_tokens", output_tokens)
+                    parsed_in, parsed_out = ProxyService._extract_openai_usage_token_counts(usage)
+                    if parsed_in:
+                        input_tokens = parsed_in
+                    if parsed_out:
+                        output_tokens = parsed_out
                     usage_state.update(usage)
             except (json.JSONDecodeError, TypeError):
                 pass
 
         full_content = "".join(collected_content)
         full_reasoning_content = "".join(collected_reasoning_content)
+        if (
+            last_id is None
+            and not full_content
+            and not full_reasoning_content
+            and input_tokens == 0
+            and output_tokens == 0
+        ):
+            payload = ProxyService._parse_json_object_payload(raw_text)
+            if isinstance(payload, dict) and (
+                payload.get("choices") is not None or payload.get("usage") is not None
+            ):
+                prompt_tokens, completion_tokens = ProxyService._extract_openai_usage_token_counts(
+                    payload.get("usage")
+                )
+                return payload, prompt_tokens, completion_tokens
+
         message_content = full_content or full_reasoning_content
 
         response_body = {
@@ -11505,11 +11639,11 @@ class ProxyService:
         stop_reason = None
         content_blocks: dict[int, dict] = {}
 
-        for line in raw_text.split("\n"):
+        for line in (raw_text or "").split("\n"):
             line = line.strip()
-            if not line or not line.startswith("data: "):
+            if not line or not line.startswith("data:"):
                 continue
-            data_str = line[6:]
+            data_str = line[5:].lstrip()
             try:
                 chunk = json.loads(data_str)
                 chunk_type = chunk.get("type", "")
@@ -11565,6 +11699,20 @@ class ProxyService:
 
             except (json.JSONDecodeError, TypeError):
                 pass
+
+        if msg_id is None and not content_blocks and input_tokens == 0 and output_tokens == 0:
+            payload = ProxyService._parse_json_object_payload(raw_text)
+            if isinstance(payload, dict) and (
+                payload.get("type") == "message"
+                or isinstance(payload.get("content"), list)
+                or isinstance(payload.get("usage"), dict)
+            ):
+                usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+                return (
+                    payload,
+                    int(usage.get("input_tokens") or 0),
+                    int(usage.get("output_tokens") or 0),
+                )
 
         ordered_blocks: list[dict] = []
         for block_index in sorted(content_blocks.keys()):

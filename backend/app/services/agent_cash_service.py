@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
@@ -52,6 +53,230 @@ class AgentCashService:
         # paid_at is persisted as naive UTC; admin date filters are Beijing calendar days.
         offset = timedelta(hours=8)
         return (start_dt - offset if start_dt else None, upper_dt - offset if upper_dt else None)
+
+    @staticmethod
+    def _beijing_today() -> str:
+        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+
+    @staticmethod
+    def _empty_recharge_order_summary(
+        time_field: str | None = "created_at",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        defaulted_to_today: bool = False,
+    ) -> dict:
+        return {
+            "range_start": start_date,
+            "range_end": end_date,
+            "time_field": str(time_field or "created_at").strip() or "created_at",
+            "defaulted_to_today": bool(defaulted_to_today),
+            "paid_count": 0,
+            "paid_amount_cny": 0.0,
+            "pending_count": 0,
+            "closed_count": 0,
+            "failed_count": 0,
+            "paid_credited_usd": 0.0,
+            "paid_credited_image_credits": 0.0,
+            "paid_agent_income_cny": 0.0,
+            "alipay_paid_count": 0,
+            "alipay_paid_amount_cny": 0.0,
+            "wechat_paid_count": 0,
+            "wechat_paid_amount_cny": 0.0,
+        }
+
+    @staticmethod
+    def _filtered_recharge_orders_query(
+        db: Session,
+        agent_id: int | None = None,
+        user_id: int | None = None,
+        status: str | None = None,
+        payment_channel: str | None = None,
+        recharge_type: str | None = None,
+        site_scope: str | None = None,
+        keyword: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        time_field: str | None = "created_at",
+        agent_keyword: str | None = None,
+        source_host: str | None = None,
+        include_subscription: bool = False,
+    ):
+        query = db.query(PaymentRechargeOrder)
+        if agent_id is not None:
+            query = query.filter(PaymentRechargeOrder.agent_id == agent_id)
+        if user_id is not None:
+            query = query.filter(PaymentRechargeOrder.user_id == user_id)
+        if status:
+            query = query.filter(PaymentRechargeOrder.status == status)
+        if payment_channel:
+            query = query.filter(PaymentRechargeOrder.payment_channel == payment_channel)
+        if recharge_type:
+            normalized_type = PaymentService._normalize_recharge_type(recharge_type)
+            query = query.filter(PaymentRechargeOrder.recharge_type == normalized_type)
+        elif not include_subscription:
+            query = query.filter(PaymentRechargeOrder.recharge_type.in_(["balance", "image_credit"]))
+        if site_scope == "platform":
+            query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
+        elif site_scope == "agent":
+            query = query.filter(PaymentRechargeOrder.agent_id.is_not(None))
+
+        if source_host:
+            query = query.filter(PaymentRechargeOrder.source_host.like(f"%{str(source_host).strip()}%"))
+
+        if agent_keyword:
+            like = f"%{str(agent_keyword).strip()}%"
+            matched_agent_ids = [
+                int(item.id)
+                for item in db.query(Agent.id)
+                .filter(
+                    or_(
+                        Agent.agent_name.like(like),
+                        Agent.agent_code.like(like),
+                        Agent.frontend_domain.like(like),
+                        Agent.api_domain.like(like),
+                    )
+                )
+                .all()
+            ]
+            if not matched_agent_ids:
+                return None
+            query = query.filter(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
+
+        normalized_time_field = str(time_field or "created_at").strip()
+        date_field = PaymentRechargeOrder.paid_at if normalized_time_field == "paid_at" else PaymentRechargeOrder.created_at
+        start_dt, end_exclusive_dt = AgentCashService._beijing_date_bounds_for_payment_field(
+            start_date,
+            end_date,
+            normalized_time_field,
+        )
+        if start_dt:
+            query = query.filter(date_field >= start_dt)
+        if end_exclusive_dt:
+            query = query.filter(date_field < end_exclusive_dt)
+
+        if keyword:
+            keyword_text = str(keyword).strip()
+            like = f"%{keyword_text}%"
+            matched_user_ids = [
+                int(item.id)
+                for item in db.query(SysUser.id)
+                .filter(SysUser.username.like(like))
+                .all()
+            ]
+            matched_agent_ids = [
+                int(item.id)
+                for item in db.query(Agent.id)
+                .filter(
+                    or_(
+                        Agent.agent_name.like(like),
+                        Agent.agent_code.like(like),
+                        Agent.frontend_domain.like(like),
+                        Agent.api_domain.like(like),
+                    )
+                )
+                .all()
+            ]
+            filters = [
+                PaymentRechargeOrder.order_no.like(like),
+                PaymentRechargeOrder.alipay_trade_no.like(like),
+                PaymentRechargeOrder.wechat_transaction_id.like(like),
+                PaymentRechargeOrder.source_host.like(like),
+            ]
+            if matched_user_ids:
+                filters.append(PaymentRechargeOrder.user_id.in_(matched_user_ids))
+            if matched_agent_ids:
+                filters.append(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
+            query = query.filter(or_(*filters))
+        return query
+
+    @staticmethod
+    def summarize_recharge_orders(
+        db: Session,
+        agent_id: int | None = None,
+        user_id: int | None = None,
+        payment_channel: str | None = None,
+        recharge_type: str | None = None,
+        site_scope: str | None = None,
+        keyword: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        time_field: str | None = "created_at",
+        agent_keyword: str | None = None,
+        source_host: str | None = None,
+        include_subscription: bool = False,
+    ) -> dict:
+        normalized_time_field = str(time_field or "created_at").strip() or "created_at"
+        defaulted_to_today = not bool(str(start_date or "").strip() or str(end_date or "").strip())
+        summary_start = str(start_date).strip() if start_date else None
+        summary_end = str(end_date).strip() if end_date else None
+        if defaulted_to_today:
+            today = AgentCashService._beijing_today()
+            summary_start = today
+            summary_end = today
+
+        query = AgentCashService._filtered_recharge_orders_query(
+            db,
+            agent_id=agent_id,
+            user_id=user_id,
+            status=None,
+            payment_channel=payment_channel,
+            recharge_type=recharge_type,
+            site_scope=site_scope,
+            keyword=keyword,
+            start_date=summary_start,
+            end_date=summary_end,
+            time_field=normalized_time_field,
+            agent_keyword=agent_keyword,
+            source_host=source_host,
+            include_subscription=include_subscription,
+        )
+        empty = AgentCashService._empty_recharge_order_summary(
+            normalized_time_field,
+            summary_start,
+            summary_end,
+            defaulted_to_today,
+        )
+        if query is None:
+            return empty
+
+        paid = PaymentRechargeOrder.status == "paid"
+        pending = PaymentRechargeOrder.status == "pending"
+        closed = PaymentRechargeOrder.status == "closed"
+        failed = PaymentRechargeOrder.status == "failed"
+        alipay_paid = (PaymentRechargeOrder.status == "paid") & (PaymentRechargeOrder.payment_channel == "alipay")
+        wechat_paid = (PaymentRechargeOrder.status == "paid") & (PaymentRechargeOrder.payment_channel == "wechat")
+        row = query.with_entities(
+            func.coalesce(func.sum(case((paid, 1), else_=0)), 0).label("paid_count"),
+            func.coalesce(func.sum(case((paid, PaymentRechargeOrder.amount_cny), else_=0)), 0).label("paid_amount_cny"),
+            func.coalesce(func.sum(case((pending, 1), else_=0)), 0).label("pending_count"),
+            func.coalesce(func.sum(case((closed, 1), else_=0)), 0).label("closed_count"),
+            func.coalesce(func.sum(case((failed, 1), else_=0)), 0).label("failed_count"),
+            func.coalesce(func.sum(case((paid, PaymentRechargeOrder.credited_usd), else_=0)), 0).label("paid_credited_usd"),
+            func.coalesce(func.sum(case((paid, PaymentRechargeOrder.credited_image_credits), else_=0)), 0).label("paid_credited_image_credits"),
+            func.coalesce(func.sum(case((paid, PaymentRechargeOrder.agent_income_cny), else_=0)), 0).label("paid_agent_income_cny"),
+            func.coalesce(func.sum(case((alipay_paid, 1), else_=0)), 0).label("alipay_paid_count"),
+            func.coalesce(func.sum(case((alipay_paid, PaymentRechargeOrder.amount_cny), else_=0)), 0).label("alipay_paid_amount_cny"),
+            func.coalesce(func.sum(case((wechat_paid, 1), else_=0)), 0).label("wechat_paid_count"),
+            func.coalesce(func.sum(case((wechat_paid, PaymentRechargeOrder.amount_cny), else_=0)), 0).label("wechat_paid_amount_cny"),
+        ).one()
+        return {
+            "range_start": summary_start,
+            "range_end": summary_end,
+            "time_field": normalized_time_field,
+            "defaulted_to_today": defaulted_to_today,
+            "paid_count": int(row.paid_count or 0),
+            "paid_amount_cny": float(row.paid_amount_cny or 0),
+            "pending_count": int(row.pending_count or 0),
+            "closed_count": int(row.closed_count or 0),
+            "failed_count": int(row.failed_count or 0),
+            "paid_credited_usd": float(row.paid_credited_usd or 0),
+            "paid_credited_image_credits": float(row.paid_credited_image_credits or 0),
+            "paid_agent_income_cny": float(row.paid_agent_income_cny or 0),
+            "alipay_paid_count": int(row.alipay_paid_count or 0),
+            "alipay_paid_amount_cny": float(row.alipay_paid_amount_cny or 0),
+            "wechat_paid_count": int(row.wechat_paid_count or 0),
+            "wechat_paid_amount_cny": float(row.wechat_paid_amount_cny or 0),
+        }
 
     @staticmethod
     def _normalize_money(value, code: str = "INVALID_AGENT_CASH_AMOUNT", allow_negative: bool = False) -> Decimal:
@@ -307,92 +532,24 @@ class AgentCashService:
         source_host: str | None = None,
         include_subscription: bool = False,
     ) -> tuple[list[dict], int]:
-        query = db.query(PaymentRechargeOrder)
-        if agent_id is not None:
-            query = query.filter(PaymentRechargeOrder.agent_id == agent_id)
-        if user_id is not None:
-            query = query.filter(PaymentRechargeOrder.user_id == user_id)
-        if status:
-            query = query.filter(PaymentRechargeOrder.status == status)
-        if payment_channel:
-            query = query.filter(PaymentRechargeOrder.payment_channel == payment_channel)
-        if recharge_type:
-            normalized_type = PaymentService._normalize_recharge_type(recharge_type)
-            query = query.filter(PaymentRechargeOrder.recharge_type == normalized_type)
-        elif not include_subscription:
-            query = query.filter(PaymentRechargeOrder.recharge_type.in_(["balance", "image_credit"]))
-        if site_scope == "platform":
-            query = query.filter(PaymentRechargeOrder.agent_id.is_(None))
-        elif site_scope == "agent":
-            query = query.filter(PaymentRechargeOrder.agent_id.is_not(None))
-
-        if source_host:
-            query = query.filter(PaymentRechargeOrder.source_host.like(f"%{str(source_host).strip()}%"))
-
-        if agent_keyword:
-            like = f"%{str(agent_keyword).strip()}%"
-            matched_agent_ids = [
-                int(item.id)
-                for item in db.query(Agent.id)
-                .filter(
-                    or_(
-                        Agent.agent_name.like(like),
-                        Agent.agent_code.like(like),
-                        Agent.frontend_domain.like(like),
-                        Agent.api_domain.like(like),
-                    )
-                )
-                .all()
-            ]
-            if not matched_agent_ids:
-                return [], 0
-            query = query.filter(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
-
-        normalized_time_field = str(time_field or "created_at").strip()
-        date_field = PaymentRechargeOrder.paid_at if normalized_time_field == "paid_at" else PaymentRechargeOrder.created_at
-        start_dt, end_exclusive_dt = AgentCashService._beijing_date_bounds_for_payment_field(
-            start_date,
-            end_date,
-            normalized_time_field,
+        query = AgentCashService._filtered_recharge_orders_query(
+            db,
+            agent_id=agent_id,
+            user_id=user_id,
+            status=status,
+            payment_channel=payment_channel,
+            recharge_type=recharge_type,
+            site_scope=site_scope,
+            keyword=keyword,
+            start_date=start_date,
+            end_date=end_date,
+            time_field=time_field,
+            agent_keyword=agent_keyword,
+            source_host=source_host,
+            include_subscription=include_subscription,
         )
-        if start_dt:
-            query = query.filter(date_field >= start_dt)
-        if end_exclusive_dt:
-            query = query.filter(date_field < end_exclusive_dt)
-
-        if keyword:
-            keyword_text = str(keyword).strip()
-            like = f"%{keyword_text}%"
-            matched_user_ids = [
-                int(item.id)
-                for item in db.query(SysUser.id)
-                .filter(SysUser.username.like(like))
-                .all()
-            ]
-            matched_agent_ids = [
-                int(item.id)
-                for item in db.query(Agent.id)
-                .filter(
-                    or_(
-                        Agent.agent_name.like(like),
-                        Agent.agent_code.like(like),
-                        Agent.frontend_domain.like(like),
-                        Agent.api_domain.like(like),
-                    )
-                )
-                .all()
-            ]
-            filters = [
-                PaymentRechargeOrder.order_no.like(like),
-                PaymentRechargeOrder.alipay_trade_no.like(like),
-                PaymentRechargeOrder.wechat_transaction_id.like(like),
-                PaymentRechargeOrder.source_host.like(like),
-            ]
-            if matched_user_ids:
-                filters.append(PaymentRechargeOrder.user_id.in_(matched_user_ids))
-            if matched_agent_ids:
-                filters.append(PaymentRechargeOrder.agent_id.in_(matched_agent_ids))
-            query = query.filter(or_(*filters))
+        if query is None:
+            return [], 0
 
         total = query.count()
         rows = (

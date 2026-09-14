@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -40,20 +41,36 @@ class AdminPaymentOrderTimeTest(unittest.TestCase):
         self.db.close()
         self.engine.dispose()
 
-    def _order(self, order_id, order_no, paid_at, recharge_type="balance"):
+    def _order(
+        self,
+        order_id,
+        order_no,
+        paid_at,
+        recharge_type="balance",
+        status="paid",
+        payment_channel="alipay",
+        amount_cny="1.00",
+        credited_usd=None,
+        agent_income_cny="0.00",
+        created_at=None,
+    ):
+        usd = credited_usd
+        if usd is None:
+            usd = "0.000000" if recharge_type == "subscription" else "5.000000"
         return PaymentRechargeOrder(
             id=order_id,
             order_no=order_no,
-            payment_channel="alipay",
+            payment_channel=payment_channel,
             recharge_type=recharge_type,
             user_id=1,
-            amount_cny=Decimal("1.00"),
-            credited_usd=Decimal("0.000000") if recharge_type == "subscription" else Decimal("5.000000"),
-            status="paid",
-            trade_status="TRADE_SUCCESS",
+            amount_cny=Decimal(amount_cny),
+            credited_usd=Decimal(usd),
+            agent_income_cny=Decimal(agent_income_cny),
+            status=status,
+            trade_status="TRADE_SUCCESS" if status == "paid" else "WAIT_BUYER_PAY",
             subject="test",
             paid_at=paid_at,
-            created_at=datetime(2026, 6, 19, 12, 0, 0),
+            created_at=created_at or datetime(2026, 6, 19, 12, 0, 0),
             updated_at=datetime(2026, 6, 19, 12, 0, 0),
         )
 
@@ -99,6 +116,99 @@ class AdminPaymentOrderTimeTest(unittest.TestCase):
 
         self.assertEqual(total, 3)
         self.assertIn("subscription", [item["order_no"] for item in items])
+
+    def test_summary_counts_paid_amount_and_ignores_status_filter(self):
+        self.db.add_all([
+            self._order(
+                10,
+                "wechat-paid",
+                datetime(2026, 6, 19, 10, 0, 0),
+                payment_channel="wechat",
+                amount_cny="20.00",
+                credited_usd="10.000000",
+                agent_income_cny="2.00",
+            ),
+            self._order(
+                11,
+                "pending-today",
+                None,
+                status="pending",
+                amount_cny="99.00",
+                created_at=datetime(2026, 6, 19, 11, 0, 0),
+            ),
+        ])
+        self.db.commit()
+
+        summary = AgentCashService.summarize_recharge_orders(
+            self.db,
+            start_date="2026-06-19",
+            end_date="2026-06-19",
+            time_field="paid_at",
+            include_subscription=True,
+        )
+
+        self.assertFalse(summary["defaulted_to_today"])
+        self.assertEqual(4, summary["paid_count"])
+        self.assertEqual(23.0, summary["paid_amount_cny"])
+        self.assertEqual(3, summary["alipay_paid_count"])
+        self.assertEqual(1, summary["wechat_paid_count"])
+        self.assertEqual(20.0, summary["wechat_paid_amount_cny"])
+        self.assertEqual(2.0, summary["paid_agent_income_cny"])
+        self.assertEqual(0, summary["pending_count"])
+
+        created_summary = AgentCashService.summarize_recharge_orders(
+            self.db,
+            start_date="2026-06-19",
+            end_date="2026-06-19",
+            time_field="created_at",
+            include_subscription=True,
+        )
+        self.assertEqual(1, created_summary["pending_count"])
+        self.assertEqual(6, created_summary["paid_count"])
+
+    def test_summary_defaults_to_beijing_today_when_no_date(self):
+        self.db.add(self._order(
+            12,
+            "today-paid",
+            datetime(2026, 9, 12, 1, 0, 0),
+            amount_cny="8.00",
+            created_at=datetime(2026, 9, 12, 1, 0, 0),
+        ))
+        self.db.commit()
+
+        with patch.object(AgentCashService, "_beijing_today", return_value="2026-09-12"):
+            summary = AgentCashService.summarize_recharge_orders(
+                self.db,
+                time_field="created_at",
+                include_subscription=True,
+            )
+
+        self.assertTrue(summary["defaulted_to_today"])
+        self.assertEqual("2026-09-12", summary["range_start"])
+        self.assertEqual(1, summary["paid_count"])
+        self.assertEqual(8.0, summary["paid_amount_cny"])
+
+    def test_summary_channel_filter_excludes_other_payments(self):
+        self.db.add(self._order(
+            13,
+            "wechat-only",
+            datetime(2026, 6, 19, 9, 0, 0),
+            payment_channel="wechat",
+            amount_cny="30.00",
+        ))
+        self.db.commit()
+
+        summary = AgentCashService.summarize_recharge_orders(
+            self.db,
+            payment_channel="wechat",
+            start_date="2026-06-19",
+            end_date="2026-06-19",
+            time_field="paid_at",
+            include_subscription=True,
+        )
+        self.assertEqual(1, summary["paid_count"])
+        self.assertEqual(30.0, summary["paid_amount_cny"])
+        self.assertEqual(0, summary["alipay_paid_count"])
 
 
 if __name__ == "__main__":

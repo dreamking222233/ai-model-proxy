@@ -8,6 +8,17 @@
       <a-button icon="reload" :loading="loading" @click="fetchList">刷新</a-button>
     </div>
 
+    <a-row :gutter="[16, 16]" class="stat-row">
+      <a-col v-for="card in statCards" :key="card.title" :xs="12" :sm="12" :xl="6">
+        <div class="stat-card" :class="card.class">
+          <span class="stat-label">{{ card.title }}</span>
+          <strong class="stat-value">{{ card.value }}</strong>
+          <small class="stat-desc">{{ card.desc }}</small>
+        </div>
+      </a-col>
+    </a-row>
+    <p class="stat-hint">{{ summaryHint }}</p>
+
     <a-card :bordered="false" class="table-card">
       <div class="toolbar">
         <a-input-search
@@ -21,7 +32,7 @@
           <a-select-option value="created_at">创建时间(北京)</a-select-option>
           <a-select-option value="paid_at">支付时间(北京)</a-select-option>
         </a-select>
-        <a-range-picker format="YYYY-MM-DD" @change="handleDateChange" />
+        <a-range-picker :value="dateRange" format="YYYY-MM-DD" @change="handleDateChange" />
         <a-select v-model="filters.site_scope" allowClear placeholder="客户类型" style="width: 140px" @change="handleSearch">
           <a-select-option value="platform">直属用户</a-select-option>
           <a-select-option value="agent">代理客户</a-select-option>
@@ -130,6 +141,25 @@ export default {
     return {
       loading: false,
       list: [],
+      dateRange: [],
+      summary: {
+        range_start: undefined,
+        range_end: undefined,
+        time_field: 'created_at',
+        defaulted_to_today: true,
+        paid_count: 0,
+        paid_amount_cny: 0,
+        pending_count: 0,
+        closed_count: 0,
+        failed_count: 0,
+        paid_credited_usd: 0,
+        paid_credited_image_credits: 0,
+        paid_agent_income_cny: 0,
+        alipay_paid_count: 0,
+        alipay_paid_amount_cny: 0,
+        wechat_paid_count: 0,
+        wechat_paid_amount_cny: 0
+      },
       filters: {
         keyword: '',
         time_field: 'created_at',
@@ -167,12 +197,62 @@ export default {
       ]
     }
   },
+  computed: {
+    summaryRangeLabel() {
+      const field = this.summary.time_field === 'paid_at' ? '支付时间' : '创建时间'
+      if (this.summary.defaulted_to_today) {
+        return `今日 · 按${field}`
+      }
+      const start = this.summary.range_start
+      const end = this.summary.range_end
+      if (start && end) {
+        return start === end ? `${start} · 按${field}` : `${start} 至 ${end} · 按${field}`
+      }
+      return `全部时间 · 按${field}`
+    },
+    summaryHint() {
+      return this.summary.defaulted_to_today
+        ? `未选日期时默认统计今日；成功金额只计已支付订单。当前口径：${this.summaryRangeLabel}`
+        : `统计随顶部筛选条件更新，成功金额只计已支付订单。当前口径：${this.summaryRangeLabel}`
+    },
+    statCards() {
+      return [
+        {
+          title: '成功支付金额',
+          value: `￥${this.formatMoney(this.summary.paid_amount_cny)}`,
+          desc: `支付宝 ￥${this.formatMoney(this.summary.alipay_paid_amount_cny)} · 微信 ￥${this.formatMoney(this.summary.wechat_paid_amount_cny)}`,
+          class: 'stat-paid'
+        },
+        {
+          title: '成功支付笔数',
+          value: this.formatNumber(this.summary.paid_count),
+          desc: `支付宝 ${this.formatNumber(this.summary.alipay_paid_count)} 笔 · 微信 ${this.formatNumber(this.summary.wechat_paid_count)} 笔`,
+          class: 'stat-count'
+        },
+        {
+          title: '待支付笔数',
+          value: this.formatNumber(this.summary.pending_count),
+          desc: `已关闭 ${this.formatNumber(this.summary.closed_count)} · 失败 ${this.formatNumber(this.summary.failed_count)}`,
+          class: 'stat-pending'
+        },
+        {
+          title: '代理分润',
+          value: `￥${this.formatMoney(this.summary.paid_agent_income_cny)}`,
+          desc: `到账 $${this.formatUsd(this.summary.paid_credited_usd)} · ${this.formatCredits(this.summary.paid_credited_image_credits)} 积分`,
+          class: 'stat-income'
+        }
+      ]
+    }
+  },
   mounted() {
     this.fetchList()
   },
   methods: {
     formatTime(value) {
       return value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss') : '-'
+    },
+    formatNumber(value) {
+      return Number(value || 0).toLocaleString('zh-CN')
     },
     formatMoney(value) {
       return Number(value || 0).toFixed(2)
@@ -213,12 +293,14 @@ export default {
       this.pagination.current = 1
       this.fetchList()
     },
-    handleDateChange(_, dateStrings) {
+    handleDateChange(dates, dateStrings) {
+      this.dateRange = dates || []
       this.filters.start_date = dateStrings && dateStrings[0] ? dateStrings[0] : undefined
       this.filters.end_date = dateStrings && dateStrings[1] ? dateStrings[1] : undefined
       this.handleSearch()
     },
     resetFilters() {
+      this.dateRange = []
       this.filters = {
         keyword: '',
         time_field: 'created_at',
@@ -259,6 +341,12 @@ export default {
         const data = res.data || {}
         this.list = data.list || []
         this.pagination.total = data.total || 0
+        if (data.summary) {
+          this.summary = { ...this.summary, ...data.summary }
+        }
+      } catch (err) {
+        this.$message.error('获取支付明细失败')
+        console.error('Failed to fetch payment orders:', err)
       } finally {
         this.loading = false
       }
@@ -288,6 +376,68 @@ export default {
   }
 }
 
+.stat-row {
+  margin-bottom: 8px;
+}
+
+.stat-card {
+  min-height: 118px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+
+  .stat-label {
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .stat-value {
+    color: #0f172a;
+    font-size: 26px;
+    font-weight: 800;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stat-desc {
+    color: #94a3b8;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &.stat-paid .stat-value {
+    color: #047857;
+  }
+
+  &.stat-count .stat-value {
+    color: #1d4ed8;
+  }
+
+  &.stat-pending .stat-value {
+    color: #c2410c;
+  }
+
+  &.stat-income .stat-value {
+    color: #7c3aed;
+  }
+}
+
+.stat-hint {
+  margin: 0 0 16px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .table-card {
   border-radius: 18px;
 }
@@ -306,6 +456,25 @@ export default {
 
   small {
     color: rgba(0, 0, 0, 0.45);
+  }
+}
+
+@media (max-width: 767px) {
+  .payment-order-page {
+    padding: 12px 0;
+  }
+
+  .stat-card {
+    min-height: 104px;
+    padding: 14px;
+
+    .stat-value {
+      font-size: 20px;
+    }
+
+    .stat-desc {
+      white-space: normal;
+    }
   }
 }
 </style>

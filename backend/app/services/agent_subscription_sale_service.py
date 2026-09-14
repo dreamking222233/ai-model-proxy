@@ -234,11 +234,15 @@ class AgentSubscriptionSaleService:
         agent_id: int | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        keyword: str | None = None,
+        payment_channel: str | None = None,
     ) -> dict:
         query = AgentSubscriptionSaleService._apply_filters(
             db.query(AgentSubscriptionSaleRecord),
             db,
             agent_id=agent_id,
+            payment_channel=payment_channel,
+            keyword=keyword,
             start_date=start_date,
             end_date=end_date,
         )

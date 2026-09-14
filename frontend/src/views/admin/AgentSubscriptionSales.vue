@@ -12,34 +12,52 @@
     </div>
 
     <a-row :gutter="[16, 16]" class="metrics">
-      <a-col :xs="24" :md="6">
+      <a-col :xs="12" :md="6">
         <div class="metric-card">
           <span>销售笔数</span>
-          <strong>{{ summary.total_count || 0 }}</strong>
+          <strong>{{ formatNumber(summary.total_count) }}</strong>
+          <small>待核销 {{ formatNumber(summary.pending_count) }} · 已核销 {{ formatNumber(summary.settled_count) }}</small>
         </div>
       </a-col>
-      <a-col :xs="24" :md="6">
+      <a-col :xs="12" :md="6">
         <div class="metric-card blue">
           <span>销售总额</span>
           <strong>￥{{ formatMoney(summary.total_sale_price_cny) }}</strong>
+          <small>拿货成本 ￥{{ formatMoney(summary.total_agent_cost_price_cny) }}</small>
         </div>
       </a-col>
-      <a-col :xs="24" :md="6">
+      <a-col :xs="12" :md="6">
         <div class="metric-card orange">
           <span>待核销返现</span>
           <strong>￥{{ formatMoney(summary.pending_rebate_cny) }}</strong>
+          <small>{{ formatNumber(summary.pending_count) }} 笔</small>
         </div>
       </a-col>
-      <a-col :xs="24" :md="6">
+      <a-col :xs="12" :md="6">
         <div class="metric-card green">
           <span>已核销返现</span>
           <strong>￥{{ formatMoney(summary.settled_rebate_cny) }}</strong>
+          <small>{{ formatNumber(summary.settled_count) }} 笔</small>
         </div>
       </a-col>
     </a-row>
+    <p class="metric-hint">{{ summaryHint }}</p>
 
     <a-card :bordered="false" class="table-card">
       <div class="toolbar">
+        <a-select
+          v-model="filters.agent_id"
+          allowClear
+          showSearch
+          optionFilterProp="children"
+          placeholder="选择代理"
+          style="width: 240px"
+          @change="handleSearch"
+        >
+          <a-select-option v-for="item in agents" :key="item.id" :value="item.id">
+            {{ item.agent_name }} ({{ item.agent_code }})
+          </a-select-option>
+        </a-select>
         <a-input-search
           v-model="filters.keyword"
           placeholder="搜索订单号、用户、代理、套餐"
@@ -47,7 +65,7 @@
           style="width: 300px"
           @search="handleSearch"
         />
-        <a-range-picker format="YYYY-MM-DD" @change="handleDateChange" />
+        <a-range-picker :value="dateRange" format="YYYY-MM-DD" @change="handleDateChange" />
         <a-select v-model="filters.rebate_status" allowClear placeholder="核销状态" style="width: 140px" @change="handleSearch">
           <a-select-option value="pending">待核销</a-select-option>
           <a-select-option value="settled">已核销</a-select-option>
@@ -123,6 +141,7 @@ import {
   listAdminSubscriptionSales,
   settleAdminSubscriptionSale
 } from '@/api/subscription'
+import { listAgents } from '@/api/agent'
 import { formatBeijingTime } from '@/utils'
 
 export default {
@@ -134,8 +153,11 @@ export default {
       settling: false,
       summary: {},
       list: [],
+      agents: [],
+      dateRange: [],
       selectedRowKeys: [],
       filters: {
+        agent_id: undefined,
         keyword: '',
         start_date: undefined,
         end_date: undefined,
@@ -165,6 +187,23 @@ export default {
     }
   },
   computed: {
+    selectedAgent() {
+      return this.agents.find(item => Number(item.id) === Number(this.filters.agent_id)) || null
+    },
+    summaryHint() {
+      const agentText = this.selectedAgent
+        ? `${this.selectedAgent.agent_name}（${this.selectedAgent.agent_code}）`
+        : '全部代理'
+      const start = this.filters.start_date
+      const end = this.filters.end_date
+      const dateText = start && end
+        ? (start === end ? start : `${start} 至 ${end}`)
+        : '全部时间'
+      const channelText = this.filters.payment_channel === 'alipay'
+        ? '支付宝'
+        : (this.filters.payment_channel === 'wechat' ? '微信' : '全部支付平台')
+      return `当前统计：${agentText} · ${dateText} · ${channelText}。核销状态只影响表格，不影响顶部返现拆分。`
+    },
     rowSelection() {
       return {
         selectedRowKeys: this.selectedRowKeys,
@@ -176,11 +215,15 @@ export default {
     }
   },
   mounted() {
+    this.fetchAgents()
     this.refreshAll()
   },
   methods: {
     formatTime(value) {
       return value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss') : '-'
+    },
+    formatNumber(value) {
+      return Number(value || 0).toLocaleString('zh-CN')
     },
     formatMoney(value) {
       return Number(value || 0).toFixed(2)
@@ -189,14 +232,31 @@ export default {
       this.fetchSummary()
       this.fetchList()
     },
+    async fetchAgents() {
+      try {
+        const res = await listAgents({ page: 1, page_size: 100 })
+        this.agents = (res.data && res.data.list) || []
+      } catch (err) {
+        console.error('Failed to fetch agents:', err)
+      }
+    },
+    summaryQuery() {
+      return {
+        agent_id: this.filters.agent_id || undefined,
+        keyword: this.filters.keyword || undefined,
+        start_date: this.filters.start_date || undefined,
+        end_date: this.filters.end_date || undefined,
+        payment_channel: this.filters.payment_channel || undefined
+      }
+    },
     async fetchSummary() {
       this.summaryLoading = true
       try {
-        const res = await getAdminSubscriptionSaleSummary({
-          start_date: this.filters.start_date,
-          end_date: this.filters.end_date
-        })
+        const res = await getAdminSubscriptionSaleSummary(this.summaryQuery())
         this.summary = res.data || {}
+      } catch (err) {
+        this.$message.error('获取套餐销售统计失败')
+        console.error('Failed to fetch subscription sale summary:', err)
       } finally {
         this.summaryLoading = false
       }
@@ -207,16 +267,16 @@ export default {
         const res = await listAdminSubscriptionSales({
           page: this.pagination.current,
           page_size: this.pagination.pageSize,
-          keyword: this.filters.keyword || undefined,
-          start_date: this.filters.start_date,
-          end_date: this.filters.end_date,
-          rebate_status: this.filters.rebate_status,
-          payment_channel: this.filters.payment_channel
+          ...this.summaryQuery(),
+          rebate_status: this.filters.rebate_status || undefined
         })
         const data = res.data || {}
         this.list = data.list || []
         this.pagination.total = data.total || 0
         this.selectedRowKeys = []
+      } catch (err) {
+        this.$message.error('获取套餐销售明细失败')
+        console.error('Failed to fetch subscription sales:', err)
       } finally {
         this.loading = false
       }
@@ -225,13 +285,22 @@ export default {
       this.pagination.current = 1
       this.refreshAll()
     },
-    handleDateChange(_, dateStrings) {
+    handleDateChange(dates, dateStrings) {
+      this.dateRange = dates || []
       this.filters.start_date = dateStrings && dateStrings[0] ? dateStrings[0] : undefined
       this.filters.end_date = dateStrings && dateStrings[1] ? dateStrings[1] : undefined
       this.handleSearch()
     },
     resetFilters() {
-      this.filters = { keyword: '', start_date: undefined, end_date: undefined, rebate_status: undefined, payment_channel: undefined }
+      this.dateRange = []
+      this.filters = {
+        agent_id: undefined,
+        keyword: '',
+        start_date: undefined,
+        end_date: undefined,
+        rebate_status: undefined,
+        payment_channel: undefined
+      }
       this.handleSearch()
     },
     handleTableChange(pagination) {
@@ -289,13 +358,15 @@ export default {
   color: #64748b;
 }
 .metrics {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 .metric-card {
+  min-height: 118px;
   padding: 18px;
   border-radius: 12px;
   background: linear-gradient(135deg, #334155, #0f172a);
   color: #fff;
+  overflow: hidden;
 }
 .metric-card.blue { background: linear-gradient(135deg, #2563eb, #0891b2); }
 .metric-card.orange { background: linear-gradient(135deg, #f97316, #f59e0b); }
@@ -306,7 +377,26 @@ export default {
   margin-bottom: 8px;
 }
 .metric-card strong {
+  display: block;
   font-size: 24px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metric-card small {
+  display: block;
+  margin-top: 6px;
+  opacity: 0.8;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metric-hint {
+  margin: 0 0 16px;
+  color: #94a3b8;
+  font-size: 12px;
 }
 .toolbar {
   display: flex;
@@ -324,5 +414,24 @@ export default {
 }
 .rebate-text {
   color: #d97706;
+}
+
+@media (max-width: 767px) {
+  .subscription-sale-page {
+    padding: 12px 0;
+  }
+
+  .metric-card {
+    min-height: 104px;
+    padding: 14px;
+  }
+
+  .metric-card strong {
+    font-size: 20px;
+  }
+
+  .metric-card small {
+    white-space: normal;
+  }
 }
 </style>

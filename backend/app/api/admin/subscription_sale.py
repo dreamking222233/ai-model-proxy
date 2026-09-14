@@ -21,10 +21,19 @@ def get_subscription_sale_summary(
     agent_id: int = Query(None),
     start_date: str = Query(None),
     end_date: str = Query(None),
+    keyword: str = Query(None),
+    payment_channel: str = Query(None),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_platform_admin),
 ):
-    return ResponseModel(data=AgentSubscriptionSaleService.get_summary(db, agent_id, start_date, end_date))
+    return ResponseModel(data=AgentSubscriptionSaleService.get_summary(
+        db,
+        agent_id=agent_id,
+        start_date=start_date,
+        end_date=end_date,
+        keyword=keyword,
+        payment_channel=payment_channel,
+    ))
 
 
 @router.get("", response_model=ResponseModel)

@@ -63,7 +63,28 @@ def list_agent_cash_orders(
         source_host,
         bool(include_subscription),
     )
-    return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+    summary = AgentCashService.summarize_recharge_orders(
+        db,
+        agent_id=agent_id,
+        user_id=user_id,
+        payment_channel=payment_channel,
+        recharge_type=recharge_type,
+        site_scope=site_scope,
+        keyword=keyword,
+        start_date=start_date,
+        end_date=end_date,
+        time_field=time_field,
+        agent_keyword=agent_keyword,
+        source_host=source_host,
+        include_subscription=bool(include_subscription),
+    )
+    return ResponseModel(data={
+        "list": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "summary": summary,
+    })
 
 
 @router.get("/agent-cash/withdrawals", response_model=ResponseModel)

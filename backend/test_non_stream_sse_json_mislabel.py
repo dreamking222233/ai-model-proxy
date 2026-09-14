@@ -111,6 +111,44 @@ class NonStreamSseJsonMislabelTest(unittest.TestCase):
         self.assertEqual(input_tokens, 120)
         self.assertEqual(output_tokens, 4)
 
+    def test_real_sse_is_not_swallowed_as_json_when_content_type_is_event_stream(self):
+        raw = (
+            'data: {"id":"chatcmpl-stream","object":"chat.completion.chunk",'
+            '"choices":[{"delta":{"content":"ab"}}]}\n'
+            'data: {"choices":[{"delta":{"content":"c"},"finish_reason":"stop"}]}\n'
+            'data: {"usage":{"prompt_tokens":88,"completion_tokens":3,"total_tokens":91}}\n'
+            "data: [DONE]\n"
+        )
+        self.assertFalse(ProxyService._body_looks_like_json_payload(raw))
+        parsed, input_tokens, output_tokens = ProxyService._parse_openai_non_stream_upstream_body(
+            raw,
+            "text/event-stream",
+        )
+        self.assertEqual(parsed["choices"][0]["message"]["content"], "abc")
+        self.assertEqual(input_tokens, 88)
+        self.assertEqual(output_tokens, 3)
+        self.assertEqual(parsed["object"], "chat.completion")
+
+    def test_stream_billing_still_uses_upstream_usage_only(self):
+        request_data = {"messages": [{"role": "user", "content": "hello " * 200}]}
+        input_tokens, output_tokens = ProxyService._resolve_openai_stream_billing_tokens(
+            request_data,
+            0,
+            0,
+            {"collected_usage": {}},
+        )
+        self.assertEqual(input_tokens, 0)
+        self.assertEqual(output_tokens, 0)
+
+        input_tokens, output_tokens = ProxyService._resolve_openai_stream_billing_tokens(
+            request_data,
+            46149,
+            102,
+            {"collected_usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        )
+        self.assertEqual(input_tokens, 46149)
+        self.assertEqual(output_tokens, 102)
+
     def test_application_json_chat_completion_still_works(self):
         body = {
             "id": "chatcmpl-3",

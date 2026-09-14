@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 
@@ -87,9 +88,9 @@ async def lifespan(app: FastAPI):
     from app.tasks import start_scheduler, run_startup_health_check
     start_scheduler(interval)
 
-    # Run startup health check (non-blocking, don't fail startup)
+    # Run startup health check in background so the API can bind immediately.
     try:
-        await run_startup_health_check()
+        asyncio.create_task(run_startup_health_check())
     except Exception as e:
         logger.warning(f"Startup health check failed (non-critical): {e}")
 

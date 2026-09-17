@@ -234,6 +234,7 @@ CREATE TABLE `channel` (
     `auth_header_type` VARCHAR(32) NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
     `priority` INT NOT NULL DEFAULT 10 COMMENT '优先级,1=最高',
     `enabled` TINYINT NOT NULL DEFAULT 1,
+    `passthrough_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '文本模型原生透传：1开启，0关闭',
     `health_check_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT '是否参与健康监控',
     `is_healthy` TINYINT NOT NULL DEFAULT 1,
     `health_score` INT NOT NULL DEFAULT 100 COMMENT '健康分0-100',

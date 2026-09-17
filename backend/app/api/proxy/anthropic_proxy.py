@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.dependencies import verify_api_key
 from app.services.proxy_service import ProxyService
+from app.services.channel_passthrough_service import ChannelPassthroughService
 
 router = APIRouter(tags=["代理-Anthropic"])
 
@@ -15,6 +16,9 @@ async def anthropic_count_tokens_v1(
     """Anthropic count_tokens compatibility endpoint with /v1 prefix."""
     await verify_api_key(request, db)
     body = await request.json()
+    passthrough_response = await ChannelPassthroughService.forward_count_tokens(request, db, body)
+    if passthrough_response is not None:
+        return passthrough_response
     return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}
 
 
@@ -26,6 +30,9 @@ async def anthropic_count_tokens_root(
     """Anthropic count_tokens compatibility endpoint without /v1 prefix."""
     await verify_api_key(request, db)
     body = await request.json()
+    passthrough_response = await ChannelPassthroughService.forward_count_tokens(request, db, body)
+    if passthrough_response is not None:
+        return passthrough_response
     return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}
 
 
@@ -43,9 +50,13 @@ async def anthropic_messages_v1(
     client_ip = request.client.host if request.client else None
 
     # Delegate to proxy service
-    return await ProxyService.handle_anthropic_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "anthropic",
+        lambda payload, channel_ids: ProxyService.handle_anthropic_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )
 
 
@@ -74,7 +85,11 @@ async def anthropic_messages_root(
     client_ip = request.client.host if request.client else None
 
     # Delegate to proxy service
-    return await ProxyService.handle_anthropic_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "anthropic",
+        lambda payload, channel_ids: ProxyService.handle_anthropic_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )

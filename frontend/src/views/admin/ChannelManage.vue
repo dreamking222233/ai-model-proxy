@@ -137,6 +137,12 @@
         </a-tag>
       </template>
 
+      <template slot="passthrough_enabled" slot-scope="text">
+        <a-tag :color="text ? 'green' : 'default'" class="protocol-tag">
+          {{ text ? '原生透传' : '系统处理' }}
+        </a-tag>
+      </template>
+
       <template slot="health" slot-scope="text, record">
         <a-badge
           :status="record.is_healthy ? 'success' : 'error'"
@@ -202,6 +208,9 @@
           </a-tag>
           <a-tag :color="record.health_check_enabled ? 'blue' : 'default'" class="protocol-tag">
             {{ record.health_check_enabled ? '监控开启' : '不监控' }}
+          </a-tag>
+          <a-tag :color="record.passthrough_enabled ? 'green' : 'default'" class="protocol-tag">
+            {{ record.passthrough_enabled ? '原生透传' : '系统处理' }}
           </a-tag>
         </div>
 
@@ -394,6 +403,16 @@
             关闭后，该渠道不会参与定时健康检查和“全部检查”，但仍可用于实际请求转发。
           </div>
         </a-form-item>
+        <a-form-item label="文本模型原生透传">
+          <a-switch
+            :checked="form.passthrough_enabled"
+            @change="val => form.passthrough_enabled = val"
+            class="form-switch"
+          />
+          <div class="form-hint">
+            开启后，本渠道的文本请求保持用户模型名、提示词、工具、思考参数和原生协议，不再经过系统提示词、参数兼容或协议转换；鉴权、额度检查和计费仍正常执行。
+          </div>
+        </a-form-item>
         <a-form-item label="描述">
           <a-textarea
             v-model="form.description"
@@ -487,6 +506,13 @@ export default {
           scopedSlots: { customRender: 'health_check_enabled' }
         },
         {
+          title: '文本处理',
+          dataIndex: 'passthrough_enabled',
+          key: 'passthrough_enabled',
+          width: 110,
+          scopedSlots: { customRender: 'passthrough_enabled' }
+        },
+        {
           title: '健康状态',
           dataIndex: 'is_healthy',
           key: 'health',
@@ -522,6 +548,7 @@ export default {
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
+        passthrough_enabled: false,
         health_check_enabled: true,
         description: ''
       },
@@ -792,6 +819,7 @@ export default {
         auth_header_type: record.auth_header_type || ({ anthropic: 'x-api-key', google: 'x-goog-api-key' }[record.protocol_type] || 'authorization'),
         priority: record.priority,
         enabled: record.enabled,
+        passthrough_enabled: Boolean(record.passthrough_enabled),
         health_check_enabled: Boolean(record.health_check_enabled),
         description: record.description || ''
       }
@@ -887,6 +915,7 @@ export default {
         auth_header_type: 'authorization',
         priority: 1,
         enabled: true,
+        passthrough_enabled: false,
         health_check_enabled: true,
         description: ''
       }

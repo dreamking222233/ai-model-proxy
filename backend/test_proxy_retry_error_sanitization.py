@@ -357,9 +357,12 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ProxyService, "_iter_responses_upstream_payloads", fake_iter):
             with self.assertRaises(ResponsesTurnError) as ctx:
                 await ProxyService._forward_responses_websocket_turn(
+                    object(),
                     websocket,
                     channel,
+                    UnifiedModel(model_name="requested-model"),
                     {"model": "actual-model"},
+                    "request-id",
                     "requested-model",
                 )
 
@@ -383,9 +386,12 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ProxyService, "_iter_responses_upstream_payloads", fake_iter):
             with self.assertRaises(ResponsesTurnError) as ctx:
                 await ProxyService._forward_responses_websocket_turn(
+                    object(),
                     websocket,
                     channel,
+                    UnifiedModel(model_name="requested-model"),
                     {"model": "actual-model"},
+                    "request-id",
                     "requested-model",
                 )
 
@@ -408,9 +414,12 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(ProxyService, "_iter_responses_upstream_payloads", fake_iter):
             with self.assertRaises(ResponsesTurnError) as ctx:
                 await ProxyService._forward_responses_websocket_turn(
+                    object(),
                     websocket,
                     channel,
+                    UnifiedModel(model_name="requested-model"),
                     {"model": "actual-model"},
+                    "request-id",
                     "requested-model",
                 )
 

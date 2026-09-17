@@ -23,6 +23,7 @@ class ChannelCreate(BaseModel):
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: int = Field(default=10, ge=1)
     enabled: int = Field(default=1, ge=0, le=1)
+    passthrough_enabled: int = Field(default=0, ge=0, le=1)
     health_check_enabled: int = Field(default=1, ge=0, le=1)
     description: Optional[str] = None
 
@@ -40,6 +41,7 @@ class ChannelUpdate(BaseModel):
     health_check_model: Optional[str] = Field(None, max_length=128)
     priority: Optional[int] = Field(None, ge=1)
     enabled: Optional[int] = Field(None, ge=0, le=1)
+    passthrough_enabled: Optional[int] = Field(None, ge=0, le=1)
     health_check_enabled: Optional[int] = Field(None, ge=0, le=1)
     description: Optional[str] = None
 
@@ -71,6 +73,7 @@ class ChannelInfo(BaseModel):
     video_billing_evidence_mode: str = "external_reconcile"
     priority: int
     enabled: int
+    passthrough_enabled: int = 0
     health_check_enabled: int
     is_healthy: int
     health_score: int

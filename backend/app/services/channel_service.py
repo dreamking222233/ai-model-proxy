@@ -187,6 +187,7 @@ class ChannelService:
             ),
             "priority": channel.priority,
             "enabled": channel.enabled,
+            "passthrough_enabled": int(getattr(channel, "passthrough_enabled", 0) or 0),
             "health_check_enabled": int(getattr(channel, "health_check_enabled", 1) or 0),
             "is_healthy": bool(channel.is_healthy),
             "health_score": channel.health_score,
@@ -234,6 +235,7 @@ class ChannelService:
             health_check_model=ChannelService._normalize_health_check_model(d.get("health_check_model")),
             priority=d.get("priority", 10),
             enabled=d.get("enabled", 1),
+            passthrough_enabled=d.get("passthrough_enabled", 0),
             health_check_enabled=d.get(
                 "health_check_enabled",
                 ChannelService._resolve_default_health_check_enabled(protocol_value, provider_variant),
@@ -267,7 +269,7 @@ class ChannelService:
         protocol_value = d.get("protocol_type", channel.protocol_type)
         updatable_fields = [
             "name", "base_url", "api_key", "protocol_type", "auth_header_type",
-            "priority", "enabled", "health_check_enabled", "description",
+            "priority", "enabled", "passthrough_enabled", "health_check_enabled", "description",
             "video_billing_evidence_mode",
         ]
         for field in updatable_fields:

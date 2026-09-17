@@ -35,6 +35,12 @@ class Channel(Base):
     )
     priority = Column(Integer, nullable=False, default=10, comment="Priority, 1=highest")
     enabled = Column(SmallInteger, nullable=False, default=1)
+    passthrough_enabled = Column(
+        SmallInteger,
+        nullable=False,
+        default=0,
+        comment="Whether text-model requests are forwarded without payload/protocol rewriting",
+    )
     health_check_enabled = Column(
         SmallInteger,
         nullable=False,

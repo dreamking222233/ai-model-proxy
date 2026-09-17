@@ -5888,6 +5888,7 @@ class ProxyService:
         request_data: dict,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        _allowed_channel_ids: Optional[list[int]] = None,
     ):
         """
         Handle OpenAI Responses API format request (/v1/responses).
@@ -5993,6 +5994,11 @@ class ProxyService:
                 requested_model,
                 client_request,
             )
+            if _allowed_channel_ids is not None:
+                allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
+                channels = [item for item in channels if int(item[0].id) in allowed_ids]
+                if not channels:
+                    raise ServiceException(503, "当前候选渠道不可用", "NO_CHANNEL")
             request_billing_context = ProxyService._build_frozen_text_billing_context(
                 request_billing_context,
                 quota_precheck,
@@ -6134,17 +6140,26 @@ class ProxyService:
         websocket: WebSocket,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
-    ) -> None:
+        initial_message: Optional[Union[str, bytes]] = None,
+        _allowed_channel_ids: Optional[list[int]] = None,
+        _defer_retryable_start_failure: bool = False,
+    ) -> bool:
         """Serve a Codex-compatible websocket session on ``GET /v1/responses``."""
         last_request: dict | None = None
         last_response_output: list = []
+        session_committed = False
         release_session_connection(db)
 
+        pending_message = initial_message
         while True:
             try:
-                raw_message = await websocket.receive_text()
+                if pending_message is not None:
+                    raw_message = pending_message
+                    pending_message = None
+                else:
+                    raw_message = await websocket.receive_text()
             except WebSocketDisconnect:
-                return
+                return True
 
             request_id = str(uuid.uuid4())
             try:
@@ -6193,6 +6208,7 @@ class ProxyService:
                 last_response_output = []
                 for payload in ProxyService._build_responses_prewarm_payloads(state_request):
                     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+                session_committed = True
                 continue
 
             requested_model = str(state_request.get("model", "") or "")
@@ -6250,6 +6266,11 @@ class ProxyService:
                     requested_model,
                     normalized_request,
                 )
+                if _allowed_channel_ids is not None:
+                    allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
+                    channels = [item for item in channels if int(item[0].id) in allowed_ids]
+                    if not channels:
+                        raise ServiceException(503, "当前候选渠道不可用", "NO_CHANNEL")
             except ServiceException as exc:
                 release_session_connection(db)
                 await websocket.send_text(json.dumps(
@@ -6260,7 +6281,7 @@ class ProxyService:
                     ),
                     ensure_ascii=False,
                 ))
-                return
+                return True
             release_session_connection(db)
 
             turn_completed = False
@@ -6350,6 +6371,7 @@ class ProxyService:
                     )
                     last_response_output = completed_output
                     turn_completed = True
+                    session_committed = True
                     break
                 except ServiceException as exc:
                     if exc.error_code in {"BILLING_CONCURRENCY_LIMITED", "BILLING_CONCURRENCY_UNAVAILABLE"}:
@@ -6361,7 +6383,7 @@ class ProxyService:
                             ),
                             ensure_ascii=False,
                         ))
-                        return
+                        return True
                     raise
                 except ResponsesTurnError as exc:
                     response_time_ms = ProxyService._calculate_elapsed_ms(
@@ -6385,7 +6407,7 @@ class ProxyService:
                             cache_info=cache_info,
                             billing_context=billing_context,
                         )
-                        return
+                        return True
                     continue
                 except Exception as exc:
                     response_time_ms = ProxyService._calculate_elapsed_ms(started_at)
@@ -6402,12 +6424,15 @@ class ProxyService:
                         cache_info=cache_info,
                         billing_context=billing_context,
                     )
-                    return
+                    return True
                 finally:
                     BillingConcurrencyService.release(lease)
 
             if turn_completed:
                 continue
+
+            if _defer_retryable_start_failure and not session_committed:
+                return False
 
             error_detail = ProxyService._failure_error_log_detail(last_error)
             ProxyService._log_failed_request(
@@ -6423,7 +6448,7 @@ class ProxyService:
                 ),
                 ensure_ascii=False,
             ))
-            return
+            return True
 
     @staticmethod
     def _prepare_responses_request_context(
@@ -7785,6 +7810,7 @@ class ProxyService:
         request_data: dict,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        _allowed_channel_ids: Optional[list[int]] = None,
     ):
         """
         Handle an OpenAI-format ``/v1/chat/completions`` request.
@@ -7874,6 +7900,9 @@ class ProxyService:
                     ModelService.get_available_channels(db, unified_model.id),
                     "openai",
                 )
+                if _allowed_channel_ids is not None:
+                    allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
+                    channels = [item for item in channels if int(item[0].id) in allowed_ids]
                 if not channels:
                     raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
@@ -8083,6 +8112,7 @@ class ProxyService:
         request_data: dict,
         client_ip: str,
         request_headers: Optional[dict[str, str]] = None,
+        _allowed_channel_ids: Optional[list[int]] = None,
     ):
         """
         Handle an Anthropic-format ``/v1/messages`` request.
@@ -8164,6 +8194,9 @@ class ProxyService:
                 ModelService.get_available_channels(db, unified_model.id),
                 "anthropic",
             )
+            if _allowed_channel_ids is not None:
+                allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
+                channels = [item for item in channels if int(item[0].id) in allowed_ids]
             if not channels:
                 raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:

@@ -425,6 +425,7 @@ CREATE TABLE `channel` (
   `auth_header_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'x-api-key' COMMENT '鉴权头类型: authorization/x-api-key/anthropic-api-key/x-goog-api-key',
   `priority` int NOT NULL DEFAULT '10' COMMENT '优先级,1=最高',
   `enabled` tinyint NOT NULL DEFAULT '1',
+  `passthrough_enabled` tinyint NOT NULL DEFAULT '0' COMMENT '文本模型原生透传：1开启，0关闭',
   `health_check_enabled` tinyint NOT NULL DEFAULT '1' COMMENT '是否参与健康监控',
   `is_healthy` tinyint NOT NULL DEFAULT '1',
   `health_score` int NOT NULL DEFAULT '100' COMMENT '健康分0-100',

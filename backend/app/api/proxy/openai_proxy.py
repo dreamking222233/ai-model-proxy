@@ -5,6 +5,7 @@ from app.core.dependencies import verify_api_key, verify_api_key_from_headers
 from app.core.exceptions import ServiceException
 from app.models.user import SysUser, UserApiKey
 from app.services.proxy_service import ProxyService
+from app.services.channel_passthrough_service import ChannelPassthroughService
 
 router = APIRouter(tags=["代理-OpenAI"])
 
@@ -23,9 +24,13 @@ async def openai_chat_completions_v1(
     client_ip = request.client.host if request.client else None
 
     # Delegate to proxy service
-    return await ProxyService.handle_openai_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "openai",
+        lambda payload, channel_ids: ProxyService.handle_openai_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )
 
 
@@ -54,9 +59,13 @@ async def openai_chat_completions_root(
     client_ip = request.client.host if request.client else None
 
     # Delegate to proxy service
-    return await ProxyService.handle_openai_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "openai",
+        lambda payload, channel_ids: ProxyService.handle_openai_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )
 
 
@@ -128,9 +137,13 @@ async def codex_responses_v1(
     body = await request.json()
     client_ip = request.client.host if request.client else None
 
-    return await ProxyService.handle_responses_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "responses",
+        lambda payload, channel_ids: ProxyService.handle_responses_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )
 
 
@@ -144,9 +157,13 @@ async def codex_responses_root(
     body = await request.json()
     client_ip = request.client.host if request.client else None
 
-    return await ProxyService.handle_responses_request(
-        db, user, api_key_record, body, client_ip,
-        request_headers=dict(request.headers.items()),
+    return await ChannelPassthroughService.dispatch_http(
+        request, db, user, api_key_record, body, "responses",
+        lambda payload, channel_ids: ProxyService.handle_responses_request(
+            db, user, api_key_record, payload, client_ip,
+            request_headers=dict(request.headers.items()),
+            _allowed_channel_ids=channel_ids,
+        ),
     )
 
 
@@ -169,9 +186,16 @@ async def _handle_codex_responses_websocket(websocket: WebSocket, db: Session):
 
     await websocket.accept()
     client_ip = websocket.client.host if websocket.client else None
+    handled, first_message, channel_ids = await ChannelPassthroughService.dispatch_websocket(
+        websocket, db, user, api_key_record, client_ip,
+    )
+    if handled:
+        return
     await ProxyService.handle_responses_websocket(
         db, user, api_key_record, websocket, client_ip,
         request_headers=dict(websocket.headers.items()),
+        initial_message=first_message,
+        _allowed_channel_ids=channel_ids,
     )
 
 

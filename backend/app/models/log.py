@@ -470,6 +470,8 @@ class UserSubscription(Base):
     allowed_model_ids_snapshot = Column(Text, nullable=True, comment="JSON array of allowed unified_model IDs")
     reset_period = Column(String(20), nullable=True, default="day")
     reset_timezone = Column(String(64), nullable=True, default="Asia/Shanghai")
+    refresh_period_days = Column(Integer, nullable=True, comment="用户选择的额度刷新周期（天），NULL 表示未选择")
+    refresh_period_selected_at = Column(DateTime, nullable=True, comment="用户选择额度刷新周期的时间")
     activation_mode = Column(String(20), nullable=True, default="append")
     start_time = Column(DateTime, nullable=False, comment="开始时间")
     end_time = Column(DateTime, nullable=False, comment="结束时间")

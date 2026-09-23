@@ -9,6 +9,7 @@ from app.services.image_credit_service import ImageCreditService
 from app.services.subscription_service import SubscriptionService
 from app.services.health_service import get_system_config
 from app.schemas.common import ResponseModel
+from app.schemas.subscription import SubscriptionRefreshPeriodRequest
 
 router = APIRouter(prefix="/api/user/balance", tags=["用户-余额"])
 
@@ -27,6 +28,20 @@ def get_balance(
         "image_credit_total_consumed": image_balance["total_consumed"],
         "subscription_summary": SubscriptionService.get_current_subscription_summary(db, current_user.id),
     })
+
+
+@router.post("/subscription-refresh-period", response_model=ResponseModel)
+def set_subscription_refresh_period(
+    data: SubscriptionRefreshPeriodRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    result = SubscriptionService.set_subscription_refresh_period(
+        db,
+        user_id=current_user.id,
+        period_days=data.period_days,
+    )
+    return ResponseModel(data=result, message="套餐额度刷新周期设置成功")
 
 
 @router.get("/consumption", response_model=ResponseModel)

@@ -400,20 +400,23 @@ class ProxyService:
                             active_subscription=active_subscription,
                         )
                     raise ProxyService._build_quota_balance_insufficient_error()
-                if ProxyService._precheck_requires_exact_cost(quota_precheck):
-                    estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
-                        db,
-                        user.id,
-                        quota_precheck,
-                        unified_model=unified_model,
-                        requested_model=requested_model,
-                    )
-                    if not ProxyService._can_balance_cover_exact_amount(
+                estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
+                    db,
+                    user.id,
+                    quota_precheck,
+                    unified_model=unified_model,
+                    requested_model=requested_model,
+                )
+                if (
+                    estimated_balance_charge is not None
+                    and SubscriptionService._normalize_decimal(estimated_balance_charge) > 0
+                    and not ProxyService._can_balance_cover_exact_amount(
                         db,
                         user.id,
                         estimated_balance_charge,
-                    ):
-                        raise ProxyService._build_quota_balance_insufficient_error()
+                    )
+                ):
+                    raise ProxyService._build_quota_balance_insufficient_error()
             return ProxyService._build_billing_admission_decision(
                 db,
                 user.id,
@@ -464,12 +467,12 @@ class ProxyService:
         if not active_subscription or not SubscriptionService._requires_daily_cycle(active_subscription):
             return None, None
         quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
-        quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
         cycle = SubscriptionService._get_or_create_cycle(
             db,
             active_subscription,
             SubscriptionService.get_current_time(),
         )
+        quota_limit = SubscriptionService._normalize_decimal(cycle.quota_limit)
         remaining = quota_limit - SubscriptionService._normalize_decimal(cycle.used_amount)
         return quota_metric, max(remaining, Decimal("0"))
 
@@ -682,17 +685,12 @@ class ProxyService:
             requested_model=requested_model,
         )
         requested_amount = SubscriptionService._normalize_decimal(estimated_balance_charge)
-        exact_cost = ProxyService._precheck_requires_exact_cost(quota_precheck)
-        if exact_cost and not ProxyService._can_balance_cover_exact_amount(db, user_id, requested_amount):
+        if requested_amount > 0 and not ProxyService._can_balance_cover_exact_amount(
+            db,
+            user_id,
+            requested_amount,
+        ):
             return False
-        if requested_amount > 0 and available_balance < requested_amount:
-            logger.info(
-                "Allowing quota balance fallback with positive balance despite high precheck estimate: "
-                "user_id=%s balance=%s estimated_balance_charge=%s",
-                user_id,
-                available_balance,
-                requested_amount,
-            )
         return True
 
     @staticmethod
@@ -754,7 +752,7 @@ class ProxyService:
             SubscriptionService.get_current_time(),
         )
         quota_remaining_amount = (
-            SubscriptionService._get_effective_quota_limit(active_subscription)
+            SubscriptionService._normalize_decimal(cycle.quota_limit)
             - SubscriptionService._normalize_decimal(cycle.used_amount)
         )
         estimated_quota_amount = SubscriptionService._get_estimated_quota_consumption(
@@ -12268,7 +12266,6 @@ class ProxyService:
             cache_creation_price = Decimal(str(getattr(unified_model, "cache_creation_price_per_million", 0) or 0))
             request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
             billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
-            exact_request_billing = billing_type in {"request", "free"}
             if billing_type == "request":
                 input_cost_decimal = Decimal("0")
                 cache_read_cost_decimal = Decimal("0")
@@ -12354,7 +12351,7 @@ class ProxyService:
                     return float(balance_before_decimal), float(balance_before_decimal)
                 if not balance or balance_before_decimal <= 0:
                     raise ProxyService._build_balance_precheck_insufficient_error()
-                if exact_request_billing and balance_before_decimal < amount:
+                if balance_before_decimal < amount:
                     raise ProxyService._build_balance_precheck_insufficient_error()
                 balance_before_local = float(balance_before_decimal)
                 balance.balance = balance_before_decimal - amount
@@ -12368,9 +12365,7 @@ class ProxyService:
                 if requested_amount <= 0:
                     return True
                 balance_before_decimal = ProxyService._balance_decimal(balance)
-                if exact_request_billing:
-                    return balance_before_decimal >= requested_amount
-                return balance_before_decimal > 0
+                return balance_before_decimal >= requested_amount
 
             if fresh_user.subscription_type == "balance":
                 balance_before, balance_after = apply_balance_charge(total_cost_decimal)
@@ -12406,7 +12401,6 @@ class ProxyService:
                         SubscriptionService.PLAN_KIND_UNLIMITED,
                     }:
                         quota_metric = SubscriptionService._get_effective_quota_metric(active_subscription)
-                        quota_limit_snapshot = SubscriptionService._get_effective_quota_limit(active_subscription)
                         quota_consumed_amount = SubscriptionService._get_quota_consumed_amount(
                             active_subscription,
                             raw_total_tokens=raw_total_tokens,
@@ -12414,6 +12408,7 @@ class ProxyService:
                             quota_cost=float(quota_cost_for_request),
                         )
                         cycle = SubscriptionService._get_or_create_cycle(write_db, active_subscription, usage_now)
+                        quota_limit_snapshot = SubscriptionService._normalize_decimal(cycle.quota_limit)
                         quota_remaining_amount = (
                             quota_limit_snapshot
                             - SubscriptionService._normalize_decimal(cycle.used_amount)
@@ -12429,14 +12424,7 @@ class ProxyService:
                         )
                         allow_quota_over_limit = False
                         if balance_charge_amount > 0 and not balance_can_pay_next_charge(balance_charge_amount):
-                            if exact_request_billing:
-                                raise ProxyService._build_quota_balance_insufficient_error()
-                            if quota_amount_to_consume > 0:
-                                quota_amount_to_consume = quota_consumed_amount
-                                balance_charge_amount = Decimal("0")
-                                allow_quota_over_limit = True
-                            else:
-                                raise ProxyService._build_quota_balance_insufficient_error()
+                            raise ProxyService._build_quota_balance_insufficient_error()
 
                         if quota_amount_to_consume <= 0:
                             if balance_charge_amount <= 0:
@@ -12472,8 +12460,9 @@ class ProxyService:
                                             usage_now,
                                         )
                                     )
+                                    refreshed_quota_limit = SubscriptionService._normalize_decimal(refreshed_cycle.quota_limit)
                                     refreshed_quota_remaining = (
-                                        quota_limit_snapshot
+                                        refreshed_quota_limit
                                         - SubscriptionService._normalize_decimal(refreshed_cycle.used_amount)
                                     )
                                     refreshed_quota_amount_to_consume = min(
@@ -12490,14 +12479,7 @@ class ProxyService:
                                         refreshed_balance_charge_amount > 0
                                         and not balance_can_pay_next_charge(refreshed_balance_charge_amount)
                                     ):
-                                        if exact_request_billing:
-                                            raise ProxyService._build_quota_balance_insufficient_error()
-                                        if refreshed_quota_amount_to_consume > 0:
-                                            refreshed_quota_amount_to_consume = quota_consumed_amount
-                                            refreshed_balance_charge_amount = Decimal("0")
-                                            refreshed_allow_quota_over_limit = True
-                                        else:
-                                            raise ProxyService._build_quota_balance_insufficient_error()
+                                        raise ProxyService._build_quota_balance_insufficient_error()
 
                                     if refreshed_quota_amount_to_consume > 0:
                                         quota_usage = SubscriptionService.consume_quota_amount_after_request(

@@ -97,6 +97,21 @@
               <span class="val">{{ formatQuotaAmount(subscriptionSummary.current_cycle.remaining_amount, subscriptionSummary.quota_metric).split(' ')[0] }}</span>
             </div>
           </div>
+          <div v-if="subscriptionCanChooseRefreshPeriod" class="refresh-period-setting">
+            <span class="refresh-period-label">额度刷新周期</span>
+            <a-radio-group
+              size="small"
+              :disabled="periodSaving"
+              @change="handleRefreshPeriodChange"
+            >
+              <a-radio-button v-for="days in subscriptionRefreshPeriodOptions" :key="days" :value="days">
+                {{ days }}天
+              </a-radio-button>
+            </a-radio-group>
+          </div>
+          <div v-else-if="subscriptionRefreshPeriodDays" class="refresh-period-selected">
+            已设置为每 {{ subscriptionRefreshPeriodDays }} 天刷新一次
+          </div>
         </div>
       </div>
       <div v-if="subscriptionSummary.bonus_grants && subscriptionSummary.bonus_grants.length" class="package-card bonus-package-card animate__animated animate__fadeInUp">
@@ -130,7 +145,7 @@
           <p class="section-subtitle">查看所有 AI 模型的调用细节与消耗逻辑</p>
         </div>
         <div class="section-actions">
-          <a-button shape="circle" icon="reload" @click="fetchLogs" :loading="loading" class="refresh-btn" />
+          <a-button shape="circle" icon="reload" @click="refreshAll" :loading="refreshing" class="refresh-btn" />
         </div>
       </div>
 
@@ -613,7 +628,7 @@
 </template>
 
 <script>
-import { getUsageLogs, getProfile, getModelUsageStats, getSiteConfig } from '@/api/user'
+import { getUsageLogs, getProfile, getModelUsageStats, getSiteConfig, setSubscriptionRefreshPeriod } from '@/api/user'
 import { formatDate as formatLocalDate } from '@/utils'
 import { getModelSeriesLabel } from '@/constants/modelSeries'
 
@@ -622,6 +637,8 @@ export default {
   data() {
     return {
       loading: false,
+      refreshing: false,
+      periodSaving: false,
       logs: [],
       dateRange: [],
       statusFilter: undefined,
@@ -668,9 +685,18 @@ export default {
     },
     subscriptionModeText() {
       const summary = this.subscriptionSummary || {}
-      if (summary.plan_kind === 'daily_quota') return '每24小时刷新'
-      if (summary.current_cycle || summary.next_refresh_at) return '无限套餐 / 每24小时刷新'
-      return '无限套餐'
+      const days = Number(summary.refresh_period_days || 1)
+      return `每${days}天刷新一次`
+    },
+    subscriptionRefreshPeriodDays() {
+      const value = this.subscriptionSummary && this.subscriptionSummary.refresh_period_days
+      return value == null ? null : Number(value)
+    },
+    subscriptionRefreshPeriodOptions() {
+      return (this.subscriptionSummary && this.subscriptionSummary.refresh_period_options) || []
+    },
+    subscriptionCanChooseRefreshPeriod() {
+      return this.subscriptionRefreshPeriodDays == null && this.subscriptionRefreshPeriodOptions.length > 0
     },
     onlineRechargeEnabled() {
       return Boolean(this.siteConfig.online_recharge_enabled)
@@ -703,10 +729,21 @@ export default {
       return eligible.length ? `全部赠送模型（当前：${eligible.join('、')}）` : '暂无已启用赠送模型'
     },
     initData() {
-      this.fetchLogs()
-      this.fetchSummary()
-      this.fetchProfile()
-      this.fetchSiteConfig()
+      this.refreshAll()
+    },
+    async refreshAll() {
+      if (this.refreshing) return
+      this.refreshing = true
+      try {
+        await Promise.all([
+          this.fetchLogs(),
+          this.fetchSummary(),
+          this.fetchProfile(),
+          this.fetchSiteConfig()
+        ])
+      } finally {
+        this.refreshing = false
+      }
     },
     async fetchSiteConfig() {
       try {
@@ -731,6 +768,20 @@ export default {
         this.userInfo = res.data || { balance: 0 }
       } catch (err) {
         console.error('Failed to fetch profile:', err)
+      }
+    },
+    async handleRefreshPeriodChange(event) {
+      const periodDays = Number(event && event.target ? event.target.value : event)
+      if (!periodDays || this.periodSaving) return
+      this.periodSaving = true
+      try {
+        await setSubscriptionRefreshPeriod(periodDays)
+        this.$message.success('额度刷新周期设置成功')
+        await this.fetchProfile()
+      } catch (err) {
+        // The request interceptor displays the server error.
+      } finally {
+        this.periodSaving = false
       }
     },
     async fetchSummary() {
@@ -1020,6 +1071,25 @@ export default {
 <style lang="less" scoped>
 .bonus-package-card {
   margin-top: 16px;
+}
+
+.refresh-period-setting,
+.refresh-period-selected {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+}
+
+.refresh-period-label {
+  white-space: nowrap;
+}
+
+.refresh-period-selected {
+  color: rgba(255, 255, 255, 0.62);
 }
 .bonus-grant-row {
   padding: 12px 0;

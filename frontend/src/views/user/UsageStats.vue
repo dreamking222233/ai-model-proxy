@@ -55,8 +55,16 @@
           <!-- Pie: Distribution -->
           <div class="chart-glass-card distribution-card animate__animated animate__fadeInUp" style="animation-delay: 0.4s">
             <div class="chart-header">
-              <h3 class="chart-title"><a-icon type="pie-chart" /> 请求分布</h3>
-              <p class="chart-subtitle">实时统计各模型的请求占比</p>
+              <div class="chart-header-left">
+                <h3 class="chart-title"><a-icon type="pie-chart" /> 请求分布</h3>
+                <p class="chart-subtitle">实时统计各模型的请求占比</p>
+              </div>
+              <div v-if="byModel.length > 5" class="chart-header-actions">
+                <a-radio-group v-model="pieMode" size="small" button-style="solid" class="chart-switch-radio" @change="renderPieChart">
+                  <a-radio-button value="top5">Top 5</a-radio-button>
+                  <a-radio-button value="all">全部 ({{ byModel.length }})</a-radio-button>
+                </a-radio-group>
+              </div>
             </div>
             <div class="chart-wrapper">
               <div ref="pieChart" class="chart-instance"></div>
@@ -69,8 +77,16 @@
           <!-- Bar: Token Usage -->
           <div class="chart-glass-card tokens-card animate__animated animate__fadeInUp" style="animation-delay: 0.5s">
             <div class="chart-header">
-              <h3 class="chart-title"><a-icon type="bar-chart" /> Token 资源消耗</h3>
-              <p class="chart-subtitle">输入与输出 Token 的对比构成</p>
+              <div class="chart-header-left">
+                <h3 class="chart-title"><a-icon type="bar-chart" /> Token 资源消耗</h3>
+                <p class="chart-subtitle">输入与输出 Token 的对比构成</p>
+              </div>
+              <div v-if="byModel.length > 8" class="chart-header-actions">
+                <a-radio-group v-model="barMode" size="small" button-style="solid" class="chart-switch-radio" @change="renderBarChart">
+                  <a-radio-button value="top8">Top 8</a-radio-button>
+                  <a-radio-button value="all">全部 ({{ byModel.length }})</a-radio-button>
+                </a-radio-group>
+              </div>
             </div>
             <div class="chart-wrapper">
               <div ref="barChart" class="chart-instance"></div>
@@ -104,7 +120,7 @@
             <a-table
               :columns="columns"
               :data-source="byModel"
-              :pagination="false"
+              :pagination="byModel.length > 10 ? pagination : false"
               row-key="model_name"
               size="middle"
               class="premium-table"
@@ -159,20 +175,24 @@ import {
   TooltipComponent,
   LegendComponent,
   GridComponent,
-  GraphicComponent
+  GraphicComponent,
+  DataZoomComponent
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 echarts.use([
   PieChart, BarChart, LineChart,
-  TitleComponent, TooltipComponent, LegendComponent, GridComponent, GraphicComponent,
+  TitleComponent, TooltipComponent, LegendComponent, GridComponent, GraphicComponent, DataZoomComponent,
   CanvasRenderer
 ])
 
+// 扩展丰富调色板，支持更多模型对比
 const VIZ_COLORS = [
-  '#667eea', '#764ba2', '#36cfc9', '#38ef7d', '#fa8c16',
-  '#f5222d', '#722ed1', '#1890ff', '#faad14', '#eb2f96'
+  '#667eea', '#38ef7d', '#36cfc9', '#fa8c16', '#764ba2',
+  '#1890ff', '#f5222d', '#faad14', '#722ed1', '#eb2f96',
+  '#13c2c2', '#52c41a', '#2f54eb', '#fa541c', '#a0d911', '#9254de'
 ]
+const OTHERS_COLOR = '#94a3b8'
 
 export default {
   name: 'UsageStats',
@@ -183,6 +203,8 @@ export default {
       days: 7,
       byModel: [],
       dailyTrend: [],
+      pieMode: 'top5', // 'top5' 聚合前5与其它, 'all' 全部
+      barMode: 'top8', // 'top8' 前8模型, 'all' 全部
       summary: {
         total_requests: 0,
         total_tokens: 0,
@@ -190,11 +212,49 @@ export default {
         total_failed: 0,
         total_cost: 0
       },
+      pagination: {
+        pageSize: 10,
+        showSizeChanger: true,
+        pageSizeOptions: ['10', '20', '50'],
+        showTotal: (total) => `共 ${total} 个模型`
+      },
       columns: [
-        { title: '模型名称', dataIndex: 'model_name', key: 'model_name', width: 220, scopedSlots: { customRender: 'model_name' } },
-        { title: '请求总额', dataIndex: 'request_count', key: 'request_count', width: 120, align: 'right', scopedSlots: { customRender: 'request_count' } },
-        { title: '调用成功率', key: 'success_rate', width: 160, scopedSlots: { customRender: 'success_rate' } },
-        { title: 'Token 消耗对账', key: 'token_usage', width: 320, scopedSlots: { customRender: 'token_usage' } }
+        {
+          title: '模型名称',
+          dataIndex: 'model_name',
+          key: 'model_name',
+          width: 220,
+          scopedSlots: { customRender: 'model_name' },
+          sorter: (a, b) => (a.model_name || '').localeCompare(b.model_name || '')
+        },
+        {
+          title: '请求总额',
+          dataIndex: 'request_count',
+          key: 'request_count',
+          width: 120,
+          align: 'right',
+          scopedSlots: { customRender: 'request_count' },
+          sorter: (a, b) => (a.request_count || 0) - (b.request_count || 0),
+          defaultSortOrder: 'descend'
+        },
+        {
+          title: '调用成功率',
+          key: 'success_rate',
+          width: 160,
+          scopedSlots: { customRender: 'success_rate' },
+          sorter: (a, b) => {
+            const rateA = a.request_count > 0 ? a.success_count / a.request_count : 0
+            const rateB = b.request_count > 0 ? b.success_count / b.request_count : 0
+            return rateA - rateB
+          }
+        },
+        {
+          title: 'Token 消耗对账',
+          key: 'token_usage',
+          width: 320,
+          scopedSlots: { customRender: 'token_usage' },
+          sorter: (a, b) => (a.total_tokens || 0) - (b.total_tokens || 0)
+        }
       ],
       pieInstance: null,
       barInstance: null,
@@ -293,51 +353,148 @@ export default {
       if (!this.pieInstance) this.pieInstance = echarts.init(this.$refs.pieChart)
       
       const isNarrow = window.innerWidth < 1100
+      const totalRequests = this.byModel.reduce((sum, item) => sum + (item.request_count || 0), 0)
+
+      // 数据处理：Top 5 + 其他 vs 全部
+      let pieData = []
+      const sortedModels = [...this.byModel].sort((a, b) => (b.request_count || 0) - (a.request_count || 0))
+
+      if (this.pieMode === 'top5' && sortedModels.length > 5) {
+        const top5 = sortedModels.slice(0, 5)
+        const others = sortedModels.slice(5)
+        const othersCount = others.reduce((sum, item) => sum + (item.request_count || 0), 0)
+
+        pieData = top5.map((m, idx) => ({
+          name: m.model_name,
+          value: m.request_count,
+          itemStyle: { color: VIZ_COLORS[idx % VIZ_COLORS.length] }
+        }))
+
+        if (othersCount > 0) {
+          pieData.push({
+            name: '其他模型',
+            value: othersCount,
+            itemStyle: { color: OTHERS_COLOR }
+          })
+        }
+      } else {
+        pieData = sortedModels.map((m, idx) => ({
+          name: m.model_name,
+          value: m.request_count,
+          itemStyle: { color: VIZ_COLORS[idx % VIZ_COLORS.length] }
+        }))
+      }
 
       this.pieInstance.setOption({
         animation: !this.reduceMotion,
         tooltip: {
           trigger: 'item',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          backgroundColor: 'rgba(255, 255, 255, 0.96)',
+          borderColor: '#edf2f7',
+          borderWidth: 1,
           borderRadius: 8,
-          borderWidth: 0,
-          padding: 12,
-          textStyle: { color: '#1a1a2e', fontWeight: 'bold' },
-          shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.1)',
-          formatter: '{b}: <span style="color:#667eea">{c}</span> 次 ({d}%)'
-        },
-        legend: {
-          orient: isNarrow ? 'horizontal' : 'vertical',
-          right: isNarrow ? 'center' : '2%',
-          left: isNarrow ? 'center' : 'auto',
-          bottom: isNarrow ? -5 : 'auto',
-          top: isNarrow ? 'auto' : 'middle',
-          itemWidth: 10, itemHeight: 10,
-          textStyle: { 
-            fontSize: 10, 
-            color: '#8c8c8c',
-            width: isNarrow ? 100 : 140,
-            overflow: 'truncate',
-            ellipsis: '...'
-          },
-          formatter: (name) => {
-            return name.length > 20 ? name.slice(0, 18) + '...' : name
+          padding: [10, 14],
+          textStyle: { color: '#1a1a2e', fontSize: 12 },
+          extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,0.08);',
+          formatter: (params) => {
+            const percent = totalRequests > 0 ? ((params.value / totalRequests) * 100).toFixed(1) : 0
+            return `
+              <div style="font-weight: 700; margin-bottom: 4px; color: #1a1a2e;">${params.name}</div>
+              <div style="display:flex; align-items:center; gap: 8px;">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${params.color}"></span>
+                <span style="color:#595959">请求量:</span>
+                <strong style="color:#667eea">${this.formatNumber(params.value)} 次</strong>
+                <span style="color:#8c8c8c">(${percent}%)</span>
+              </div>
+            `
           }
         },
-        color: VIZ_COLORS,
+        legend: {
+          type: 'scroll',
+          orient: isNarrow ? 'horizontal' : 'vertical',
+          right: isNarrow ? 'center' : 12,
+          left: isNarrow ? 'center' : 'auto',
+          bottom: isNarrow ? 0 : 16,
+          top: isNarrow ? 'auto' : 20,
+          itemWidth: 8,
+          itemHeight: 8,
+          itemGap: isNarrow ? 8 : 10,
+          pageButtonPosition: 'end',
+          pageIconSize: 10,
+          pageTextStyle: { color: '#8c8c8c', fontSize: 11 },
+          textStyle: {
+            fontSize: 11,
+            color: '#595959',
+            rich: {
+              name: {
+                width: isNarrow ? 80 : 105,
+                overflow: 'truncate',
+                ellipsis: '...',
+                fontSize: 11,
+                color: '#4a5568'
+              },
+              rate: {
+                width: 42,
+                align: 'right',
+                fontSize: 10,
+                color: '#8c8c8c',
+                fontFamily: 'monospace'
+              }
+            }
+          },
+          formatter: (name) => {
+            const target = pieData.find(d => d.name === name)
+            if (!target || !totalRequests) return name
+            const rate = ((target.value / totalRequests) * 100).toFixed(1) + '%'
+            return `{name|${name}} {rate|${rate}}`
+          }
+        },
+        graphic: [
+          {
+            type: 'group',
+            left: isNarrow ? '50%' : '30%',
+            top: isNarrow ? '36%' : '48%',
+            children: [
+              {
+                type: 'text',
+                z: 100,
+                left: 'center',
+                top: -14,
+                style: {
+                  text: '总请求量',
+                  textAlign: 'center',
+                  fill: '#8c8c8c',
+                  font: '500 11px sans-serif'
+                }
+              },
+              {
+                type: 'text',
+                z: 100,
+                left: 'center',
+                top: 2,
+                style: {
+                  text: this.formatNumberShort(totalRequests),
+                  textAlign: 'center',
+                  fill: '#1a1a2e',
+                  font: 'bold 16px "MonoLisa", monospace'
+                }
+              }
+            ]
+          }
+        ],
         series: [{
           type: 'pie',
-          radius: isNarrow ? ['40%', '60%'] : ['45%', '65%'],
-          center: isNarrow ? ['50%', '42%'] : ['28%', '50%'],
+          radius: isNarrow ? ['40%', '62%'] : ['48%', '72%'],
+          center: isNarrow ? ['50%', '36%'] : ['30%', '48%'],
           avoidLabelOverlap: true,
-          itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 3 },
+          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
           label: { show: false },
           emphasis: {
             scale: true,
-            scaleSize: 8,
-            label: { show: true, fontSize: 13, fontWeight: 'bold' }
+            scaleSize: 6,
+            label: { show: false }
           },
-          data: this.byModel.map(m => ({ name: m.model_name, value: m.request_count }))
+          data: pieData
         }]
       }, true)
     },
@@ -345,21 +502,98 @@ export default {
       if (!this.$refs.barChart || this.byModel.length === 0) return
       if (!this.barInstance) this.barInstance = echarts.init(this.$refs.barChart)
       
-      const models = this.byModel.map(m => m.model_name)
+      // 按 total_tokens 降序排列
+      const sortedModels = [...this.byModel].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0))
+      const isTop8 = this.barMode === 'top8' && sortedModels.length > 8
+      const displayModels = isTop8 ? sortedModels.slice(0, 8) : sortedModels
+
+      // 使用 inverse: true 让消耗最多的模型排在上方（更符合直觉）
+      const modelNames = displayModels.map(m => m.model_name)
+      const inputTokens = displayModels.map(m => m.input_tokens || 0)
+      const outputTokens = displayModels.map(m => m.output_tokens || 0)
+
+      // 当显示全部且模型数量 > 8 时开启 dataZoom 滚动
+      const showScroll = !isTop8 && displayModels.length > 8
+      const dataZoomConfig = showScroll ? [
+        {
+          type: 'slider',
+          show: true,
+          yAxisIndex: 0,
+          right: 4,
+          width: 8,
+          startValue: 0,
+          endValue: 7, // 默认聚焦前 8 个，其余平滑滚动
+          fillerColor: 'rgba(102, 126, 234, 0.25)',
+          borderColor: 'transparent',
+          backgroundColor: '#f8fafc',
+          showDataShadow: false,
+          showDetail: false,
+          brushSelect: false,
+          handleSize: 12,
+          handleStyle: { color: '#667eea', borderColor: '#667eea' }
+        },
+        {
+          type: 'inside',
+          yAxisIndex: 0,
+          zoomOnMouseWheel: false,
+          moveOnMouseMove: true,
+          moveOnMouseWheel: true
+        }
+      ] : []
+
       this.barInstance.setOption({
         animation: !this.reduceMotion,
         tooltip: {
           trigger: 'axis',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          axisPointer: { type: 'shadow' }
+          backgroundColor: 'rgba(255, 255, 255, 0.96)',
+          borderColor: '#edf2f7',
+          borderWidth: 1,
+          borderRadius: 8,
+          padding: [10, 14],
+          axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(102, 126, 234, 0.06)' } },
+          extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,0.08);',
+          formatter: (params) => {
+            if (!params || !params.length) return ''
+            const modelName = params[0].name
+            const inputItem = params.find(p => p.seriesName === '输入 Token')
+            const outputItem = params.find(p => p.seriesName === '输出 Token')
+            const inputVal = inputItem ? Number(inputItem.value) : 0
+            const outputVal = outputItem ? Number(outputItem.value) : 0
+            const total = inputVal + outputVal
+            return `
+              <div style="font-weight: 700; margin-bottom: 6px; color: #1a1a2e;">${modelName}</div>
+              <div style="display:flex; justify-content:space-between; gap:16px; font-size:12px; margin-bottom:3px;">
+                <span style="color:#667eea">● 输入 Token</span>
+                <strong>${this.formatNumber(inputVal)}</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; gap:16px; font-size:12px; margin-bottom:3px;">
+                <span style="color:#36cfc9">● 输出 Token</span>
+                <strong>${this.formatNumber(outputVal)}</strong>
+              </div>
+              <div style="border-top:1px dashed #e2e8f0; margin-top:4px; padding-top:4px; display:flex; justify-content:space-between; gap:16px; font-size:12px;">
+                <span style="color:#595959">合计消耗</span>
+                <strong style="color:#1a1a2e">${this.formatNumber(total)}</strong>
+              </div>
+            `
+          }
         },
         legend: {
           data: ['输入 Token', '输出 Token'],
           top: 0,
-          itemGap: 24,
+          right: showScroll ? 24 : 0,
+          itemGap: 16,
+          itemWidth: 10,
+          itemHeight: 10,
           textStyle: { fontSize: 11, color: '#8c8c8c' }
         },
-        grid: { left: 0, right: 30, bottom: 0, top: 40, containLabel: true },
+        dataZoom: dataZoomConfig,
+        grid: {
+          left: 8,
+          right: showScroll ? 24 : 20,
+          bottom: 10,
+          top: 36,
+          containLabel: true
+        },
         xAxis: {
           type: 'value',
           axisLabel: { color: '#8c8c8c', fontSize: 11, formatter: (v) => this.formatNumberShort(v) },
@@ -367,32 +601,41 @@ export default {
         },
         yAxis: {
           type: 'category',
-          data: models,
+          inverse: true, // 消耗最多的排在最上方
+          data: modelNames,
           axisLine: { show: false },
           axisTick: { show: false },
-          axisLabel: { color: '#595959', fontSize: 11, interval: 0 }
+          axisLabel: {
+            color: '#475569',
+            fontSize: 11,
+            interval: 0,
+            formatter: (val) => {
+              return val.length > 18 ? val.slice(0, 16) + '...' : val
+            }
+          }
         },
         series: [
           {
             name: '输入 Token',
             type: 'bar',
             stack: 'total',
-            data: this.byModel.map(m => m.input_tokens),
-            itemStyle: { color: '#667eea', borderRadius: [0, 0, 0, 0] },
-            barWidth: 18
+            data: inputTokens,
+            itemStyle: { color: '#667eea' },
+            barMaxWidth: 16
           },
           {
             name: '输出 Token',
             type: 'bar',
             stack: 'total',
-            data: this.byModel.map(m => m.output_tokens),
-            itemStyle: { 
+            data: outputTokens,
+            itemStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
                 { offset: 0, color: '#36cfc9' },
                 { offset: 1, color: '#38ef7d' }
               ]),
-              borderRadius: [0, 6, 6, 0] 
-            }
+              borderRadius: [0, 4, 4, 0]
+            },
+            barMaxWidth: 16
           }
         ]
       }, true)
@@ -579,7 +822,16 @@ export default {
     background: rgba(255, 255, 255, 0.94); border-radius: 28px; padding: 24px;
     border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 8px 22px rgba(15,23,42,0.03);
     
-    .chart-header { margin-bottom: 20px; }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      gap: 12px;
+
+      .chart-header-left { flex: 1; min-width: 0; }
+      .chart-header-actions { flex-shrink: 0; }
+    }
     .chart-title { font-size: 17px; font-weight: 800; color: #1a1a2e; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
     .chart-subtitle { font-size: 12px; color: #bfbfbf; font-weight: 500; }
     
@@ -589,6 +841,29 @@ export default {
     .chart-empty-state { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
   }
   .trend-full-card { margin-bottom: 24px; .chart-wrapper { height: 380px; } }
+
+  .chart-switch-radio {
+    /deep/ .ant-radio-button-wrapper {
+      height: 28px;
+      line-height: 26px;
+      padding: 0 10px;
+      font-size: 12px;
+      border-radius: 8px;
+      border-color: #e2e8f0;
+      color: #64748b;
+      font-weight: 500;
+      &:first-child { border-radius: 8px 0 0 8px; }
+      &:last-child { border-radius: 0 8px 8px 0; }
+      &::before { display: none; }
+      &:hover { color: #667eea; }
+    }
+    /deep/ .ant-radio-button-wrapper-checked {
+      background: #667eea !important;
+      border-color: #667eea !important;
+      color: #fff !important;
+      box-shadow: none !important;
+    }
+  }
 
   /* ===== Table Section ===== */
   .table-glass-section {
@@ -603,6 +878,11 @@ export default {
     .table-container-glass {
       background: rgba(255, 255, 255, 0.94); border-radius: 24px; overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.6);
+      padding-bottom: 8px;
+
+      /deep/ .ant-pagination {
+        margin: 16px 24px;
+      }
     }
   }
 

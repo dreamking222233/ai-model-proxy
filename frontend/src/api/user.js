@@ -181,6 +181,14 @@ export function getBalance() {
   })
 }
 
+export function setSubscriptionRefreshPeriod(periodDays) {
+  return request({
+    url: '/api/user/balance/subscription-refresh-period',
+    method: 'post',
+    data: { period_days: periodDays }
+  })
+}
+
 export function getConsumptionRecords(params) {
   return request({
     url: '/api/user/balance/consumption',

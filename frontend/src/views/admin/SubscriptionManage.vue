@@ -2,7 +2,7 @@
   <div class="subscription-manage">
     <a-card :bordered="false" class="header-card">
       <h2 class="page-title">套餐管理</h2>
-      <p class="page-desc">支持模板化套餐发放、旧版无限套餐兼容开通，以及每日额度套餐管理。</p>
+      <p class="page-desc">支持模板化套餐发放、历史套餐兼容开通，以及每日限额套餐管理。</p>
     </a-card>
 
     <a-card :bordered="false">
@@ -28,7 +28,7 @@
           >
             <template slot="plan_kind" slot-scope="text, record">
               <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
-                {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
+                {{ record.plan_kind === 'daily_quota' ? '每日限额' : '每日限额（历史兼容）' }}
               </a-tag>
             </template>
 
@@ -112,7 +112,7 @@
               </a-form>
             </a-card>
 
-            <a-card title="旧版无限套餐开通（每日 100 美元）" :bordered="false" class="grant-card">
+            <a-card title="历史套餐兼容开通（每日 100 美元）" :bordered="false" class="grant-card">
               <a-form layout="vertical">
                 <a-form-item label="选择用户">
                   <a-select
@@ -149,7 +149,7 @@
                   <a-input-number v-model="legacyForm.duration_days" :min="1" :max="3650" style="width: 100%" />
                 </a-form-item>
                 <a-button type="primary" :loading="legacyLoading" @click="handleLegacyActivate">
-                  开通旧版无限套餐
+                  开通历史套餐兼容额度
                 </a-button>
               </a-form>
             </a-card>
@@ -214,7 +214,7 @@
             <template slot="active_plan_info" slot-scope="text, record">
               <div>
                 <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
-                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
+                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '每日限额（历史兼容）' }}
                 </a-tag>
                 <div class="sub-title">{{ record.plan_name }}</div>
                 <div class="sub-text">{{ formatPlanQuota(record) }}</div>
@@ -318,7 +318,7 @@
             <template slot="plan_info" slot-scope="text, record">
               <div>
                 <a-tag :color="record.plan_kind === 'daily_quota' ? 'blue' : 'purple'">
-                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '无限额度' }}
+                  {{ record.plan_kind === 'daily_quota' ? '每日限额' : '每日限额（历史兼容）' }}
                 </a-tag>
                 <div class="sub-title">{{ record.plan_name }}</div>
                 <div class="sub-text">{{ formatPlanQuota(record) }}</div>
@@ -394,7 +394,7 @@
           <a-col :span="12">
             <a-form-item label="套餐模式">
               <a-select v-model="planForm.plan_kind">
-                <a-select-option value="unlimited">无限额度</a-select-option>
+                <a-select-option value="unlimited" :disabled="!editingPlanId">每日限额（历史兼容值）</a-select-option>
                 <a-select-option value="daily_quota">每日限额</a-select-option>
               </a-select>
             </a-form-item>
@@ -1108,7 +1108,7 @@ export default {
           plan_type: this.legacyForm.plan_type,
           duration_days: this.legacyForm.duration_days
         })
-        this.$message.success('旧版无限套餐开通成功')
+        this.$message.success('历史套餐兼容额度开通成功')
         this.fetchList()
         this.fetchActiveUsers()
       } finally {

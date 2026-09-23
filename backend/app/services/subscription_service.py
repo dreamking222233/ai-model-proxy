@@ -40,6 +40,7 @@ class SubscriptionService:
     QUOTA_METRIC_COST = "cost_usd"
     DEFAULT_TIMEZONE = "Asia/Shanghai"
     DEFAULT_RESET_PERIOD = "day"
+    ALLOWED_REFRESH_PERIOD_DAYS = (1, 3, 5, 7)
     QUOTA_RULE_CUTOVER_AT = datetime(2026, 5, 10, 0, 0, 0)
     UNLIMITED_DAILY_TOKEN_LIMIT = Decimal("300000000")
     UNLIMITED_MONTHLY_DAILY_COST_LIMIT = Decimal("100")
@@ -195,6 +196,9 @@ class SubscriptionService:
             "refresh_anchor_at": None,
             "next_refresh_at": None,
             "refresh_period_hours": None,
+            "refresh_period_days": None,
+            "refresh_period_selected_at": None,
+            "refresh_period_options": [],
         }
 
     @staticmethod
@@ -342,8 +346,8 @@ class SubscriptionService:
 
         if SubscriptionService._is_unlimited_subscription(subscription):
             return SubscriptionService._build_quota_strategy(
-                quota_metric=SubscriptionService.QUOTA_METRIC_TOKENS,
-                quota_limit=SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT,
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT,
                 hard_limit=True,
                 use_official_cost=False,
             )
@@ -375,8 +379,8 @@ class SubscriptionService:
 
         if SubscriptionService._get_record_plan_kind(plan) == SubscriptionService.PLAN_KIND_UNLIMITED:
             return SubscriptionService._build_quota_strategy(
-                quota_metric=SubscriptionService.QUOTA_METRIC_TOKENS,
-                quota_limit=SubscriptionService.UNLIMITED_DAILY_TOKEN_LIMIT,
+                quota_metric=SubscriptionService.QUOTA_METRIC_COST,
+                quota_limit=SubscriptionService.UNLIMITED_MONTHLY_DAILY_COST_LIMIT,
                 hard_limit=True,
                 use_official_cost=False,
             )
@@ -621,10 +625,12 @@ class SubscriptionService:
                 strategy["quota_metric"],
                 strategy["quota_limit"],
             )
+            refresh_days = SubscriptionService._get_refresh_period_days(subscription)
+            refresh_text = "每 24 小时" if refresh_days == 1 else f"每 {refresh_days} 天"
             if estimated:
-                message = f"本次请求预计会超出实际使用额度，每 24 小时最多可使用 {limit_text}，请缩短上下文或降低输出上限后重试"
+                message = f"本次请求预计会超出实际使用额度，{refresh_text}最多可使用 {limit_text}，请缩短上下文或降低输出上限后重试"
             else:
-                message = f"已超出实际使用额度，每 24 小时最多可使用 {limit_text}，请在下个额度周期后重试"
+                message = f"已超出实际使用额度，{refresh_text}最多可使用 {limit_text}，请在下个额度周期后重试"
             return ServiceException(
                 403,
                 message,
@@ -692,10 +698,10 @@ class SubscriptionService:
         subscription: UserSubscription,
         now_local: datetime,
     ) -> tuple[date, datetime, datetime]:
-        """Return the rolling 24h quota window anchored at subscription start time.
+        """Return the rolling quota window anchored at subscription start time.
 
         Subscription quota periods are fixed to Beijing time. ``reset_timezone``
-        remains on historical records but no longer drives daily quota refresh.
+        remains on historical records but no longer drives quota refresh.
         """
         usage_now = SubscriptionService._to_default_timezone_naive(now_local) or SubscriptionService.get_current_time()
         start_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "start_time", None))
@@ -709,14 +715,49 @@ class SubscriptionService:
         if effective_now < start_time:
             effective_now = start_time
 
+        period_days = SubscriptionService._get_refresh_period_days(subscription)
         elapsed_seconds = max(0, (effective_now - start_time).total_seconds())
-        cycle_index = int(elapsed_seconds // 86400)
-        cycle_start_at = start_time + timedelta(days=cycle_index)
-        cycle_end_at = cycle_start_at + timedelta(days=1)
+        cycle_index = int(elapsed_seconds // (period_days * 86400))
+        cycle_start_at = start_time + timedelta(days=cycle_index * period_days)
+        cycle_end_at = cycle_start_at + timedelta(days=period_days)
         if end_time and cycle_end_at > end_time:
             cycle_end_at = end_time
 
         return cycle_start_at.date(), cycle_start_at, cycle_end_at
+
+    @staticmethod
+    def _get_refresh_period_days(subscription: UserSubscription) -> int:
+        selected = getattr(subscription, "refresh_period_days", None)
+        if selected in SubscriptionService.ALLOWED_REFRESH_PERIOD_DAYS:
+            return int(selected)
+        return 1
+
+    @staticmethod
+    def _get_max_refresh_period_days(subscription: UserSubscription) -> int:
+        start_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "start_time", None))
+        end_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "end_time", None))
+        if start_time and end_time and end_time >= start_time:
+            duration_days = (end_time - start_time).total_seconds() / 86400
+        else:
+            duration_days = float(getattr(subscription, "duration_days_snapshot", 0) or 0)
+        if duration_days >= 30:
+            return 7
+        if duration_days >= 7:
+            return 3
+        return 1
+
+    @staticmethod
+    def _get_cycle_quota_limit(
+        subscription: UserSubscription,
+        cycle_start_at: datetime,
+        cycle_end_at: datetime,
+    ) -> Decimal:
+        daily_limit = SubscriptionService._get_effective_quota_limit(subscription)
+        actual_days = max(
+            Decimal("0"),
+            Decimal(str((cycle_end_at - cycle_start_at).total_seconds())) / Decimal("86400"),
+        )
+        return daily_limit * actual_days
 
     @staticmethod
     def _validate_plan_payload(data: dict, is_update: bool = False) -> dict:
@@ -1108,6 +1149,10 @@ class SubscriptionService:
             "unlimited_daily_token_limit": SubscriptionService._get_unlimited_daily_token_limit(subscription),
             "reset_period": subscription.reset_period,
             "reset_timezone": subscription.reset_timezone,
+            "refresh_period_days": getattr(subscription, "refresh_period_days", None),
+            "refresh_period_selected_at": SubscriptionService._serialize_beijing_dt(
+                getattr(subscription, "refresh_period_selected_at", None)
+            ),
             "activation_mode": subscription.activation_mode,
             "model_scope": getattr(subscription, "model_scope_snapshot", "all_models") or "all_models",
             "model_series": json.loads(subscription.model_series_snapshot) if getattr(subscription, "model_series_snapshot", None) else [],
@@ -1134,12 +1179,29 @@ class SubscriptionService:
                 if isinstance(result.get("current_cycle"), dict)
                 else None
             )
-            result["refresh_period_hours"] = 24
+            result["refresh_period_days"] = SubscriptionService._get_refresh_period_days(subscription)
+            result["refresh_period_hours"] = result["refresh_period_days"] * 24
+            result["refresh_period_options"] = SubscriptionService._get_refresh_period_options(subscription)
         result.update(source_info or SubscriptionService._default_subscription_source_info(subscription))
         if user is not None:
             result["username"] = user.username
             result["email"] = user.email
         return result
+
+    @staticmethod
+    def _get_refresh_period_options(subscription: UserSubscription) -> list[int]:
+        max_days = SubscriptionService._get_max_refresh_period_days(subscription)
+        start_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "start_time", None))
+        end_time = SubscriptionService._to_default_timezone_naive(getattr(subscription, "end_time", None))
+        if start_time and end_time and end_time >= start_time:
+            duration_days = (end_time - start_time).total_seconds() / 86400
+        else:
+            duration_days = float(getattr(subscription, "duration_days_snapshot", 0) or 0)
+        return [
+            days
+            for days in SubscriptionService.ALLOWED_REFRESH_PERIOD_DAYS
+            if days <= max_days and duration_days >= days
+        ]
 
     @staticmethod
     def _default_subscription_source_info(subscription: UserSubscription) -> dict:
@@ -1458,7 +1520,11 @@ class SubscriptionService:
             usage_now,
         )
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
-        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
+        quota_limit = SubscriptionService._get_cycle_quota_limit(
+            subscription,
+            cycle_start_at,
+            cycle_end_at,
+        )
         query = db.query(SubscriptionUsageCycle).filter(
             SubscriptionUsageCycle.subscription_id == subscription.id,
             SubscriptionUsageCycle.cycle_date == cycle_date,
@@ -1698,7 +1764,11 @@ class SubscriptionService:
             usage_now,
         )
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
-        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
+        quota_limit = SubscriptionService._get_cycle_quota_limit(
+            subscription,
+            cycle_start_at,
+            cycle_end_at,
+        )
         cycle = (
             db.query(SubscriptionUsageCycle)
             .filter(
@@ -1708,7 +1778,11 @@ class SubscriptionService:
             .first()
         )
         if cycle:
-            if SubscriptionService._cycle_window_changed(cycle, cycle_start_at, cycle_end_at) or cycle.quota_metric != quota_metric:
+            if (
+                SubscriptionService._cycle_window_changed(cycle, cycle_start_at, cycle_end_at)
+                or cycle.quota_metric != quota_metric
+                or SubscriptionService._normalize_decimal(cycle.quota_limit) != quota_limit
+            ):
                 if rebuild_from_consumption:
                     usage_snapshot = SubscriptionService._rebuild_cycle_usage_snapshot(
                         db,
@@ -1810,10 +1884,86 @@ class SubscriptionService:
             "current_cycle": current_cycle,
             "refresh_anchor_at": SubscriptionService._serialize_beijing_dt(active_subscription.start_time) if requires_daily_cycle else None,
             "next_refresh_at": next_refresh_at,
-            "refresh_period_hours": 24 if requires_daily_cycle else None,
+            "refresh_period_days": getattr(active_subscription, "refresh_period_days", None),
+            "refresh_period_selected_at": SubscriptionService._serialize_beijing_dt(
+                getattr(active_subscription, "refresh_period_selected_at", None)
+            ),
+            "refresh_period_options": (
+                SubscriptionService._get_refresh_period_options(active_subscription)
+                if requires_daily_cycle and getattr(active_subscription, "refresh_period_days", None) is None
+                else []
+            ),
+            "refresh_period_hours": (
+                SubscriptionService._get_refresh_period_days(active_subscription) * 24
+                if requires_daily_cycle
+                else None
+            ),
         }
         result["bonus_grants"] = SubscriptionBonusService.active_summary(db, user_id, usage_now)
         return result
+
+    @staticmethod
+    def set_subscription_refresh_period(
+        db: Session,
+        user_id: int,
+        period_days: int,
+    ) -> dict:
+        try:
+            normalized_days = int(period_days)
+        except (TypeError, ValueError):
+            raise ServiceException(400, "额度刷新周期不合法", "INVALID_REFRESH_PERIOD")
+
+        if normalized_days not in SubscriptionService.ALLOWED_REFRESH_PERIOD_DAYS:
+            raise ServiceException(400, "额度刷新周期只能选择 1、3、5 或 7 天", "INVALID_REFRESH_PERIOD")
+
+        now = SubscriptionService.get_current_time()
+        subscription = (
+            db.query(UserSubscription)
+            .filter(
+                UserSubscription.user_id == user_id,
+                SubscriptionService._active_status_filter(),
+                UserSubscription.start_time <= now,
+                UserSubscription.end_time > now,
+            )
+            .with_for_update()
+            .order_by(UserSubscription.end_time.desc(), UserSubscription.id.desc())
+            .first()
+        )
+        if not subscription:
+            raise ServiceException(400, "当前没有可设置的有效套餐", "SUBSCRIPTION_NOT_ACTIVE")
+        if getattr(subscription, "refresh_period_days", None) is not None:
+            raise ServiceException(409, "当前套餐已经设置过额度刷新周期", "REFRESH_PERIOD_ALREADY_SET")
+
+        max_period_days = SubscriptionService._get_max_refresh_period_days(subscription)
+        if normalized_days > max_period_days:
+            raise ServiceException(
+                400,
+                f"当前套餐最多选择 {max_period_days} 天刷新一次",
+                "REFRESH_PERIOD_NOT_ALLOWED",
+            )
+
+        start_time = SubscriptionService._to_default_timezone_naive(subscription.start_time)
+        end_time = SubscriptionService._to_default_timezone_naive(subscription.end_time)
+        package_duration_seconds = max((end_time - start_time).total_seconds(), 0)
+        if package_duration_seconds < normalized_days * 86400:
+            raise ServiceException(
+                400,
+                "套餐完整有效期不足以支持所选刷新周期",
+                "REFRESH_PERIOD_EXCEEDS_DURATION",
+            )
+
+        subscription.refresh_period_days = normalized_days
+        subscription.refresh_period_selected_at = now
+        db.flush()
+        # Rebuild the current cycle immediately so usage from the newly widened
+        # window is visible before the next request arrives.
+        SubscriptionService._get_or_create_cycle(db, subscription, now, lock=True)
+        db.commit()
+        db.refresh(subscription)
+        return SubscriptionService._serialize_subscription(
+            subscription,
+            current_cycle=SubscriptionService._get_cycle_for_summary(db, subscription, now),
+        )
 
     @staticmethod
     def check_quota_before_request(
@@ -1831,7 +1981,7 @@ class SubscriptionService:
             return {"subscription": active_subscription, "cycle": None}
 
         cycle = SubscriptionService._get_or_create_cycle(db, active_subscription, usage_now)
-        quota_limit = SubscriptionService._get_effective_quota_limit(active_subscription)
+        quota_limit = SubscriptionService._normalize_decimal(cycle.quota_limit)
         used_amount = SubscriptionService._normalize_decimal(cycle.used_amount)
         remaining_amount = quota_limit - used_amount
         if remaining_amount <= 0:
@@ -1875,7 +2025,6 @@ class SubscriptionService:
         allow_over_limit: bool = False,
     ) -> dict:
         usage_now = now or SubscriptionService.get_current_time()
-        quota_limit = SubscriptionService._get_effective_quota_limit(subscription)
         quota_metric = SubscriptionService._get_effective_quota_metric(subscription)
         consumed_amount = SubscriptionService._normalize_decimal(consumed_amount)
         if consumed_amount <= 0:
@@ -1884,6 +2033,7 @@ class SubscriptionService:
         cycle: Optional[SubscriptionUsageCycle] = None
         for _attempt in range(2):
             cycle = SubscriptionService._get_or_create_cycle(db, subscription, usage_now)
+            quota_limit = SubscriptionService._normalize_decimal(cycle.quota_limit)
             updated = SubscriptionService._apply_cycle_consumption_update(
                 db,
                 cycle_id=cycle.id,

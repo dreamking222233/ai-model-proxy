@@ -1454,6 +1454,8 @@ CREATE TABLE `user_subscription` (
   `quota_value` decimal(20,6) DEFAULT '0.000000',
   `reset_period` varchar(20) DEFAULT 'day',
   `reset_timezone` varchar(64) DEFAULT 'Asia/Shanghai',
+  `refresh_period_days` int DEFAULT NULL COMMENT '用户选择的额度刷新周期（天），NULL 表示未选择',
+  `refresh_period_selected_at` datetime DEFAULT NULL COMMENT '用户选择额度刷新周期的时间',
   `activation_mode` varchar(20) DEFAULT 'append',
   `start_time` datetime NOT NULL COMMENT '开始时间',
   `end_time` datetime NOT NULL COMMENT '结束时间',

@@ -70,3 +70,7 @@ class SubscriptionBonusGrantCreate(BaseModel):
 
 class SubscriptionBonusGrantCancel(BaseModel):
     reason: Optional[str] = Field(None, max_length=255)
+
+
+class SubscriptionRefreshPeriodRequest(BaseModel):
+    period_days: int = Field(..., description="额度刷新周期：1/3/5/7 天")

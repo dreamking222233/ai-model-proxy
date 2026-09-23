@@ -103,6 +103,8 @@ frontend/.nuxt/
 frontend/.output/
 
 # Local-only documentation, test workspaces, and generated media
+/.codex/skills/ai-model-proxy-server-deploy/
+/ai-model-proxy-server-deploy/
 /docs/
 /md/
 /backend/app/test/

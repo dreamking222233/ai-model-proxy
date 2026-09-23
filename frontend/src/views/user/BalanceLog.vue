@@ -98,19 +98,42 @@
             </div>
           </div>
           <div v-if="subscriptionCanChooseRefreshPeriod" class="refresh-period-setting">
-            <span class="refresh-period-label">额度刷新周期</span>
+            <div class="refresh-period-heading">
+              <div class="refresh-period-title">
+                <a-icon type="setting" />
+                <span>选择刷新周期</span>
+              </div>
+              <span class="refresh-period-once">仅可设置一次</span>
+            </div>
+            <p class="refresh-period-description">
+              将每日额度合并到所选周期内使用，适合需要集中调用模型的场景。
+            </p>
             <a-radio-group
+              class="refresh-period-options"
               size="small"
               :disabled="periodSaving"
               @change="handleRefreshPeriodChange"
             >
               <a-radio-button v-for="days in subscriptionRefreshPeriodOptions" :key="days" :value="days">
-                {{ days }}天
+                <span class="refresh-period-days">{{ days }}</span>
+                <span class="refresh-period-unit">天</span>
               </a-radio-button>
             </a-radio-group>
+            <div class="refresh-period-note">
+              <a-icon type="info-circle" />
+              <span>设置后立即生效，下一次只能在新套餐开通后重新选择。</span>
+            </div>
           </div>
           <div v-else-if="subscriptionRefreshPeriodDays" class="refresh-period-selected">
-            已设置为每 {{ subscriptionRefreshPeriodDays }} 天刷新一次
+            <div class="refresh-period-selected-heading">
+              <div class="refresh-period-title">
+                <a-icon type="check-circle" />
+                <span>刷新周期已设置</span>
+              </div>
+              <span class="refresh-period-locked">已锁定</span>
+            </div>
+            <div class="refresh-period-selected-value">每 {{ subscriptionRefreshPeriodDays }} 天刷新一次</div>
+            <p class="refresh-period-description">当前套餐的额度会按这个周期重新刷新，设置后不可修改。</p>
           </div>
         </div>
       </div>
@@ -1075,21 +1098,140 @@ export default {
 
 .refresh-period-setting,
 .refresh-period-selected {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 14px;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
+  margin-top: 16px;
+  padding: 14px 15px 13px;
+  border: 1px solid rgba(102, 126, 234, 0.14);
+  border-radius: 14px;
+  background: rgba(102, 126, 234, 0.045);
 }
 
-.refresh-period-label {
+.refresh-period-heading,
+.refresh-period-selected-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.refresh-period-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.refresh-period-title .anticon {
+  color: #667eea;
+  font-size: 14px;
+}
+
+.refresh-period-once,
+.refresh-period-locked {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(102, 126, 234, 0.1);
+  color: #667eea;
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
+.refresh-period-description {
+  margin: 6px 0 11px;
+  color: #8190a5;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.refresh-period-options {
+  display: flex;
+  width: 100%;
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper {
+  flex: 1 1 0;
+  height: 42px;
+  min-width: 0;
+  padding: 0 5px;
+  border: 1px solid rgba(102, 126, 234, 0.18);
+  background: rgba(255, 255, 255, 0.86);
+  color: #526176;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 40px;
+  transition: all 0.2s ease;
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper:first-child {
+  border-radius: 10px 0 0 10px;
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper:last-child {
+  border-radius: 0 10px 10px 0;
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper:not(:first-child)::before {
+  background-color: rgba(102, 126, 234, 0.12);
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper:hover {
+  color: #667eea;
+  border-color: rgba(102, 126, 234, 0.42);
+}
+
+.refresh-period-options /deep/ .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
+  z-index: 1;
+  border-color: #667eea;
+  background: #667eea;
+  color: #fff;
+  box-shadow: 0 4px 10px rgba(102, 126, 234, 0.2);
+}
+
+.refresh-period-days {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.refresh-period-unit {
+  font-size: 12px;
+}
+
+.refresh-period-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  color: #98a5b6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.refresh-period-note .anticon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #8c9bea;
+}
+
 .refresh-period-selected {
-  color: rgba(255, 255, 255, 0.62);
+  background: rgba(82, 196, 26, 0.045);
+  border-color: rgba(82, 196, 26, 0.16);
+}
+
+.refresh-period-selected .refresh-period-title .anticon {
+  color: #52c41a;
+}
+
+.refresh-period-selected-value {
+  margin-top: 9px;
+  color: #334155;
+  font-size: 16px;
+  font-weight: 800;
 }
 .bonus-grant-row {
   padding: 12px 0;

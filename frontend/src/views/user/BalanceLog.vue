@@ -112,6 +112,7 @@
               class="refresh-period-options"
               size="small"
               :disabled="periodSaving"
+              :value="pendingRefreshPeriodDays"
               @change="handleRefreshPeriodChange"
             >
               <a-radio-button v-for="days in subscriptionRefreshPeriodOptions" :key="days" :value="days">
@@ -647,6 +648,30 @@
         </div>
       </div>
     </a-modal>
+
+    <a-modal
+      v-model="refreshPeriodConfirmVisible"
+      title="确认设置刷新周期"
+      :width="460"
+      :confirm-loading="periodSaving"
+      :getContainer="getModalContainer"
+      ok-text="确认设置"
+      cancel-text="取消"
+      @ok="confirmRefreshPeriod"
+      @cancel="cancelRefreshPeriod"
+    >
+      <div class="refresh-period-confirm-content">
+        <a-icon type="question-circle" class="refresh-period-confirm-icon" />
+        <div>
+          <p class="refresh-period-confirm-title">
+            确定将额度刷新周期设置为每 {{ pendingRefreshPeriodDays }} 天一次吗？
+          </p>
+          <p class="refresh-period-confirm-description">
+            设置后立即生效，当前套餐只能设置一次，下一次需开通新套餐后重新选择。
+          </p>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -662,6 +687,8 @@ export default {
       loading: false,
       refreshing: false,
       periodSaving: false,
+      pendingRefreshPeriodDays: null,
+      refreshPeriodConfirmVisible: false,
       logs: [],
       dateRange: [],
       statusFilter: undefined,
@@ -796,10 +823,22 @@ export default {
     async handleRefreshPeriodChange(event) {
       const periodDays = Number(event && event.target ? event.target.value : event)
       if (!periodDays || this.periodSaving) return
+      this.pendingRefreshPeriodDays = periodDays
+      this.refreshPeriodConfirmVisible = true
+    },
+    cancelRefreshPeriod() {
+      this.refreshPeriodConfirmVisible = false
+      this.pendingRefreshPeriodDays = null
+    },
+    async confirmRefreshPeriod() {
+      const periodDays = Number(this.pendingRefreshPeriodDays)
+      if (!periodDays || this.periodSaving) return
       this.periodSaving = true
       try {
         await setSubscriptionRefreshPeriod(periodDays)
         this.$message.success('额度刷新周期设置成功')
+        this.refreshPeriodConfirmVisible = false
+        this.pendingRefreshPeriodDays = null
         await this.fetchProfile()
       } catch (err) {
         // The request interceptor displays the server error.
@@ -1207,15 +1246,44 @@ export default {
   align-items: flex-start;
   gap: 6px;
   margin-top: 10px;
-  color: #98a5b6;
-  font-size: 11px;
+  color: #cf1322;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.5;
 }
 
 .refresh-period-note .anticon {
   flex: 0 0 auto;
   margin-top: 2px;
-  color: #8c9bea;
+  color: #cf1322;
+}
+
+.refresh-period-confirm-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.refresh-period-confirm-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: #faad14;
+  font-size: 22px;
+}
+
+.refresh-period-confirm-title {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.refresh-period-confirm-description {
+  margin: 8px 0 0;
+  color: #cf1322;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .refresh-period-selected {

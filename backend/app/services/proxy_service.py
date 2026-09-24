@@ -400,23 +400,6 @@ class ProxyService:
                             active_subscription=active_subscription,
                         )
                     raise ProxyService._build_quota_balance_insufficient_error()
-                estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
-                    db,
-                    user.id,
-                    quota_precheck,
-                    unified_model=unified_model,
-                    requested_model=requested_model,
-                )
-                if (
-                    estimated_balance_charge is not None
-                    and SubscriptionService._normalize_decimal(estimated_balance_charge) > 0
-                    and not ProxyService._can_balance_cover_exact_amount(
-                        db,
-                        user.id,
-                        estimated_balance_charge,
-                    )
-                ):
-                    raise ProxyService._build_quota_balance_insufficient_error()
             return ProxyService._build_billing_admission_decision(
                 db,
                 user.id,
@@ -437,11 +420,11 @@ class ProxyService:
 
     @staticmethod
     def _billing_low_asset_threshold(db: Session) -> Decimal:
-        value = get_system_config(db, "billing_low_asset_threshold_usd", "2")
+        value = get_system_config(db, "billing_low_asset_threshold_usd", "3")
         try:
             return max(Decimal(str(value)), Decimal("0"))
         except Exception:
-            return Decimal("2")
+            return Decimal("3")
 
     @staticmethod
     def _billing_low_asset_concurrency_limit(db: Session) -> int:
@@ -500,7 +483,7 @@ class ProxyService:
             # A sufficient balance is an independent source of billing capacity;
             # users without a subscription must not be throttled when it is above
             # the low-asset threshold.
-            if balance > threshold:
+            if balance >= threshold:
                 limited = False
                 reason = "balance_sufficient"
             else:
@@ -513,18 +496,18 @@ class ProxyService:
         ):
             limited = False
             reason = "quota_sufficient"
-        elif balance > threshold:
+        elif balance >= threshold:
             limited = False
             reason = "balance_sufficient"
         elif (
             quota_metric == SubscriptionService.QUOTA_METRIC_COST
             and quota_remaining is not None
             and quota_remaining < threshold
-            and balance <= 0
+            and balance < threshold
         ):
             limited = True
             reason = "low_quota_no_balance"
-        elif balance <= threshold:
+        elif balance < threshold:
             limited = True
             reason = "low_balance"
 
@@ -616,52 +599,21 @@ class ProxyService:
         return ProxyService._balance_decimal(balance) > 0
 
     @staticmethod
-    def _precheck_requires_exact_cost(quota_precheck: Optional[dict[str, Decimal]] = None) -> bool:
-        return bool(quota_precheck and quota_precheck.get("estimated_cost_is_exact"))
-
-    @staticmethod
-    def _can_balance_cover_exact_amount(
-        db: Session,
-        user_id: int,
-        amount: Optional[Decimal],
-    ) -> bool:
-        requested_amount = SubscriptionService._normalize_decimal(amount)
-        if requested_amount <= 0:
-            return True
-        available_balance = ProxyService._balance_decimal(
-            ProxyService._get_balance_record(db, user_id)
-        )
-        return available_balance >= requested_amount
-
-    @staticmethod
     def _can_balance_cover_text_precheck(
         db: Session,
         user_id: int,
         quota_precheck: Optional[dict[str, Decimal]] = None,
     ) -> bool:
+        # Admission must not reject a request from a user with positive assets
+        # based on a speculative cost. Completed upstream usage is the source
+        # of truth for the final balance check and settlement.
         estimated_cost = quota_precheck.get("estimated_total_cost") if quota_precheck else None
         if estimated_cost is not None and SubscriptionService._normalize_decimal(estimated_cost) <= 0:
             return True
-
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
-        if available_balance <= 0:
-            return False
-
-        requested_amount = SubscriptionService._normalize_decimal(estimated_cost)
-        exact_cost = ProxyService._precheck_requires_exact_cost(quota_precheck)
-        if exact_cost and not ProxyService._can_balance_cover_exact_amount(db, user_id, requested_amount):
-            return False
-        if requested_amount > 0 and available_balance < requested_amount:
-            logger.info(
-                "Allowing text request with positive balance despite high precheck estimate: "
-                "user_id=%s balance=%s estimated_cost=%s",
-                user_id,
-                available_balance,
-                requested_amount,
-            )
-        return True
+        return available_balance > 0
 
     @staticmethod
     def _can_fallback_to_balance_for_quota_precheck(
@@ -671,27 +623,15 @@ class ProxyService:
         unified_model: Optional[UnifiedModel] = None,
         requested_model: Optional[str] = None,
     ) -> bool:
+        # A positive balance is enough to admit the request. Do not use the
+        # estimated quota shortfall to reject before the upstream call.
+        estimated_cost = quota_precheck.get("estimated_total_cost") if quota_precheck else None
+        if estimated_cost is not None and SubscriptionService._normalize_decimal(estimated_cost) <= 0:
+            return True
         available_balance = ProxyService._balance_decimal(
             ProxyService._get_balance_record(db, user_id)
         )
-        if available_balance <= 0:
-            return False
-
-        estimated_balance_charge = ProxyService._estimate_balance_charge_after_quota(
-            db,
-            user_id,
-            quota_precheck,
-            unified_model=unified_model,
-            requested_model=requested_model,
-        )
-        requested_amount = SubscriptionService._normalize_decimal(estimated_balance_charge)
-        if requested_amount > 0 and not ProxyService._can_balance_cover_exact_amount(
-            db,
-            user_id,
-            requested_amount,
-        ):
-            return False
-        return True
+        return available_balance > 0
 
     @staticmethod
     def _calculate_balance_charge_after_quota(
@@ -714,56 +654,6 @@ class ProxyService:
         if uncovered_amount <= 0:
             return Decimal("0")
         return total_cost * (uncovered_amount / quota_consumed_amount)
-
-    @staticmethod
-    def _estimate_balance_charge_after_quota(
-        db: Session,
-        user_id: int,
-        quota_precheck: Optional[dict[str, Decimal]] = None,
-        unified_model: Optional[UnifiedModel] = None,
-        requested_model: Optional[str] = None,
-    ) -> Optional[Decimal]:
-        estimated_total_cost = None
-        if quota_precheck:
-            estimated_total_cost = quota_precheck.get("estimated_total_cost")
-        if estimated_total_cost is None:
-            return None
-
-        estimated_total_cost = SubscriptionService._normalize_decimal(estimated_total_cost)
-        active_subscription = SubscriptionService.resolve_active_subscription(
-            db,
-            user_id,
-            SubscriptionService.get_current_time(),
-        )
-        if (
-            not active_subscription
-            or not SubscriptionService._requires_daily_cycle(active_subscription)
-            or not ProxyService._subscription_covers_request(
-                active_subscription,
-                unified_model,
-                requested_model,
-            )
-        ):
-            return estimated_total_cost
-
-        cycle = SubscriptionService._get_or_create_cycle(
-            db,
-            active_subscription,
-            SubscriptionService.get_current_time(),
-        )
-        quota_remaining_amount = (
-            SubscriptionService._normalize_decimal(cycle.quota_limit)
-            - SubscriptionService._normalize_decimal(cycle.used_amount)
-        )
-        estimated_quota_amount = SubscriptionService._get_estimated_quota_consumption(
-            active_subscription,
-            quota_precheck,
-        )
-        return ProxyService._calculate_balance_charge_after_quota(
-            estimated_total_cost,
-            estimated_quota_amount,
-            quota_remaining_amount,
-        )
 
     @staticmethod
     def _build_quota_balance_insufficient_error() -> ServiceException:

@@ -376,6 +376,19 @@ class LogService:
         )
 
     @staticmethod
+    def _visible_token_totals(log: RequestLog, accounting_failed: bool) -> tuple[int, int]:
+        total = int(log.total_tokens or 0)
+        raw_total = int(log.raw_total_tokens or 0)
+        if accounting_failed:
+            cache_read = int(log.upstream_cache_read_input_tokens or 0)
+            total = max(total, int(log.input_tokens or 0) + int(log.output_tokens or 0) + cache_read)
+            raw_total = max(
+                raw_total,
+                int(log.raw_input_tokens or 0) + int(log.raw_output_tokens or 0) + cache_read,
+            )
+        return total, raw_total
+
+    @staticmethod
     def _visible_success_condition():
         return or_(
             RequestLog.status == "success",
@@ -571,6 +584,12 @@ class LogService:
                 * (context_price_multiplier_snapshot or 1)
             )
             cache_details = cache_summary_map.get(log.request_id)
+            accounting_failed = LogService._is_accounting_failure_after_success(
+                log.status, log.error_message, log.total_tokens
+            )
+            visible_total_tokens, visible_raw_total_tokens = LogService._visible_token_totals(
+                log, accounting_failed
+            )
             item = {
                 "id": log.id,
                 "request_id": log.request_id,
@@ -586,11 +605,11 @@ class LogService:
                 "is_stream": bool(log.is_stream),
                 "input_tokens": log.input_tokens,
                 "output_tokens": log.output_tokens,
-                "total_tokens": log.total_tokens,
+                "total_tokens": visible_total_tokens,
                 "billable_input_tokens": log.billable_input_tokens or log.input_tokens or 0,
                 "raw_input_tokens": log.raw_input_tokens or 0,
                 "raw_output_tokens": log.raw_output_tokens or 0,
-                "raw_total_tokens": log.raw_total_tokens or 0,
+                "raw_total_tokens": visible_raw_total_tokens,
                 "image_credits_charged": float(log.image_credits_charged or 0),
                 "image_count": int(log.image_count or 0),
                 "image_size": log.image_size,
@@ -623,14 +642,8 @@ class LogService:
                 "upstream_session_mode": None,
                 "upstream_session_id": None,
                 "raw_status": log.status,
-                "accounting_failed_after_success": LogService._is_accounting_failure_after_success(
-                    log.status,
-                    log.error_message,
-                    log.total_tokens,
-                ),
-                "status": "success"
-                if LogService._is_accounting_failure_after_success(log.status, log.error_message, log.total_tokens)
-                else log.status,
+                "accounting_failed_after_success": accounting_failed,
+                "status": "success" if accounting_failed else log.status,
                 "error_message": log.error_message,
                 "client_ip": log.client_ip,
                 "subscription_cycle_id": log.subscription_cycle_id,

@@ -595,8 +595,16 @@ class ProxyService:
         return Decimal(str(balance.balance or 0))
 
     @staticmethod
-    def _has_positive_balance(balance: Optional[UserBalance]) -> bool:
-        return ProxyService._balance_decimal(balance) > 0
+    def _charge_balance_after_request(balance: Optional[UserBalance], amount: Decimal) -> tuple[float, float]:
+        amount = SubscriptionService._normalize_decimal(amount)
+        balance_before = ProxyService._balance_decimal(balance)
+        if amount <= 0:
+            return float(balance_before), float(balance_before)
+        if balance is None:
+            raise ProxyService._build_balance_precheck_insufficient_error()
+        balance.balance = balance_before - amount
+        balance.total_consumed = SubscriptionService._normalize_decimal(balance.total_consumed) + amount
+        return float(balance_before), float(balance.balance)
 
     @staticmethod
     def _can_balance_cover_text_precheck(
@@ -12235,27 +12243,7 @@ class ProxyService:
             )
 
             def apply_balance_charge(amount: Decimal) -> tuple[float, float]:
-                amount = SubscriptionService._normalize_decimal(amount)
-                balance_before_decimal = ProxyService._balance_decimal(balance)
-                if amount <= 0:
-                    return float(balance_before_decimal), float(balance_before_decimal)
-                if not balance or balance_before_decimal <= 0:
-                    raise ProxyService._build_balance_precheck_insufficient_error()
-                if balance_before_decimal < amount:
-                    raise ProxyService._build_balance_precheck_insufficient_error()
-                balance_before_local = float(balance_before_decimal)
-                balance.balance = balance_before_decimal - amount
-                balance.total_consumed += amount
-                return balance_before_local, float(balance.balance)
-
-            def balance_can_pay_next_charge(amount: Optional[Decimal] = None) -> bool:
-                if amount is None:
-                    return ProxyService._has_positive_balance(balance)
-                requested_amount = SubscriptionService._normalize_decimal(amount)
-                if requested_amount <= 0:
-                    return True
-                balance_before_decimal = ProxyService._balance_decimal(balance)
-                return balance_before_decimal >= requested_amount
+                return ProxyService._charge_balance_after_request(balance, amount)
 
             if fresh_user.subscription_type == "balance":
                 balance_before, balance_after = apply_balance_charge(total_cost_decimal)
@@ -12272,7 +12260,7 @@ class ProxyService:
                     requested_model,
                 )
                 if not active_subscription or not subscription_covers_model:
-                    if balance_can_pay_next_charge(total_cost_decimal):
+                    if balance:
                         billing_mode = "balance"
                         balance_before, balance_after = apply_balance_charge(total_cost_decimal)
                     elif active_subscription and not subscription_covers_model:
@@ -12313,9 +12301,6 @@ class ProxyService:
                             quota_remaining_amount,
                         )
                         allow_quota_over_limit = False
-                        if balance_charge_amount > 0 and not balance_can_pay_next_charge(balance_charge_amount):
-                            raise ProxyService._build_quota_balance_insufficient_error()
-
                         if quota_amount_to_consume <= 0:
                             if balance_charge_amount <= 0:
                                 subscription_cycle_id = cycle.id
@@ -12365,12 +12350,6 @@ class ProxyService:
                                         refreshed_quota_remaining,
                                     )
                                     refreshed_allow_quota_over_limit = False
-                                    if (
-                                        refreshed_balance_charge_amount > 0
-                                        and not balance_can_pay_next_charge(refreshed_balance_charge_amount)
-                                    ):
-                                        raise ProxyService._build_quota_balance_insufficient_error()
-
                                     if refreshed_quota_amount_to_consume > 0:
                                         quota_usage = SubscriptionService.consume_quota_amount_after_request(
                                             write_db,
@@ -12394,7 +12373,7 @@ class ProxyService:
                                         else:
                                             balance_before = float(balance.balance) if balance else 0.0
                                             balance_after = float(balance.balance) if balance else 0.0
-                                    elif balance_can_pay_next_charge(total_cost_decimal):
+                                    elif balance:
                                         billing_mode = "balance"
                                         subscription_id = None
                                         quota_metric = None
@@ -12705,6 +12684,11 @@ class ProxyService:
                 exc,
                 exc_info=True,
             )
+            cache_read_tokens = int(
+                RequestCacheSummaryService.build_request_log_fields(cache_info).get(
+                    "upstream_cache_read_input_tokens", 0
+                ) or 0
+            )
             ProxyService._log_failed_request(
                 db,
                 user,
@@ -12722,10 +12706,10 @@ class ProxyService:
                 actual_model=actual_model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+                total_tokens=int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens,
                 raw_input_tokens=input_tokens,
                 raw_output_tokens=output_tokens,
-                raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+                raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens,
                 billing_context=billing_context,
             )
             if (
@@ -12817,6 +12801,10 @@ class ProxyService:
                         input_tokens=int(input_tokens or 0),
                         output_tokens=int(output_tokens or 0),
                         total_tokens=int(total_tokens or 0),
+                        billable_input_tokens=int(input_tokens or 0),
+                        billable_cache_read_input_tokens=int(
+                            cache_log_fields.get("upstream_cache_read_input_tokens", 0) or 0
+                        ),
                         raw_input_tokens=int(raw_input_tokens or 0),
                         raw_output_tokens=int(raw_output_tokens or 0),
                         raw_total_tokens=int(raw_total_tokens or 0),

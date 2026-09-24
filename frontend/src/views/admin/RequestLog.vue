@@ -206,7 +206,11 @@
               <span v-if="record.upstream_cache_creation_input_tokens > 0" class="compact-expand-metric compact-expand-metric--cache-create">缓存建 {{ formatNumber(record.upstream_cache_creation_input_tokens || 0) }}</span>
               <span class="compact-expand-metric compact-expand-metric--total">合计 {{ formatNumber(record.total_tokens || 0) }}</span>
             </div>
-            <div class="compact-expand-line">
+            <div v-if="record.accounting_failed_after_success" class="compact-expand-line">
+              <span class="compact-expand-label">计费</span>
+              <span class="compact-expand-meta">上游已返回，余额不足导致本地未落账</span>
+            </div>
+            <div v-else class="compact-expand-line">
               <span class="compact-expand-label">日志详情</span>
               <template v-if="isRequestBilling(record)">
                 <span class="compact-expand-meta">单次价格 ${{ formatPrice(record.request_price_snapshot) }} / 次</span>
@@ -223,7 +227,7 @@
               <a-tag v-if="isFastMode(record)" color="orange" class="fast-detail-tag">Fast 模式 x{{ formatMultiplier(getFastPriceMultiplier(record)) }}</a-tag>
               <a-tag v-if="isLongContext(record)" color="red" class="fast-detail-tag">计费上下文 x{{ formatMultiplier(getContextPriceMultiplier(record)) }}</a-tag>
             </div>
-            <div class="compact-expand-line">
+            <div v-if="!record.accounting_failed_after_success" class="compact-expand-line">
               <span class="compact-expand-label">计费过程</span>
               <template v-if="isRequestBilling(record)">
                 <span class="compact-expand-metric">1 次 × ${{ formatPrice(record.request_price_snapshot) }} × {{ formatMultiplier(getEffectivePriceMultiplier(record)) }}</span>
@@ -286,7 +290,8 @@
         </template>
 
         <template slot="total_cost" slot-scope="text, record">
-          <span v-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
+          <span v-if="record.accounting_failed_after_success" class="text-muted">未落账</span>
+          <span v-else-if="isImageRequest(record)" class="image-credit-cost">{{ formatNumber(getImageCreditsDisplay(record)) }} 积分</span>
           <div v-else-if="text != null && text > 0" class="cost-breakdown-cell">
             <a-tooltip placement="left">
               <template slot="title">
@@ -363,7 +368,8 @@
 
         <template slot="status" slot-scope="text, record">
           <div style="cursor: pointer;" @click.stop="handleStatusClick(record)">
-            <a-badge v-if="text === 'success'" status="success" text="成功" />
+            <a-badge v-if="record.accounting_failed_after_success" status="warning" text="计费失败" />
+            <a-badge v-else-if="text === 'success'" status="success" text="成功" />
             <a-badge v-else-if="text === 'error' || text === 'failed'" status="error" text="失败" />
             <a-badge v-else-if="text === 'timeout'" status="warning" text="超时" />
             <a-badge v-else-if="text === 'pending'" status="processing" text="处理中" />
@@ -411,7 +417,8 @@
           <div class="detail-hero-main">
             <div class="detail-title-row">
               <span class="detail-title">{{ errorModalTitle }}</span>
-              <a-badge v-if="selectedRecord.status === 'success'" status="success" text="成功" />
+              <a-badge v-if="selectedRecord.accounting_failed_after_success" status="warning" text="计费失败" />
+              <a-badge v-else-if="selectedRecord.status === 'success'" status="success" text="成功" />
               <a-badge v-else-if="selectedRecord.status === 'error' || selectedRecord.status === 'failed'" status="error" text="失败" />
               <a-badge v-else-if="selectedRecord.status === 'timeout'" status="warning" text="超时" />
               <a-badge v-else-if="selectedRecord.status === 'pending'" status="processing" text="处理中" />
@@ -531,7 +538,7 @@
           </div>
         </div>
 
-        <div v-if="!isImageRequest(selectedRecord)" class="detail-section">
+        <div v-if="!isImageRequest(selectedRecord) && !selectedRecord.accounting_failed_after_success" class="detail-section">
           <div class="detail-section-title">计费详情</div>
           <div class="billing-panel">
             <div v-if="isRequestBilling(selectedRecord)" class="billing-price-grid">

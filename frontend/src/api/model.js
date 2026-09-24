@@ -11,6 +11,37 @@ export function listAvailableModels() {
 
 // ==================== Admin Model Management ====================
 
+export function listModelCategories(params) {
+  return request({
+    url: '/api/admin/models/categories',
+    method: 'get',
+    params
+  })
+}
+
+export function createModelCategory(data) {
+  return request({
+    url: '/api/admin/models/categories',
+    method: 'post',
+    data
+  })
+}
+
+export function updateModelCategory(id, data) {
+  return request({
+    url: `/api/admin/models/categories/${id}`,
+    method: 'put',
+    data
+  })
+}
+
+export function deleteModelCategory(id) {
+  return request({
+    url: `/api/admin/models/categories/${id}`,
+    method: 'delete'
+  })
+}
+
 export function listModels(params) {
   return request({
     url: '/api/admin/models',

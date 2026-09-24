@@ -8,13 +8,15 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ServiceException
 from app.core.model_series import MODEL_SERIES_LABELS, MODEL_SERIES_ORDER
-from app.models.model import ModelPriceAdjustmentRule, UnifiedModel, UserPriceAdjustmentRule
+from app.models.model import ModelCategory, ModelPriceAdjustmentRule, UnifiedModel, UserPriceAdjustmentRule
 from app.models.user import SysUser
 from app.services.model_service import ModelService
+from app.services.model_category_service import ModelCategoryService
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,7 @@ class PriceAdjustmentService:
         return parsed.replace(microsecond=0)
 
     @staticmethod
-    def _normalize_payload(data, existing: Optional[ModelPriceAdjustmentRule] = None) -> dict:
+    def _normalize_payload(db: Session, data, existing: Optional[ModelPriceAdjustmentRule] = None) -> dict:
         d = data if isinstance(data, dict) else data.model_dump(exclude_unset=True)
         payload = {}
         name = d.get("name", getattr(existing, "name", None))
@@ -117,6 +119,18 @@ class PriceAdjustmentService:
             payload["model_series"] = PriceAdjustmentService._normalize_series(
                 d.get("model_series", getattr(existing, "model_series", "all") if existing else "all")
             )
+        if "model_category" in d or existing is None:
+            payload["model_category"] = ModelCategoryService.normalize_rule_category(
+                db,
+                d.get("model_category", getattr(existing, "model_category", "all") if existing else "all"),
+                existing_code=getattr(existing, "model_category", None),
+            )
+        effective_series = payload.get("model_series", getattr(existing, "model_series", "all") if existing else "all")
+        effective_category = payload.get("model_category", getattr(existing, "model_category", "all") if existing else "all")
+        if effective_category != "all":
+            category = db.query(ModelCategory).filter(ModelCategory.code == effective_category).first()
+            if category and effective_series not in ("all", category.model_series):
+                raise ServiceException(400, "价格规则类别所属系列与所选系列不一致", "MODEL_CATEGORY_SERIES_MISMATCH")
         if "model_type" in d or existing is None:
             payload["model_type"] = PriceAdjustmentService._normalize_model_type(
                 d.get("model_type", getattr(existing, "model_type", "all") if existing else "all")
@@ -176,6 +190,7 @@ class PriceAdjustmentService:
             "id": rule.id,
             "name": rule.name,
             "model_series": rule.model_series,
+            "model_category": getattr(rule, "model_category", "all") or "all",
             "model_type": rule.model_type,
             "billing_type": rule.billing_type,
             "multiplier": float(rule.multiplier or 1),
@@ -205,6 +220,7 @@ class PriceAdjustmentService:
             "username": getattr(user, "username", None) if user else None,
             "email": getattr(user, "email", None) if user else None,
             "model_series": rule.model_series,
+            "model_category": getattr(rule, "model_category", "all") or "all",
             "model_type": rule.model_type,
             "billing_type": rule.billing_type,
             "multiplier": float(rule.multiplier or 1),
@@ -256,12 +272,15 @@ class PriceAdjustmentService:
         page: int = 1,
         page_size: int = 20,
         model_series: Optional[str] = None,
+        model_category: Optional[str] = None,
         model_type: Optional[str] = None,
         enabled: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         query = db.query(ModelPriceAdjustmentRule)
         if model_series:
             query = query.filter(ModelPriceAdjustmentRule.model_series == PriceAdjustmentService._normalize_series(model_series))
+        if model_category:
+            query = query.filter(ModelPriceAdjustmentRule.model_category == ModelCategoryService.normalize_rule_category(db, model_category))
         if model_type:
             query = query.filter(ModelPriceAdjustmentRule.model_type == PriceAdjustmentService._normalize_model_type(model_type))
         if enabled is not None:
@@ -277,7 +296,7 @@ class PriceAdjustmentService:
 
     @staticmethod
     def create_rule(db: Session, data) -> dict:
-        payload = PriceAdjustmentService._normalize_payload(data)
+        payload = PriceAdjustmentService._normalize_payload(db, data)
         rule = ModelPriceAdjustmentRule(**payload)
         db.add(rule)
         db.commit()
@@ -289,7 +308,7 @@ class PriceAdjustmentService:
         rule = db.query(ModelPriceAdjustmentRule).filter(ModelPriceAdjustmentRule.id == rule_id).first()
         if not rule:
             raise ServiceException(404, "价格调控规则不存在", "PRICE_ADJUSTMENT_RULE_NOT_FOUND")
-        payload = PriceAdjustmentService._normalize_payload(data, existing=rule)
+        payload = PriceAdjustmentService._normalize_payload(db, data, existing=rule)
         for key, value in payload.items():
             setattr(rule, key, value)
         db.commit()
@@ -307,17 +326,24 @@ class PriceAdjustmentService:
     @staticmethod
     def _matching_rules_query(db: Session, rule_model, unified_model: UnifiedModel, user_id: Optional[int] = None):
         series = getattr(unified_model, "model_series", None) or ModelService.infer_model_series(unified_model.model_name)
+        category = str(getattr(unified_model, "model_category", None) or series).strip().lower()
         model_type = str(getattr(unified_model, "model_type", None) or "chat").strip().lower()
         billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
         query = db.query(rule_model).filter(
             rule_model.enabled == 1,
             or_(rule_model.model_series == series, rule_model.model_series == "all"),
+            or_(rule_model.model_category == category, rule_model.model_category == "all", rule_model.model_category.is_(None)),
             or_(rule_model.model_type == model_type, rule_model.model_type == "all"),
             or_(rule_model.billing_type == billing_type, rule_model.billing_type == "all"),
         )
         if user_id is not None:
             query = query.filter(rule_model.user_id == int(user_id))
-        return query.order_by(rule_model.priority.asc(), rule_model.id.desc())
+        return query.order_by(
+            case((rule_model.model_category == category, 0), else_=1).asc(),
+            case((rule_model.model_series == series, 0), else_=1).asc(),
+            rule_model.priority.asc(),
+            rule_model.id.desc(),
+        )
 
     @staticmethod
     def resolve_rule(
@@ -397,6 +423,7 @@ class PriceAdjustmentService:
         keyword: Optional[str] = None,
         model_series: Optional[str] = None,
         model_type: Optional[str] = None,
+        model_category: Optional[str] = None,
         enabled: Optional[int] = None,
     ) -> tuple[list[dict], int]:
         query = db.query(UserPriceAdjustmentRule, SysUser).outerjoin(SysUser, SysUser.id == UserPriceAdjustmentRule.user_id)
@@ -412,6 +439,8 @@ class PriceAdjustmentService:
                 query = query.filter(or_(*conditions))
         if model_series:
             query = query.filter(UserPriceAdjustmentRule.model_series == PriceAdjustmentService._normalize_series(model_series))
+        if model_category:
+            query = query.filter(UserPriceAdjustmentRule.model_category == ModelCategoryService.normalize_rule_category(db, model_category))
         if model_type:
             query = query.filter(UserPriceAdjustmentRule.model_type == PriceAdjustmentService._normalize_model_type(model_type))
         if enabled is not None:
@@ -428,7 +457,7 @@ class PriceAdjustmentService:
     @staticmethod
     def create_user_rule(db: Session, user_id: int, data, operator_id: Optional[int] = None) -> dict:
         user = PriceAdjustmentService._ensure_user_exists(db, user_id)
-        payload = PriceAdjustmentService._normalize_payload(data)
+        payload = PriceAdjustmentService._normalize_payload(db, data)
         payload["user_id"] = int(user_id)
         payload["created_by"] = operator_id
         payload["updated_by"] = operator_id
@@ -444,7 +473,7 @@ class PriceAdjustmentService:
         rule = db.query(UserPriceAdjustmentRule).filter(UserPriceAdjustmentRule.id == rule_id).first()
         if not rule or int(rule.user_id) != int(user_id):
             raise ServiceException(404, "用户专属价格调控规则不存在", "USER_PRICE_ADJUSTMENT_RULE_NOT_FOUND")
-        payload = PriceAdjustmentService._normalize_payload(data, existing=rule)
+        payload = PriceAdjustmentService._normalize_payload(db, data, existing=rule)
         payload["updated_by"] = operator_id
         for key, value in payload.items():
             setattr(rule, key, value)
@@ -465,11 +494,15 @@ class PriceAdjustmentService:
         user = PriceAdjustmentService._ensure_user_exists(db, user_id)
         now = PriceAdjustmentService.now_beijing()
         rows = []
-        for series in MODEL_SERIES_ORDER:
+        category_items = ModelCategoryService.list_categories(db, include_disabled=True)
+        matrix_items = [(series, None) for series in MODEL_SERIES_ORDER]
+        matrix_items.extend((item["model_series"], item["code"]) for item in category_items)
+        for series, category in matrix_items:
             for model_type in ("chat", "image", "video"):
                 fake_model = UnifiedModel(
                     model_name=f"{series}-{model_type}",
                     model_series=series,
+                    model_category=category,
                     model_type=model_type,
                     billing_type="image_credit" if model_type in {"image", "video"} else "token",
                 )
@@ -477,6 +510,7 @@ class PriceAdjustmentService:
                 payload = resolution.to_dict()
                 payload.update({
                     "model_series": series,
+                    "model_category": category,
                     "model_type": model_type,
                     "billing_type": fake_model.billing_type,
                     "username": user.username,
@@ -487,13 +521,21 @@ class PriceAdjustmentService:
         return rows
 
     @staticmethod
-    def get_options() -> dict:
+    def get_options(db: Optional[Session] = None) -> dict:
+        categories = ModelCategoryService.list_categories(db, include_disabled=False) if db is not None else []
         return {
             "model_series": [
                 {"value": "all", "label": "全部系列"},
                 *[
                     {"value": series, "label": MODEL_SERIES_LABELS[series]}
                     for series in MODEL_SERIES_ORDER
+                ],
+            ],
+            "model_categories": [
+                {"value": "all", "label": "全部类别"},
+                *[
+                    {"value": item["code"], "label": f"{item['name']}（{item['model_series_label']}）", "model_series": item["model_series"]}
+                    for item in categories
                 ],
             ],
             "model_types": [
@@ -521,17 +563,22 @@ class PriceAdjustmentService:
     def list_effective_matrix(db: Session) -> list[dict]:
         now = PriceAdjustmentService.now_beijing()
         rows = []
-        for series in MODEL_SERIES_ORDER:
+        category_items = ModelCategoryService.list_categories(db, include_disabled=True)
+        matrix_items = [(series, None) for series in MODEL_SERIES_ORDER]
+        matrix_items.extend((item["model_series"], item["code"]) for item in category_items)
+        for series, category in matrix_items:
             for model_type in ("chat", "image", "video"):
                 fake_model = UnifiedModel(
                     model_name=f"{series}-{model_type}",
                     model_series=series,
+                    model_category=category,
                     model_type=model_type,
                     billing_type="image_credit" if model_type in {"image", "video"} else "token",
                 )
                 rule = PriceAdjustmentService.resolve_rule(db, fake_model, now)
                 rows.append({
                     "model_series": series,
+                    "model_category": category,
                     "model_type": model_type,
                     "billing_type": fake_model.billing_type,
                     "multiplier": float(rule.multiplier) if rule else 1.0,

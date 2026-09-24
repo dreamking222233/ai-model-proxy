@@ -15,6 +15,10 @@
             <a-icon type="plus" />
             添加模型
           </a-button>
+          <a-button @click="handleManageCategories">
+            <a-icon type="tags" />
+            管理类别
+          </a-button>
         </div>
 
         <a-table
@@ -35,6 +39,10 @@
 
           <template slot="series" slot-scope="text">
             <a-tag :color="getSeriesColor(text)">{{ getSeriesLabel(text) }}</a-tag>
+          </template>
+
+          <template slot="category" slot-scope="text">
+            <a-tag color="cyan">{{ getCategoryLabel(text) }}</a-tag>
           </template>
 
           <template slot="billingType" slot-scope="text, record">
@@ -160,6 +168,7 @@
               <div class="mobile-tag-row">
                 <a-tag>{{ record.model_type || '-' }}</a-tag>
                 <a-tag :color="getSeriesColor(record.model_series)">{{ getSeriesLabel(record.model_series) }}</a-tag>
+                <a-tag v-if="record.model_category" color="cyan">{{ getCategoryLabel(record.model_category) }}</a-tag>
                 <a-tag>{{ record.protocol_type || '-' }}</a-tag>
                 <a-tag v-if="record.billing_type === 'image_credit'" color="gold">
                   {{ record.model_type === 'video' ? `媒体积分 ${record.image_credit_multiplier || 0.5}/秒` : `媒体积分 x${record.image_credit_multiplier || 1}` }}
@@ -555,6 +564,18 @@
           </a-select>
           <div class="form-tip">用于价格调控规则匹配，可按 GPT、Claude、Grok、Gemini、DeepSeek、国产模型 等系列设置倍率。</div>
         </a-form-item>
+        <a-form-item label="模型类别">
+          <a-select v-model="modelForm.model_category" allow-clear placeholder="选择模型类别">
+            <a-select-option
+              v-for="item in modelCategoryOptionsForSeries"
+              :key="item.code"
+              :value="item.code"
+            >
+              {{ item.name }}（{{ item.code }}）
+            </a-select-option>
+          </a-select>
+          <div class="form-tip">类别用于区分同一系列下的渠道和定价，例如 Claude 与 Claude Code。</div>
+        </a-form-item>
         <a-form-item label="协议">
           <a-select v-model="modelForm.protocol_type" placeholder="Select protocol">
             <a-select-option value="openai">OpenAI</a-select-option>
@@ -688,6 +709,57 @@
       </a-form>
     </a-modal>
 
+    <a-modal
+      title="模型类别管理"
+      :visible="categoryModalVisible"
+      :footer="null"
+      :width="modalWidth(760)"
+      @cancel="categoryModalVisible = false"
+    >
+      <div class="category-toolbar">
+        <span class="form-tip">类别编码用于价格规则匹配，创建后建议保持稳定。</span>
+        <a-button type="primary" size="small" @click="handleAddCategory"><a-icon type="plus" />新增类别</a-button>
+      </div>
+      <a-table :data-source="modelCategories" :loading="categoryLoading" row-key="id" :pagination="false" size="small">
+        <a-table-column title="名称" data-index="name" />
+        <a-table-column title="编码" data-index="code" />
+        <a-table-column title="系列" data-index="model_series">
+          <template slot-scope="text">{{ getSeriesLabel(text) }}</template>
+        </a-table-column>
+        <a-table-column title="状态" data-index="enabled">
+          <template slot-scope="text"><a-tag :color="text ? 'green' : 'red'">{{ text ? '启用' : '禁用' }}</a-tag></template>
+        </a-table-column>
+        <a-table-column title="操作" width="150">
+          <template slot-scope="text, record">
+            <a @click="handleEditCategory(record)">编辑</a>
+            <a-divider type="vertical" />
+            <a-popconfirm title="确定删除该类别吗？" @confirm="handleDeleteCategory(record.id)"><a style="color:#f5222d">删除</a></a-popconfirm>
+          </template>
+        </a-table-column>
+      </a-table>
+    </a-modal>
+
+    <a-modal
+      :title="categoryEditId ? '编辑模型类别' : '新增模型类别'"
+      :visible="categoryEditModalVisible"
+      :confirm-loading="categoryModalLoading"
+      @ok="handleCategoryModalOk"
+      @cancel="categoryEditModalVisible = false"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="类别名称"><a-input v-model="categoryForm.name" placeholder="例如 Claude Code" /></a-form-item>
+        <a-form-item label="类别编码"><a-input v-model="categoryForm.code" :disabled="!!categoryEditId" placeholder="例如 claude-cc" /></a-form-item>
+        <a-form-item label="所属系列">
+          <a-select v-model="categoryForm.model_series">
+            <a-select-option v-for="item in modelSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="排序"><a-input-number v-model="categoryForm.sort_order" :min="0" style="width:100%" /></a-form-item>
+        <a-form-item label="启用"><a-switch :checked="!!categoryForm.enabled" @change="value => categoryForm.enabled = value ? 1 : 0" /></a-form-item>
+        <a-form-item label="说明"><a-textarea v-model="categoryForm.description" :rows="2" /></a-form-item>
+      </a-form>
+    </a-modal>
+
     <!-- Mapping Create Modal -->
     <a-modal
       title="添加渠道映射"
@@ -798,6 +870,7 @@
 <script>
 import {
   listModels, getModel, createModel, updateModel, deleteModel,
+  listModelCategories, createModelCategory, updateModelCategory, deleteModelCategory,
   listMappings, createMapping, deleteMapping,
   listOverrideRules, createOverrideRule, updateOverrideRule, deleteOverrideRule
 } from '@/api/model'
@@ -834,6 +907,20 @@ export default {
     return {
       activeTab: 'models',
       modelSeriesOptions: MODEL_SERIES_OPTIONS,
+      modelCategories: [],
+      categoryLoading: false,
+      categoryModalVisible: false,
+      categoryEditModalVisible: false,
+      categoryModalLoading: false,
+      categoryEditId: null,
+      categoryForm: {
+        code: '',
+        name: '',
+        model_series: 'other',
+        sort_order: 100,
+        enabled: 1,
+        description: ''
+      },
       isMobile: false,
 
       // Models
@@ -853,6 +940,7 @@ export default {
         { title: '显示名称', dataIndex: 'display_name', key: 'display_name' },
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 100, scopedSlots: { customRender: 'type' } },
         { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 100, scopedSlots: { customRender: 'series' } },
+        { title: '类别', dataIndex: 'model_category', key: 'model_category', width: 130, scopedSlots: { customRender: 'category' } },
         { title: '协议', dataIndex: 'protocol_type', key: 'protocol_type', width: 100 },
         { title: '计费类型', dataIndex: 'billing_type', key: 'billingType', width: 140, scopedSlots: { customRender: 'billingType' } },
         { title: '长上下文', dataIndex: 'long_context_billing_enabled', key: 'longContextBilling', width: 110, scopedSlots: { customRender: 'longContextBilling' } },
@@ -881,6 +969,7 @@ export default {
         display_name: '',
         model_type: 'chat',
         model_series: 'other',
+        model_category: null,
         protocol_type: 'openai',
         billing_type: 'token',
         request_price: 0,
@@ -977,6 +1066,9 @@ export default {
     supportedImageResolutionPresets() {
       return IMAGE_RESOLUTION_RULE_PRESETS[this.modelForm.model_name] || []
     },
+    modelCategoryOptionsForSeries() {
+      return this.modelCategories.filter(item => item.enabled && item.model_series === this.modelForm.model_series)
+    },
     selectedModelEnabledImageSizes() {
       if (!this.selectedModel || this.selectedModel.model_type !== 'image') {
         return []
@@ -1026,12 +1118,14 @@ export default {
     'modelForm.model_name'() {
       if (!this.isModelEdit) {
         this.modelForm.model_series = this.inferModelSeries(this.modelForm.model_name)
+        this.syncModelCategoryDefault()
         this.syncLongContextBillingDefault()
         this.syncSecurityMonitorDefault()
       }
       this.syncImageResolutionRules()
     },
     'modelForm.model_series'() {
+      this.syncModelCategoryDefault()
       if (!this.isModelEdit) {
         this.syncLongContextBillingDefault()
         this.syncSecurityMonitorDefault()
@@ -1056,6 +1150,7 @@ export default {
     window.addEventListener('resize', this.updateViewport)
     this.fetchModels()
     this.fetchChannelOptions()
+    this.fetchModelCategories()
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.updateViewport)
@@ -1069,6 +1164,71 @@ export default {
     },
     inferModelSeries(modelName) {
       return inferSeriesFromName(modelName)
+    },
+    async fetchModelCategories() {
+      this.categoryLoading = true
+      try {
+        const res = await listModelCategories({ include_disabled: true })
+        this.modelCategories = res.data || []
+        this.syncModelCategoryDefault()
+      } finally {
+        this.categoryLoading = false
+      }
+    },
+    syncModelCategoryDefault() {
+      if (this.isModelEdit) return
+      const candidates = this.modelCategoryOptionsForSeries
+      if (!candidates.some(item => item.code === this.modelForm.model_category)) {
+        const sameSeries = candidates.find(item => item.code === this.modelForm.model_series)
+        this.modelForm.model_category = sameSeries ? sameSeries.code : (candidates[0] ? candidates[0].code : null)
+      }
+    },
+    getCategoryLabel(code) {
+      const item = this.modelCategories.find(category => category.code === code)
+      return item ? item.name : (code || '-')
+    },
+    handleManageCategories() {
+      this.categoryModalVisible = true
+      this.fetchModelCategories()
+    },
+    handleAddCategory() {
+      this.categoryEditId = null
+      this.categoryForm = { code: '', name: '', model_series: 'other', sort_order: 100, enabled: 1, description: '' }
+      this.categoryEditModalVisible = true
+    },
+    handleEditCategory(record) {
+      this.categoryEditId = record.id
+      this.categoryForm = {
+        code: record.code,
+        name: record.name,
+        model_series: record.model_series,
+        sort_order: Number(record.sort_order || 100),
+        enabled: Number(record.enabled) ? 1 : 0,
+        description: record.description || ''
+      }
+      this.categoryEditModalVisible = true
+    },
+    async handleCategoryModalOk() {
+      if (!this.categoryForm.name || !this.categoryForm.code) {
+        this.$message.warning('请填写类别名称和编码')
+        return
+      }
+      this.categoryModalLoading = true
+      try {
+        const payload = { ...this.categoryForm, enabled: this.categoryForm.enabled ? 1 : 0, sort_order: Number(this.categoryForm.sort_order || 100) }
+        if (this.categoryEditId) await updateModelCategory(this.categoryEditId, payload)
+        else await createModelCategory(payload)
+        this.$message.success('模型类别已保存')
+        this.categoryEditModalVisible = false
+        await this.fetchModelCategories()
+      } finally {
+        this.categoryModalLoading = false
+      }
+    },
+    async handleDeleteCategory(id) {
+      await deleteModelCategory(id)
+      this.$message.success('模型类别已删除')
+      this.fetchModelCategories()
     },
     getSeriesLabel(value) {
       const item = MODEL_SERIES_OPTIONS.find(opt => opt.value === value)
@@ -1239,6 +1399,7 @@ export default {
         display_name: '',
         model_type: 'chat',
         model_series: 'other',
+        model_category: null,
         protocol_type: 'openai',
         billing_type: 'token',
         request_price: 0,
@@ -1274,6 +1435,7 @@ export default {
           display_name: model.display_name || '',
           model_type: model.model_type || 'chat',
           model_series: model.model_series || this.inferModelSeries(model.model_name),
+          model_category: model.model_category || null,
           protocol_type: model.protocol_type || 'openai',
           billing_type: model.billing_type || 'token',
           request_price: Number(model.request_price || 0),

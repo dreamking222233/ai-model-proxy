@@ -18,6 +18,37 @@ def _validate_long_context_token_threshold_input(value):
 # Unified Model
 # ===========================================================================
 
+class ModelCategoryCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    model_series: str = Field(default="other", max_length=32)
+    sort_order: int = Field(default=100, ge=0)
+    enabled: int = Field(default=1, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class ModelCategoryUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=1, max_length=64)
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    model_series: Optional[str] = Field(None, max_length=32)
+    sort_order: Optional[int] = Field(None, ge=0)
+    enabled: Optional[int] = Field(None, ge=0, le=1)
+    description: Optional[str] = None
+
+
+class ModelCategoryInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int
+    code: str
+    name: str
+    model_series: str
+    sort_order: int
+    enabled: int
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
 class UnifiedModelCreate(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -25,6 +56,7 @@ class UnifiedModelCreate(BaseModel):
     display_name: Optional[str] = Field(None, max_length=128)
     model_type: str = Field(default="chat", max_length=20)
     model_series: str = Field(default="other", max_length=32)
+    model_category: Optional[str] = Field(None, max_length=64)
     protocol_type: str = Field(default="openai", max_length=20)
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Decimal = Field(default=Decimal("0"), ge=0)
@@ -55,6 +87,7 @@ class UnifiedModelUpdate(BaseModel):
     display_name: Optional[str] = Field(None, max_length=128)
     model_type: Optional[str] = Field(None, max_length=20)
     model_series: Optional[str] = Field(None, max_length=32)
+    model_category: Optional[str] = Field(None, max_length=64)
     protocol_type: Optional[str] = Field(None, max_length=20)
     max_tokens: Optional[int] = Field(None, gt=0)
     input_price_per_million: Optional[Decimal] = Field(None, ge=0)
@@ -86,6 +119,7 @@ class UnifiedModelInfo(BaseModel):
     display_name: Optional[str] = None
     model_type: str
     model_series: str
+    model_category: Optional[str] = None
     protocol_type: str
     max_tokens: Optional[int] = None
     input_price_per_million: Decimal
@@ -138,6 +172,7 @@ class ModelImageResolutionRuleInfo(BaseModel):
 class ModelPriceAdjustmentRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     model_series: str = Field(default="all", max_length=32)
+    model_category: str = Field(default="all", max_length=64)
     model_type: str = Field(default="all", max_length=20)
     billing_type: str = Field(default="all", max_length=20)
     multiplier: Decimal = Field(default=Decimal("1"), gt=0)
@@ -152,6 +187,7 @@ class ModelPriceAdjustmentRuleCreate(BaseModel):
 class ModelPriceAdjustmentRuleUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=128)
     model_series: Optional[str] = Field(None, max_length=32)
+    model_category: Optional[str] = Field(None, max_length=64)
     model_type: Optional[str] = Field(None, max_length=20)
     billing_type: Optional[str] = Field(None, max_length=20)
     multiplier: Optional[Decimal] = Field(None, gt=0)
@@ -169,6 +205,7 @@ class ModelPriceAdjustmentRuleInfo(BaseModel):
     id: int
     name: str
     model_series: str
+    model_category: str = "all"
     model_type: str
     billing_type: str
     multiplier: Decimal
@@ -185,6 +222,7 @@ class ModelPriceAdjustmentRuleInfo(BaseModel):
 class UserPriceAdjustmentRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     model_series: str = Field(default="all", max_length=32)
+    model_category: str = Field(default="all", max_length=64)
     model_type: str = Field(default="all", max_length=20)
     billing_type: str = Field(default="all", max_length=20)
     multiplier: Decimal = Field(default=Decimal("1"), gt=0)
@@ -199,6 +237,7 @@ class UserPriceAdjustmentRuleCreate(BaseModel):
 class UserPriceAdjustmentRuleUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=128)
     model_series: Optional[str] = Field(None, max_length=32)
+    model_category: Optional[str] = Field(None, max_length=64)
     model_type: Optional[str] = Field(None, max_length=20)
     billing_type: Optional[str] = Field(None, max_length=20)
     multiplier: Optional[Decimal] = Field(None, gt=0)
@@ -219,6 +258,7 @@ class UserPriceAdjustmentRuleInfo(BaseModel):
     username: Optional[str] = None
     email: Optional[str] = None
     model_series: str
+    model_category: str = "all"
     model_type: str
     billing_type: str
     multiplier: Decimal

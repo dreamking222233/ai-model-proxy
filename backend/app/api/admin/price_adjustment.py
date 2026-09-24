@@ -20,6 +20,7 @@ def list_price_adjustment_rules(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     model_series: Optional[str] = Query(None),
+    model_category: Optional[str] = Query(None),
     model_type: Optional[str] = Query(None),
     enabled: Optional[int] = Query(None),
     db: Session = Depends(get_db),
@@ -30,6 +31,7 @@ def list_price_adjustment_rules(
         page=page,
         page_size=page_size,
         model_series=model_series,
+        model_category=model_category,
         model_type=model_type,
         enabled=enabled,
     )
@@ -38,9 +40,10 @@ def list_price_adjustment_rules(
 
 @router.get("/options", response_model=ResponseModel)
 def get_price_adjustment_options(
+    db: Session = Depends(get_db),
     current_user: SysUser = Depends(require_admin),
 ):
-    return ResponseModel(data=PriceAdjustmentService.get_options())
+    return ResponseModel(data=PriceAdjustmentService.get_options(db))
 
 
 @router.get("/effective", response_model=ResponseModel)
@@ -58,6 +61,7 @@ def list_user_price_adjustment_rules(
     keyword: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
     model_series: Optional[str] = Query(None),
+    model_category: Optional[str] = Query(None),
     model_type: Optional[str] = Query(None),
     enabled: Optional[int] = Query(None),
     db: Session = Depends(get_db),
@@ -70,6 +74,7 @@ def list_user_price_adjustment_rules(
         user_id=user_id,
         keyword=keyword,
         model_series=model_series,
+        model_category=model_category,
         model_type=model_type,
         enabled=enabled,
     )

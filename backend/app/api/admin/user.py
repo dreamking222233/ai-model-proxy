@@ -43,6 +43,7 @@ def list_user_price_adjustment_rules(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     model_series: str = Query(None),
+    model_category: str = Query(None),
     model_type: str = Query(None),
     enabled: int = Query(None),
     db: Session = Depends(get_db),
@@ -54,6 +55,7 @@ def list_user_price_adjustment_rules(
         page_size=page_size,
         user_id=user_id,
         model_series=model_series,
+        model_category=model_category,
         model_type=model_type,
         enabled=enabled,
     )

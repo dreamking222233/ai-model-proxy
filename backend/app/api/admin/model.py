@@ -10,8 +10,10 @@ from app.models.user import SysUser
 from app.models.model import UnifiedModel, ModelChannelMapping
 from app.models.channel import Channel
 from app.services.model_service import ModelService
+from app.services.model_category_service import ModelCategoryService
 from app.schemas.model import (
     UnifiedModelCreate, UnifiedModelUpdate,
+    ModelCategoryCreate, ModelCategoryUpdate,
     ModelChannelMappingCreate,
     ModelOverrideRuleCreate, ModelOverrideRuleUpdate,
 )
@@ -24,6 +26,46 @@ def _public_actual_model_name(model_name: str, actual_model_name: Optional[str])
     if str(model_name or "").strip() == "claude-opus-4-6":
         return "claude-opus-4-6"
     return actual_model_name
+
+
+# ---- Model Categories ----
+
+@router.get("/categories", response_model=ResponseModel)
+def list_model_categories(
+    include_disabled: bool = Query(True),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=ModelCategoryService.list_categories(db, include_disabled=include_disabled))
+
+
+@router.post("/categories", response_model=ResponseModel)
+def create_model_category(
+    data: ModelCategoryCreate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=ModelCategoryService.create_category(db, data), message="模型类别已创建")
+
+
+@router.put("/categories/{category_id}", response_model=ResponseModel)
+def update_model_category(
+    category_id: int,
+    data: ModelCategoryUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    return ResponseModel(data=ModelCategoryService.update_category(db, category_id, data), message="模型类别已保存")
+
+
+@router.delete("/categories/{category_id}", response_model=ResponseModel)
+def delete_model_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    ModelCategoryService.delete_category(db, category_id)
+    return ResponseModel(message="模型类别已删除")
 
 # ---- Unified Model ----
 
@@ -202,6 +244,7 @@ def get_channels_models(
                     "api_type": api_type,
                     "model_type": um.model_type,
                     "model_series": getattr(um, "model_series", None) or ModelService.infer_model_series(um.model_name),
+                    "model_category": getattr(um, "model_category", None),
                     "protocol_type": um.protocol_type,
                     "billing_type": um.billing_type,
                     "request_price": float(getattr(um, "request_price", 0) or 0),

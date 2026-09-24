@@ -26,6 +26,7 @@ from app.core.model_series import (
     infer_model_series as infer_series_from_name,
 )
 from app.services.channel_service import ChannelService
+from app.services.model_category_service import ModelCategoryService
 from app.services import grok_imagine_adapter
 
 logger = logging.getLogger(__name__)
@@ -731,6 +732,7 @@ class ModelService:
             "display_name": model.display_name,
             "model_type": model.model_type,
             "model_series": getattr(model, "model_series", None) or ModelService.infer_model_series(model.model_name),
+            "model_category": getattr(model, "model_category", None),
             "protocol_type": model.protocol_type,
             "max_tokens": model.max_tokens,
             "input_price_per_million": ModelService._decimal_to_float(model.input_price_per_million),
@@ -845,6 +847,9 @@ class ModelService:
             raise ServiceException(400, "图片积分或免费模型不支持赠送额度", "INVALID_BONUS_QUOTA_MODEL")
         request_price = ModelService._normalize_request_price(d.get("request_price", 0), billing_type)
         model_series = ModelService.normalize_model_series(d.get("model_series"), d["model_name"])
+        model_category = ModelCategoryService.validate_for_model(
+            db, d.get("model_category"), model_series, allow_empty=True
+        )
         long_context_billing_enabled = ModelService._normalize_long_context_billing_enabled(
             d.get("long_context_billing_enabled"),
             model_series,
@@ -875,6 +880,7 @@ class ModelService:
             display_name=d.get("display_name"),
             model_type=d.get("model_type", "chat"),
             model_series=model_series,
+            model_category=model_category,
             protocol_type=d.get("protocol_type", "openai"),
             max_tokens=d.get("max_tokens"),
             input_price_per_million=d.get("input_price_per_million", 0),
@@ -916,6 +922,13 @@ class ModelService:
             d.get("model_series", getattr(model, "model_series", None)),
             next_model_name,
         )
+        next_model_category = ModelCategoryService.validate_for_model(
+            db,
+            d.get("model_category", getattr(model, "model_category", None)),
+            next_model_series,
+            allow_empty=True,
+            existing_code=getattr(model, "model_category", None),
+        )
         next_protocol_type = d.get("protocol_type", model.protocol_type)
         next_billing_type = ModelService._normalize_billing_type(d.get("billing_type", model.billing_type))
         next_bonus_enabled = int(d.get("bonus_quota_enabled", getattr(model, "bonus_quota_enabled", 0)) or 0)
@@ -928,6 +941,7 @@ class ModelService:
         d["billing_type"] = next_billing_type
         d["request_price"] = next_request_price
         d["model_series"] = next_model_series
+        d["model_category"] = next_model_category
         if "cache_read_price_per_million" in d:
             d["cache_read_price_per_million"] = ModelService._normalize_cache_read_price(
                 d.get("cache_read_price_per_million")
@@ -970,11 +984,12 @@ class ModelService:
             "cache_read_price_per_million", "cache_creation_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier", "enabled", "description",
             "model_series", "long_context_billing_enabled", "long_context_token_threshold",
+            "model_category",
             "security_monitor_enabled",
             "bonus_quota_enabled",
         ]
         billing_fields = {
-            "model_name", "model_type", "model_series", "protocol_type",
+            "model_name", "model_type", "model_series", "model_category", "protocol_type",
             "input_price_per_million", "output_price_per_million",
             "cache_read_price_per_million", "cache_creation_price_per_million",
             "billing_type", "request_price", "image_credit_multiplier",
@@ -985,7 +1000,7 @@ class ModelService:
             value = d.get(field)
             # The cache-read price is tri-state: an explicit NULL restores
             # the input-price*10% fallback, while an omitted field is unchanged.
-            if field == "cache_read_price_per_million" and field in d:
+            if field in {"cache_read_price_per_million", "model_category"} and field in d:
                 setattr(model, field, value)
             elif value is not None:
                 # Validate unique model_name if changing
@@ -1045,6 +1060,7 @@ class ModelService:
                     UnifiedModel.model_name.like(like_pattern),
                     UnifiedModel.display_name.like(like_pattern),
                     UnifiedModel.model_series.like(like_pattern),
+                    UnifiedModel.model_category.like(like_pattern),
                     UnifiedModel.description.like(like_pattern),
                 )
             )

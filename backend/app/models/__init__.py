@@ -19,6 +19,7 @@ from app.models.agent import (
 )
 from app.models.channel import Channel
 from app.models.model import (
+    ModelCategory,
     UnifiedModel,
     ModelChannelMapping,
     ModelImageResolutionRule,
@@ -84,6 +85,7 @@ __all__ = [
     "AgentSettlementBatchItem",
     "AgentSubscriptionSaleRecord",
     "Channel",
+    "ModelCategory",
     "UnifiedModel",
     "ModelChannelMapping",
     "ModelImageResolutionRule",

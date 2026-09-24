@@ -257,12 +257,31 @@ CREATE TABLE `channel` (
 -- ============================================================
 -- 4. unified_model - 统一模型定义表
 -- ============================================================
+CREATE TABLE `model_category` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `code` VARCHAR(64) NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `model_series` VARCHAR(32) NOT NULL,
+    `sort_order` INT NOT NULL DEFAULT 100,
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `description` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`), UNIQUE KEY `uk_model_category_code` (`code`),
+    KEY `idx_model_category_series` (`model_series`, `enabled`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='管理员自定义模型类别';
+INSERT INTO `model_category` (`code`, `name`, `model_series`, `sort_order`) VALUES
+('gpt', 'GPT', 'gpt', 10), ('claude', 'Claude', 'claude', 20), ('grok', 'Grok', 'grok', 30),
+('gemini', 'Gemini', 'gemini', 40), ('deepseek', 'DeepSeek', 'deepseek', 50),
+('domestic', '国产模型', 'domestic', 60), ('other', '其他', 'other', 70);
+
 CREATE TABLE `unified_model` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `model_name` VARCHAR(128) NOT NULL COMMENT '统一模型名称,用户请求时使用',
     `display_name` VARCHAR(128) DEFAULT NULL,
     `model_type` ENUM('chat', 'embedding', 'image', 'video') NOT NULL DEFAULT 'chat',
     `model_series` VARCHAR(32) NOT NULL DEFAULT 'other' COMMENT '模型系列:gpt/claude/grok/gemini/deepseek/domestic/other',
+    `model_category` VARCHAR(64) DEFAULT NULL COMMENT '管理员自定义模型类别',
     `protocol_type` ENUM('openai', 'anthropic', 'google') NOT NULL DEFAULT 'openai',
     `max_tokens` INT DEFAULT NULL,
     `input_price_per_million` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '每百万输入Token单价(美元)',
@@ -293,6 +312,7 @@ CREATE TABLE `model_price_adjustment_rule` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `name` VARCHAR(128) NOT NULL,
     `model_series` VARCHAR(32) NOT NULL DEFAULT 'all' COMMENT 'gpt/claude/grok/gemini/deepseek/domestic/other/all',
+    `model_category` VARCHAR(64) NOT NULL DEFAULT 'all' COMMENT '模型类别编码或 all',
     `model_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'chat/image/video/embedding/completion/all',
     `billing_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'token/request/image_credit/free/all',
     `multiplier` DECIMAL(12, 6) NOT NULL DEFAULT 1 COMMENT '价格调控倍率',
@@ -317,6 +337,7 @@ CREATE TABLE `user_price_adjustment_rule` (
     `name` VARCHAR(128) NOT NULL COMMENT '规则名称',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `model_series` VARCHAR(32) NOT NULL DEFAULT 'all' COMMENT 'gpt/claude/grok/gemini/deepseek/domestic/other/all',
+    `model_category` VARCHAR(64) NOT NULL DEFAULT 'all' COMMENT '模型类别编码或 all',
     `model_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'chat/image/video/embedding/completion/all',
     `billing_type` VARCHAR(20) NOT NULL DEFAULT 'all' COMMENT 'token/request/image_credit/free/all',
     `multiplier` DECIMAL(12, 6) NOT NULL DEFAULT 1 COMMENT '用户专属价格倍率',

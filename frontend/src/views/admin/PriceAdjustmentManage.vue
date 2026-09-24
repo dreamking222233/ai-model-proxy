@@ -23,11 +23,12 @@
         <div class="effective-grid">
           <div
             v-for="item in effectiveList"
-            :key="`${item.model_series}-${item.model_type}`"
+            :key="`${item.model_category || item.model_series}-${item.model_type}`"
             class="effective-card"
           >
             <div class="effective-title">
               <a-tag :color="getSeriesColor(item.model_series)">{{ getSeriesLabel(item.model_series) }}</a-tag>
+              <a-tag v-if="item.model_category" color="cyan">{{ getCategoryLabel(item.model_category) }}</a-tag>
               <span>{{ getTypeLabel(item.model_type) }}</span>
             </div>
             <div class="effective-rate">x{{ formatMultiplier(item.multiplier) }}</div>
@@ -43,6 +44,9 @@
         <div class="toolbar-left">
           <a-select v-model="filters.model_series" allow-clear placeholder="系列" style="width: 150px" @change="handleFilterChange">
             <a-select-option v-for="item in seriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
+          <a-select v-model="filters.model_category" allow-clear placeholder="类别" style="width: 170px" @change="handleFilterChange">
+            <a-select-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
           <a-select v-model="filters.model_type" allow-clear placeholder="类型" style="width: 150px" @change="handleFilterChange">
             <a-select-option v-for="item in typeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
@@ -68,6 +72,10 @@
       >
         <template slot="series" slot-scope="text">
           <a-tag :color="getSeriesColor(text)">{{ getSeriesLabel(text) }}</a-tag>
+        </template>
+        <template slot="category" slot-scope="text">
+          <a-tag v-if="text" color="cyan">{{ getCategoryLabel(text) }}</a-tag>
+          <span v-else>-</span>
         </template>
         <template slot="modelType" slot-scope="text">{{ getTypeLabel(text) }}</template>
         <template slot="billingType" slot-scope="text">{{ getBillingLabel(text) }}</template>
@@ -109,6 +117,9 @@
           <a-select v-model="userRuleFilters.model_series" allow-clear placeholder="系列" style="width: 150px" @change="handleUserRuleFilterChange">
             <a-select-option v-for="item in seriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
+          <a-select v-model="userRuleFilters.model_category" allow-clear placeholder="类别" style="width: 170px" @change="handleUserRuleFilterChange">
+            <a-select-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+          </a-select>
           <a-select v-model="userRuleFilters.model_type" allow-clear placeholder="类型" style="width: 150px" @change="handleUserRuleFilterChange">
             <a-select-option v-for="item in typeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
           </a-select>
@@ -139,6 +150,10 @@
         </template>
         <template slot="userSeries" slot-scope="text">
           <a-tag :color="getSeriesColor(text)">{{ getSeriesLabel(text) }}</a-tag>
+        </template>
+        <template slot="userCategory" slot-scope="text">
+          <a-tag v-if="text" color="cyan">{{ getCategoryLabel(text) }}</a-tag>
+          <span v-else>-</span>
         </template>
         <template slot="userModelType" slot-scope="text">{{ getTypeLabel(text) }}</template>
         <template slot="userBillingType" slot-scope="text">{{ getBillingLabel(text) }}</template>
@@ -173,21 +188,28 @@
           <a-input v-model="form.name" placeholder="例如：GPT 夜间优惠" />
         </a-form-item>
         <a-row :gutter="16">
-          <a-col :span="8">
+          <a-col :span="6">
             <a-form-item label="模型系列">
               <a-select v-model="form.model_series">
                 <a-select-option v-for="item in seriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
               </a-select>
             </a-form-item>
           </a-col>
-          <a-col :span="8">
+          <a-col :span="6">
+            <a-form-item label="模型类别">
+              <a-select v-model="form.model_category">
+                <a-select-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+          <a-col :span="6">
             <a-form-item label="模型类型">
               <a-select v-model="form.model_type">
                 <a-select-option v-for="item in typeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
               </a-select>
             </a-form-item>
           </a-col>
-          <a-col :span="8">
+          <a-col :span="6">
             <a-form-item label="计费类型">
               <a-select v-model="form.billing_type">
                 <a-select-option v-for="item in billingOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
@@ -260,11 +282,13 @@ export default {
       effectiveList: [],
       options: {
         model_series: [],
+        model_categories: [],
         model_types: [],
         billing_types: []
       },
       filters: {
         model_series: undefined,
+        model_category: undefined,
         model_type: undefined,
         enabled: undefined
       },
@@ -273,6 +297,7 @@ export default {
       userRuleFilters: {
         keyword: '',
         model_series: undefined,
+        model_category: undefined,
         model_type: undefined,
         enabled: undefined
       },
@@ -293,6 +318,7 @@ export default {
       columns: [
         { title: '名称', dataIndex: 'name', key: 'name', width: 180 },
         { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 110, scopedSlots: { customRender: 'series' } },
+        { title: '类别', dataIndex: 'model_category', key: 'model_category', width: 150, scopedSlots: { customRender: 'category' } },
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 120, scopedSlots: { customRender: 'modelType' } },
         { title: '计费', dataIndex: 'billing_type', key: 'billing_type', width: 130, scopedSlots: { customRender: 'billingType' } },
         { title: '倍率', dataIndex: 'multiplier', key: 'multiplier', width: 100, scopedSlots: { customRender: 'multiplier' } },
@@ -306,6 +332,7 @@ export default {
         { title: '用户', key: 'userInfo', width: 220, scopedSlots: { customRender: 'userInfo' } },
         { title: '名称', dataIndex: 'name', key: 'name', width: 180, ellipsis: true },
         { title: '系列', dataIndex: 'model_series', key: 'model_series', width: 110, scopedSlots: { customRender: 'userSeries' } },
+        { title: '类别', dataIndex: 'model_category', key: 'model_category', width: 150, scopedSlots: { customRender: 'userCategory' } },
         { title: '类型', dataIndex: 'model_type', key: 'model_type', width: 120, scopedSlots: { customRender: 'userModelType' } },
         { title: '计费', dataIndex: 'billing_type', key: 'billing_type', width: 130, scopedSlots: { customRender: 'userBillingType' } },
         { title: '倍率', dataIndex: 'multiplier', key: 'multiplier', width: 100, scopedSlots: { customRender: 'userMultiplier' } },
@@ -328,6 +355,9 @@ export default {
     seriesOptions() {
       return this.options.model_series || []
     },
+    categoryOptions() {
+      return this.options.model_categories || []
+    },
     typeOptions() {
       return this.options.model_types || []
     },
@@ -344,6 +374,7 @@ export default {
       return {
         name: '',
         model_series: 'all',
+        model_category: 'all',
         model_type: 'all',
         billing_type: 'all',
         multiplier: 1,
@@ -433,6 +464,7 @@ export default {
       this.form = {
         name: record.name,
         model_series: record.model_series || 'all',
+        model_category: record.model_category || 'all',
         model_type: record.model_type || 'all',
         billing_type: record.billing_type || 'all',
         multiplier: Number(record.multiplier || 1),
@@ -504,6 +536,10 @@ export default {
     },
     getSeriesColor(value) {
       return getModelSeriesColor(value)
+    },
+    getCategoryLabel(value) {
+      const item = this.categoryOptions.find(option => option.value === value)
+      return item ? item.label : (value || '-')
     },
     getTypeLabel(value) {
       const item = this.typeOptions.find(opt => opt.value === value)

@@ -7,6 +7,22 @@ from sqlalchemy import (
 from app.database import Base
 
 
+class ModelCategory(Base):
+    """Admin-managed model category used for fine-grained pricing."""
+
+    __tablename__ = "model_category"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    code = Column(String(64), nullable=False, unique=True, comment="Stable category code")
+    name = Column(String(128), nullable=False, comment="Display name")
+    model_series = Column(String(32), nullable=False, comment="Parent fixed model series")
+    sort_order = Column(Integer, nullable=False, default=100)
+    enabled = Column(SmallInteger, nullable=False, default=1)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class UnifiedModel(Base):
     """Unified model definition."""
 
@@ -17,6 +33,7 @@ class UnifiedModel(Base):
     display_name = Column(String(128), nullable=True)
     model_type = Column(String(20), nullable=False, default="chat")
     model_series = Column(String(32), nullable=False, default="other", comment="Model series: gpt/claude/grok/gemini/deepseek/domestic/other")
+    model_category = Column(String(64), nullable=True, index=True, comment="Admin-managed fine-grained model category")
     protocol_type = Column(String(20), nullable=False, default="openai")
     max_tokens = Column(Integer, nullable=True)
     input_price_per_million = Column(DECIMAL(12, 6), nullable=False, default=0, comment="Input price per million tokens (USD)")
@@ -78,6 +95,7 @@ class ModelPriceAdjustmentRule(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(String(128), nullable=False)
     model_series = Column(String(32), nullable=False, default="all", comment="gpt/claude/grok/gemini/deepseek/domestic/other/all")
+    model_category = Column(String(64), nullable=False, default="all", comment="Fine-grained category code or all")
     model_type = Column(String(20), nullable=False, default="all", comment="chat/image/video/embedding/completion/all")
     billing_type = Column(String(20), nullable=False, default="all", comment="token/request/image_credit/free/all")
     multiplier = Column(DECIMAL(12, 6), nullable=False, default=1)
@@ -100,6 +118,7 @@ class UserPriceAdjustmentRule(Base):
     name = Column(String(128), nullable=False)
     user_id = Column(BigInteger, nullable=False, index=True)
     model_series = Column(String(32), nullable=False, default="all", comment="gpt/claude/grok/gemini/deepseek/domestic/other/all")
+    model_category = Column(String(64), nullable=False, default="all", comment="Fine-grained category code or all")
     model_type = Column(String(20), nullable=False, default="all", comment="chat/image/video/embedding/completion/all")
     billing_type = Column(String(20), nullable=False, default="all", comment="token/request/image_credit/free/all")
     multiplier = Column(DECIMAL(12, 6), nullable=False, default=1)

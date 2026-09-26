@@ -71,7 +71,7 @@ WHERE mg.code='default' AND active_default.model_series IS NULL;
 
 -- Normalize legacy data so every model series has exactly one enabled default.
 CREATE TEMPORARY TABLE IF NOT EXISTS `_model_group_default_keep` (
-  `model_series` VARCHAR(32) NOT NULL PRIMARY KEY,
+  `model_series` VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL PRIMARY KEY,
   `group_id` BIGINT UNSIGNED NOT NULL
 );
 TRUNCATE TABLE `_model_group_default_keep`;

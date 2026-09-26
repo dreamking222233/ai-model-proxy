@@ -109,6 +109,9 @@ CREATE TABLE `user_api_key` (
     `key_hash` VARCHAR(64) NOT NULL COMMENT 'SHA256哈希',
     `key_full` VARCHAR(128) DEFAULT NULL COMMENT '完整API Key明文',
     `status` ENUM('active', 'disabled', 'expired') NOT NULL DEFAULT 'active',
+    `group_mode` VARCHAR(16) DEFAULT 'unified',
+    `group_model_series` VARCHAR(32) DEFAULT NULL,
+    `group_id` BIGINT UNSIGNED DEFAULT NULL,
     `expires_at` DATETIME DEFAULT NULL,
     `total_requests` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `total_tokens` BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -536,6 +539,9 @@ CREATE TABLE `video_task_billing_snapshot` (
     `request_id` VARCHAR(36) DEFAULT NULL COMMENT '创建请求ID',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `channel_id` BIGINT UNSIGNED NOT NULL COMMENT '渠道ID',
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `requested_model` VARCHAR(128) DEFAULT NULL,
     `actual_model` VARCHAR(128) DEFAULT NULL,
     `billing_type` VARCHAR(20) DEFAULT 'image_credit',
@@ -543,6 +549,7 @@ CREATE TABLE `video_task_billing_snapshot` (
     `model_multiplier` DECIMAL(12, 3) DEFAULT 1,
     `video_size` VARCHAR(16) DEFAULT NULL,
     `video_seconds` INT DEFAULT 0,
+    `global_price_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `adjustment_price_multiplier_snapshot` DECIMAL(12, 6) DEFAULT 1,
     `price_adjustment_source_snapshot` VARCHAR(20) DEFAULT NULL,
     `price_adjustment_rule_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
@@ -559,18 +566,36 @@ CREATE TABLE `video_task_billing_snapshot` (
 -- ============================================================
 -- 5. model_channel_mapping - 模型-渠道映射表
 -- ============================================================
+CREATE TABLE IF NOT EXISTS `model_group` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `model_series` VARCHAR(32) NOT NULL,
+    `code` VARCHAR(64) NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `multiplier` DECIMAL(12,6) NOT NULL DEFAULT 1,
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `is_default` TINYINT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 100,
+    `description` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`), UNIQUE KEY `uk_model_group_series_code` (`model_series`,`code`),
+    KEY `idx_model_group_series_enabled` (`model_series`,`enabled`,`is_default`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型系列渠道分组';
+
 CREATE TABLE `model_channel_mapping` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `unified_model_id` BIGINT UNSIGNED NOT NULL,
+    `group_id` BIGINT UNSIGNED NOT NULL,
     `channel_id` BIGINT UNSIGNED NOT NULL,
     `actual_model_name` VARCHAR(128) NOT NULL COMMENT '该渠道中的实际模型名称',
     `default_reasoning_effort` VARCHAR(16) DEFAULT NULL COMMENT '默认推理强度: minimal/low/medium/high/xhigh',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_model_channel` (`unified_model_id`, `channel_id`),
+    UNIQUE KEY `uk_model_channel_group` (`unified_model_id`, `group_id`, `channel_id`),
     KEY `idx_channel_id` (`channel_id`),
-    KEY `idx_enabled` (`enabled`)
+    KEY `idx_enabled` (`enabled`),
+    KEY `idx_model_mapping_group` (`group_id`,`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型-渠道映射表';
 
 -- ============================================================
@@ -662,6 +687,9 @@ CREATE TABLE `request_log` (
     `user_api_key_id` BIGINT UNSIGNED DEFAULT NULL,
     `channel_id` BIGINT UNSIGNED DEFAULT NULL,
     `channel_name` VARCHAR(128) DEFAULT NULL,
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `requested_model` VARCHAR(128) DEFAULT NULL COMMENT '用户请求的模型名',
     `actual_model` VARCHAR(128) DEFAULT NULL COMMENT '实际发送的模型名',
     `protocol_type` ENUM('openai', 'anthropic') DEFAULT NULL,
@@ -872,6 +900,9 @@ CREATE TABLE `consumption_record` (
     `agent_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '所属代理ID',
     `request_id` VARCHAR(36) DEFAULT NULL,
     `model_name` VARCHAR(128) DEFAULT NULL,
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
@@ -1346,6 +1377,11 @@ ON DUPLICATE KEY UPDATE
     `description` = VALUES(`description`);
 
 -- 系统配置
+INSERT INTO `model_group` (`model_series`, `code`, `name`, `multiplier`, `enabled`, `is_default`, `sort_order`)
+SELECT DISTINCT `model_series`, 'default', CONCAT(UCASE(LEFT(`model_series`, 1)), SUBSTRING(`model_series`, 2), ' 默认'), 1, 1, 1, 0
+FROM `unified_model` um
+WHERE NOT EXISTS (SELECT 1 FROM `model_group` mg WHERE mg.`model_series` = um.`model_series` AND mg.`code` = 'default');
+
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES
 ('health_check_interval', '300', 'number', '健康检查间隔(秒)'),
 ('circuit_breaker_threshold', '5', 'number', '熔断器触发阈值(连续失败次数)'),

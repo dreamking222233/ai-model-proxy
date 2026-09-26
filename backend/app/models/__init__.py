@@ -20,6 +20,7 @@ from app.models.agent import (
 from app.models.channel import Channel
 from app.models.model import (
     ModelCategory,
+    ModelGroup,
     UnifiedModel,
     ModelChannelMapping,
     ModelImageResolutionRule,
@@ -86,6 +87,7 @@ __all__ = [
     "AgentSubscriptionSaleRecord",
     "Channel",
     "ModelCategory",
+    "ModelGroup",
     "UnifiedModel",
     "ModelChannelMapping",
     "ModelImageResolutionRule",

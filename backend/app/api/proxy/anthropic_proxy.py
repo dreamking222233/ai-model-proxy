@@ -14,9 +14,11 @@ async def anthropic_count_tokens_v1(
     db: Session = Depends(get_db),
 ):
     """Anthropic count_tokens compatibility endpoint with /v1 prefix."""
-    await verify_api_key(request, db)
+    _user, api_key_record = await verify_api_key(request, db)
     body = await request.json()
-    passthrough_response = await ChannelPassthroughService.forward_count_tokens(request, db, body)
+    passthrough_response = await ChannelPassthroughService.forward_count_tokens(
+        request, db, body, api_key_record
+    )
     if passthrough_response is not None:
         return passthrough_response
     return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}
@@ -28,9 +30,11 @@ async def anthropic_count_tokens_root(
     db: Session = Depends(get_db),
 ):
     """Anthropic count_tokens compatibility endpoint without /v1 prefix."""
-    await verify_api_key(request, db)
+    _user, api_key_record = await verify_api_key(request, db)
     body = await request.json()
-    passthrough_response = await ChannelPassthroughService.forward_count_tokens(request, db, body)
+    passthrough_response = await ChannelPassthroughService.forward_count_tokens(
+        request, db, body, api_key_record
+    )
     if passthrough_response is not None:
         return passthrough_response
     return {"input_tokens": ProxyService.estimate_anthropic_input_tokens(body)}

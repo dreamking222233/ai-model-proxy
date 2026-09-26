@@ -57,6 +57,12 @@ const routes = [
         meta: { title: '模型管理' }
       },
       {
+        path: 'model-groups',
+        name: 'ModelGroupManage',
+        component: () => import('@/views/admin/ModelGroupManage.vue'),
+        meta: { title: '模型分组' }
+      },
+      {
         path: 'users',
         name: 'UserManage',
         component: () => import('@/views/admin/UserManage.vue'),

@@ -49,6 +49,44 @@ class ModelCategoryInfo(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
+class ModelGroupCreate(BaseModel):
+    model_series: str = Field(default="other", min_length=1, max_length=32)
+    code: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    multiplier: Decimal = Field(default=Decimal("1"), gt=0)
+    enabled: int = Field(default=1, ge=0, le=1)
+    is_default: int = Field(default=0, ge=0, le=1)
+    sort_order: int = Field(default=100, ge=0)
+    description: Optional[str] = None
+
+
+class ModelGroupUpdate(BaseModel):
+    model_series: Optional[str] = Field(None, min_length=1, max_length=32)
+    code: Optional[str] = Field(None, min_length=1, max_length=64)
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    multiplier: Optional[Decimal] = Field(None, gt=0)
+    enabled: Optional[int] = Field(None, ge=0, le=1)
+    is_default: Optional[int] = Field(None, ge=0, le=1)
+    sort_order: Optional[int] = Field(None, ge=0)
+    description: Optional[str] = None
+
+
+class ModelGroupInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    id: int
+    model_series: str
+    code: str
+    name: str
+    multiplier: Decimal
+    enabled: int
+    is_default: int
+    sort_order: int
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
 class UnifiedModelCreate(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -281,6 +319,7 @@ class UserPriceAdjustmentRuleInfo(BaseModel):
 class ModelChannelMappingCreate(BaseModel):
     unified_model_id: int
     channel_id: int
+    group_id: Optional[int] = None
     actual_model_name: str = Field(..., min_length=1, max_length=128)
     default_reasoning_effort: Optional[str] = Field(None, max_length=16)
     enabled: int = Field(default=1, ge=0, le=1)
@@ -292,11 +331,20 @@ class ModelChannelMappingInfo(BaseModel):
     id: int
     unified_model_id: int
     channel_id: int
+    group_id: int
+    group_name: Optional[str] = None
     actual_model_name: str
     default_reasoning_effort: Optional[str] = None
     enabled: int
     channel_name: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+class ModelChannelMappingUpdate(BaseModel):
+    group_id: Optional[int] = None
+    actual_model_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    default_reasoning_effort: Optional[str] = Field(None, max_length=16)
+    enabled: Optional[int] = Field(None, ge=0, le=1)
 
 
 # ===========================================================================

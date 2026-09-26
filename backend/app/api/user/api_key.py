@@ -5,13 +5,9 @@ from app.core.dependencies import get_current_user
 from app.models.user import SysUser
 from app.services.api_key_service import ApiKeyService
 from app.schemas.common import ResponseModel
-from pydantic import BaseModel
+from app.schemas.user import ApiKeyCreateRequest, ApiKeyGroupBindingUpdate
 
 router = APIRouter(prefix="/api/user/api-keys", tags=["用户-API Key"])
-
-
-class ApiKeyCreateRequest(BaseModel):
-    name: str
 
 
 @router.get("", response_model=ResponseModel)
@@ -29,8 +25,32 @@ def create_api_key(
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(get_current_user),
 ):
-    result = ApiKeyService.create_api_key(db, current_user.id, data.name)
+    result = ApiKeyService.create_api_key(
+        db,
+        current_user.id,
+        data.name,
+        data.group_mode,
+        data.group_model_series,
+        data.group_id,
+    )
     return ResponseModel(data=result)
+
+
+@router.get("/group-options", response_model=ResponseModel)
+def get_group_options(
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    return ResponseModel(data=ApiKeyService.get_group_options(db))
+
+
+@router.get("/options", response_model=ResponseModel)
+def get_group_options_alias(
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    """Compatibility alias used by the user API-key management page."""
+    return ResponseModel(data=ApiKeyService.get_group_options(db))
 
 
 @router.delete("/{key_id}", response_model=ResponseModel)
@@ -71,3 +91,40 @@ def enable_api_key(
 ):
     ApiKeyService.enable_api_key(db, current_user.id, key_id)
     return ResponseModel(message="API Key enabled")
+
+
+@router.put("/{key_id}/group", response_model=ResponseModel)
+def update_group_binding(
+    key_id: int,
+    data: ApiKeyGroupBindingUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    result = ApiKeyService.update_group_binding(
+        db,
+        current_user.id,
+        key_id,
+        data.group_mode,
+        data.group_model_series,
+        data.group_id,
+    )
+    return ResponseModel(data=result, message="API Key 分组已更新")
+
+
+@router.put("/{key_id}/group-binding", response_model=ResponseModel)
+def update_group_binding_alias(
+    key_id: int,
+    data: ApiKeyGroupBindingUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    """Compatibility alias for clients using the explicit binding path."""
+    result = ApiKeyService.update_group_binding(
+        db,
+        current_user.id,
+        key_id,
+        data.group_mode,
+        data.group_model_series,
+        data.group_id,
+    )
+    return ResponseModel(data=result, message="API Key 分组已更新")

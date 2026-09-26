@@ -455,6 +455,9 @@ CREATE TABLE `consumption_record` (
   `agent_id` bigint unsigned DEFAULT NULL COMMENT '所属代理ID',
   `request_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `model_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `group_id_snapshot` bigint unsigned DEFAULT NULL,
+  `group_name_snapshot` varchar(128) DEFAULT NULL,
+  `group_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `input_tokens` int DEFAULT '0',
   `output_tokens` int DEFAULT '0',
   `total_tokens` int DEFAULT '0',
@@ -650,18 +653,38 @@ CREATE TABLE `image_credit_record` (
 -- ----------------------------
 -- Table structure for model_channel_mapping
 -- ----------------------------
+DROP TABLE IF EXISTS `model_group`;
+CREATE TABLE `model_group` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `model_series` varchar(32) NOT NULL,
+  `code` varchar(64) NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `multiplier` decimal(12,6) NOT NULL DEFAULT '1.000000',
+  `enabled` tinyint NOT NULL DEFAULT '1',
+  `is_default` tinyint NOT NULL DEFAULT '0',
+  `sort_order` int NOT NULL DEFAULT '100',
+  `description` text,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_model_group_series_code` (`model_series`,`code`),
+  KEY `idx_model_group_series_enabled` (`model_series`,`enabled`,`is_default`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型系列渠道分组';
+
 DROP TABLE IF EXISTS `model_channel_mapping`;
 CREATE TABLE `model_channel_mapping` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `unified_model_id` bigint unsigned NOT NULL,
+  `group_id` bigint unsigned NOT NULL,
   `channel_id` bigint unsigned NOT NULL,
   `actual_model_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '该渠道中的实际模型名称',
   `enabled` tinyint NOT NULL DEFAULT '1',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_model_channel` (`unified_model_id`,`channel_id`),
+  UNIQUE KEY `uk_model_channel_group` (`unified_model_id`,`group_id`,`channel_id`),
   KEY `idx_channel_id` (`channel_id`),
-  KEY `idx_enabled` (`enabled`)
+  KEY `idx_enabled` (`enabled`),
+  KEY `idx_model_mapping_group` (`group_id`,`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型-渠道映射表';
 
 -- ----------------------------
@@ -973,6 +996,9 @@ CREATE TABLE `request_log` (
   `user_api_key_id` bigint unsigned DEFAULT NULL,
   `channel_id` bigint unsigned DEFAULT NULL,
   `channel_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `group_id_snapshot` bigint unsigned DEFAULT NULL,
+  `group_name_snapshot` varchar(128) DEFAULT NULL,
+  `group_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `requested_model` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '用户请求的模型名',
   `actual_model` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '实际发送的模型名',
   `protocol_type` enum('openai','anthropic','google') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
@@ -1358,6 +1384,9 @@ CREATE TABLE `video_task_billing_snapshot` (
   `request_id` varchar(36) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '创建请求ID',
   `user_id` bigint unsigned NOT NULL COMMENT '用户ID',
   `channel_id` bigint unsigned NOT NULL COMMENT '渠道ID',
+  `group_id_snapshot` bigint unsigned DEFAULT NULL,
+  `group_name_snapshot` varchar(128) DEFAULT NULL,
+  `group_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `requested_model` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `actual_model` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `billing_type` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT 'image_credit',
@@ -1365,6 +1394,7 @@ CREATE TABLE `video_task_billing_snapshot` (
   `model_multiplier` decimal(12,3) DEFAULT '1.000',
   `video_size` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `video_seconds` int DEFAULT '0',
+  `global_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `adjustment_price_multiplier_snapshot` decimal(12,6) DEFAULT '1.000000',
   `price_adjustment_source_snapshot` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `price_adjustment_rule_id_snapshot` bigint unsigned DEFAULT NULL,
@@ -1390,6 +1420,9 @@ CREATE TABLE `user_api_key` (
   `key_hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'SHA256哈希',
   `key_full` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '完整API Key明文',
   `status` enum('active','disabled','expired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `group_mode` varchar(16) DEFAULT 'unified',
+  `group_model_series` varchar(32) DEFAULT NULL,
+  `group_id` bigint unsigned DEFAULT NULL,
   `expires_at` datetime DEFAULT NULL,
   `total_requests` bigint unsigned NOT NULL DEFAULT '0',
   `total_tokens` bigint unsigned NOT NULL DEFAULT '0',
@@ -1524,6 +1557,11 @@ ON DUPLICATE KEY UPDATE
   `description` = VALUES(`description`);
 
 -- 系统配置
+INSERT INTO `model_group` (`model_series`, `code`, `name`, `multiplier`, `enabled`, `is_default`, `sort_order`)
+SELECT DISTINCT `model_series`, 'default', CONCAT(UCASE(LEFT(`model_series`, 1)), SUBSTRING(`model_series`, 2), ' 默认'), 1, 1, 1, 0
+FROM `unified_model` um
+WHERE NOT EXISTS (SELECT 1 FROM `model_group` mg WHERE mg.`model_series` = um.`model_series` AND mg.`code` = 'default');
+
 INSERT INTO `system_config` (`config_key`, `config_value`, `config_type`, `description`) VALUES
 ('health_check_interval', '300', 'number', '健康检查间隔(秒)'),
 ('circuit_breaker_threshold', '5', 'number', '熔断器触发阈值(连续失败次数)'),

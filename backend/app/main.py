@@ -23,6 +23,7 @@ from app.api.admin.agent import router as admin_agent_router
 from app.api.admin.payment import router as admin_payment_router
 from app.api.admin.channel import router as admin_channel_router
 from app.api.admin.model import router as admin_model_router
+from app.api.admin.model_group import router as admin_model_group_router
 from app.api.admin.user import router as admin_user_router
 from app.api.admin.log import router as admin_log_router
 from app.api.admin.health import router as admin_health_router
@@ -130,6 +131,7 @@ app.include_router(public_security_router)
 app.include_router(admin_channel_router)
 app.include_router(admin_agent_router)
 app.include_router(admin_model_router)
+app.include_router(admin_model_group_router)
 app.include_router(admin_user_router)
 app.include_router(admin_log_router)
 app.include_router(admin_health_router)

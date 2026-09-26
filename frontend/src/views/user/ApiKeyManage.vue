@@ -59,12 +59,24 @@
             :pagination="false"
             rowKey="id"
             size="middle"
-            :scroll="{ x: 1300 }"
+            :scroll="{ x: 1490 }"
             class="premium-table"
           >
             <!-- Name Column -->
             <template slot="name" slot-scope="text">
               <span class="key-name">{{ text }}</span>
+            </template>
+
+            <template slot="group" slot-scope="text, record">
+              <div class="key-group-cell">
+                <a-tag v-if="record.group_mode === 'special'" :color="record.group_status === 'active' ? 'cyan' : 'red'">
+                  {{ record.group_name || `分组 #${record.group_id || '-'}` }}{{ record.group_status !== 'active' ? '（已停用）' : '' }}
+                </a-tag>
+                <a-tag v-else color="blue">通用 / 各系列默认</a-tag>
+                <span v-if="record.group_mode === 'special' && record.group_model_series" class="key-group-series">
+                  {{ getSeriesLabel(record.group_model_series) }}
+                </span>
+              </div>
             </template>
 
             <!-- Key Prefix Column -->
@@ -163,6 +175,11 @@
                     <a-icon type="delete" />
                   </a-button>
                 </a-tooltip>
+                <a-tooltip title="修改分组">
+                  <a-button type="link" class="action-btn" @click="openBindingModal(record)">
+                    <a-icon type="branches" />
+                  </a-button>
+                </a-tooltip>
               </div>
             </template>
           </a-table>
@@ -203,6 +220,26 @@
               @pressEnter="handleCreate"
             />
           </a-form-item>
+          <a-form-item label="路由模式">
+            <a-radio-group v-model="createForm.group_mode" class="group-mode-options">
+              <a-radio value="unified">通用：各模型系列使用默认分组</a-radio>
+              <a-radio value="special">专用：绑定一个系列和分组</a-radio>
+            </a-radio-group>
+          </a-form-item>
+          <template v-if="createForm.group_mode === 'special'">
+            <a-form-item label="模型系列">
+              <a-select v-model="createForm.group_model_series" placeholder="选择模型系列" @change="handleCreateSeriesChange">
+                <a-select-option v-for="item in groupSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="模型分组">
+              <a-select v-model="createForm.group_id" placeholder="选择模型分组" :loading="groupOptionsLoading">
+                <a-select-option v-for="item in groupsForSeries(createForm.group_model_series)" :key="item.id" :value="item.id">
+                  {{ item.name }} ({{ item.code }}) · x{{ formatMultiplier(item.multiplier) }}
+                </a-select-option>
+              </a-select>
+            </a-form-item>
+          </template>
           <div class="modal-btns">
             <a-button @click="createModalVisible = false" class="cancel-btn">取消</a-button>
             <a-button type="primary" :loading="createLoading" @click="handleCreate" class="submit-btn">
@@ -265,6 +302,39 @@
           </a-button>
         </div>
       </div>
+    </a-modal>
+
+    <a-modal
+      v-model="bindingModalVisible"
+      title="修改 API Key 分组"
+      :confirm-loading="bindingLoading"
+      @ok="handleBindingUpdate"
+      @cancel="bindingModalVisible = false"
+      :width="480"
+      :getContainer="false"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="路由模式">
+          <a-radio-group v-model="bindingForm.group_mode">
+            <a-radio value="unified">通用 / 各系列默认</a-radio>
+            <a-radio value="special">专用分组</a-radio>
+          </a-radio-group>
+        </a-form-item>
+        <template v-if="bindingForm.group_mode === 'special'">
+          <a-form-item label="模型系列">
+            <a-select v-model="bindingForm.group_model_series" @change="handleBindingSeriesChange">
+              <a-select-option v-for="item in groupSeriesOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="模型分组">
+            <a-select v-model="bindingForm.group_id" :loading="groupOptionsLoading" placeholder="选择模型分组">
+              <a-select-option v-for="item in groupsForSeries(bindingForm.group_model_series)" :key="item.id" :value="item.id">
+                {{ item.name }} ({{ item.code }}) · x{{ formatMultiplier(item.multiplier) }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+        </template>
+      </a-form>
     </a-modal>
 
     <a-modal
@@ -352,7 +422,8 @@
 </template>
 
 <script>
-import { listApiKeys, createApiKey, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, getSiteConfig } from '@/api/user'
+import { listApiKeys, createApiKey, updateApiKeyGroupBinding, getApiKeyGroupOptions, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, getSiteConfig } from '@/api/user'
+import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
 import { formatUtcDate } from '@/utils'
 
 export default {
@@ -364,8 +435,22 @@ export default {
       createModalVisible: false,
       createLoading: false,
       createForm: {
-        name: ''
+        name: '',
+        group_mode: 'unified',
+        group_model_series: undefined,
+        group_id: undefined
       },
+      bindingModalVisible: false,
+      bindingLoading: false,
+      bindingKey: null,
+      bindingForm: {
+        group_mode: 'unified',
+        group_model_series: undefined,
+        group_id: undefined
+      },
+      groupOptionsLoading: false,
+      groupSeriesOptions: MODEL_SERIES_OPTIONS,
+      groupsBySeries: {},
       showKeyModalVisible: false,
       createdKey: '',
       createdKeyName: '',
@@ -382,6 +467,7 @@ export default {
       copyStates: {},
       columns: [
         { title: '密钥名称', dataIndex: 'name', key: 'name', width: 180, fixed: 'left', scopedSlots: { customRender: 'name' } },
+        { title: '路由分组', key: 'group', width: 190, scopedSlots: { customRender: 'group' } },
         { title: '密钥令牌 (Revealed/Prefix)', dataIndex: 'key_prefix', key: 'key_prefix', width: 320, scopedSlots: { customRender: 'key_prefix' } },
         { title: '用量统计', key: 'usage_stats', width: 320, scopedSlots: { customRender: 'usage_stats' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'status' } },
@@ -451,6 +537,7 @@ export default {
     }
   },
   created() {
+    this.fetchGroupOptions()
     this.fetchSiteConfig()
     this.fetchApiKeys()
   },
@@ -502,6 +589,9 @@ export default {
     },
     showCreateModal() {
       this.createForm.name = ''
+      this.createForm.group_mode = 'unified'
+      this.createForm.group_model_series = undefined
+      this.createForm.group_id = undefined
       this.createModalVisible = true
       this.$nextTick(() => {
         if (this.$refs.nameInput) {
@@ -516,7 +606,16 @@ export default {
       }
       this.createLoading = true
       try {
-        const res = await createApiKey({ name: this.createForm.name.trim() })
+        if (this.createForm.group_mode === 'special' && (!this.createForm.group_model_series || !this.createForm.group_id)) {
+          this.$message.error('请选择专用 Key 的模型系列和分组')
+          return
+        }
+        const res = await createApiKey({
+          name: this.createForm.name.trim(),
+          group_mode: this.createForm.group_mode,
+          group_model_series: this.createForm.group_mode === 'special' ? this.createForm.group_model_series : null,
+          group_id: this.createForm.group_mode === 'special' ? this.createForm.group_id : null
+        })
         this.createdKey = res.data.key || res.data.api_key || ''
         this.createdKeyName = res.data.name || this.createForm.name.trim()
         this.createModalVisible = false
@@ -527,6 +626,75 @@ export default {
       } finally {
         this.createLoading = false
       }
+    },
+    async fetchGroupOptions() {
+      this.groupOptionsLoading = true
+      try {
+        const res = await getApiKeyGroupOptions()
+        const data = res.data || {}
+        const series = data.model_series || data.series || data.series_options
+        if (Array.isArray(series) && series.length) this.groupSeriesOptions = series
+        this.groupsBySeries = data.groups_by_series || data.groups || {}
+        if (Array.isArray(this.groupsBySeries)) {
+          this.groupsBySeries = this.groupsBySeries.reduce((acc, item) => {
+            const key = item.model_series || item.series || 'other'
+            if (!acc[key]) acc[key] = []
+            acc[key].push(item)
+            return acc
+          }, {})
+        }
+      } catch (e) {
+        console.error('Failed to fetch API key group options:', e)
+      } finally {
+        this.groupOptionsLoading = false
+      }
+    },
+    groupsForSeries(series) {
+      if (!series) return []
+      return Array.isArray(this.groupsBySeries) ? this.groupsBySeries : (this.groupsBySeries[series] || [])
+    },
+    handleCreateSeriesChange() {
+      this.createForm.group_id = undefined
+    },
+    openBindingModal(record) {
+      this.bindingKey = record
+      this.bindingForm = {
+        group_mode: record.group_mode || 'unified',
+        group_model_series: record.group_model_series || undefined,
+        group_id: record.group_id || undefined
+      }
+      this.bindingModalVisible = true
+      if (!Object.keys(this.groupsBySeries).length) this.fetchGroupOptions()
+    },
+    handleBindingSeriesChange() {
+      this.bindingForm.group_id = undefined
+    },
+    async handleBindingUpdate() {
+      if (!this.bindingKey) return
+      if (this.bindingForm.group_mode === 'special' && (!this.bindingForm.group_model_series || !this.bindingForm.group_id)) {
+        this.$message.error('请选择专用 Key 的模型系列和分组')
+        return
+      }
+      this.bindingLoading = true
+      try {
+        await updateApiKeyGroupBinding(this.bindingKey.id, {
+          group_mode: this.bindingForm.group_mode,
+          group_model_series: this.bindingForm.group_mode === 'special' ? this.bindingForm.group_model_series : null,
+          group_id: this.bindingForm.group_mode === 'special' ? this.bindingForm.group_id : null
+        })
+        this.$message.success('API Key 分组已更新')
+        this.bindingModalVisible = false
+        this.fetchApiKeys()
+      } finally {
+        this.bindingLoading = false
+      }
+    },
+    getSeriesLabel(value) {
+      return getModelSeriesLabel(value)
+    },
+    formatMultiplier(value) {
+      const num = Number(value || 1)
+      return Number.isInteger(num) ? String(num) : num.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
     },
     async handleReveal(record) {
       await this.ensureRevealedKey(record)

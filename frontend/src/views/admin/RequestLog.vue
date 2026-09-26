@@ -478,6 +478,13 @@
               <span class="detail-item-value">{{ selectedRecord.channel_name || '-' }}</span>
             </div>
             <div class="detail-item">
+              <span class="detail-item-label">请求分组</span>
+              <span class="detail-item-value">
+                {{ selectedRecord.group_name_snapshot || selectedRecord.group_name || '-' }}
+                <span v-if="selectedRecord.group_multiplier_snapshot != null" class="detail-item-subtext">倍率 x{{ formatMultiplier(selectedRecord.group_multiplier_snapshot) }}</span>
+              </span>
+            </div>
+            <div class="detail-item">
               <span class="detail-item-label">计费方式</span>
               <span class="detail-item-value">{{ getBillingTypeText(selectedRecord) }}</span>
             </div>
@@ -729,6 +736,14 @@ export default {
           scopedSlots: { customRender: 'channel_name' }
         },
         {
+          title: '分组',
+          dataIndex: 'group_name_snapshot',
+          key: 'group_name_snapshot',
+          width: 130,
+          ellipsis: true,
+          customRender: (text, record) => text || record.group_name || '-'
+        },
+        {
           title: '用量',
           key: 'tokens',
           width: 300,
@@ -804,7 +819,7 @@ export default {
       return this.columns.filter(column => column.key !== 'actual_model')
     },
     tableScrollX() {
-      return this.showActualModel ? 1600 : 1460
+      return this.showActualModel ? 1730 : 1590
     },
     hasUserFilter() {
       return String(this.filters.user_id || '').trim() !== ''

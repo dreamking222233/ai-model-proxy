@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.model import (
+    ModelGroup,
     UnifiedModel,
     ModelChannelMapping,
     ModelImageResolutionRule,
@@ -763,6 +764,7 @@ class ModelService:
 
     @staticmethod
     def _mapping_with_channel_to_dict(
+        db: Session,
         mapping: ModelChannelMapping,
         channel: Optional[Channel],
     ) -> dict:
@@ -790,6 +792,11 @@ class ModelService:
             "id": mapping.id,
             "unified_model_id": mapping.unified_model_id,
             "channel_id": mapping.channel_id,
+            "group_id": getattr(mapping, "group_id", None),
+            "group_name": (
+                db.query(ModelGroup.name).filter(ModelGroup.id == mapping.group_id).scalar()
+                if getattr(mapping, "group_id", None) else None
+            ),
             "actual_model_name": mapping.actual_model_name,
             "default_reasoning_effort": mapping.default_reasoning_effort,
             "enabled": mapping.enabled,
@@ -802,12 +809,17 @@ class ModelService:
         }
 
     @staticmethod
-    def _mapping_to_dict(m: ModelChannelMapping) -> dict:
+    def _mapping_to_dict(m: ModelChannelMapping, db: Optional[Session] = None) -> dict:
         """Convert a ModelChannelMapping ORM instance to a serializable dict."""
         return {
             "id": m.id,
             "unified_model_id": m.unified_model_id,
             "channel_id": m.channel_id,
+            "group_id": getattr(m, "group_id", None),
+            "group_name": (
+                db.query(ModelGroup.name).filter(ModelGroup.id == m.group_id).scalar()
+                if db is not None and getattr(m, "group_id", None) else None
+            ),
             "actual_model_name": m.actual_model_name,
             "default_reasoning_effort": m.default_reasoning_effort,
             "enabled": m.enabled,
@@ -1109,7 +1121,7 @@ class ModelService:
         mapping_list = []
         for m in mappings:
             channel = db.query(Channel).filter(Channel.id == m.channel_id).first()
-            mapping_list.append(ModelService._mapping_with_channel_to_dict(m, channel))
+            mapping_list.append(ModelService._mapping_with_channel_to_dict(db, m, channel))
 
         return {
             "model": ModelService._model_to_dict(model),
@@ -1135,15 +1147,27 @@ class ModelService:
         if not channel:
             raise ServiceException(404, "渠道不存在", "CHANNEL_NOT_FOUND")
 
+        group_id = d.get("group_id")
+        if group_id is None:
+            from app.services.model_group_service import ModelGroupService
+            default_group = ModelGroupService.resolve_default_group(db, model.model_series)
+            if not default_group:
+                raise ServiceException(400, "该模型系列尚未配置启用的默认分组", "MODEL_GROUP_DEFAULT_REQUIRED")
+            group_id = int(default_group.id)
+        group = db.query(ModelGroup).filter(ModelGroup.id == int(group_id)).first()
+        if not group:
+            raise ServiceException(404, "模型分组不存在", "MODEL_GROUP_NOT_FOUND")
+        if group.model_series != model.model_series:
+            raise ServiceException(400, "模型分组所属系列与模型不一致", "MODEL_GROUP_SERIES_MISMATCH")
+        if not int(group.enabled or 0):
+            raise ServiceException(400, "模型分组已停用", "MODEL_GROUP_DISABLED")
+
         # Check duplicate
-        existing = (
-            db.query(ModelChannelMapping)
-            .filter(
-                ModelChannelMapping.unified_model_id == d["unified_model_id"],
-                ModelChannelMapping.channel_id == d["channel_id"],
-            )
-            .first()
-        )
+        existing = db.query(ModelChannelMapping).filter(
+            ModelChannelMapping.unified_model_id == d["unified_model_id"],
+            ModelChannelMapping.group_id == int(group_id),
+            ModelChannelMapping.channel_id == d["channel_id"],
+        ).first()
         if existing:
             raise ServiceException(400, "当前模型与渠道的映射已存在", "DUPLICATE_MAPPING")
 
@@ -1153,6 +1177,7 @@ class ModelService:
 
         mapping = ModelChannelMapping(
             unified_model_id=d["unified_model_id"],
+            group_id=int(group_id),
             channel_id=d["channel_id"],
             actual_model_name=d["actual_model_name"],
             default_reasoning_effort=default_reasoning_effort,
@@ -1161,7 +1186,7 @@ class ModelService:
         db.add(mapping)
         db.commit()
         db.refresh(mapping)
-        return ModelService._mapping_to_dict(mapping)
+        return ModelService._mapping_to_dict(mapping, db)
 
     @staticmethod
     def update_mapping(db: Session, mapping_id: int, data: dict) -> dict:
@@ -1169,6 +1194,25 @@ class ModelService:
         mapping = db.query(ModelChannelMapping).filter(ModelChannelMapping.id == mapping_id).first()
         if not mapping:
             raise ServiceException(404, "模型渠道映射不存在", "MAPPING_NOT_FOUND")
+
+        if "group_id" in data and data.get("group_id") is not None:
+            model = db.query(UnifiedModel).filter(UnifiedModel.id == mapping.unified_model_id).first()
+            group = db.query(ModelGroup).filter(ModelGroup.id == int(data["group_id"])).first()
+            if not group:
+                raise ServiceException(404, "模型分组不存在", "MODEL_GROUP_NOT_FOUND")
+            if model and group.model_series != model.model_series:
+                raise ServiceException(400, "模型分组所属系列与模型不一致", "MODEL_GROUP_SERIES_MISMATCH")
+            if not int(group.enabled or 0):
+                raise ServiceException(400, "模型分组已停用", "MODEL_GROUP_DISABLED")
+            duplicate = db.query(ModelChannelMapping).filter(
+                ModelChannelMapping.unified_model_id == mapping.unified_model_id,
+                ModelChannelMapping.group_id == int(data["group_id"]),
+                ModelChannelMapping.channel_id == mapping.channel_id,
+                ModelChannelMapping.id != mapping.id,
+            ).first()
+            if duplicate:
+                raise ServiceException(400, "当前模型、分组与渠道的映射已存在", "DUPLICATE_MAPPING")
+            mapping.group_id = int(data["group_id"])
 
         if "default_reasoning_effort" in data:
             mapping.default_reasoning_effort = ModelService._normalize_reasoning_effort(
@@ -1182,7 +1226,7 @@ class ModelService:
 
         db.commit()
         db.refresh(mapping)
-        return ModelService._mapping_to_dict(mapping)
+        return ModelService._mapping_to_dict(mapping, db)
 
     @staticmethod
     def delete_mapping(db: Session, mapping_id: int) -> None:
@@ -1205,7 +1249,7 @@ class ModelService:
         result = []
         for m in mappings:
             channel = db.query(Channel).filter(Channel.id == m.channel_id).first()
-            result.append(ModelService._mapping_with_channel_to_dict(m, channel))
+            result.append(ModelService._mapping_with_channel_to_dict(db, m, channel))
         return result
 
     # -----------------------------------------------------------------------
@@ -1369,7 +1413,7 @@ class ModelService:
 
     @staticmethod
     def get_available_channels(
-        db: Session, unified_model_id: int
+        db: Session, unified_model_id: int, group_id: Optional[int] = None
     ) -> list[tuple[Channel, str]]:
         """
         Get available channels for a unified model, sorted by priority.
@@ -1387,14 +1431,13 @@ class ModelService:
         """
         now = datetime.utcnow()
 
-        mappings = (
-            db.query(ModelChannelMapping)
-            .filter(
-                ModelChannelMapping.unified_model_id == unified_model_id,
-                ModelChannelMapping.enabled == 1,
-            )
-            .all()
+        mapping_query = db.query(ModelChannelMapping).filter(
+            ModelChannelMapping.unified_model_id == unified_model_id,
+            ModelChannelMapping.enabled == 1,
         )
+        if group_id is not None:
+            mapping_query = mapping_query.filter(ModelChannelMapping.group_id == int(group_id))
+        mappings = mapping_query.all()
 
         results: list[tuple[Channel, str]] = []
         for mapping in mappings:

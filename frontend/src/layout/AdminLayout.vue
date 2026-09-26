@@ -49,6 +49,10 @@
             <a-icon type="api" />
             <span>模型管理</span>
           </a-menu-item>
+          <a-menu-item key="/admin/model-groups">
+            <a-icon type="branches" />
+            <span>模型分组</span>
+          </a-menu-item>
           <a-menu-item key="/admin/users">
             <a-icon type="team" />
             <span>用户管理</span>

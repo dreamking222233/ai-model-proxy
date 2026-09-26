@@ -202,14 +202,24 @@ class ChannelPassthroughService:
         return False
 
     @staticmethod
-    def get_candidates(db: Session, requested_model: str, protocol: str) -> list[PassthroughCandidate]:
+    def get_candidates(
+        db: Session,
+        requested_model: str,
+        protocol: str,
+        api_key_record: Optional[UserApiKey] = None,
+    ) -> list[PassthroughCandidate]:
         if protocol not in _TEXT_PROTOCOLS:
             return []
         original_model = ModelService.get_enabled_model_by_name(db, requested_model)
         if not original_model or not ChannelPassthroughService._is_text_model(original_model):
             return []
         candidates = []
-        for channel, actual_model in ModelService.get_available_channels(db, original_model.id):
+        group_id = None
+        if api_key_record is not None:
+            from app.services.model_group_routing_service import ModelGroupRoutingService
+            context = ModelGroupRoutingService.resolve_context(db, api_key_record, original_model)
+            group_id = context.group_id
+        for channel, actual_model in ModelService.get_available_channels(db, original_model.id, group_id=group_id):
             if not int(getattr(channel, "passthrough_enabled", 0) or 0):
                 continue
             if not ChannelPassthroughService._channel_supports_protocol(channel, protocol, actual_model):
@@ -222,11 +232,16 @@ class ChannelPassthroughService:
         return sorted(candidates, key=lambda item: int(item.channel.priority or 10))
 
     @staticmethod
-    def get_normal_channel_ids(db: Session, requested_model: str, protocol: str) -> list[int]:
+    def get_normal_channel_ids(
+        db: Session,
+        requested_model: str,
+        protocol: str,
+        api_key_record: Optional[UserApiKey] = None,
+    ) -> list[int]:
         return [
             int(candidate.channel.id)
             for candidate in ChannelPassthroughService.get_normal_candidates(
-                db, requested_model, protocol
+                db, requested_model, protocol, api_key_record
             )
         ]
 
@@ -235,12 +250,18 @@ class ChannelPassthroughService:
         db: Session,
         requested_model: str,
         protocol: str,
+        api_key_record: Optional[UserApiKey] = None,
     ) -> list[PassthroughCandidate]:
         resolved = ModelService.resolve_model(db, requested_model)
         if not resolved or not ChannelPassthroughService._is_text_model(resolved):
             return []
         candidates = []
-        for channel, actual_model in ModelService.get_available_channels(db, resolved.id):
+        group_id = None
+        if api_key_record is not None:
+            from app.services.model_group_routing_service import ModelGroupRoutingService
+            context = ModelGroupRoutingService.resolve_context(db, api_key_record, resolved)
+            group_id = context.group_id
+        for channel, actual_model in ModelService.get_available_channels(db, resolved.id, group_id=group_id):
             if int(getattr(channel, "passthrough_enabled", 0) or 0):
                 continue
             candidates.append(PassthroughCandidate(
@@ -330,13 +351,17 @@ class ChannelPassthroughService:
         protocol: str,
         request_data: dict,
         requested_model: str,
+        api_key_record: Optional[UserApiKey] = None,
     ):
         from app.services.proxy_service import ProxyService
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, model)
         quota = ProxyService._build_text_quota_precheck(
-            db, protocol, request_data, model, user_id=ProxyService._safe_object_id(user)
+            db, protocol, request_data, model,
+            user_id=ProxyService._safe_object_id(user),
+            billing_context=group_context,
         )
         billing_context = ProxyService._build_frozen_text_billing_context(
-            ProxyService._build_text_billing_context(protocol, request_data), quota
+            ProxyService._build_text_billing_context(protocol, request_data, group_context), quota
         )
         admission = ProxyService._assert_text_request_allowed(
             db, user, quota_precheck=quota, unified_model=model, requested_model=requested_model
@@ -423,7 +448,8 @@ class ChannelPassthroughService:
         if candidate.unified_model is None:
             raise ServiceException(500, "透传候选缺少计费模型", "PASSTHROUGH_MODEL_MISSING")
         admission, billing_context = ChannelPassthroughService._build_billing(
-            db, user, candidate.unified_model, protocol, request_data, requested_model
+            db, user, candidate.unified_model, protocol, request_data, requested_model,
+            api_key_record,
         )
         user = ChannelPassthroughService._snapshot_orm_columns(user)
         api_key_record = ChannelPassthroughService._snapshot_orm_columns(api_key_record)
@@ -551,8 +577,8 @@ class ChannelPassthroughService:
     ) -> Response:
         from app.services.proxy_service import ProxyService
         requested_model = str(request_data.get("model") or "")
-        passthrough = ChannelPassthroughService.get_candidates(db, requested_model, protocol)
-        normal = ChannelPassthroughService.get_normal_candidates(db, requested_model, protocol)
+        passthrough = ChannelPassthroughService.get_candidates(db, requested_model, protocol, api_key_record)
+        normal = ChannelPassthroughService.get_normal_candidates(db, requested_model, protocol, api_key_record)
         if not passthrough:
             return await normal_handler(
                 copy.deepcopy(request_data),
@@ -701,12 +727,30 @@ class ChannelPassthroughService:
         request: Request,
         db: Session,
         request_data: dict,
+        api_key_record: Optional[UserApiKey] = None,
     ) -> Optional[Response]:
         requested_model = str(request_data.get("model") or "")
-        passthrough = ChannelPassthroughService.get_candidates(db, requested_model, "anthropic")
+        original_model = (
+            ModelService.get_enabled_model_by_name(db, requested_model)
+            if hasattr(db, "query")
+            else None
+        )
+        # count_tokens has a local estimator fallback, but it must still honor a
+        # special key's series/group scope before returning that fallback.
+        if api_key_record is not None:
+            from app.services.model_group_routing_service import ModelGroupRoutingService, GROUP_MODE_SPECIAL
+            if original_model is None and str(getattr(api_key_record, "group_mode", "unified") or "unified").lower() == GROUP_MODE_SPECIAL:
+                raise ServiceException(403, "当前 API Key 不允许访问该模型系列", "API_KEY_MODEL_GROUP_MISMATCH")
+            if original_model is not None:
+                ModelGroupRoutingService.resolve_context(db, api_key_record, original_model)
+        passthrough = ChannelPassthroughService.get_candidates(
+            db, requested_model, "anthropic", api_key_record
+        )
         if not passthrough:
             return None
-        normal = ChannelPassthroughService.get_normal_candidates(db, requested_model, "anthropic")
+        normal = ChannelPassthroughService.get_normal_candidates(
+            db, requested_model, "anthropic", api_key_record
+        )
         candidates = ChannelPassthroughService.merge_candidates(passthrough, normal)
         raw_body = await request.body()
         raw_headers = list(request.scope.get("headers") or [])
@@ -793,8 +837,8 @@ class ChannelPassthroughService:
         if not requested_model:
             return False, first_message, None
 
-        passthrough = ChannelPassthroughService.get_candidates(db, requested_model, "responses")
-        normal = ChannelPassthroughService.get_normal_candidates(db, requested_model, "responses")
+        passthrough = ChannelPassthroughService.get_candidates(db, requested_model, "responses", api_key_record)
+        normal = ChannelPassthroughService.get_normal_candidates(db, requested_model, "responses", api_key_record)
         normal_ids = [int(item.channel.id) for item in normal]
         if not passthrough:
             return False, first_message, normal_ids
@@ -903,7 +947,7 @@ class ChannelPassthroughService:
             lease = None
             if not is_prewarm:
                 admission, billing_context = ChannelPassthroughService._build_billing(
-                    db, user, model, "responses", payload, model_name
+                    db, user, model, "responses", payload, model_name, api_key_record
                 )
                 lease = BillingConcurrencyService.acquire_if_needed(
                     admission, request_id,
@@ -1006,7 +1050,9 @@ class ChannelPassthroughService:
                             ChannelPassthroughService._extract_websocket_model(parsed)
                             or last_model_name
                         )
-                        matching = ChannelPassthroughService.get_candidates(db, next_model_name, "responses")
+                        matching = ChannelPassthroughService.get_candidates(
+                            db, next_model_name, "responses", api_key_record
+                        )
                         next_candidate = next(
                             (item for item in matching if int(item.channel.id) == int(channel.id)),
                             None,

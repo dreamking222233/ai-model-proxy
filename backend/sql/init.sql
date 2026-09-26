@@ -64,6 +64,9 @@ CREATE TABLE `user_api_key` (
     `key_hash` VARCHAR(64) NOT NULL COMMENT 'SHA256哈希',
     `key_full` VARCHAR(128) DEFAULT NULL COMMENT '完整API Key明文',
     `status` ENUM('active', 'disabled', 'expired') NOT NULL DEFAULT 'active',
+    `group_mode` VARCHAR(16) DEFAULT 'unified',
+    `group_model_series` VARCHAR(32) DEFAULT NULL,
+    `group_id` BIGINT UNSIGNED DEFAULT NULL,
     `expires_at` DATETIME DEFAULT NULL,
     `total_requests` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `total_tokens` BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -366,6 +369,9 @@ CREATE TABLE `video_task_billing_snapshot` (
     `request_id` VARCHAR(36) DEFAULT NULL COMMENT '创建请求ID',
     `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
     `channel_id` BIGINT UNSIGNED NOT NULL COMMENT '渠道ID',
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `requested_model` VARCHAR(128) DEFAULT NULL,
     `actual_model` VARCHAR(128) DEFAULT NULL,
     `billing_type` VARCHAR(20) DEFAULT 'image_credit',
@@ -373,6 +379,7 @@ CREATE TABLE `video_task_billing_snapshot` (
     `model_multiplier` DECIMAL(12, 3) DEFAULT 1,
     `video_size` VARCHAR(16) DEFAULT NULL,
     `video_seconds` INT DEFAULT 0,
+    `global_price_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `adjustment_price_multiplier_snapshot` DECIMAL(12, 6) DEFAULT 1,
     `price_adjustment_source_snapshot` VARCHAR(20) DEFAULT NULL,
     `price_adjustment_rule_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
@@ -389,18 +396,37 @@ CREATE TABLE `video_task_billing_snapshot` (
 -- ============================================================
 -- 5. model_channel_mapping - 模型-渠道映射表
 -- ============================================================
+CREATE TABLE `model_group` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `model_series` VARCHAR(32) NOT NULL,
+    `code` VARCHAR(64) NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `multiplier` DECIMAL(12,6) NOT NULL DEFAULT 1,
+    `enabled` TINYINT NOT NULL DEFAULT 1,
+    `is_default` TINYINT NOT NULL DEFAULT 0,
+    `sort_order` INT NOT NULL DEFAULT 100,
+    `description` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_model_group_series_code` (`model_series`, `code`),
+    KEY `idx_model_group_series_enabled` (`model_series`, `enabled`, `is_default`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型系列渠道分组';
+
 CREATE TABLE `model_channel_mapping` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `unified_model_id` BIGINT UNSIGNED NOT NULL,
+    `group_id` BIGINT UNSIGNED NOT NULL,
     `channel_id` BIGINT UNSIGNED NOT NULL,
     `actual_model_name` VARCHAR(128) NOT NULL COMMENT '该渠道中的实际模型名称',
     `default_reasoning_effort` VARCHAR(16) DEFAULT NULL COMMENT '默认推理强度: minimal/low/medium/high/xhigh',
     `enabled` TINYINT NOT NULL DEFAULT 1,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_model_channel` (`unified_model_id`, `channel_id`),
+    UNIQUE KEY `uk_model_channel_group` (`unified_model_id`, `group_id`, `channel_id`),
     KEY `idx_channel_id` (`channel_id`),
-    KEY `idx_enabled` (`enabled`)
+    KEY `idx_enabled` (`enabled`),
+    KEY `idx_model_mapping_group` (`group_id`, `enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型-渠道映射表';
 
 -- ============================================================
@@ -467,6 +493,9 @@ CREATE TABLE `request_log` (
     `user_api_key_id` BIGINT UNSIGNED DEFAULT NULL,
     `channel_id` BIGINT UNSIGNED DEFAULT NULL,
     `channel_name` VARCHAR(128) DEFAULT NULL,
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `requested_model` VARCHAR(128) DEFAULT NULL COMMENT '用户请求的模型名',
     `actual_model` VARCHAR(128) DEFAULT NULL COMMENT '实际发送的模型名',
     `protocol_type` ENUM('openai', 'anthropic', 'google') DEFAULT NULL,
@@ -749,6 +778,9 @@ CREATE TABLE `consumption_record` (
     `user_id` BIGINT UNSIGNED NOT NULL,
     `request_id` VARCHAR(36) DEFAULT NULL,
     `model_name` VARCHAR(128) DEFAULT NULL,
+    `group_id_snapshot` BIGINT UNSIGNED DEFAULT NULL,
+    `group_name_snapshot` VARCHAR(128) DEFAULT NULL,
+    `group_multiplier_snapshot` DECIMAL(12,6) DEFAULT 1,
     `input_tokens` INT DEFAULT 0,
     `output_tokens` INT DEFAULT 0,
     `total_tokens` INT DEFAULT 0,
@@ -1272,6 +1304,16 @@ SELECT um.id, '4K', 1, 6.000, 0, 30
 FROM `unified_model` um
 WHERE um.`model_name` = 'gemini-3-pro-image-preview';
 
+-- Every seeded mapping belongs to the stable default group. Administrators can
+-- add additional groups and remap channels after initialization.
+INSERT INTO `model_group` (`model_series`, `code`, `name`, `multiplier`, `enabled`, `is_default`, `sort_order`)
+SELECT DISTINCT um.`model_series`, 'default', CONCAT(UCASE(LEFT(um.`model_series`, 1)), SUBSTRING(um.`model_series`, 2), ' 默认'), 1, 1, 1, 0
+FROM `unified_model` um
+WHERE NOT EXISTS (
+    SELECT 1 FROM `model_group` mg
+    WHERE mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
+);
+
 -- 可选：Google Gemini 官方渠道与模型映射
 -- 将 @google_api_key 从 NULL 改成真实密钥后再执行 init.sql，可自动创建渠道与映射。
 SET @google_api_key = NULL;
@@ -1288,22 +1330,25 @@ SELECT
 FROM DUAL
 WHERE @google_api_key IS NOT NULL;
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gemini-2.5-flash-image', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gemini-2.5-flash-image', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-2.5-flash-image';
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gemini-3.1-flash-image-preview', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-3.1-flash-image-preview';
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gemini-3-pro-image-preview', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gemini-3-pro-image-preview', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @google_channel_name AND ch.`base_url` = @google_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @google_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-preview';
 
 SET @google_api_key = NULL;
@@ -1326,22 +1371,25 @@ SELECT
 FROM DUAL
 WHERE @vertex_api_key IS NOT NULL;
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'imagen-3.0-fast-generate-001|imagen-3.0-generate-001|imagen-3.0-generate-002', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'imagen-3.0-fast-generate-001|imagen-3.0-generate-001|imagen-3.0-generate-002', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-2.5-flash-image';
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gemini-3.1-flash-image-preview', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gemini-3.1-flash-image-preview', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-3.1-flash-image-preview';
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gemini-3-pro-image-preview', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gemini-3-pro-image-preview', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @vertex_channel_name AND ch.`base_url` = @vertex_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @vertex_api_key IS NOT NULL AND um.`model_name` = 'gemini-3-pro-image-preview';
 
 SET @vertex_api_key = NULL;
@@ -1364,10 +1412,11 @@ SELECT
 FROM DUAL
 WHERE @chatgpt_image_api_key IS NOT NULL;
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, 'gpt-image-2', 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, 'gpt-image-2', 1
 FROM `unified_model` um
 JOIN `channel` ch ON ch.`name` = @chatgpt_image_channel_name AND ch.`base_url` = @chatgpt_image_base_url
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @chatgpt_image_api_key IS NOT NULL AND um.`model_name` = 'gpt-image-2';
 
 SET @chatgpt_image_api_key = NULL;
@@ -1409,8 +1458,8 @@ WHERE @grok_api_key IS NOT NULL
     WHERE `name` = @grok_anthropic_channel_name AND `base_url` = @grok_base_url
   );
 
-INSERT INTO `model_channel_mapping` (`unified_model_id`, `channel_id`, `actual_model_name`, `enabled`)
-SELECT um.id, ch.id, grok.model_name, 1
+INSERT INTO `model_channel_mapping` (`unified_model_id`, `group_id`, `channel_id`, `actual_model_name`, `enabled`)
+SELECT um.id, mg.id, ch.id, grok.model_name, 1
 FROM (
     SELECT 'grok-4.20-0309-non-reasoning' AS model_name
     UNION ALL SELECT 'grok-4.20-0309'
@@ -1423,6 +1472,7 @@ JOIN `unified_model` um ON um.`model_name` = grok.`model_name`
 JOIN `channel` ch
   ON ch.`base_url` = @grok_base_url
  AND ch.`name` IN (@grok_openai_channel_name, @grok_anthropic_channel_name)
+JOIN `model_group` mg ON mg.`model_series` = um.`model_series` AND mg.`code` = 'default'
 WHERE @grok_api_key IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM `model_channel_mapping` m

@@ -126,6 +126,21 @@ export function createApiKey(data) {
   })
 }
 
+export function getApiKeyGroupOptions() {
+  return request({
+    url: '/api/user/api-keys/options',
+    method: 'get'
+  })
+}
+
+export function updateApiKeyGroupBinding(id, data) {
+  return request({
+    url: `/api/user/api-keys/${id}/group-binding`,
+    method: 'put',
+    data
+  })
+}
+
 export function deleteApiKey(id) {
   return request({
     url: `/api/user/api-keys/${id}`,

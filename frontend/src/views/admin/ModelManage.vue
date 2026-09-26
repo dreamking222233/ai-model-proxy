@@ -299,6 +299,11 @@
                 </a-tag>
               </template>
 
+              <template slot="groupName" slot-scope="text, record">
+                <a-tag v-if="text || record.group_id" color="cyan">{{ text || `分组 #${record.group_id}` }}</a-tag>
+                <span v-else class="muted-text">未设置</span>
+              </template>
+
               <template slot="channelVariant" slot-scope="text, record">
                 <a-tag :color="getChannelVariantColor(record.channel_protocol_type, record.channel_provider_variant)">
                   {{ getChannelVariantLabel(record.channel_protocol_type, record.channel_provider_variant) }}
@@ -364,6 +369,7 @@
                     </a-tag>
                   </div>
                   <div class="mobile-tag-row">
+                    <a-tag color="cyan">{{ record.group_name || (record.group_id ? `分组 #${record.group_id}` : '未设置分组') }}</a-tag>
                     <a-tag :color="getChannelVariantColor(record.channel_protocol_type, record.channel_provider_variant)">
                       {{ getChannelVariantLabel(record.channel_protocol_type, record.channel_provider_variant) }}
                     </a-tag>
@@ -770,6 +776,24 @@
       :width="modalWidth(500)"
     >
       <a-form layout="vertical">
+        <a-form-item label="模型分组">
+          <a-select
+            v-model="mappingForm.group_id"
+            placeholder="选择模型分组"
+            show-search
+            allow-clear
+            :filter-option="filterGroupOption"
+          >
+            <a-select-option
+              v-for="group in groupOptions"
+              :key="group.id"
+              :value="group.id"
+            >
+              {{ group.name }} ({{ group.code }}) · x{{ formatPrice(group.multiplier) }}
+            </a-select-option>
+          </a-select>
+          <div class="mapping-hint">仅展示与当前模型系列匹配的启用分组。</div>
+        </a-form-item>
         <a-form-item label="渠道">
           <a-select
             v-model="mappingForm.channel_id"
@@ -875,6 +899,7 @@ import {
   listOverrideRules, createOverrideRule, updateOverrideRule, deleteOverrideRule
 } from '@/api/model'
 import { listChannels } from '@/api/channel'
+import { getModelGroupOptions } from '@/api/modelGroup'
 import { MODEL_SERIES_OPTIONS as SHARED_MODEL_SERIES_OPTIONS, inferModelSeries as inferSeriesFromName } from '@/constants/modelSeries'
 
 const IMAGE_RESOLUTION_RULE_PRESETS = {
@@ -992,6 +1017,7 @@ export default {
       mappingList: [],
       mappingColumns: [
         { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
+        { title: '分组', dataIndex: 'group_name', key: 'group_name', width: 130, scopedSlots: { customRender: 'groupName' } },
         { title: '渠道名称', dataIndex: 'channel_name', key: 'channel_name' },
         { title: '渠道类型', dataIndex: 'channel_provider_variant', key: 'channelVariant', width: 170, scopedSlots: { customRender: 'channelVariant' } },
         { title: '分辨率能力', dataIndex: 'supported_image_sizes', key: 'supportedImageSizes', width: 180, scopedSlots: { customRender: 'supportedImageSizes' } },
@@ -1004,6 +1030,7 @@ export default {
       mappingModalVisible: false,
       mappingModalLoading: false,
       mappingForm: {
+        group_id: undefined,
         channel_id: undefined,
         actual_model_name: '',
         default_reasoning_effort: undefined
@@ -1016,6 +1043,7 @@ export default {
         { label: 'xhigh', value: 'xhigh' }
       ],
       channelOptions: [],
+      groupOptions: [],
 
       // Override Rules
       ruleLoading: false,
@@ -1580,6 +1608,23 @@ export default {
         this.mappingLoading = false
       }
     },
+    async fetchGroupOptions(modelSeries) {
+      try {
+        const res = await getModelGroupOptions({ model_series: modelSeries })
+        const data = res.data || {}
+        if (Array.isArray(data)) {
+          this.groupOptions = data
+        } else if (Array.isArray(data.series) && modelSeries) {
+          const series = data.series.find(item => item.value === modelSeries)
+          this.groupOptions = series ? (series.groups || []) : []
+        } else {
+          this.groupOptions = data.groups || data.list || []
+        }
+      } catch (err) {
+        console.error('Failed to fetch model group options:', err)
+        this.groupOptions = []
+      }
+    },
     async fetchChannelOptions() {
       try {
         const res = await listChannels({ page: 1, page_size: 100 })
@@ -1595,13 +1640,19 @@ export default {
         return
       }
       this.mappingForm = {
+        group_id: undefined,
         channel_id: undefined,
         actual_model_name: '',
         default_reasoning_effort: undefined
       }
+      this.fetchGroupOptions(this.selectedModel.model_series)
       this.mappingModalVisible = true
     },
     async handleMappingModalOk() {
+      if (!this.mappingForm.group_id) {
+        this.$message.warning('请选择模型分组')
+        return
+      }
       if (!this.mappingForm.channel_id) {
         this.$message.warning('请选择渠道')
         return
@@ -1615,6 +1666,7 @@ export default {
       try {
         await createMapping({
           unified_model_id: this.selectedModel.id,
+          group_id: this.mappingForm.group_id,
           channel_id: this.mappingForm.channel_id,
           actual_model_name: this.mappingForm.actual_model_name,
           default_reasoning_effort: this.mappingForm.default_reasoning_effort || null
@@ -1638,6 +1690,9 @@ export default {
       }
     },
     filterChannelOption(input, option) {
+      return option.componentOptions.children[0].text.toLowerCase().includes(input.toLowerCase())
+    },
+    filterGroupOption(input, option) {
       return option.componentOptions.children[0].text.toLowerCase().includes(input.toLowerCase())
     },
     filterModelOption(input, option) {

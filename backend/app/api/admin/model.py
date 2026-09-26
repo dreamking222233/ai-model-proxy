@@ -15,6 +15,7 @@ from app.schemas.model import (
     UnifiedModelCreate, UnifiedModelUpdate,
     ModelCategoryCreate, ModelCategoryUpdate,
     ModelChannelMappingCreate,
+    ModelChannelMappingUpdate,
     ModelOverrideRuleCreate, ModelOverrideRuleUpdate,
 )
 from app.schemas.common import ResponseModel
@@ -142,6 +143,17 @@ def create_mapping(
 ):
     mapping = ModelService.create_mapping(db, data)
     return ResponseModel(data=mapping)
+
+
+@router.put("/mappings/{mapping_id}", response_model=ResponseModel)
+def update_mapping(
+    mapping_id: int,
+    data: ModelChannelMappingUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    mapping = ModelService.update_mapping(mapping_id=mapping_id, db=db, data=data.model_dump(exclude_unset=True))
+    return ResponseModel(data=mapping, message="模型渠道映射已保存")
 
 
 @router.delete("/mappings/{mapping_id}", response_model=ResponseModel)

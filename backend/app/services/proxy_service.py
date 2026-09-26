@@ -272,9 +272,34 @@ class ProxyService:
     _RESPONSES_REASONING_EFFORT_ALIASES = {"xhigh": "high"}
     _FAST_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _RESPONSES_FAST_PRICE_MULTIPLIER = Decimal("2")
+    # Group pricing is resolved by the routing layer.  Keep the billing
+    # service usable before a route has a group (legacy keys and non-token
+    # billing paths), where the neutral multiplier is always 1x.
+    _GROUP_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _LONG_CONTEXT_TOKEN_THRESHOLD = ModelService.LONG_CONTEXT_TOKEN_THRESHOLD_DEFAULT
     _LONG_CONTEXT_PRICE_MULTIPLIER_DEFAULT = Decimal("1")
     _LONG_CONTEXT_PRICE_MULTIPLIER = Decimal("2")
+
+    @staticmethod
+    def _resolve_group_billing_context(
+        db: Session,
+        api_key_record: Optional[UserApiKey],
+        unified_model: Optional[UnifiedModel],
+    ) -> dict[str, Any]:
+        """Return the request's frozen group identity for routing and billing."""
+        if unified_model is None:
+            return {}
+        from app.services.model_group_routing_service import ModelGroupRoutingService
+
+        context = ModelGroupRoutingService.resolve_context(db, api_key_record, unified_model)
+        return {
+            "group_id": context.group_id,
+            "group_name": context.group_name,
+            "group_multiplier": context.group_multiplier,
+            "group_id_snapshot": context.group_id,
+            "group_name_snapshot": context.group_name,
+            "group_multiplier_snapshot": context.group_multiplier,
+        }
 
     # ----- Model identity system prompt mapping -----
     _MODEL_VENDOR_MAP = [
@@ -1649,6 +1674,7 @@ class ProxyService:
     def _build_text_billing_context(
         protocol: str,
         request_data: Optional[dict[str, Any]] = None,
+        group_context: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         normalized_protocol = str(protocol or "").strip().lower()
         service_tier = None
@@ -1659,12 +1685,24 @@ class ProxyService:
             if service_tier == ProxyService._RESPONSES_FAST_SERVICE_TIER:
                 fast_price_multiplier = ProxyService._RESPONSES_FAST_PRICE_MULTIPLIER
 
-        return {
+        context = {
             "protocol": normalized_protocol,
             "service_tier": service_tier,
             "fast_price_multiplier": fast_price_multiplier,
             "fast_mode_enabled": fast_price_multiplier > ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT,
         }
+        if group_context:
+            for key in (
+                "group_id",
+                "group_name",
+                "group_multiplier",
+                "group_id_snapshot",
+                "group_name_snapshot",
+                "group_multiplier_snapshot",
+            ):
+                if key in group_context:
+                    context[key] = group_context[key]
+        return context
 
     @staticmethod
     def _build_frozen_text_billing_context(
@@ -1672,22 +1710,30 @@ class ProxyService:
         quota_precheck: Optional[dict[str, Any]],
     ) -> dict[str, Any]:
         context = dict(billing_context or {})
-        if not quota_precheck:
-            return context
-        for key in (
-            "global_price_multiplier_snapshot",
-            "adjustment_price_multiplier_snapshot",
-            "price_adjustment_source_snapshot",
-            "price_adjustment_rule_id_snapshot",
-            "fast_price_multiplier_snapshot",
-            "context_price_multiplier_snapshot",
-            "context_tokens_snapshot",
-            "context_token_threshold_snapshot",
-            "service_tier",
-        ):
-            if key in quota_precheck:
-                context[key] = quota_precheck.get(key)
-        context["price_adjustment_frozen"] = True
+        if quota_precheck:
+            for key in (
+                "global_price_multiplier_snapshot",
+                "adjustment_price_multiplier_snapshot",
+                "price_adjustment_source_snapshot",
+                "price_adjustment_rule_id_snapshot",
+                "group_id_snapshot",
+                "group_name_snapshot",
+                "group_multiplier_snapshot",
+                "fast_price_multiplier_snapshot",
+                "context_price_multiplier_snapshot",
+                "context_tokens_snapshot",
+                "context_token_threshold_snapshot",
+                "service_tier",
+            ):
+                if key in quota_precheck:
+                    context[key] = quota_precheck.get(key)
+            context["price_adjustment_frozen"] = True
+        # A route context may be absent for legacy requests. Materialize the
+        # group snapshot from either live or already-frozen keys so later
+        # billing code consumes one stable shape.
+        group_snapshot = ProxyService._get_group_billing_snapshot(context)
+        for key, value in group_snapshot.items():
+            context.setdefault(key, value)
         return context
 
     @staticmethod
@@ -1707,6 +1753,66 @@ class ProxyService:
         if multiplier <= 0:
             return ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT
         return multiplier
+
+    @staticmethod
+    def _get_group_price_multiplier_decimal(
+        billing_context: Optional[dict[str, Any]] = None,
+    ) -> Decimal:
+        """Return the frozen/request group multiplier, defaulting to 1x.
+
+        Routing supplies ``group_multiplier`` before precheck and the frozen
+        ``group_multiplier_snapshot`` afterwards.  Accepting both keys keeps
+        this helper independent from the routing implementation and preserves
+        compatibility for old API keys that have no group selection.
+        """
+        context = billing_context or {}
+        value = context.get("group_multiplier_snapshot")
+        if value is None or value == "":
+            value = context.get("group_multiplier")
+        if isinstance(value, Decimal):
+            multiplier = value
+        else:
+            try:
+                multiplier = Decimal(str(value)) if value not in (None, "") else ProxyService._GROUP_PRICE_MULTIPLIER_DEFAULT
+            except Exception:
+                multiplier = ProxyService._GROUP_PRICE_MULTIPLIER_DEFAULT
+        try:
+            if not multiplier.is_finite() or multiplier <= 0:
+                return ProxyService._GROUP_PRICE_MULTIPLIER_DEFAULT
+            return multiplier.quantize(Decimal("0.000001"))
+        except Exception:
+            return ProxyService._GROUP_PRICE_MULTIPLIER_DEFAULT
+
+    @staticmethod
+    def _build_token_price_multiplier(
+        base_price_multiplier: Decimal,
+        group_multiplier: Decimal,
+    ) -> Decimal:
+        """Combine the existing adjustment with a token-route group price."""
+        return (
+            Decimal(str(base_price_multiplier or 1))
+            * ProxyService._get_group_price_multiplier_decimal(
+                {"group_multiplier": group_multiplier}
+            )
+        )
+
+    @staticmethod
+    def _get_group_billing_snapshot(
+        billing_context: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Return stable group fields for request/consumption snapshots."""
+        context = billing_context or {}
+        group_id = context.get("group_id_snapshot")
+        if group_id is None:
+            group_id = context.get("group_id")
+        group_name = context.get("group_name_snapshot")
+        if group_name is None:
+            group_name = context.get("group_name")
+        return {
+            "group_id_snapshot": group_id,
+            "group_name_snapshot": group_name,
+            "group_multiplier_snapshot": ProxyService._get_group_price_multiplier_decimal(context),
+        }
 
     @staticmethod
     def _calculate_context_tokens(
@@ -2889,6 +2995,7 @@ class ProxyService:
         request_data: dict,
         unified_model: Optional[UnifiedModel] = None,
         user_id: Optional[int] = None,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> dict[str, Decimal]:
         if protocol == "anthropic":
             estimated_input_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
@@ -2921,9 +3028,32 @@ class ProxyService:
             global_price_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
             price_adjustment = PriceAdjustmentService.resolve_adjustment(db, unified_model, user_id=user_id)
             adjustment_price_multiplier = price_adjustment.multiplier
-            price_multiplier = global_price_multiplier * adjustment_price_multiplier
-            billing_context = ProxyService._build_text_billing_context(protocol, request_data)
+            # A user-specific or model-series rule replaces the legacy system
+            # multiplier. The system setting remains a compatibility fallback
+            # when no price-adjustment rule matches.
+            price_multiplier = (
+                adjustment_price_multiplier
+                if price_adjustment.source in {"user", "global"}
+                else global_price_multiplier
+            )
+            request_billing_context = ProxyService._build_text_billing_context(protocol, request_data)
+            # T4 supplies group fields through the optional context.  Keep the
+            # merge narrow so protocol-derived service tier/fast mode remains
+            # authoritative until the route context is frozen.
+            if billing_context:
+                for key in (
+                    "group_id",
+                    "group_name",
+                    "group_multiplier",
+                    "group_id_snapshot",
+                    "group_name_snapshot",
+                    "group_multiplier_snapshot",
+                ):
+                    if key in billing_context:
+                        request_billing_context[key] = billing_context[key]
+            billing_context = request_billing_context
             fast_price_multiplier = ProxyService._get_fast_price_multiplier_decimal(billing_context)
+            group_multiplier = ProxyService._get_group_price_multiplier_decimal(billing_context)
             effective_price_multiplier = ProxyService._build_effective_price_multiplier(
                 price_multiplier,
                 fast_price_multiplier,
@@ -2934,6 +3064,15 @@ class ProxyService:
                 context_price_multiplier,
             )
             billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
+            if billing_type == "token":
+                effective_price_multiplier = ProxyService._build_effective_price_multiplier(
+                    ProxyService._build_token_price_multiplier(
+                        price_multiplier,
+                        group_multiplier,
+                    ),
+                    fast_price_multiplier,
+                    context_price_multiplier,
+                )
             if billing_type == "request":
                 request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
                 request_context_price_multiplier = context_price_multiplier
@@ -2993,6 +3132,7 @@ class ProxyService:
             quota_precheck["price_adjustment_source_snapshot"] = price_adjustment.source
             quota_precheck["price_adjustment_rule_id_snapshot"] = price_adjustment.rule_id
             quota_precheck["fast_price_multiplier_snapshot"] = fast_price_multiplier
+            quota_precheck.update(ProxyService._get_group_billing_snapshot(billing_context))
             quota_precheck.setdefault("effective_price_multiplier_snapshot", effective_price_multiplier)
 
         return quota_precheck
@@ -5899,6 +6039,7 @@ class ProxyService:
                 user,
                 requested_model,
                 client_request,
+                api_key_record=api_key_record,
             )
             if _allowed_channel_ids is not None:
                 allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
@@ -6171,12 +6312,17 @@ class ProxyService:
                     user,
                     requested_model,
                     normalized_request,
+                    api_key_record=api_key_record,
                 )
                 if _allowed_channel_ids is not None:
                     allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
                     channels = [item for item in channels if int(item[0].id) in allowed_ids]
                     if not channels:
                         raise ServiceException(503, "当前候选渠道不可用", "NO_CHANNEL")
+                billing_context = ProxyService._build_frozen_text_billing_context(
+                    ProxyService._build_text_billing_context("responses", normalized_request),
+                    quota_precheck,
+                )
             except ServiceException as exc:
                 release_session_connection(db)
                 await websocket.send_text(json.dumps(
@@ -6189,6 +6335,11 @@ class ProxyService:
                 ))
                 return True
             release_session_connection(db)
+
+            request_billing_context = ProxyService._build_frozen_text_billing_context(
+                ProxyService._build_text_billing_context("responses", normalized_request),
+                quota_precheck,
+            )
 
             turn_completed = False
             last_error: Exception | None = None
@@ -6345,7 +6496,7 @@ class ProxyService:
                 db, user, api_key_record, request_id, requested_model,
                 client_ip, True, error_detail,
                 cache_info=last_cache_info,
-                billing_context=ProxyService._build_text_billing_context("responses", normalized_request),
+                billing_context=request_billing_context,
             )
             await websocket.send_text(json.dumps(
                 ProxyService._build_responses_error_payload(
@@ -6362,9 +6513,11 @@ class ProxyService:
         user: SysUser,
         requested_model: str,
         request_data: Optional[dict] = None,
+        api_key_record: Optional[UserApiKey] = None,
     ) -> tuple[UnifiedModel, list[tuple[Channel, str]], Optional[dict[str, Any]], BillingAdmissionDecision]:
         """Resolve a Responses request into a model plus channel candidates."""
         unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
         if (
             str(getattr(unified_model, "model_type", "") or "") == "image"
             or str(getattr(unified_model, "billing_type", "") or "") == "image_credit"
@@ -6386,6 +6539,7 @@ class ProxyService:
                 request_data,
                 unified_model,
                 user_id=ProxyService._safe_object_id(user),
+                billing_context=group_context,
             )
         admission_decision = ProxyService._assert_text_request_allowed(
             db,
@@ -6396,10 +6550,14 @@ class ProxyService:
         )
 
         channels = ProxyService._prioritize_channels_for_request(
-            ModelService.get_available_channels(db, unified_model.id),
+            ModelService.get_available_channels(
+                db, unified_model.id, group_id=group_context.get("group_id")
+            ),
             "responses",
         )
         if not channels:
+            if group_context.get("group_id") is not None:
+                raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         channels = ProxyService._filter_responses_text_channels(db, channels)
         if not channels:
@@ -7749,6 +7907,7 @@ class ProxyService:
         try:
             # 2. Resolve model (apply override rules)
             unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
+            group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
             if str(unified_model.model_type or "") == "video":
                 video_unified_model = unified_model
             else:
@@ -7786,9 +7945,10 @@ class ProxyService:
                     request_data,
                     unified_model,
                     user_id=ProxyService._safe_object_id(user),
+                    billing_context=group_context,
                 )
                 request_billing_context = ProxyService._build_frozen_text_billing_context(
-                    ProxyService._build_text_billing_context("openai", request_data),
+                    ProxyService._build_text_billing_context("openai", request_data, group_context),
                     quota_precheck,
                 )
 
@@ -7803,13 +7963,17 @@ class ProxyService:
 
                 # 3. Get available channels sorted by priority
                 channels = ProxyService._prioritize_channels_for_request(
-                    ModelService.get_available_channels(db, unified_model.id),
+                    ModelService.get_available_channels(
+                        db, unified_model.id, group_id=group_context.get("group_id")
+                    ),
                     "openai",
                 )
                 if _allowed_channel_ids is not None:
                     allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
                     channels = [item for item in channels if int(item[0].id) in allowed_ids]
                 if not channels:
+                    if group_context.get("group_id") is not None:
+                        raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
                     raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
             ProxyService._log_pre_request_failure(
@@ -8044,6 +8208,7 @@ class ProxyService:
         try:
             # 2. Resolve model
             unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
+            group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
             security_snapshot, security_report_token = ProxyService._maybe_create_security_snapshot(
                 db,
                 unified_model,
@@ -8080,9 +8245,10 @@ class ProxyService:
                 request_data,
                 unified_model,
                 user_id=ProxyService._safe_object_id(user),
+                billing_context=group_context,
             )
             request_billing_context = ProxyService._build_frozen_text_billing_context(
-                ProxyService._build_text_billing_context("anthropic", request_data),
+                ProxyService._build_text_billing_context("anthropic", request_data, group_context),
                 quota_precheck,
             )
 
@@ -8097,13 +8263,17 @@ class ProxyService:
 
             # 3. Get available channels
             channels = ProxyService._prioritize_channels_for_request(
-                ModelService.get_available_channels(db, unified_model.id),
+                ModelService.get_available_channels(
+                    db, unified_model.id, group_id=group_context.get("group_id")
+                ),
                 "anthropic",
             )
             if _allowed_channel_ids is not None:
                 allowed_ids = {int(channel_id) for channel_id in _allowed_channel_ids}
                 channels = [item for item in channels if int(item[0].id) in allowed_ids]
             if not channels:
+                if group_context.get("group_id") is not None:
+                    raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
                 raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
         except Exception as exc:
             ProxyService._log_pre_request_failure(
@@ -12152,7 +12322,14 @@ class ProxyService:
                 adjustment_price_multiplier = price_adjustment.multiplier
                 price_adjustment_source = price_adjustment.source
                 price_adjustment_rule_id = price_adjustment.rule_id
-            price_multiplier_decimal = global_price_multiplier * adjustment_price_multiplier
+            price_multiplier_decimal = (
+                adjustment_price_multiplier
+                if price_adjustment_source in {"user", "global"}
+                else global_price_multiplier
+            )
+            group_multiplier_decimal = ProxyService._get_group_price_multiplier_decimal(
+                billing_context
+            )
             service_tier = ProxyService._normalize_service_tier(billing_context.get("service_tier"))
             fast_price_multiplier_decimal = ProxyService._get_fast_price_multiplier_decimal(
                 billing_context
@@ -12174,6 +12351,16 @@ class ProxyService:
             cache_creation_price = Decimal(str(getattr(unified_model, "cache_creation_price_per_million", 0) or 0))
             request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
             billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
+            if billing_type == "token":
+                price_multiplier_decimal = ProxyService._build_token_price_multiplier(
+                    price_multiplier_decimal,
+                    group_multiplier_decimal,
+                )
+                effective_price_multiplier_decimal = ProxyService._build_effective_price_multiplier(
+                    price_multiplier_decimal,
+                    fast_price_multiplier_decimal,
+                    context_price_multiplier_decimal,
+                )
             if billing_type == "request":
                 input_cost_decimal = Decimal("0")
                 cache_read_cost_decimal = Decimal("0")
@@ -12417,12 +12604,14 @@ class ProxyService:
                 else ("subscription" if billing_mode in {"subscription", "mixed"} else "token")
             )
             logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
+            group_snapshot = ProxyService._get_group_billing_snapshot(billing_context)
             write_db.add(
                 ConsumptionRecord(
                     user_id=fresh_user.id,
                     agent_id=fresh_user.agent_id,
                     request_id=request_id,
                     model_name=requested_model,
+                    **group_snapshot,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
@@ -12483,6 +12672,7 @@ class ProxyService:
                         user_api_key_id=api_key_id,
                         channel_id=channel.id,
                         channel_name=channel.name,
+                        **group_snapshot,
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,
@@ -12604,6 +12794,7 @@ class ProxyService:
         request_type: str = "chat",
         billing_type: str = "token",
         actual_model: Optional[str] = None,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> bool:
         try:
             with session_scope() as write_db:
@@ -12611,6 +12802,7 @@ class ProxyService:
                     return True
                 user_id = ProxyService._safe_object_id(user)
                 api_key_id = ProxyService._safe_object_id(api_key_record)
+                group_snapshot = ProxyService._get_group_billing_snapshot(billing_context)
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
@@ -12619,6 +12811,7 @@ class ProxyService:
                         user_api_key_id=api_key_id,
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
+                        **group_snapshot,
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,
@@ -12790,7 +12983,12 @@ class ProxyService:
                 context_price_multiplier = Decimal(
                     str(context.get("context_price_multiplier_snapshot") or "1")
                 ).quantize(Decimal("0.000001"))
-                price_multiplier = global_price_multiplier * adjustment_price_multiplier
+                price_multiplier = (
+                    adjustment_price_multiplier
+                    if price_adjustment_source in {"user", "global"}
+                    else global_price_multiplier
+                )
+                group_snapshot = ProxyService._get_group_billing_snapshot(context)
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
@@ -12799,6 +12997,7 @@ class ProxyService:
                         user_api_key_id=api_key_id,
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
+                        **group_snapshot,
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,
@@ -12888,6 +13087,7 @@ class ProxyService:
                 request_type=request_type,
                 billing_type=billing_type,
                 actual_model=actual_model,
+                billing_context=billing_context,
             )
 
     @staticmethod
@@ -12987,9 +13187,13 @@ class ProxyService:
         model_multiplier: Optional[Decimal] = None,
         video_size: Optional[str] = None,
         video_seconds: Optional[int] = None,
+        global_price_multiplier: Optional[Decimal] = None,
         adjustment_multiplier: Optional[Decimal] = None,
         price_adjustment_source: Optional[str] = None,
         price_adjustment_rule_id: Optional[int] = None,
+        group_id_snapshot: Optional[int] = None,
+        group_name_snapshot: Optional[str] = None,
+        group_multiplier_snapshot: Optional[Decimal] = None,
         billed: bool = False,
     ) -> None:
         if not video_id:
@@ -13007,9 +13211,13 @@ class ProxyService:
             "model_multiplier": str(model_multiplier) if model_multiplier is not None else None,
             "video_size": video_size,
             "video_seconds": int(video_seconds) if video_seconds is not None else None,
+            "global_price_multiplier_snapshot": str(global_price_multiplier or "1"),
             "adjustment_multiplier": str(adjustment_multiplier) if adjustment_multiplier is not None else None,
             "price_adjustment_source": price_adjustment_source,
             "price_adjustment_rule_id": int(price_adjustment_rule_id) if price_adjustment_rule_id else None,
+            "group_id_snapshot": group_id_snapshot,
+            "group_name_snapshot": group_name_snapshot,
+            "group_multiplier_snapshot": str(group_multiplier_snapshot or "1"),
             "billed": bool(billed),
         }
         ProxyService._video_task_routes[str(video_id)] = route_payload
@@ -13026,6 +13234,24 @@ class ProxyService:
                 snapshot.request_id = request_id
                 snapshot.user_id = int(user_id)
                 snapshot.channel_id = int(channel_id)
+                # Media billing deliberately keeps the legacy multiplier. Use
+                # the already-written request snapshot when available.
+                media_group = route_payload
+                if media_group.get("group_id_snapshot") is None and request_id:
+                    prior_log = (
+                        write_db.query(RequestLog)
+                        .filter(RequestLog.request_id == request_id)
+                        .first()
+                    )
+                    if prior_log:
+                        media_group = {
+                            "group_id_snapshot": prior_log.group_id_snapshot,
+                            "group_name_snapshot": prior_log.group_name_snapshot,
+                            "group_multiplier_snapshot": prior_log.group_multiplier_snapshot,
+                        }
+                for field, value in ProxyService._get_group_billing_snapshot(media_group).items():
+                    if hasattr(snapshot, field):
+                        setattr(snapshot, field, value)
                 snapshot.requested_model = requested_model
                 snapshot.actual_model = actual_model
                 snapshot.billing_type = billing_type
@@ -13033,6 +13259,9 @@ class ProxyService:
                 snapshot.model_multiplier = Decimal(str(model_multiplier or "1")).quantize(Decimal("0.001"))
                 snapshot.video_size = video_size
                 snapshot.video_seconds = int(video_seconds) if video_seconds is not None else 0
+                snapshot.global_price_multiplier_snapshot = Decimal(
+                    str(global_price_multiplier or "1")
+                ).quantize(Decimal("0.000001"))
                 snapshot.adjustment_price_multiplier_snapshot = Decimal(
                     str(adjustment_multiplier or "1")
                 ).quantize(Decimal("0.000001"))
@@ -13069,11 +13298,15 @@ class ProxyService:
             "actual_model": snapshot.actual_model or "",
             "created_at": time.time(),
             "request_id": snapshot.request_id,
+            "group_id_snapshot": snapshot.group_id_snapshot,
+            "group_name_snapshot": snapshot.group_name_snapshot,
+            "group_multiplier_snapshot": str(snapshot.group_multiplier_snapshot or "1"),
             "billing_type": snapshot.billing_type,
             "charged_credits": str(snapshot.charged_credits or "0"),
             "model_multiplier": str(snapshot.model_multiplier or "1"),
             "video_size": snapshot.video_size,
             "video_seconds": int(snapshot.video_seconds or 0),
+            "global_price_multiplier_snapshot": str(snapshot.global_price_multiplier_snapshot or "1"),
             "adjustment_multiplier": str(snapshot.adjustment_price_multiplier_snapshot or "1"),
             "price_adjustment_source": snapshot.price_adjustment_source_snapshot or "default",
             "price_adjustment_rule_id": int(snapshot.price_adjustment_rule_id_snapshot) if snapshot.price_adjustment_rule_id_snapshot else None,
@@ -14045,7 +14278,9 @@ class ProxyService:
         response_time_ms: int,
         *,
         video_size: str,
+        group_context: Optional[dict[str, Any]] = None,
     ) -> None:
+        group_context = group_context or ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
         ProxyService._deduct_balance_and_log(
             db,
             user,
@@ -14061,6 +14296,7 @@ class ProxyService:
             is_stream=False,
             request_type="video_generation",
             actual_model=actual_model,
+            billing_context=group_context,
         )
         with session_scope() as write_db:
             request_log = (
@@ -14093,6 +14329,9 @@ class ProxyService:
         adjustment_multiplier: Optional[Decimal] = None,
         price_adjustment_source: Optional[str] = None,
         price_adjustment_rule_id: Optional[int] = None,
+        group_id_snapshot: Optional[int] = None,
+        group_name_snapshot: Optional[str] = None,
+        group_multiplier_snapshot: Optional[Decimal] = None,
     ) -> None:
         user_id = ProxyService._safe_object_id(user)
         api_key_id = ProxyService._safe_object_id(api_key_record)
@@ -14101,6 +14340,19 @@ class ProxyService:
             raise ServiceException(500, "视频计费失败：用户或渠道信息失效", "VIDEO_BILLING_FAILED")
 
         with session_scope() as write_db:
+            if group_id_snapshot is None:
+                try:
+                    target_model = write_db.query(UnifiedModel).filter(
+                        UnifiedModel.model_name == requested_model
+                    ).first()
+                    group_context = ProxyService._resolve_group_billing_context(
+                        write_db, api_key_record, target_model
+                    )
+                    group_id_snapshot = group_context.get("group_id")
+                    group_name_snapshot = group_context.get("group_name")
+                    group_multiplier_snapshot = group_context.get("group_multiplier")
+                except Exception:
+                    pass
             if billing_type == "image_credit":
                 ImageCreditService.deduct_for_request(
                     write_db,
@@ -14124,6 +14376,9 @@ class ProxyService:
                     user_api_key_id=api_key_id,
                     channel_id=channel_id,
                     channel_name=getattr(channel, "name", None),
+                    group_id_snapshot=group_id_snapshot,
+                    group_name_snapshot=group_name_snapshot,
+                    group_multiplier_snapshot=group_multiplier_snapshot or Decimal("1"),
                     requested_model=requested_model,
                     actual_model=ProxyService._public_actual_model_name(
                         requested_model,
@@ -14180,6 +14435,7 @@ class ProxyService:
         price_adjustment_rule_id: Optional[int] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None
         start_time = time.time()
         billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -14279,6 +14535,7 @@ class ProxyService:
                         client_ip,
                         response_time_ms,
                         video_size=size,
+                        group_context=group_context,
                     )
                 else:
                     ProxyService._log_video_success(
@@ -14299,6 +14556,9 @@ class ProxyService:
                         adjustment_multiplier=adjustment_multiplier,
                         price_adjustment_source=price_adjustment_source,
                         price_adjustment_rule_id=price_adjustment_rule_id,
+                        group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+                        group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+                        group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
                     )
             except ServiceException:
                 raise
@@ -14322,9 +14582,13 @@ class ProxyService:
             model_multiplier=model_multiplier,
             video_size=size,
             video_seconds=int(seconds),
+            global_price_multiplier=Decimal(str(get_system_config(db, "price_multiplier", 1.0))) if db is not None and hasattr(db, "query") else Decimal("1"),
             adjustment_multiplier=adjustment_multiplier,
             price_adjustment_source=price_adjustment_source,
             price_adjustment_rule_id=price_adjustment_rule_id,
+            group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+            group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+            group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
             billed=bill_on_create,
         )
         normalized_body.setdefault("request_id", request_id)
@@ -14362,6 +14626,7 @@ class ProxyService:
         price_adjustment_rule_id: Optional[int] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None
         start_time = time.time()
         billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -14439,6 +14704,7 @@ class ProxyService:
                         client_ip,
                         response_time_ms,
                         video_size=size,
+                        group_context=group_context,
                     )
                 else:
                     ProxyService._log_video_success(
@@ -14459,6 +14725,9 @@ class ProxyService:
                         adjustment_multiplier=adjustment_multiplier,
                         price_adjustment_source=price_adjustment_source,
                         price_adjustment_rule_id=price_adjustment_rule_id,
+                        group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+                        group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+                        group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
                     )
             except ServiceException:
                 raise
@@ -14481,9 +14750,13 @@ class ProxyService:
             model_multiplier=model_multiplier,
             video_size=size,
             video_seconds=int(seconds),
+            global_price_multiplier=Decimal(str(get_system_config(db, "price_multiplier", 1.0))) if db is not None and hasattr(db, "query") else Decimal("1"),
             adjustment_multiplier=adjustment_multiplier,
             price_adjustment_source=price_adjustment_source,
             price_adjustment_rule_id=price_adjustment_rule_id,
+            group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+            group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+            group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
             billed=bill_on_create,
         )
         normalized_body.setdefault("request_id", request_id)
@@ -14522,6 +14795,7 @@ class ProxyService:
         price_adjustment_rule_id: Optional[int] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None
         start_time = time.time()
         billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -14656,6 +14930,7 @@ class ProxyService:
                         client_ip,
                         response_time_ms,
                         video_size=size,
+                        group_context=group_context,
                     )
                 else:
                     ProxyService._log_video_success(
@@ -14676,6 +14951,9 @@ class ProxyService:
                         adjustment_multiplier=adjustment_multiplier,
                         price_adjustment_source=price_adjustment_source,
                         price_adjustment_rule_id=price_adjustment_rule_id,
+                        group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+                        group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+                        group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
                     )
             except ServiceException:
                 raise
@@ -14699,9 +14977,13 @@ class ProxyService:
             model_multiplier=model_multiplier,
             video_size=size,
             video_seconds=int(seconds),
+            global_price_multiplier=Decimal(str(get_system_config(db, "price_multiplier", 1.0))) if db is not None and hasattr(db, "query") else Decimal("1"),
             adjustment_multiplier=adjustment_multiplier,
             price_adjustment_source=price_adjustment_source,
             price_adjustment_rule_id=price_adjustment_rule_id,
+            group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+            group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+            group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
             billed=bill_on_create,
         )
         normalized_body.setdefault("request_id", request_id)
@@ -14739,6 +15021,7 @@ class ProxyService:
         price_adjustment_rule_id: Optional[int] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None
         start_time = time.time()
         billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -14859,6 +15142,7 @@ class ProxyService:
                         client_ip,
                         response_time_ms,
                         video_size=size,
+                        group_context=group_context,
                     )
                 else:
                     ProxyService._log_video_success(
@@ -14879,6 +15163,9 @@ class ProxyService:
                         adjustment_multiplier=adjustment_multiplier,
                         price_adjustment_source=price_adjustment_source,
                         price_adjustment_rule_id=price_adjustment_rule_id,
+                        group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+                        group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+                        group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
                     )
             except ServiceException:
                 raise
@@ -14902,9 +15189,13 @@ class ProxyService:
             model_multiplier=model_multiplier,
             video_size=size,
             video_seconds=int(seconds),
+            global_price_multiplier=Decimal(str(get_system_config(db, "price_multiplier", 1.0))) if db is not None and hasattr(db, "query") else Decimal("1"),
             adjustment_multiplier=adjustment_multiplier,
             price_adjustment_source=price_adjustment_source,
             price_adjustment_rule_id=price_adjustment_rule_id,
+            group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+            group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+            group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
             billed=bill_on_create,
         )
         normalized_body.setdefault("request_id", request_id)
@@ -14944,6 +15235,7 @@ class ProxyService:
         price_adjustment_rule_id: Optional[int] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None
         start_time = time.time()
         billing_type = str(request_data.get("_resolved_billing_type") or unified_model.billing_type or "image_credit")
         prompt = str(request_data.get("prompt", "") or "").strip()
@@ -15032,6 +15324,7 @@ class ProxyService:
                         client_ip,
                         response_time_ms,
                         video_size=size,
+                        group_context=group_context,
                     )
                 else:
                     ProxyService._log_video_success(
@@ -15052,6 +15345,9 @@ class ProxyService:
                         adjustment_multiplier=adjustment_multiplier,
                         price_adjustment_source=price_adjustment_source,
                         price_adjustment_rule_id=price_adjustment_rule_id,
+                        group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+                        group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+                        group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
                     )
             except ServiceException:
                 raise
@@ -15075,9 +15371,13 @@ class ProxyService:
             model_multiplier=model_multiplier,
             video_size=size,
             video_seconds=int(seconds),
+            global_price_multiplier=Decimal(str(get_system_config(db, "price_multiplier", 1.0))) if db is not None and hasattr(db, "query") else Decimal("1"),
             adjustment_multiplier=adjustment_multiplier,
             price_adjustment_source=price_adjustment_source,
             price_adjustment_rule_id=price_adjustment_rule_id,
+            group_id_snapshot=(group_context or {}).get("group_id_snapshot") or (group_context or {}).get("group_id"),
+            group_name_snapshot=(group_context or {}).get("group_name_snapshot") or (group_context or {}).get("group_name"),
+            group_multiplier_snapshot=Decimal(str((group_context or {}).get("group_multiplier_snapshot") or (group_context or {}).get("group_multiplier") or "1")),
             billed=bill_on_create,
         )
         response_body.setdefault("request_id", request_id)
@@ -15144,8 +15444,13 @@ class ProxyService:
 
         normalized_preset = ProxyService._normalize_video_preset(request_data.get("preset"))
 
-        channels = ModelService.get_available_channels(db, unified_model_id)
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
+        channels = ModelService.get_available_channels(
+            db, unified_model_id, group_id=group_context.get("group_id")
+        )
         if not channels:
+            if group_context.get("group_id") is not None:
+                raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
             raise ServiceException(503, "当前视频模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         last_error: Exception | None = None
@@ -15253,6 +15558,7 @@ class ProxyService:
                     "_normalized_video_preset": normalized_preset,
                     "_resolved_billing_type": billing_type,
                     "_grok_imagine_payload": grok_imagine_payload,
+                    "_group_context": group_context,
                 }
                 if ProxyService._is_grok_imagine_channel(channel):
                     return await ProxyService._run_with_billing_concurrency(
@@ -15424,6 +15730,7 @@ class ProxyService:
             image_credits_charged=0,
             image_count=0,
             image_size=ProxyService._video_size_for_failure_log(request_data.get("size")),
+            billing_context=group_context,
         )
         if request_error:
             raise request_error
@@ -15470,8 +15777,13 @@ class ProxyService:
                 "当前视频模型仅支持图片积分、按次或免费计费",
                 "VIDEO_MODEL_NOT_SUPPORTED",
             )
-        channels = ModelService.get_available_channels(db, unified_model_id)
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
+        channels = ModelService.get_available_channels(
+            db, unified_model_id, group_id=group_context.get("group_id")
+        )
         if not channels:
+            if group_context.get("group_id") is not None:
+                raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
             raise ServiceException(503, "当前视频模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
 
         request_data_copy = dict(request_data)
@@ -15529,6 +15841,7 @@ class ProxyService:
                     "preset": normalized_preset,
                 }
                 payload["_resolved_billing_type"] = billing_type
+                payload["_group_context"] = group_context
                 if request_data.get("stream", False):
                     return await ProxyService._run_with_billing_concurrency(
                         db,
@@ -15630,6 +15943,7 @@ class ProxyService:
             image_credits_charged=0,
             image_count=0,
             image_size=ProxyService._video_size_for_failure_log(video_config.get("size")),
+            billing_context=group_context,
         )
         if request_error:
             raise request_error
@@ -15656,12 +15970,15 @@ class ProxyService:
         adjustment_multiplier: Optional[Decimal] = None,
         price_adjustment_source: Optional[str] = None,
         price_adjustment_rule_id: Optional[int] = None,
+        group_context: Optional[dict[str, Any]] = None,
     ) -> JSONResponse:
         release_session_connection(db)
+        group_context = group_context or (request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None)
         start_time = time.time()
         url = ProxyService._resolve_openai_chat_completions_url(channel.base_url)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         payload = dict(request_data)
+        payload.pop("_group_context", None)
         payload["stream"] = False
         timeout = httpx.Timeout(_VIDEO_UPSTREAM_TIMEOUT, connect=_UPSTREAM_CONNECT_TIMEOUT)
         response = await ProxyService._post_with_retries(
@@ -15711,6 +16028,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 video_size=video_size,
+                group_context=group_context,
             )
         else:
             ProxyService._log_video_success(
@@ -15731,6 +16049,17 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_id_snapshot=(group_context or {}).get("group_id_snapshot")
+                or (group_context or {}).get("group_id"),
+                group_name_snapshot=(group_context or {}).get("group_name_snapshot")
+                or (group_context or {}).get("group_name"),
+                group_multiplier_snapshot=Decimal(
+                    str(
+                        (group_context or {}).get("group_multiplier_snapshot")
+                        or (group_context or {}).get("group_multiplier")
+                        or "1"
+                    )
+                ),
             )
         response_body.setdefault("request_id", request_id)
         response_body["usage"] = {
@@ -15768,12 +16097,15 @@ class ProxyService:
         adjustment_multiplier: Optional[Decimal] = None,
         price_adjustment_source: Optional[str] = None,
         price_adjustment_rule_id: Optional[int] = None,
+        group_context: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         release_session_connection(db)
+        group_context = group_context or (request_data.get("_group_context") if isinstance(request_data.get("_group_context"), dict) else None)
         start_time = time.time()
         url = ProxyService._resolve_openai_chat_completions_url(channel.base_url)
         headers = ProxyService._build_headers(channel, "openai", request_headers=request_headers)
         payload = dict(request_data)
+        payload.pop("_group_context", None)
         payload["stream"] = True
         collected_text_parts: list[str] = []
 
@@ -15851,6 +16183,7 @@ class ProxyService:
                                 client_ip,
                                 response_time_ms,
                                 video_size=video_size,
+                                group_context=group_context,
                             )
                         else:
                             ProxyService._log_video_success(
@@ -15871,6 +16204,17 @@ class ProxyService:
                                 adjustment_multiplier=adjustment_multiplier,
                                 price_adjustment_source=price_adjustment_source,
                                 price_adjustment_rule_id=price_adjustment_rule_id,
+                                group_id_snapshot=(group_context or {}).get("group_id_snapshot")
+                                or (group_context or {}).get("group_id"),
+                                group_name_snapshot=(group_context or {}).get("group_name_snapshot")
+                                or (group_context or {}).get("group_name"),
+                                group_multiplier_snapshot=Decimal(
+                                    str(
+                                        (group_context or {}).get("group_multiplier_snapshot")
+                                        or (group_context or {}).get("group_multiplier")
+                                        or "1"
+                                    )
+                                ),
                             )
                     except ServiceException as exc:
                         ProxyService._log_failed_request(
@@ -15890,6 +16234,7 @@ class ProxyService:
                             image_credits_charged=0,
                             image_count=0,
                             image_size=video_size,
+                            billing_context=group_context,
                         )
                         error_payload = json.dumps({
                             "error": {
@@ -15958,6 +16303,7 @@ class ProxyService:
                             image_credits_charged=0,
                             image_count=0,
                             image_size=video_size,
+                            billing_context=group_context,
                         )
                 except Exception as accounting_err:
                     logger.error("Post-video-stream accounting error: %s", accounting_err)
@@ -16371,9 +16717,13 @@ class ProxyService:
             charged_credits=Decimal(str(request_log.image_credits_charged or "0")),
             model_multiplier=Decimal(str(getattr(request_log, "price_multiplier_snapshot", 1) or "1")),
             video_size=request_log.image_size,
+            global_price_multiplier=Decimal(str(getattr(request_log, "global_price_multiplier_snapshot", 1) or "1")),
             adjustment_multiplier=Decimal(str(getattr(request_log, "adjustment_price_multiplier_snapshot", 1) or "1")),
             price_adjustment_source=getattr(request_log, "price_adjustment_source_snapshot", None),
             price_adjustment_rule_id=getattr(request_log, "price_adjustment_rule_id_snapshot", None),
+            group_id_snapshot=getattr(request_log, "group_id_snapshot", None),
+            group_name_snapshot=getattr(request_log, "group_name_snapshot", None),
+            group_multiplier_snapshot=Decimal(str(getattr(request_log, "group_multiplier_snapshot", 1) or "1")),
             billed=True,
         )
         return channel, request_log.requested_model or "", request_log.actual_model or ""
@@ -16458,6 +16808,17 @@ class ProxyService:
                 requested_model,
                 error_code="VIDEO_MODEL_NOT_FOUND",
             )
+            frozen_request_context = dict(route_info)
+            if adjustment_multiplier is not None:
+                frozen_request_context["adjustment_price_multiplier_snapshot"] = adjustment_multiplier
+                frozen_request_context["price_adjustment_source_snapshot"] = price_adjustment_source or "default"
+                frozen_request_context["price_adjustment_rule_id_snapshot"] = price_adjustment_rule_id
+            # system_config.price_multiplier is required to remain 1 for this
+            # deployment; persist the value used by the completion fallback.
+            frozen_request_context.setdefault(
+                "global_price_multiplier_snapshot",
+                Decimal(str(get_system_config(db, "price_multiplier", 1.0))),
+            )
             ProxyService._log_video_request_success(
                 db,
                 user,
@@ -16471,6 +16832,7 @@ class ProxyService:
                 client_ip,
                 response_time_ms,
                 video_size=video_size,
+                group_context=frozen_request_context,
             )
         else:
             ProxyService._log_video_success(
@@ -16491,6 +16853,9 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_id_snapshot=route_info.get("group_id_snapshot") or route_info.get("group_id"),
+                group_name_snapshot=route_info.get("group_name_snapshot") or route_info.get("group_name"),
+                group_multiplier_snapshot=Decimal(str(route_info.get("group_multiplier_snapshot") or route_info.get("group_multiplier") or "1")),
             )
         route_info["billed"] = True
         ProxyService._mark_video_task_snapshot_billed(video_id)
@@ -18198,6 +18563,7 @@ class ProxyService:
         adjustment_multiplier: Optional[Decimal] = None,
         price_adjustment_source: Optional[str] = None,
         price_adjustment_rule_id: Optional[int] = None,
+        group_context: Optional[dict[str, Any]] = None,
     ) -> None:
         request_type_label = "Image edit" if request_type == "image_edit" else "Image generation"
         user_id = ProxyService._safe_object_id(user)
@@ -18218,6 +18584,17 @@ class ProxyService:
             protocol_type = getattr(channel, "protocol_type", None)
 
         with session_scope() as write_db:
+            group_snapshot = {}
+            try:
+                if not group_context:
+                    group_context = ProxyService._resolve_group_billing_context(
+                        write_db, api_key_record, unified_model
+                    )
+                group_snapshot = ProxyService._get_group_billing_snapshot(group_context)
+            except Exception:
+                # Media billing keeps its legacy pricing path; logging the route is
+                # best-effort so a concurrent group change cannot block a paid result.
+                logger.warning("Failed to resolve image request group snapshot", exc_info=True)
             ImageCreditService.deduct_for_request(
                 write_db,
                 user_id=user_id,
@@ -18240,6 +18617,7 @@ class ProxyService:
                     user_api_key_id=api_key_id,
                     channel_id=channel_id,
                     channel_name=channel_name,
+                    **group_snapshot,
                     requested_model=requested_model,
                     actual_model=ProxyService._public_actual_model_name(
                         requested_model,
@@ -18358,6 +18736,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -18511,6 +18890,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -18692,6 +19072,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -18780,6 +19161,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -18914,6 +19296,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -19024,6 +19407,7 @@ class ProxyService:
                 adjustment_multiplier=adjustment_multiplier,
                 price_adjustment_source=price_adjustment_source,
                 price_adjustment_rule_id=price_adjustment_rule_id,
+                group_context=request_data.get("_group_context") if isinstance(request_data, dict) else None,
             )
         except ServiceException:
             raise
@@ -19364,7 +19748,10 @@ class ProxyService:
         )
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
+        channels = ModelService.get_available_channels(
+            db, unified_model.id, group_id=group_context.get("group_id")
+        )
         channels = ProxyService._filter_channels_by_image_size(
             channels,
             unified_model,
@@ -19372,6 +19759,8 @@ class ProxyService:
         )
         channels = ProxyService._prefer_openai_compatible_for_1k_image(channels, image_size)
         if not channels:
+            if group_context.get("group_id") is not None:
+                raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
             if image_size:
                 raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
@@ -19404,7 +19793,7 @@ class ProxyService:
                     api_key_record,
                     channel,
                     unified_model,
-                    request_data,
+                    {**request_data, "_group_context": group_context},
                     request_id,
                     requested_model,
                     upstream_model_name,
@@ -19490,6 +19879,7 @@ class ProxyService:
             image_credits_charged=0,
             image_count=0,
             image_size=image_size,
+            billing_context=group_context,
         )
         if request_error:
             raise request_error
@@ -19584,7 +19974,10 @@ class ProxyService:
         )
         ImageCreditService.check_balance(db, user.id, image_credit_cost)
 
-        channels = ModelService.get_available_channels(db, unified_model.id)
+        group_context = ProxyService._resolve_group_billing_context(db, api_key_record, unified_model)
+        channels = ModelService.get_available_channels(
+            db, unified_model.id, group_id=group_context.get("group_id")
+        )
         channels = ProxyService._filter_channels_by_image_size(
             channels,
             unified_model,
@@ -19592,6 +19985,8 @@ class ProxyService:
         )
         channels = ProxyService._prefer_openai_compatible_for_1k_image(channels, image_size)
         if not channels:
+            if group_context.get("group_id") is not None:
+                raise ServiceException(503, "当前分组暂无可用渠道，请先切换其他分组", "MODEL_GROUP_NO_AVAILABLE_CHANNEL")
             if image_size:
                 raise ServiceException(503, f"当前模型暂无支持 {image_size} 分辨率的可用渠道，请稍后重试", "NO_CHANNEL")
             raise ServiceException(503, "当前模型暂无可用渠道，请稍后重试", "NO_CHANNEL")
@@ -19620,7 +20015,7 @@ class ProxyService:
                     api_key_record,
                     channel,
                     unified_model,
-                    request_data,
+                    {**request_data, "_group_context": group_context},
                     request_id,
                     requested_model,
                     upstream_model_name,
@@ -19704,6 +20099,7 @@ class ProxyService:
             image_credits_charged=0,
             image_count=0,
             image_size=image_size,
+            billing_context=group_context,
         )
         if request_error:
             raise request_error

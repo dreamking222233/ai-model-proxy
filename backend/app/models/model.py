@@ -23,6 +23,27 @@ class ModelCategory(Base):
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class ModelGroup(Base):
+    """Admin-managed routing group scoped to a model series."""
+
+    __tablename__ = "model_group"
+    __table_args__ = (
+        UniqueConstraint("model_series", "code", name="uk_model_group_series_code"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    model_series = Column(String(32), nullable=False, index=True)
+    code = Column(String(64), nullable=False)
+    name = Column(String(128), nullable=False)
+    multiplier = Column(DECIMAL(12, 6), nullable=False, default=1)
+    enabled = Column(SmallInteger, nullable=False, default=1)
+    is_default = Column(SmallInteger, nullable=False, default=0)
+    sort_order = Column(Integer, nullable=False, default=100)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
 class UnifiedModel(Base):
     """Unified model definition."""
 
@@ -58,9 +79,16 @@ class ModelChannelMapping(Base):
     """Model-to-channel mapping."""
 
     __tablename__ = "model_channel_mapping"
+    __table_args__ = (
+        UniqueConstraint(
+            "unified_model_id", "group_id", "channel_id",
+            name="uk_model_channel_group",
+        ),
+    )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     unified_model_id = Column(BigInteger, nullable=False)
+    group_id = Column(BigInteger, nullable=False, index=True)
     channel_id = Column(BigInteger, nullable=False, index=True)
     actual_model_name = Column(String(128), nullable=False, comment="Actual model name in this channel")
     default_reasoning_effort = Column(String(16), nullable=True, comment="Default reasoning effort for mapped GPT upstreams")

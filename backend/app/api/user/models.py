@@ -13,6 +13,8 @@ from app.models.channel import Channel
 from app.schemas.common import ResponseModel
 from app.services.model_service import ModelService
 from app.services.agent_service import AgentService
+from app.services.model_group_routing_service import ModelGroupRoutingService
+from app.core.exceptions import ServiceException
 
 router = APIRouter(prefix="/api/user", tags=["用户-模型列表"])
 
@@ -46,14 +48,24 @@ def list_available_models(
 
     result = []
     for m in models:
-        channel_count = (
+        try:
+            default_group_context = ModelGroupRoutingService.resolve_context(db, None, m)
+        except ServiceException:
+            # A configured series without an enabled default group is not
+            # available to the legacy/embedded chat flow.
+            continue
+        mapping_query = (
             db.query(ModelChannelMapping)
             .filter(
                 ModelChannelMapping.unified_model_id == m.id,
                 ModelChannelMapping.enabled == 1,
             )
-            .count()
         )
+        if default_group_context.group_id is not None:
+            mapping_query = mapping_query.filter(
+                ModelChannelMapping.group_id == default_group_context.group_id
+            )
+        channel_count = mapping_query.count()
         result.append({
             "id": m.id,
             "model_name": m.model_name,
@@ -113,7 +125,11 @@ def list_chat_models(
 
     result = []
     for m in models:
-        mapping_rows = (
+        try:
+            default_group_context = ModelGroupRoutingService.resolve_context(db, None, m)
+        except ServiceException:
+            continue
+        mapping_query = (
             db.query(ModelChannelMapping, Channel)
             .join(Channel, ModelChannelMapping.channel_id == Channel.id)
             .filter(
@@ -121,9 +137,12 @@ def list_chat_models(
                 ModelChannelMapping.enabled == 1,
                 Channel.enabled == 1,
             )
-            .order_by(Channel.priority.asc(), Channel.id.asc())
-            .all()
         )
+        if default_group_context.group_id is not None:
+            mapping_query = mapping_query.filter(
+                ModelChannelMapping.group_id == default_group_context.group_id
+            )
+        mapping_rows = mapping_query.order_by(Channel.priority.asc(), Channel.id.asc()).all()
         if not mapping_rows:
             continue
 

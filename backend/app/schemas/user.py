@@ -3,8 +3,22 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    group_mode: Literal["unified", "special"] = "unified"
+    group_model_series: Optional[str] = Field(None, max_length=32)
+    group_id: Optional[int] = Field(None, gt=0)
+
+
+class ApiKeyGroupBindingUpdate(BaseModel):
+    group_mode: Literal["unified", "special"] = "unified"
+    group_model_series: Optional[str] = Field(None, max_length=32)
+    group_id: Optional[int] = Field(None, gt=0)
 
 
 # ---------------------------------------------------------------------------

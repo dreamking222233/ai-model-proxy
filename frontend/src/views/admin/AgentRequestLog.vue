@@ -316,6 +316,13 @@
               <span class="detail-item-label">渠道</span>
               <span class="detail-item-value">{{ selectedRecord.channel_name || '-' }}</span>
             </div>
+            <div class="detail-item">
+              <span class="detail-item-label">请求分组</span>
+              <span class="detail-item-value">
+                {{ selectedRecord.group_name_snapshot || selectedRecord.group_name || '-' }}
+                <span v-if="selectedRecord.group_multiplier_snapshot != null" class="detail-item-subtext">倍率 x{{ formatMultiplier(selectedRecord.group_multiplier_snapshot) }}</span>
+              </span>
+            </div>
             <div class="detail-item" v-if="selectedRecord.quota_metric">
               <span class="detail-item-label">套餐额度结算</span>
               <span class="detail-item-value">
@@ -496,6 +503,7 @@ export default {
         { title: '代理', dataIndex: 'agent_id', key: 'agent', width: 120, scopedSlots: { customRender: 'agent' } },
         { title: '用户', dataIndex: 'username', key: 'username', width: 130, scopedSlots: { customRender: 'username' } },
         { title: '请求模型', dataIndex: 'requested_model', key: 'requested_model', width: 150, ellipsis: true, scopedSlots: { customRender: 'requested_model' } },
+        { title: '分组', dataIndex: 'group_name_snapshot', key: 'group_name_snapshot', width: 130, ellipsis: true, customRender: (text, record) => text || record.group_name || '-' },
         { title: '用量', key: 'tokens', width: 290, scopedSlots: { customRender: 'tokens' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 90, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '详情', key: 'detailAction', width: 100, align: 'center', scopedSlots: { customRender: 'detailAction' } },

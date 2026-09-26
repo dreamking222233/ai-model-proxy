@@ -77,11 +77,11 @@ async def list_models_v1(
     """OpenAI-compatible model listing endpoint with /v1 prefix"""
     user, api_key_record = await verify_api_key(request, db)
 
-    from app.models.model import UnifiedModel
-    models = db.query(UnifiedModel).filter(UnifiedModel.enabled == 1).all()
+    from app.services.model_group_routing_service import ModelGroupRoutingService
+    models = ModelGroupRoutingService.list_available_models(db, api_key_record)
 
     model_list = []
-    for m in models:
+    for m, _context in models:
         model_list.append({
             "id": m.model_name,
             "object": "model",
@@ -103,11 +103,11 @@ async def list_models_root(
     """OpenAI-compatible model listing endpoint without /v1 prefix"""
     user, api_key_record = await verify_api_key(request, db)
 
-    from app.models.model import UnifiedModel
-    models = db.query(UnifiedModel).filter(UnifiedModel.enabled == 1).all()
+    from app.services.model_group_routing_service import ModelGroupRoutingService
+    models = ModelGroupRoutingService.list_available_models(db, api_key_record)
 
     model_list = []
-    for m in models:
+    for m, _context in models:
         model_list.append({
             "id": m.model_name,
             "object": "model",

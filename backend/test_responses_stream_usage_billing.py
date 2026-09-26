@@ -7,6 +7,31 @@ from app.services.proxy_service import ProxyService
 
 
 class ResponsesStreamUsageBillingTest(unittest.IsolatedAsyncioTestCase):
+    def test_openai_usage_reconciles_hidden_reasoning_with_total(self):
+        summary = ProxyService._extract_openai_prompt_cache_summary(
+            {
+                "prompt_tokens": 41448,
+                "completion_tokens": 232,
+                "total_tokens": 43179,
+                "prompt_tokens_details": {"cached_tokens": 32512},
+            },
+        )
+        self.assertEqual(summary["input_tokens"], 8936)
+        self.assertEqual(summary["output_tokens"], 1731)
+        self.assertEqual(summary["logical_input_tokens"], 41448)
+        self.assertEqual(summary["cache_read_input_tokens"], 32512)
+
+    def test_openai_usage_does_not_double_count_standard_total(self):
+        summary = ProxyService._extract_openai_prompt_cache_summary(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 40,
+                "total_tokens": 140,
+                "completion_tokens_details": {"reasoning_tokens": 15},
+            },
+        )
+        self.assertEqual(summary["output_tokens"], 40)
+
     @staticmethod
     def _request_objects():
         return {

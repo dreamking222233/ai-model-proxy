@@ -2335,6 +2335,16 @@ class ProxyService:
             else usage.get("output_tokens")
             or 0
         )
+        # A few OpenAI-compatible upstreams expose visible completion tokens
+        # in ``completion_tokens`` while their ``total_tokens`` also includes
+        # hidden reasoning tokens.  Standard OpenAI responses already include
+        # reasoning in ``completion_tokens``; only use the total-token
+        # difference when it is strictly larger, which prevents double
+        # counting compliant providers while preserving the provider's actual
+        # billed usage.
+        total_tokens = int(usage.get("total_tokens") or 0)
+        if total_tokens > prompt_tokens + completion_tokens:
+            completion_tokens = total_tokens - prompt_tokens
         details = usage.get("prompt_tokens_details")
         has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
         cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0

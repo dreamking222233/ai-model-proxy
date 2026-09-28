@@ -82,6 +82,7 @@ class UsageObserver:
         self.completed = False
         self.failed = False
         self.summary: dict[str, Any] = {}
+        self._openai_usage: dict[str, Any] = {}
 
     def feed_json(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -103,8 +104,7 @@ class UsageObserver:
             response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
             usage = response.get("usage") if isinstance(response, dict) else None
             if isinstance(usage, dict):
-                from app.services.proxy_service import ProxyService
-                self._merge(ProxyService._extract_responses_prompt_cache_summary(usage, self.channel))
+                self._merge_openai_usage(usage)
             if event_type == "response.completed" or (
                 payload.get("object") == "response" and payload.get("status") == "completed"
             ):
@@ -117,8 +117,7 @@ class UsageObserver:
 
         usage = payload.get("usage")
         if isinstance(usage, dict):
-            from app.services.proxy_service import ProxyService
-            self._merge(ProxyService._extract_openai_prompt_cache_summary(usage, self.channel))
+            self._merge_openai_usage(usage)
         choices = payload.get("choices")
         if isinstance(choices, list) and any(
             isinstance(choice, dict) and choice.get("finish_reason") is not None
@@ -158,6 +157,23 @@ class UsageObserver:
             self.feed_json(json.loads(raw))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
+
+    def _merge_openai_usage(self, usage: dict[str, Any]) -> None:
+        """Merge explicit usage fields, then rebuild one consistent snapshot."""
+        from app.services.proxy_service import ProxyService
+
+        for key, value in usage.items():
+            if isinstance(value, dict) and isinstance(self._openai_usage.get(key), dict):
+                self._openai_usage[key] = {**self._openai_usage[key], **value}
+            else:
+                self._openai_usage[key] = copy.deepcopy(value)
+        extract = (
+            ProxyService._extract_responses_prompt_cache_summary
+            if self.protocol == "responses"
+            else ProxyService._extract_openai_prompt_cache_summary
+        )
+        self.summary = extract(self._openai_usage, self.channel)
+        self.usage_seen = bool(self.summary.get("usage_received"))
 
     def _merge(self, summary: dict[str, Any]) -> None:
         self.usage_seen = True

@@ -1819,11 +1819,13 @@ class ProxyService:
         raw_input_tokens: int = 0,
         raw_output_tokens: int = 0,
         raw_cache_read_input_tokens: int = 0,
+        raw_cache_creation_input_tokens: int = 0,
     ) -> int:
         return (
             max(int(raw_input_tokens or 0), 0)
             + max(int(raw_output_tokens or 0), 0)
             + max(int(raw_cache_read_input_tokens or 0), 0)
+            + max(int(raw_cache_creation_input_tokens or 0), 0)
         )
 
     @staticmethod
@@ -2410,75 +2412,103 @@ class ProxyService:
         return int(usage_summary.get("input_tokens", 0) or 0)
 
     @staticmethod
-    def _is_cpa_openai_cache_channel(channel: Channel | None) -> bool:
-        """Return whether this OpenAI-compatible channel exposes CPA cached_tokens."""
-        if not channel:
-            return False
-        base_url = str(getattr(channel, "base_url", "") or "").rstrip("/")
-        parsed = urlparse(base_url)
-        if parsed.port == 8317:
-            return True
-        return base_url.startswith("http://43.156.153.12:8317") or base_url.startswith(
-            "http://43.128.147.93:8317"
-        )
+    def _first_usage_token_count(*values: Any) -> Optional[int]:
+        """Select one explicit non-negative integer, preserving authoritative zero."""
+        for value in values:
+            if value is None or isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if count >= 0 and (not isinstance(value, float) or value == count):
+                return count
+        return None
 
     @staticmethod
-    def _extract_openai_prompt_cache_summary(
-        usage: Optional[dict[str, Any]],
-        channel: Channel | None = None,
+    def _build_openai_cache_usage_summary(
+        usage: dict[str, Any],
+        input_tokens: int,
+        output_tokens: int,
+        detail_fields: tuple[str, str],
     ) -> dict[str, Any]:
-        """Parse CPA/OpenAI cached_tokens into the same upstream-cache shape."""
-        usage = usage or {}
-        prompt_tokens = int(
-            usage.get("prompt_tokens")
-            if usage.get("prompt_tokens") is not None
-            else usage.get("input_tokens")
-            or 0
+        """Split inclusive OpenAI input into disjoint ordinary/read/write buckets."""
+        details = [usage.get(key) for key in detail_fields if isinstance(usage.get(key), dict)]
+        read_candidates = [detail.get("cached_tokens") for detail in details]
+        read_candidates.extend(usage.get(key) for key in (
+            "cache_read_input_tokens", "cache_read_tokens", "cached_tokens",
+        ))
+        creation_keys = (
+            "cache_write_tokens", "cache_creation_tokens",
+            "cache_creation_input_tokens", "cache_write_input_tokens",
         )
-        completion_tokens = int(
-            usage.get("completion_tokens")
-            if usage.get("completion_tokens") is not None
-            else usage.get("output_tokens")
-            or 0
-        )
-        # A few OpenAI-compatible upstreams expose visible completion tokens
-        # in ``completion_tokens`` while their ``total_tokens`` also includes
-        # hidden reasoning tokens.  Standard OpenAI responses already include
-        # reasoning in ``completion_tokens``; only use the total-token
-        # difference when it is strictly larger, which prevents double
-        # counting compliant providers while preserving the provider's actual
-        # billed usage.
-        total_tokens = int(usage.get("total_tokens") or 0)
-        if total_tokens > prompt_tokens + completion_tokens:
-            completion_tokens = total_tokens - prompt_tokens
-        details = usage.get("prompt_tokens_details")
-        has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
-        cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0
-        billable_input = max(prompt_tokens - cache_read, 0)
-
-        cache_creation = 0
-        if has_cache_details and cache_read == 0 and prompt_tokens > 0 and ProxyService._is_cpa_openai_cache_channel(channel):
-            cache_creation = prompt_tokens
-
-        if cache_read > 0 and cache_creation > 0:
+        creation_candidates = [detail.get(key) for detail in details for key in creation_keys]
+        creation_candidates.extend(usage.get(key) for key in (
+            "cache_write_tokens", "cache_creation_input_tokens",
+            "cache_write_input_tokens", "cache_creation_tokens",
+        ))
+        usage_received = ProxyService._first_usage_token_count(
+            *(usage.get(key) for key in (
+                "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "total_tokens",
+            )),
+            *read_candidates,
+            *creation_candidates,
+        ) is not None
+        reported_read = ProxyService._first_usage_token_count(*read_candidates) or 0
+        reported_creation = ProxyService._first_usage_token_count(*creation_candidates) or 0
+        # Cache details are subsets of the inclusive input, never additional
+        # input. Missing details (including CPA misses) do not prove a write.
+        cache_read = min(reported_read, input_tokens)
+        cache_creation = min(reported_creation, input_tokens - cache_read)
+        if reported_read != cache_read or reported_creation != cache_creation:
+            logger.warning(
+                "Clamped upstream OpenAI cache usage: input=%s read=%s creation=%s",
+                input_tokens, reported_read, reported_creation,
+            )
+        if cache_read and cache_creation:
             status = "MIXED"
-        elif cache_read > 0:
+        elif cache_read:
             status = "READ"
-        elif cache_creation > 0:
+        elif cache_creation:
             status = "WRITE"
         else:
             status = "BYPASS"
-
         return {
-            "input_tokens": billable_input,
-            "output_tokens": completion_tokens,
-            "logical_input_tokens": prompt_tokens,
+            # An empty/missing usage object also normalizes to zeros, but is
+            # not evidence that the upstream reported a valid all-zero usage.
+            "usage_received": usage_received,
+            "input_tokens": input_tokens - cache_read - cache_creation,
+            "output_tokens": output_tokens,
+            "logical_input_tokens": input_tokens,
             "cache_read_input_tokens": cache_read,
             "cache_creation_input_tokens": cache_creation,
             "cache_creation_5m_input_tokens": 0,
             "cache_creation_1h_input_tokens": 0,
             "prompt_cache_status": status,
         }
+
+    @staticmethod
+    def _extract_openai_prompt_cache_summary(
+        usage: Optional[dict[str, Any]],
+        channel: Channel | None = None,
+    ) -> dict[str, Any]:
+        """Normalize Chat Completions usage without inferring cache creation."""
+        usage = usage if isinstance(usage, dict) else {}
+        prompt_tokens = ProxyService._first_usage_token_count(
+            usage.get("prompt_tokens"), usage.get("input_tokens"),
+        ) or 0
+        completion_tokens = ProxyService._first_usage_token_count(
+            usage.get("completion_tokens"), usage.get("output_tokens"),
+        ) or 0
+        # Some compatible providers exclude hidden reasoning from completion.
+        # Reconcile against inclusive input BEFORE splitting its cache buckets.
+        total_tokens = ProxyService._first_usage_token_count(usage.get("total_tokens")) or 0
+        if total_tokens > prompt_tokens + completion_tokens:
+            completion_tokens = total_tokens - prompt_tokens
+        return ProxyService._build_openai_cache_usage_summary(
+            usage, prompt_tokens, completion_tokens,
+            ("prompt_tokens_details", "input_tokens_details"),
+        )
 
     @staticmethod
     def _collect_stream_billing_tokens(
@@ -2496,26 +2526,21 @@ class ProxyService:
         upstream = usage_map.get("_upstream_cache_usage") or {}
         if not isinstance(upstream, dict):
             upstream = {}
-        input_tokens = (
-            int(billing_input_tokens or 0)
-            or int(usage_map.get("prompt_tokens") or 0)
-            or int(upstream.get("input_tokens") or 0)
-        )
-        output_tokens = (
-            int(billing_output_tokens or 0)
-            or int(usage_map.get("completion_tokens") or 0)
-            or int(upstream.get("output_tokens") or 0)
-        )
-        cache_read = int(usage_map.get("cache_read_input_tokens") or 0) or int(
-            upstream.get("cache_read_input_tokens") or 0
-        )
-        cache_creation = int(usage_map.get("cache_creation_input_tokens") or 0) or int(
-            upstream.get("cache_creation_input_tokens") or 0
-        )
-        logical_input = int(usage_map.get("logical_input_tokens") or 0) or int(
-            upstream.get("logical_input_tokens") or 0
-        )
-        has_usage = bool(
+        def token_count(collected_key: str, upstream_key: str, callback_value: int = 0) -> int:
+            # An actual normalized snapshot can correct a prior count to zero.
+            # Without one, the existing nonzero callback remains authoritative.
+            if upstream:
+                candidates = (usage_map.get(collected_key), upstream.get(upstream_key), callback_value)
+            else:
+                candidates = (callback_value or None, usage_map.get(collected_key))
+            return ProxyService._first_usage_token_count(*candidates) or 0
+
+        input_tokens = token_count("prompt_tokens", "input_tokens", billing_input_tokens)
+        output_tokens = token_count("completion_tokens", "output_tokens", billing_output_tokens)
+        cache_read = token_count("cache_read_input_tokens", "cache_read_input_tokens")
+        cache_creation = token_count("cache_creation_input_tokens", "cache_creation_input_tokens")
+        logical_input = token_count("logical_input_tokens", "logical_input_tokens")
+        has_usage = bool(upstream.get("usage_received", bool(upstream))) or bool(
             input_tokens or output_tokens or cache_read or cache_creation or logical_input
         )
         return input_tokens, output_tokens, has_usage
@@ -7135,11 +7160,10 @@ class ProxyService:
                         break
 
                 if completed:
-                    if (
-                        input_tokens <= 0
-                        and output_tokens <= 0
-                        and not collected_usage.get("_saw_output_text_delta")
-                    ):
+                    _, _, has_reported_usage = ProxyService._collect_stream_billing_tokens(
+                        input_tokens, output_tokens, {"collected_usage": collected_usage},
+                    )
+                    if not has_reported_usage and not collected_usage.get("_saw_output_text_delta"):
                         raise Exception(_EMPTY_UPSTREAM_RESPONSE_VISIBLE_MESSAGE)
                     yield "data: [DONE]\n\n"
                 else:
@@ -7661,45 +7685,18 @@ class ProxyService:
         usage: Optional[dict[str, Any]],
         channel: Channel | None = None,
     ) -> dict[str, Any]:
-        """Parse Responses API cached input tokens into the shared cache-billing shape."""
-        usage = usage or {}
-        input_tokens = int(usage.get("input_tokens") or 0)
-        output_tokens = int(usage.get("output_tokens") or 0)
-        details = usage.get("input_tokens_details")
-        if not isinstance(details, dict):
-            details = usage.get("prompt_tokens_details")
-        has_cache_details = isinstance(details, dict) and details.get("cached_tokens") is not None
-        cache_read = int((details or {}).get("cached_tokens") or 0) if has_cache_details else 0
-        billable_input = max(input_tokens - cache_read, 0)
-
-        cache_creation = 0
-        if (
-            has_cache_details
-            and cache_read == 0
-            and input_tokens > 0
-            and ProxyService._is_cpa_openai_cache_channel(channel)
-        ):
-            cache_creation = input_tokens
-
-        if cache_read > 0 and cache_creation > 0:
-            status = "MIXED"
-        elif cache_read > 0:
-            status = "READ"
-        elif cache_creation > 0:
-            status = "WRITE"
-        else:
-            status = "BYPASS"
-
-        return {
-            "input_tokens": billable_input,
-            "output_tokens": output_tokens,
-            "logical_input_tokens": input_tokens,
-            "cache_read_input_tokens": cache_read,
-            "cache_creation_input_tokens": cache_creation,
-            "cache_creation_5m_input_tokens": 0,
-            "cache_creation_1h_input_tokens": 0,
-            "prompt_cache_status": status,
-        }
+        """Normalize inclusive Responses input, including explicit cache writes."""
+        usage = usage if isinstance(usage, dict) else {}
+        input_tokens = ProxyService._first_usage_token_count(
+            usage.get("input_tokens"), usage.get("prompt_tokens"),
+        ) or 0
+        output_tokens = ProxyService._first_usage_token_count(
+            usage.get("output_tokens"), usage.get("completion_tokens"),
+        ) or 0
+        return ProxyService._build_openai_cache_usage_summary(
+            usage, input_tokens, output_tokens,
+            ("input_tokens_details", "prompt_tokens_details"),
+        )
 
     @staticmethod
     def _extract_responses_output(payload: dict) -> list:
@@ -12284,12 +12281,13 @@ class ProxyService:
             raw_cache_creation_input_tokens = int(
                 cache_log_fields.get("upstream_cache_creation_input_tokens", 0) or 0
             )
-            raw_total_tokens = raw_input_tokens + raw_output_tokens + raw_cache_read_input_tokens
-            context_tokens_snapshot = ProxyService._calculate_context_tokens(
+            raw_total_tokens = ProxyService._calculate_context_tokens(
                 raw_input_tokens,
                 raw_output_tokens,
                 raw_cache_read_input_tokens,
+                raw_cache_creation_input_tokens,
             )
+            context_tokens_snapshot = raw_total_tokens
             context_token_threshold_snapshot = ProxyService._get_long_context_token_threshold(unified_model)
             context_price_multiplier_decimal = ProxyService._get_context_price_multiplier_decimal(
                 context_tokens_snapshot,
@@ -12302,7 +12300,7 @@ class ProxyService:
             output_tokens = int(raw_output_tokens * token_multiplier)
             cache_read_input_tokens = int(raw_cache_read_input_tokens * token_multiplier)
             cache_creation_input_tokens = int(raw_cache_creation_input_tokens * token_multiplier)
-            total_tokens = input_tokens + output_tokens + cache_read_input_tokens
+            total_tokens = input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens
 
             global_price_multiplier = Decimal(str(get_system_config(write_db, "price_multiplier", 1.0)))
             billing_context = billing_context or {}
@@ -12887,10 +12885,12 @@ class ProxyService:
                 exc,
                 exc_info=True,
             )
-            cache_read_tokens = int(
-                RequestCacheSummaryService.build_request_log_fields(cache_info).get(
-                    "upstream_cache_read_input_tokens", 0
-                ) or 0
+            cache_fields = RequestCacheSummaryService.build_request_log_fields(cache_info)
+            raw_total_tokens = ProxyService._calculate_context_tokens(
+                input_tokens,
+                output_tokens,
+                cache_fields.get("upstream_cache_read_input_tokens", 0),
+                cache_fields.get("upstream_cache_creation_input_tokens", 0),
             )
             ProxyService._log_failed_request(
                 db,
@@ -12909,10 +12909,10 @@ class ProxyService:
                 actual_model=actual_model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                total_tokens=int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens,
+                total_tokens=raw_total_tokens,
                 raw_input_tokens=input_tokens,
                 raw_output_tokens=output_tokens,
-                raw_total_tokens=int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens,
+                raw_total_tokens=raw_total_tokens,
                 billing_context=billing_context,
             )
             if (

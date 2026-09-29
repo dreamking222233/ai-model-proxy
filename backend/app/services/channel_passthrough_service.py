@@ -81,6 +81,9 @@ class UsageObserver:
         self.usage_seen = False
         self.completed = False
         self.failed = False
+        self.error_type: Optional[str] = None
+        self.error_code: Optional[str] = None
+        self.error_message: Optional[str] = None
         self.summary: dict[str, Any] = {}
         self._openai_usage: dict[str, Any] = {}
 
@@ -88,6 +91,13 @@ class UsageObserver:
         if not isinstance(payload, dict):
             return
         event_type = str(payload.get("type") or "")
+        response_payload = payload.get("response")
+        if event_type == "error" or payload.get("error") is not None:
+            self._capture_error(payload)
+        elif event_type in {"response.failed", "response.incomplete"} and isinstance(response_payload, dict):
+            response_error = response_payload.get("error")
+            if isinstance(response_error, dict):
+                self._capture_error({"error": response_error})
         if self.protocol == "anthropic":
             usage = payload.get("usage")
             if not isinstance(usage, dict) and isinstance(payload.get("message"), dict):
@@ -126,6 +136,35 @@ class UsageObserver:
             self.completed = True
         if payload.get("error") is not None:
             self.failed = True
+
+    def _capture_error(self, payload: dict[str, Any]) -> None:
+        """Keep a bounded, user-readable reason for an SSE error event."""
+        error = payload.get("error")
+        if isinstance(error, dict):
+            error_type = error.get("type") or error.get("code")
+            error_code = error.get("code")
+            message = error.get("message") or error.get("detail")
+        else:
+            error_type = payload.get("type")
+            error_code = payload.get("code")
+            message = error if isinstance(error, str) else payload.get("message")
+        if error_type:
+            self.error_type = str(error_type)[:120]
+        if error_code:
+            self.error_code = str(error_code)[:120]
+        if message:
+            self.error_message = str(message)[:1000]
+
+    def stream_error_detail(self) -> Optional[str]:
+        """Return the captured upstream error without exposing the full event body."""
+        if not (self.error_type or self.error_code or self.error_message):
+            return None
+        label = self.error_type or "error"
+        if self.error_code and self.error_code != self.error_type:
+            label = f"{label} ({self.error_code})"
+        if self.error_message:
+            return f"上游流式错误 [{label}]: {self.error_message}"
+        return f"上游流式错误 [{label}]"
 
     def feed_sse(self, chunk: bytes) -> None:
         self.buffer.extend(chunk)
@@ -433,9 +472,15 @@ class ChannelPassthroughService:
                 billing_context=billing_context,
             )
             return
+        failure_detail = (
+            str(stream_error)
+            if stream_error
+            else observer.stream_error_detail()
+            or "上游成功响应未包含可计费用量"
+        )
         ProxyService._log_failed_request(
             db, user, api_key_record, request_id, requested_model, client_ip, is_stream,
-            str(stream_error or "上游成功响应未包含可计费用量"),
+            failure_detail,
             channel=channel, response_time_ms=response_time_ms,
             cache_info=cache_info,
             request_type="responses" if protocol == "responses" else "chat",
@@ -684,11 +729,15 @@ class ChannelPassthroughService:
                     if include_trailing:
                         return True
                     continue
-                if first_payload is None:
-                    first_payload = payload
                 if isinstance(payload, dict):
                     nested = payload.get("response") if isinstance(payload.get("response"), dict) else payload
                     usage_seen = usage_seen or isinstance(nested.get("usage"), dict)
+                    event_type = str(payload.get("type") or "")
+                    # Keep-alive events do not establish that a stream is usable.
+                    if event_type in {"ping", "keepalive"} or payload.get("ping") is not None:
+                        continue
+                if first_payload is None:
+                    first_payload = payload
             if first_payload is None:
                 return None
             event_type = str(first_payload.get("type") or "") if isinstance(first_payload, dict) else ""

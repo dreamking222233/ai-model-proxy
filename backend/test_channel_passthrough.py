@@ -222,6 +222,48 @@ class ChannelPassthroughUnitTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observer.summary["input_tokens"], 20)
         self.assertEqual(observer.summary["output_tokens"], 4)
 
+    def test_anthropic_stream_error_keeps_upstream_reason(self):
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_sse(
+            b'data: {"type":"error","error":{"type":"rate_limit_error",'
+            b'"message":"Concurrency limit exceeded for account, please retry later"}}\n\n'
+        )
+        self.assertTrue(observer.failed)
+        self.assertEqual(
+            observer.stream_error_detail(),
+            "上游流式错误 [rate_limit_error]: Concurrency limit exceeded for account, please retry later",
+        )
+
+    async def test_prefetch_ignores_ping_before_anthropic_stream_error(self):
+        async def source():
+            yield b'event: ping\ndata: {"type":"ping"}\n\n'
+            yield (
+                b'data: {"type":"error","error":{"type":"rate_limit_error",'
+                b'"message":"Concurrency limit exceeded for account, please retry later"}}\n\n'
+            )
+
+        response = StreamingResponse(source())
+        response, usable = await ChannelPassthroughService._prefetch_stream(response, "anthropic")
+        self.assertFalse(usable)
+        self.assertIsNotNone(response)
+
+    def test_finalize_logs_stream_error_detail_instead_of_missing_usage(self):
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "message": "Concurrency limit exceeded for account, please retry later",
+            },
+        })
+        with patch("app.services.proxy_service.ProxyService._log_failed_request") as log_failed:
+            ChannelPassthroughService._finalize(
+                SimpleNamespace(), SimpleNamespace(id=1), SimpleNamespace(id=2), self.model,
+                self.channel, observer, "request-id", "claude-opus-5", "127.0.0.1",
+                0.0, True, "anthropic", {},
+            )
+        self.assertEqual(log_failed.call_args.args[7], observer.stream_error_detail())
+
     def test_unterminated_sse_event_is_observed_on_finish(self):
         observer = UsageObserver("responses", self.channel)
         observer.feed_sse(

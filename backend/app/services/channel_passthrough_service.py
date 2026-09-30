@@ -86,6 +86,7 @@ class UsageObserver:
         self.error_message: Optional[str] = None
         self.summary: dict[str, Any] = {}
         self._openai_usage: dict[str, Any] = {}
+        self._anthropic_usage: dict[str, Any] = {}
 
     def feed_json(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -103,7 +104,13 @@ class UsageObserver:
             if not isinstance(usage, dict) and isinstance(payload.get("message"), dict):
                 usage = payload["message"].get("usage")
             if isinstance(usage, dict):
-                self._merge(AnthropicPromptCacheService.extract_usage_summary(usage))
+                from app.services.proxy_service import ProxyService
+                # Later usage can correct provisional input counts downwards.
+                # Merge explicit fields before deriving totals; absent fields
+                # must survive output-only deltas, including nested cache usage.
+                ProxyService._merge_anthropic_usage_snapshot(self._anthropic_usage, usage)
+                self.summary = AnthropicPromptCacheService.extract_usage_summary(self._anthropic_usage)
+                self.usage_seen = True
             if event_type in {"message_stop"} or payload.get("stop_reason"):
                 self.completed = True
             if event_type == "error" or "error" in payload:
@@ -248,10 +255,16 @@ class ChannelPassthroughService:
     @staticmethod
     def _channel_supports_protocol(channel: Channel, protocol: str, actual_model: str) -> bool:
         channel_protocol = str(channel.protocol_type or "").lower()
+        raw_target = str(actual_model or "").strip().lower()
+        prefix, separator, _ = raw_target.partition(":")
+        if separator and prefix in {"responses", "messages"}:
+            # Protocol directives require normal proxy conversion. Native
+            # passthrough forwards the request body unchanged.
+            return False
         if protocol == "anthropic":
             return channel_protocol == "anthropic"
         if protocol == "openai":
-            return channel_protocol == "openai" and not str(actual_model or "").startswith("responses:")
+            return channel_protocol == "openai"
         if protocol == "responses":
             return channel_protocol in {"openai", "responses"}
         return False
@@ -334,6 +347,16 @@ class ChannelPassthroughService:
     def _protocol_rank(channel: Channel, actual_model: str, protocol: str) -> int:
         channel_protocol = str(channel.protocol_type or "").strip().lower()
         raw_target = str(actual_model or "").strip().lower()
+        prefix, separator, _ = raw_target.partition(":")
+        is_directive = separator and prefix in {"responses", "messages"}
+        if is_directive:
+            if prefix == "responses":
+                return 0 if protocol == "responses" else 2
+            if protocol == "anthropic":
+                return 0
+            if protocol == "openai":
+                return 1 if channel_protocol in {"openai", "anthropic"} else 2
+            return 2
         if protocol == "anthropic":
             return 0 if channel_protocol == "anthropic" else (1 if raw_target.startswith("responses:") else 2)
         if protocol == "responses":

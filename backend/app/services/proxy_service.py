@@ -3401,11 +3401,18 @@ class ProxyService:
         *,
         default_openai_api: str = "openai_chat",
     ) -> tuple[str, str]:
-        """Resolve mapping directives like ``responses:gpt-5.4`` into model + API."""
+        """Resolve protocol mapping directives while preserving ordinary prefixes.
+
+        ``responses:`` and ``messages:`` are reserved mapping directives. Any
+        other prefix is part of the upstream model name and must be forwarded
+        unchanged (for example ``global:deepseek-v4.1-flash``).
+        """
         raw_target = str(actual_model_name or "")
         prefix, separator, remainder = raw_target.partition(":")
-        if separator and prefix == "responses" and remainder:
-            return remainder, "responses"
+        if separator and remainder and prefix.lower() in {"responses", "messages"}:
+            if prefix.lower() == "responses":
+                return remainder, "responses"
+            return remainder, "anthropic_messages"
 
         protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
         if protocol == "anthropic":
@@ -3429,11 +3436,13 @@ class ProxyService:
             priority = int(getattr(channel, "priority", 10) or 10)
 
             if normalized_request_protocol == "anthropic":
+                if raw_target.startswith("messages:"):
+                    return (0 if channel_protocol == "anthropic" else 1), priority
                 if channel_protocol == "anthropic":
                     return 0, priority
                 if raw_target.startswith("responses:"):
-                    return 1, priority
-                return 2, priority
+                    return 2, priority
+                return 3, priority
 
             if normalized_request_protocol == "responses":
                 if raw_target.startswith("responses:"):
@@ -3442,6 +3451,8 @@ class ProxyService:
                     return 1, priority
                 return 2, priority
 
+            if raw_target.startswith("messages:"):
+                return (0 if channel_protocol == "anthropic" else 1), priority
             if channel_protocol == "openai" and not raw_target.startswith("responses:"):
                 return 0, priority
             if channel_protocol == "anthropic":
@@ -3532,11 +3543,20 @@ class ProxyService:
         )
 
     @staticmethod
+    def _is_responses_error_payload(payload: dict[str, Any]) -> bool:
+        """Recognize both standalone and terminal Responses failure events."""
+        return isinstance(payload, dict) and payload.get("type") in {"error", "response.failed"}
+
+    @staticmethod
     def _extract_responses_error_message(payload: dict[str, Any]) -> str:
         """Extract a concise message from a Responses SSE error payload."""
         if not isinstance(payload, dict):
             return ""
         error = payload.get("error")
+        if not error and payload.get("type") == "response.failed":
+            response = payload.get("response")
+            if isinstance(response, dict):
+                error = response.get("error")
         if isinstance(error, dict):
             for key in ("message", "detail", "code", "type"):
                 value = error.get(key)
@@ -7133,13 +7153,13 @@ class ProxyService:
                             flush_payload["type"] = "response.output_text.delta"
                             flush_payload["delta"] = flushed_delta
                             yield ProxyService._payload_to_sse(flush_payload)
-                    elif payload_type == "error":
+                    elif ProxyService._is_responses_error_payload(payload):
                         saw_error = True
                         error_message = (
-                            payload.get("error", {}).get("message")
+                            ProxyService._extract_responses_error_message(payload)
                             or "Upstream responses error"
                         )
-                        continue
+                        break
                     elif payload_type == "response.output_text.delta":
                         # 收集文本内容
                         delta = payload.get("delta", "")
@@ -7297,14 +7317,14 @@ class ProxyService:
                 request_id=turn_request_id,
             ):
                 payload_type = str(payload.get("type", "") or "")
-                if payload_type == "error":
+                if ProxyService._is_responses_error_payload(payload):
                     saw_error = True
                     error_payload = payload
                     error_message = (
-                        payload.get("error", {}).get("message")
+                        ProxyService._extract_responses_error_message(payload)
                         or "Upstream responses error"
                     )
-                    continue
+                    break
 
                 sent_any_payload = True
                 if first_chunk_time is None:
@@ -7476,7 +7496,7 @@ class ProxyService:
                     rewritten_payload = ProxyService._rewrite_response_model(payload, requested_model)
                     if (
                         not emitted_visible_payload
-                        and str(rewritten_payload.get("type") or "") == "error"
+                        and ProxyService._is_responses_error_payload(rewritten_payload)
                         and ProxyService._should_retry_responses_stream_error(rewritten_payload)
                     ):
                         retry_error_payload = rewritten_payload
@@ -7544,7 +7564,8 @@ class ProxyService:
         if payload.get("type") == "response.completed":
             return payload
         if payload.get("object") == "response":
-            return {"type": "response.completed", "response": payload}
+            event_type = "response.failed" if payload.get("status") == "failed" else "response.completed"
+            return {"type": event_type, "response": payload}
         return payload
 
     @staticmethod
@@ -8042,7 +8063,7 @@ class ProxyService:
                         )
 
                     if is_stream:
-                        if upstream_protocol == "anthropic":
+                        if upstream_api == "anthropic_messages" or upstream_protocol == "anthropic":
                             return await ProxyService._run_with_billing_concurrency(
                                 db,
                                 admission_decision,
@@ -8066,7 +8087,7 @@ class ProxyService:
                             ),
                         )
                     else:
-                        if upstream_protocol == "anthropic":
+                        if upstream_api == "anthropic_messages" or upstream_protocol == "anthropic":
                             return await ProxyService._run_with_billing_concurrency(
                                 db,
                                 admission_decision,
@@ -10227,12 +10248,13 @@ class ProxyService:
                         completed = True
                         break
 
-                    if payload_type == "error":
+                    if ProxyService._is_responses_error_payload(payload):
                         saw_error = True
                         error_message = (
-                            payload.get("error", {}).get("message")
+                            ProxyService._extract_responses_error_message(payload)
                             or "Upstream responses error"
                         )
+                        break
 
             finally:
                 if not completed:

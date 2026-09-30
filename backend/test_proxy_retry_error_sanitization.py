@@ -1,6 +1,8 @@
+import copy
 import json
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.core.exceptions import ServiceException
 from app.models.channel import Channel
@@ -486,6 +488,180 @@ class ProxyRetryErrorSanitizationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payloads), 1)
         self.assertEqual(payloads[0]["type"], "response.completed")
         self.assertEqual(payloads[0]["response"]["model"], "requested-model")
+
+
+RELAY_MESSAGE = 'Basis Points returned a tool call that does not match the client tool catalog or relay contract'
+FAILED = {
+    'type': 'response.failed',
+    'response': {
+        'status': 'failed',
+        'error': {'code': 'relay_error', 'type': 'relay_error', 'message': RELAY_MESSAGE},
+    },
+}
+COMPLETED = {
+    'type': 'response.completed',
+    'response': {'model': 'actual-model', 'usage': {'input_tokens': 1, 'output_tokens': 1}},
+}
+
+
+class ResponsesFailedEventsTest(unittest.IsolatedAsyncioTestCase):
+    def test_nested_failure_message_and_missing_details(self):
+        self.assertTrue(ProxyService._is_responses_error_payload(FAILED))
+        self.assertEqual(ProxyService._extract_responses_error_message(FAILED), RELAY_MESSAGE)
+        self.assertTrue(ProxyService._should_retry_responses_stream_error(FAILED))
+        for response in (None, '', [], {'error': None}):
+            with self.subTest(response=response):
+                self.assertEqual(ProxyService._extract_responses_error_message(
+                    {'type': 'response.failed', 'response': response}), '')
+        self.assertEqual(ProxyService._extract_responses_error_message(
+            {'type': 'response.failed', 'response': {'error': 'provider unavailable'}}),
+            'provider unavailable')
+
+    def test_non_stream_failed_response_is_not_completed(self):
+        obj = {'object': 'response', **FAILED['response']}
+        payload = ProxyService._parse_non_stream_responses_payload(json.dumps(obj))
+        self.assertEqual(payload['type'], 'response.failed')
+        self.assertEqual(ProxyService._extract_responses_error_message(payload), RELAY_MESSAGE)
+        self.assertEqual(ProxyService._parse_non_stream_responses_payload(json.dumps(
+            {'object': 'response', 'status': 'completed'}))['type'], 'response.completed')
+
+    async def _collect_attempts(self, attempts, limit=2):
+        calls = []
+        async def fake_lines(*_args, **kwargs):
+            index = len(calls)
+            calls.append(kwargs)
+            for payload in attempts[min(index, len(attempts) - 1)]:
+                yield 'data: ' + json.dumps(payload)
+        channel = Channel(id=70, name='test', base_url='https://example.test/v1')
+        channel._runtime_upstream_retry_attempts = limit
+        with (
+            patch.object(ProxyService, '_stream_lines_with_retries', fake_lines),
+            patch('app.services.proxy_service.asyncio.sleep', new_callable=AsyncMock),
+        ):
+            result = [payload async for payload in ProxyService._iter_responses_upstream_payloads(
+                channel, {'model': 'actual-model'}, 'requested-model', request_id='test')]
+        return result, calls
+
+    async def test_initial_failed_event_retries_and_only_returns_success(self):
+        result, calls = await self._collect_attempts([[FAILED], [COMPLETED]])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c['max_attempts'] for c in calls], [1, 1])
+        self.assertEqual([p['type'] for p in result], ['response.completed'])
+        self.assertEqual(result[0]['response']['model'], 'requested-model')
+
+    async def test_retry_exhaustion_preserves_final_failure(self):
+        result, calls = await self._collect_attempts([[FAILED]], limit=3)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['type'], 'response.failed')
+        self.assertEqual(ProxyService._extract_responses_error_message(result[0]), RELAY_MESSAGE)
+
+    async def test_failure_after_visible_event_is_never_replayed(self):
+        for first in (
+            {'type': 'response.created', 'response': {'id': 'resp_1'}},
+            {'type': 'response.output_text.delta', 'delta': 'hello'},
+            {'type': 'response.output_item.added', 'item': {
+                'type': 'function_call', 'name': 'diag_ping', 'call_id': 'call_1'}},
+        ):
+            with self.subTest(event=first['type']):
+                result, calls = await self._collect_attempts([[first, FAILED], [COMPLETED]])
+                self.assertEqual(len(calls), 1)
+                self.assertEqual([p['type'] for p in result], [first['type'], 'response.failed'])
+
+    async def test_nested_invalid_request_error_is_not_retried(self):
+        failed = copy.deepcopy(FAILED)
+        failed['response']['error'] = {
+            'code': 'invalid_request', 'message': 'Missing required parameter: input'}
+        result, calls = await self._collect_attempts([[failed], [COMPLETED]])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result[0]['type'], 'response.failed')
+
+    async def test_websocket_failure_before_output_preserves_retry_and_error(self):
+        async def fake_iter(*_args, **_kwargs):
+            yield copy.deepcopy(FAILED)
+            yield copy.deepcopy(COMPLETED)  # A terminal failure cannot become success.
+        websocket = SimpleNamespace(send_text=AsyncMock())
+        with patch.object(ProxyService, '_iter_responses_upstream_payloads', fake_iter):
+            with self.assertRaises(ResponsesTurnError) as ctx:
+                await ProxyService._forward_responses_websocket_turn(
+                    object(), websocket, Channel(id=70, name='test'),
+                    UnifiedModel(model_name='requested-model'), {'model': 'actual-model'},
+                    'test', 'requested-model')
+        self.assertTrue(ctx.exception.can_retry)
+        self.assertEqual(str(ctx.exception), RELAY_MESSAGE)
+        websocket.send_text.assert_not_called()
+
+    async def test_websocket_failure_after_output_keeps_detail_without_retry(self):
+        async def fake_iter(*_args, **_kwargs):
+            yield {'type': 'response.output_text.delta', 'delta': 'hello'}
+            yield copy.deepcopy(FAILED)
+        websocket = SimpleNamespace(send_text=AsyncMock())
+        with patch.object(ProxyService, '_iter_responses_upstream_payloads', fake_iter):
+            with self.assertRaises(ResponsesTurnError) as ctx:
+                await ProxyService._forward_responses_websocket_turn(
+                    object(), websocket, Channel(id=70, name='test'),
+                    UnifiedModel(model_name='requested-model'), {'model': 'actual-model'},
+                    'test', 'requested-model')
+        self.assertFalse(ctx.exception.can_retry)
+        self.assertEqual(ctx.exception._upstream_detail, RELAY_MESSAGE)
+        self.assertEqual(websocket.send_text.call_count, 2)
+        self.assertEqual(json.loads(websocket.send_text.call_args.args[0])['type'], 'error')
+
+    async def test_sse_failure_preserves_cause_and_does_not_bill_or_complete(self):
+        async def fake_iter(*_args, **_kwargs):
+            yield copy.deepcopy(FAILED)
+            yield copy.deepcopy(COMPLETED)
+        finalize, failed = Mock(), Mock()
+        with (
+            patch.object(ProxyService, '_iter_responses_upstream_payloads', fake_iter),
+            patch.object(ProxyService, '_finalize_successful_text_request', finalize),
+            patch.object(ProxyService, '_log_failed_request', failed),
+            patch.object(ProxyService, '_record_channel_failure'),
+            patch.object(ProxyService, '_scan_stream_security_output'),
+        ):
+            response = await ProxyService._stream_responses_request(
+                SimpleNamespace(close=lambda: None), SimpleNamespace(), SimpleNamespace(),
+                Channel(id=70, name='test', base_url='https://example.test/v1'),
+                UnifiedModel(model_name='requested-model'),
+                {'model': 'actual-model', 'stream': True, 'input': 'test'},
+                'test-failed', 'requested-model', '127.0.0.1')
+            body = ''.join([chunk async for chunk in response.body_iterator])
+        finalize.assert_not_called()
+        failed.assert_called_once()
+        self.assertIn(RELAY_MESSAGE, str(failed.call_args))
+        self.assertNotIn('stream closed before response.completed', str(failed.call_args))
+        self.assertNotIn('event: response.completed', body)
+        self.assertNotIn('data: [DONE]', body)
+        self.assertIn('event: error', body)
+
+    async def test_anthropic_bridge_failure_preserves_cause_without_billing(self):
+        async def fake_iter(*_args, **_kwargs):
+            yield copy.deepcopy(FAILED)
+            yield copy.deepcopy(COMPLETED)
+        finalize, failed = Mock(), Mock()
+        with (
+            patch.object(ProxyService, '_iter_responses_upstream_payloads', fake_iter),
+            patch.object(ProxyService, '_finalize_successful_text_request', finalize),
+            patch.object(ProxyService, '_log_failed_request', failed),
+            patch.object(ProxyService, '_record_channel_failure'),
+            patch.object(ProxyService, '_scan_stream_security_output'),
+            patch.object(ProxyService, '_log_responses_request_json'),
+            patch.object(ProxyService, '_log_anthropic_stream_debug'),
+        ):
+            response = await ProxyService._stream_anthropic_via_responses_request(
+                SimpleNamespace(close=lambda: None), SimpleNamespace(), SimpleNamespace(),
+                Channel(id=70, name='test', base_url='https://example.test/v1'),
+                UnifiedModel(model_name='requested-model'),
+                {'model': 'actual-model', 'stream': True, 'max_tokens': 32,
+                 'messages': [{'role': 'user', 'content': 'test'}]},
+                'test-bridge-failed', 'requested-model', '127.0.0.1')
+            body = ''.join([chunk async for chunk in response.body_iterator])
+        finalize.assert_not_called()
+        failed.assert_called_once()
+        self.assertIn(RELAY_MESSAGE, str(failed.call_args))
+        self.assertNotIn('stream closed before response.completed', str(failed.call_args))
+        self.assertNotIn('event: message_stop', body)
+        self.assertIn('event: error', body)
 
 
 if __name__ == "__main__":

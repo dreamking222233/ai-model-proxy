@@ -232,20 +232,21 @@ class AnthropicPromptCacheService:
         """Parse Anthropic usage into a stable prompt-cache summary."""
         usage = usage or {}
         cache_creation = usage.get("cache_creation") or {}
+        # Explicit zero is authoritative; only absent/None fields use aliases.
         cache_creation_5m = int(
             cache_creation.get("ephemeral_5m_input_tokens")
-            or usage.get("cache_creation_5m_input_tokens")
-            or 0
+            if cache_creation.get("ephemeral_5m_input_tokens") is not None
+            else (usage.get("cache_creation_5m_input_tokens") or 0)
         )
         cache_creation_1h = int(
             cache_creation.get("ephemeral_1h_input_tokens")
-            or usage.get("cache_creation_1h_input_tokens")
-            or 0
+            if cache_creation.get("ephemeral_1h_input_tokens") is not None
+            else (usage.get("cache_creation_1h_input_tokens") or 0)
         )
         cache_creation_total = int(
             usage.get("cache_creation_input_tokens")
-            or (cache_creation_5m + cache_creation_1h)
-            or 0
+            if usage.get("cache_creation_input_tokens") is not None
+            else (cache_creation_5m + cache_creation_1h)
         )
         cache_read = int(usage.get("cache_read_input_tokens") or 0)
         input_tokens = int(usage.get("input_tokens") or 0)

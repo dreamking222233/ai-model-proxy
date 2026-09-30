@@ -264,6 +264,103 @@ class ChannelPassthroughUnitTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(log_failed.call_args.args[7], observer.stream_error_detail())
 
+    def test_anthropic_final_usage_replaces_provisional_input_counts(self):
+        cases = (
+            (67132, 29, 67, 99029, 700),
+            (67179, 30, 182, 104296, 53),
+        )
+        for initial, final, output, cached, created in cases:
+            with self.subTest(final_input=final):
+                observer = UsageObserver("anthropic", self.channel)
+                observer.feed_json({
+                    "type": "message_start",
+                    "message": {"usage": {"input_tokens": initial, "output_tokens": 0}},
+                })
+                observer.feed_json({
+                    "type": "message_delta",
+                    "usage": {
+                        "input_tokens": final,
+                        "output_tokens": output,
+                        "cache_read_input_tokens": cached,
+                        "cache_creation_input_tokens": created,
+                    },
+                })
+                observer.feed_json({"type": "message_stop"})
+                self.assertTrue(observer.completed)
+                self.assertEqual(observer.summary["input_tokens"], final)
+                self.assertEqual(observer.summary["output_tokens"], output)
+                self.assertEqual(observer.summary["logical_input_tokens"], final + cached + created)
+                cache_info = ChannelPassthroughService._cache_info(observer, "anthropic")
+                self.assertEqual(cache_info["upstream_input_tokens"], final)
+                self.assertEqual(cache_info["upstream_cache_read_input_tokens"], cached)
+                self.assertEqual(cache_info["upstream_cache_creation_input_tokens"], created)
+
+    def test_anthropic_explicit_zero_usage_replaces_earlier_counts(self):
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({
+            "type": "message_start",
+            "message": {"usage": {
+                "input_tokens": 20,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 10,
+                "cache_creation": {"ephemeral_5m_input_tokens": 7, "ephemeral_1h_input_tokens": 3},
+            }},
+        })
+        observer.feed_json({
+            "type": "message_delta",
+            "usage": {
+                "input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 2,
+            },
+        })
+        for field in ("input_tokens", "logical_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            self.assertEqual(observer.summary[field], 0)
+        self.assertEqual(observer.summary["output_tokens"], 2)
+        cache_info = ChannelPassthroughService._cache_info(observer, "anthropic")
+        self.assertEqual(cache_info["upstream_cache_creation_input_tokens"], 0)
+
+    def test_anthropic_nested_zero_overrides_flat_cache_aliases(self):
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({"type": "message_start", "message": {"usage": {
+            "input_tokens": 20,
+            "cache_creation_5m_input_tokens": 10,
+            "cache_creation_1h_input_tokens": 3,
+        }}})
+        observer.feed_json({"type": "message_delta", "usage": {
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        }})
+        self.assertEqual(observer.summary["cache_creation_5m_input_tokens"], 0)
+        self.assertEqual(observer.summary["cache_creation_1h_input_tokens"], 0)
+        self.assertEqual(observer.summary["cache_creation_input_tokens"], 0)
+        self.assertEqual(observer.summary["logical_input_tokens"], 20)
+        cache_info = ChannelPassthroughService._cache_info(observer, "anthropic")
+        self.assertEqual(cache_info["upstream_cache_creation_input_tokens"], 0)
+
+    def test_anthropic_partial_usage_preserves_cache_fields(self):
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({
+            "type": "message_start",
+            "message": {"usage": {
+                "input_tokens": 20,
+                "cache_read_input_tokens": 100,
+                "cache_creation": {"ephemeral_5m_input_tokens": 10, "ephemeral_1h_input_tokens": 3},
+            }},
+        })
+        observer.feed_json({
+            "type": "message_delta",
+            "usage": {"output_tokens": 4, "cache_creation": {"ephemeral_5m_input_tokens": 12}},
+        })
+        observer.feed_json({"type": "message_delta", "usage": {"output_tokens": 5}})
+        self.assertEqual(observer.summary["input_tokens"], 20)
+        self.assertEqual(observer.summary["cache_read_input_tokens"], 100)
+        self.assertEqual(observer.summary["cache_creation_5m_input_tokens"], 12)
+        self.assertEqual(observer.summary["cache_creation_1h_input_tokens"], 3)
+        self.assertEqual(observer.summary["cache_creation_input_tokens"], 15)
+        self.assertEqual(observer.summary["logical_input_tokens"], 135)
+        self.assertEqual(observer.summary["output_tokens"], 5)
+
     def test_unterminated_sse_event_is_observed_on_finish(self):
         observer = UsageObserver("responses", self.channel)
         observer.feed_sse(

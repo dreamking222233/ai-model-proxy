@@ -34,6 +34,92 @@ class AnthropicPromptCacheService:
     )
 
     @staticmethod
+    def normalize_usage_aliases(usage: Optional[dict[str, Any]]) -> dict[str, Any]:
+        """Normalize Anthropic-compatible prompt/cache aliases to native fields.
+
+        Some upstream Anthropic-compatible gateways expose an inclusive
+        ``prompt_tokens`` count plus ``cached_tokens`` or ``prompt_cache_*``
+        details.  The proxy stores mutually-exclusive ordinary/read/create
+        buckets, so convert those aliases before merging stream fragments.
+        """
+        normalized = dict(usage) if isinstance(usage, dict) else {}
+
+        def token(value: Any) -> Optional[int]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                result = int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return result if result >= 0 else None
+
+        cache_creation = normalized.get("cache_creation")
+        cache_creation = cache_creation if isinstance(cache_creation, dict) else {}
+        nested_creation = sum(
+            token(cache_creation.get(key)) or 0
+            for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        )
+        creation = token(normalized.get("cache_creation_input_tokens"))
+        if creation is None or (creation == 0 and nested_creation > 0):
+            creation = nested_creation
+
+        read = token(normalized.get("cache_read_input_tokens")) or 0
+        if read == 0:
+            for key in ("prompt_cache_hit_tokens", "cached_tokens"):
+                alias = token(normalized.get(key))
+                if alias is not None:
+                    read = alias
+                    break
+            if read == 0:
+                details = normalized.get("prompt_tokens_details")
+                if not isinstance(details, dict):
+                    details = normalized.get("input_tokens_details")
+                if isinstance(details, dict):
+                    read = token(details.get("cached_tokens")) or 0
+
+        details = normalized.get("prompt_tokens_details")
+        if not isinstance(details, dict):
+            details = normalized.get("input_tokens_details")
+        detail_aliases = details if isinstance(details, dict) else {}
+        if creation == 0:
+            for key in ("cache_write_tokens", "cache_creation_tokens", "cache_write_input_tokens"):
+                detail_creation = token(detail_aliases.get(key))
+                if detail_creation is not None:
+                    creation = detail_creation
+                    break
+
+        prompt = token(normalized.get("prompt_tokens"))
+        if prompt is None and detail_aliases:
+            prompt = token(normalized.get("input_tokens"))
+        miss = token(normalized.get("prompt_cache_miss_tokens"))
+        has_compat_fields = any(
+            key in normalized
+            for key in (
+                "prompt_tokens",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens",
+                "cached_tokens",
+            )
+        ) or any(
+            key in detail_aliases
+            for key in (
+                "cached_tokens",
+                "cache_write_tokens",
+                "cache_creation_tokens",
+                "cache_write_input_tokens",
+            )
+        )
+        if has_compat_fields:
+            if miss is not None:
+                normalized["input_tokens"] = miss
+            elif prompt is not None:
+                normalized["input_tokens"] = max(prompt - read - (creation or 0), 0)
+            normalized["cache_read_input_tokens"] = read
+            normalized["cache_creation_input_tokens"] = creation or 0
+
+        return normalized
+
+    @staticmethod
     def is_enabled(db: Session) -> bool:
         """Return whether Anthropic prompt caching is enabled."""
         return bool(get_system_config(db, "anthropic_prompt_cache_enabled", False))
@@ -230,7 +316,7 @@ class AnthropicPromptCacheService:
         attempt_meta: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Parse Anthropic usage into a stable prompt-cache summary."""
-        usage = usage or {}
+        usage = AnthropicPromptCacheService.normalize_usage_aliases(usage)
         cache_creation = usage.get("cache_creation") or {}
         # Explicit zero is authoritative; only absent/None fields use aliases.
         cache_creation_5m = int(

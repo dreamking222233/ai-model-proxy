@@ -115,6 +115,61 @@ def test_anthropic_input_remains_exclusive():
     assert result["input_tokens"] == 68 and result["logical_input_tokens"] == 220014
 
 
+@pytest.mark.parametrize("usage_payload", (
+    {
+        "prompt_tokens": 122117,
+        "cached_tokens": 77,
+        "cache_creation_input_tokens": 31950,
+        "output_tokens": 4,
+    },
+    {
+        "prompt_tokens": 122117,
+        "prompt_cache_hit_tokens": 77,
+        "prompt_cache_miss_tokens": 90090,
+        "cache_creation": {"ephemeral_5m_input_tokens": 31950},
+        "output_tokens": 4,
+    },
+))
+def test_anthropic_compatible_prompt_usage_aliases(usage_payload):
+    result = AnthropicPromptCacheService.extract_usage_summary(usage_payload)
+    assert result["input_tokens"] == 90090
+    assert result["logical_input_tokens"] == 122117
+    assert result["cache_read_input_tokens"] == 77
+    assert result["cache_creation_input_tokens"] == 31950
+    assert result["output_tokens"] == 4
+
+
+def test_anthropic_stream_alias_usage_survives_output_only_delta():
+    observer = UsageObserver("anthropic", CHANNEL)
+    observer.feed_json({
+        "type": "message_start",
+        "message": {"usage": {
+            "prompt_tokens": 122117,
+            "cached_tokens": 77,
+            "cache_creation_input_tokens": 31950,
+        }},
+    })
+    observer.feed_json({"type": "message_delta", "usage": {"output_tokens": 4}})
+    assert observer.summary["input_tokens"] == 90090
+    assert observer.summary["logical_input_tokens"] == 122117
+    assert observer.summary["cache_read_input_tokens"] == 77
+    assert observer.summary["cache_creation_input_tokens"] == 31950
+    assert observer.summary["output_tokens"] == 4
+
+
+def test_anthropic_compatible_detail_aliases_override_zero_placeholders():
+    result = AnthropicPromptCacheService.extract_usage_summary({
+        "input_tokens": 122117,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens_details": {"cached_tokens": 77, "cache_write_tokens": 31950},
+    })
+    assert result["input_tokens"] == 90090
+    assert result["cache_read_input_tokens"] == 77
+    assert result["cache_creation_input_tokens"] == 31950
+
+
 @pytest.mark.parametrize("protocol", ("responses", "openai"))
 def test_passthrough_corrections_rebuild_snapshot(protocol):
     observer = UsageObserver(protocol, CHANNEL)

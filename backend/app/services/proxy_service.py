@@ -2378,6 +2378,8 @@ class ProxyService:
         if not isinstance(usage, dict):
             return
 
+        usage = AnthropicPromptCacheService.normalize_usage_aliases(usage)
+
         for key in (
             "input_tokens",
             "output_tokens",

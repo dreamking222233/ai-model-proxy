@@ -55,6 +55,7 @@ from app.services.health_service import get_system_config
 from app.services.price_adjustment_service import PriceAdjustmentService
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.request_cache_summary_service import RequestCacheSummaryService
+from app.services.request_reasoning_service import RequestReasoningService
 from app.services.subscription_service import SubscriptionService
 from app.services.subscription_bonus_service import SubscriptionBonusService
 from app.services.security_detection_service import SecurityDetectionService
@@ -1702,7 +1703,7 @@ class ProxyService:
             ):
                 if key in group_context:
                     context[key] = group_context[key]
-        return context
+        return RequestReasoningService.with_snapshot(context, request_data)
 
     @staticmethod
     def _build_frozen_text_billing_context(
@@ -6141,6 +6142,9 @@ class ProxyService:
                     upstream_model_name,
                     channel_request,
                 )
+                request_billing_context = RequestReasoningService.with_snapshot(
+                    request_billing_context, channel_request,
+                )
                 ProxyService._log_responses_request_json(
                     "prepared",
                     request_id,
@@ -6418,6 +6422,7 @@ class ProxyService:
                     ProxyService._build_text_billing_context("responses", channel_request),
                     quota_precheck,
                 )
+                request_billing_context = billing_context
                 ProxyService._log_responses_request_json(
                     "websocket_prepared",
                     request_id,
@@ -7918,7 +7923,7 @@ class ProxyService:
         request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
-        request_billing_context: Optional[dict[str, Any]] = None
+        request_billing_context = ProxyService._build_text_billing_context("openai", request_data)
 
         video_unified_model: UnifiedModel | None = None
         security_snapshot = None
@@ -8055,6 +8060,9 @@ class ProxyService:
                         channel,
                         request_data_copy,
                         force_compat=compat_mode,
+                    )
+                    request_billing_context = RequestReasoningService.with_snapshot(
+                        request_billing_context, request_data_copy,
                     )
                     upstream_protocol = str(getattr(channel, "protocol_type", "openai") or "openai")
                     if upstream_api == "responses":
@@ -8223,7 +8231,7 @@ class ProxyService:
             request_headers=request_headers,
         )
         conversation_shadow_info = None
-        request_billing_context: Optional[dict[str, Any]] = None
+        request_billing_context = ProxyService._build_text_billing_context("anthropic", request_data)
 
         try:
             # 2. Resolve model
@@ -8361,6 +8369,9 @@ class ProxyService:
                             request_data_copy,
                             force_compat=compat_mode,
                         )
+                    request_billing_context = RequestReasoningService.with_snapshot(
+                        request_billing_context, request_data_copy,
+                    )
                     ProxyService._log_anthropic_runtime_debug(
                         "dispatch",
                         request_id,
@@ -9040,6 +9051,7 @@ class ProxyService:
         )
         anthropic_request = ProxyService._convert_openai_request_to_anthropic(request_data)
         anthropic_request["stream"] = True
+        billing_context = RequestReasoningService.refresh_forwarded_snapshot(billing_context, anthropic_request)
         client_model_name = requested_model or model_name
 
         billing_input_tokens = 0
@@ -9392,6 +9404,7 @@ class ProxyService:
         )
         anthropic_request = ProxyService._convert_openai_request_to_anthropic(request_data)
         anthropic_request["stream"] = False
+        billing_context = RequestReasoningService.refresh_forwarded_snapshot(billing_context, anthropic_request)
 
         async def upstream_call():
             timeout = httpx.Timeout(
@@ -9527,6 +9540,7 @@ class ProxyService:
             str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
             responses_request,
         )
+        billing_context = RequestReasoningService.refresh_forwarded_snapshot(billing_context, responses_request)
         ProxyService._log_responses_request_json(
             "anthropic_bridge_prepared",
             request_id,
@@ -10504,6 +10518,7 @@ class ProxyService:
             str(responses_request.get("model", "") or request_data.get("model", "") or requested_model),
             responses_request,
         )
+        billing_context = RequestReasoningService.refresh_forwarded_snapshot(billing_context, responses_request)
         ProxyService._log_responses_request_json(
             "anthropic_bridge_prepared",
             request_id,
@@ -12703,6 +12718,7 @@ class ProxyService:
                         channel_id=channel.id,
                         channel_name=channel.name,
                         **group_snapshot,
+                        **RequestReasoningService.log_fields(billing_context),
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,
@@ -12842,6 +12858,7 @@ class ProxyService:
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
                         **group_snapshot,
+                        **RequestReasoningService.log_fields(billing_context),
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,
@@ -13030,6 +13047,7 @@ class ProxyService:
                         channel_id=channel.id if channel else None,
                         channel_name=channel.name if channel else None,
                         **group_snapshot,
+                        **RequestReasoningService.log_fields(billing_context),
                         requested_model=requested_model,
                         actual_model=ProxyService._public_actual_model_name(
                             requested_model,

@@ -216,7 +216,7 @@
         :expand-icon-as-cell="false"
         row-key="id"
         size="middle"
-        :scroll="{ x: 1000 }"
+        :scroll="{ x: 1460 }"
         class="custom-table"
       >
           <template slot="expandedRowRender" slot-scope="record">
@@ -437,6 +437,14 @@
             <div class="detail-item">
               <span class="detail-item-label">请求模型 ID</span>
               <a-tag class="model-tag">{{ getDisplayModel(selectedRecord) }}</a-tag>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">请求分组</span>
+              <span class="detail-item-value">{{ selectedRecord.group_name_snapshot || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-item-label">思考等级</span>
+              <span class="detail-item-value">{{ formatRequestReasoning(selectedRecord) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-item-label">请求类型</span>
@@ -679,6 +687,7 @@
 import { getUsageLogs, getProfile, getModelUsageStats, getSiteConfig, setSubscriptionRefreshPeriod } from '@/api/user'
 import { formatDate as formatLocalDate } from '@/utils'
 import { getModelSeriesLabel } from '@/constants/modelSeries'
+import { formatRequestReasoning } from '@/utils/requestReasoning'
 
 export default {
   name: 'BalanceLog',
@@ -713,6 +722,8 @@ export default {
       expandedRowKeys: [],
       columns: [
         { title: '模型名称', dataIndex: 'model', key: 'model', width: 220, scopedSlots: { customRender: 'col_model' } },
+        { title: '调用分组', dataIndex: 'group_name_snapshot', key: 'group', width: 130, ellipsis: true, customRender: text => text || '-' },
+        { title: '思考等级', dataIndex: 'reasoning_snapshot', key: 'reasoning', width: 170, customRender: (text, record) => formatRequestReasoning(record) },
         { title: '用量细则', dataIndex: 'total_tokens', key: 'tokens', width: 320, scopedSlots: { customRender: 'col_tokens' } },
         { title: '实际计费', dataIndex: 'total_cost', key: 'cost', width: 210, align: 'right', scopedSlots: { customRender: 'col_cost' } },
         { title: '请求状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'col_status' } },
@@ -767,6 +778,7 @@ export default {
     this.initData()
   },
   methods: {
+    formatRequestReasoning,
     formatBonusUsd(value) {
       return `$${Number(value || 0).toFixed(6)}`
     },

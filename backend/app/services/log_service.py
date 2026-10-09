@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.log import RequestLog, OperationLog, ConsumptionRecord, RequestCacheSummary
 from app.models.user import SysUser
 from app.core.exceptions import ServiceException
+from app.services.request_reasoning_service import RequestReasoningService
 
 
 class LogService:
@@ -340,6 +341,7 @@ class LogService:
             "context_price_multiplier_snapshot",
             "effective_price_multiplier_snapshot",
             "service_tier",
+            "reasoning_snapshot",
             "token_multiplier_snapshot",
             "input_cost",
             "output_cost",
@@ -350,6 +352,8 @@ class LogService:
         for item in items:
             public_item = {key: item.get(key) for key in allowed_keys if key in item}
             public_item["model"] = item.get("model") or item.get("requested_model") or "-"
+            if "reasoning_snapshot" in public_item:
+                public_item["reasoning_snapshot"] = RequestReasoningService.load(public_item["reasoning_snapshot"])
             public_item["error_message"] = LogService._sanitize_user_visible_error_message(
                 item.get("error_message"),
                 item.get("requested_model") or item.get("model"),
@@ -678,6 +682,7 @@ class LogService:
                 "context_price_multiplier_snapshot": float(context_price_multiplier_snapshot or 1),
                 "effective_price_multiplier_snapshot": float(effective_price_multiplier or 1),
                 "service_tier": log.service_tier,
+                "reasoning_snapshot": RequestReasoningService.load(log.reasoning_snapshot),
                 "token_multiplier_snapshot": float(log.token_multiplier_snapshot or 1),
                 "input_cost": float(input_cost or 0),
                 "output_cost": float(output_cost or 0),

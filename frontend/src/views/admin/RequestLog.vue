@@ -485,6 +485,10 @@
               </span>
             </div>
             <div class="detail-item">
+              <span class="detail-item-label">思考等级</span>
+              <span class="detail-item-value">{{ formatRequestReasoning(selectedRecord) }}</span>
+            </div>
+            <div class="detail-item">
               <span class="detail-item-label">计费方式</span>
               <span class="detail-item-value">{{ getBillingTypeText(selectedRecord) }}</span>
             </div>
@@ -669,6 +673,7 @@
 <script>
 import { getRequestUserSummary, listRequestLogs } from '@/api/system'
 import { formatDate, formatUtcDate } from '@/utils'
+import { formatRequestReasoning } from '@/utils/requestReasoning'
 
 export default {
   name: 'RequestLog',
@@ -742,6 +747,13 @@ export default {
           width: 130,
           ellipsis: true,
           customRender: (text, record) => text || record.group_name || '-'
+        },
+        {
+          title: '思考等级',
+          dataIndex: 'reasoning_snapshot',
+          key: 'reasoning_snapshot',
+          width: 170,
+          customRender: (text, record) => formatRequestReasoning(record)
         },
         {
           title: '用量',
@@ -819,7 +831,7 @@ export default {
       return this.columns.filter(column => column.key !== 'actual_model')
     },
     tableScrollX() {
-      return this.showActualModel ? 1730 : 1590
+      return this.visibleColumns.reduce((total, column) => total + (column.width || 120), 0)
     },
     hasUserFilter() {
       return String(this.filters.user_id || '').trim() !== ''
@@ -844,6 +856,7 @@ export default {
     this.fetchList()
   },
   methods: {
+    formatRequestReasoning,
     formatDate,
     formatUtcDate,
     buildRequestParams() {

@@ -550,6 +550,7 @@ CREATE TABLE `request_log` (
     `quota_used_after` DECIMAL(20, 6) DEFAULT 0,
     `quota_cycle_date` DATE DEFAULT NULL,
     `service_tier` VARCHAR(32) DEFAULT NULL COMMENT 'Responses service tier snapshot',
+    `reasoning_snapshot` TEXT DEFAULT NULL COMMENT 'Validated reasoning effort/mode/budget snapshot',
     `cache_read_cost` DECIMAL(12, 6) DEFAULT 0,
     `cache_creation_cost` DECIMAL(12, 6) DEFAULT 0,
     `input_price_per_million_snapshot` DECIMAL(12, 6) DEFAULT 0,

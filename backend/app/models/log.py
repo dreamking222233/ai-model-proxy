@@ -100,6 +100,7 @@ class RequestLog(Base):
     quota_used_after = Column(DECIMAL(20, 6), nullable=True, default=0)
     quota_cycle_date = Column(Date, nullable=True)
     service_tier = Column(String(32), nullable=True, comment="Responses service tier snapshot")
+    reasoning_snapshot = Column(Text, nullable=True, comment="Validated reasoning effort/mode/budget snapshot")
     cache_read_cost = Column(DECIMAL(12, 6), nullable=True, default=0)
     cache_creation_cost = Column(DECIMAL(12, 6), nullable=True, default=0)
     input_price_per_million_snapshot = Column(DECIMAL(12, 6), nullable=True, default=0)

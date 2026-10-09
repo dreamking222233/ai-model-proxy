@@ -11930,6 +11930,13 @@ class ProxyService:
                 headers["anthropic-version"] = anthropic_version
             if anthropic_beta:
                 headers["anthropic-beta"] = anthropic_beta
+            # CPA uses these identities to scope prompt caching and reasoning
+            # replay per Claude Code agent. Keep absent IDs absent so its
+            # metadata-based session fallback still works.
+            for name in ("X-Claude-Code-Session-Id", "X-Claude-Code-Agent-Id"):
+                value = source.get(name.lower())
+                if value:
+                    headers[name] = value.strip()
         else:
             openai_org = source.get("openai-organization")
             openai_project = source.get("openai-project")

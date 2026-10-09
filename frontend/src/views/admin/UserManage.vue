@@ -60,7 +60,7 @@
             <a-avatar size="small" :style="{ background: record.role === 'admin' ? '#667eea' : '#87d068' }">
               {{ (text || '?').charAt(0).toUpperCase() }}
             </a-avatar>
-            <a class="user-name user-name-link" @click="viewUserLogs(record)">{{ text }}</a>
+            <a class="user-name user-name-link" @click="openUserApiKeys(record)">{{ text }}</a>
           </div>
         </template>
 
@@ -165,6 +165,11 @@
                 <a-icon type="control" />
               </a-button>
             </a-tooltip>
+            <a-tooltip title="查看 API Key 用量">
+              <a-button type="link" size="small" style="color: #1890ff" @click="openUserApiKeys(record)">
+                <a-icon type="key" />
+              </a-button>
+            </a-tooltip>
             <a-tooltip :title="record.status === 1 ? '禁用' : '启用'">
               <a-popconfirm
                 :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
@@ -217,7 +222,7 @@
                   {{ (record.username || '?').charAt(0).toUpperCase() }}
                 </a-avatar>
                 <div class="mobile-user-title">
-                  <a class="mobile-user-name" @click="viewUserLogs(record)">{{ record.username || '-' }}</a>
+                  <a class="mobile-user-name" @click="openUserApiKeys(record)">{{ record.username || '-' }}</a>
                   <div class="mobile-user-email">{{ record.email || '未设置邮箱' }}</div>
                 </div>
               </div>
@@ -312,6 +317,10 @@
               <a-button size="small" style="color: #13c2c2" @click="openUserPriceAdjustments(record)">
                 <a-icon type="control" />
                 倍率
+              </a-button>
+              <a-button size="small" style="color: #1890ff" @click="openUserApiKeys(record)">
+                <a-icon type="key" />
+                API Key
               </a-button>
               <a-popconfirm
                 :title="record.status === 1 ? '确定禁用此用户？' : '确定启用此用户？'"
@@ -567,6 +576,59 @@
         </div>
       </a-spin>
     </a-drawer>
+
+    <a-drawer
+      :title="apiKeyDrawerTitle"
+      :visible="apiKeyDrawerVisible"
+      :width="modalWidth(820)"
+      destroyOnClose
+      @close="apiKeyDrawerVisible = false"
+    >
+      <a-spin :spinning="apiKeyLoading">
+        <div v-if="selectedApiKeyUser" class="api-key-user-summary">
+          <a-avatar :style="{ background: '#667eea' }">{{ (selectedApiKeyUser.username || '?').charAt(0).toUpperCase() }}</a-avatar>
+          <div>
+            <div class="api-key-user-name">{{ selectedApiKeyUser.username }}</div>
+            <div class="api-key-user-email">{{ selectedApiKeyUser.email || '未设置邮箱' }}</div>
+          </div>
+        </div>
+        <a-button v-if="selectedApiKeyUser" type="link" @click="viewUserLogs(selectedApiKeyUser)">查看请求日志</a-button>
+        <a-alert v-if="apiKeyError" type="error" message="获取 API Key 失败，请重新打开或刷新" show-icon />
+        <a-table
+          v-if="selectedApiKeyUser && !apiKeyError"
+          size="small"
+          row-key="id"
+          :columns="apiKeyColumns"
+          :data-source="userApiKeys"
+          :pagination="false"
+          :scroll="{ x: 920 }"
+          :locale="{ emptyText: '该用户暂无 API Key' }"
+          class="api-key-table"
+        >
+          <template slot="apiKeyGroup" slot-scope="text, record">
+            <div v-if="record.group_mode === 'special'">
+              <a-tag :color="record.group_status === 'active' ? 'cyan' : 'red'">
+                {{ record.group_name || `分组 #${record.group_id || '-'}` }}{{ record.group_status !== 'active' ? '（已停用）' : '' }}
+              </a-tag>
+              <div class="api-key-group-series">{{ record.group_series_label || getSeriesLabel(record.group_model_series) }}</div>
+            </div>
+            <a-tag v-else color="blue">通用 / 默认分组</a-tag>
+          </template>
+          <template slot="apiKeyUsage" slot-scope="text, record">
+            <div class="api-key-usage-line">请求 {{ formatApiKeyNumber(record.total_requests) }}</div>
+            <div class="api-key-usage-line">Token {{ formatApiKeyNumber(record.total_tokens) }}</div>
+            <div class="api-key-usage-line api-key-cost">$ {{ formatApiKeyCost(record.total_cost) }}</div>
+          </template>
+          <template slot="apiKeyStatus" slot-scope="text">
+            <a-tag :color="text === 'active' ? 'green' : 'default'">{{ { active: '启用', disabled: '禁用', expired: '已过期' }[text] || text }}</a-tag>
+          </template>
+          <template slot="apiKeyLastUsed" slot-scope="text">
+            <span v-if="text">{{ formatUtcDate(text) }}</span>
+            <span v-else class="time-text muted">从未使用</span>
+          </template>
+        </a-table>
+      </a-spin>
+    </a-drawer>
   </div>
 </template>
 
@@ -584,7 +646,8 @@ import {
   getUserEffectivePriceAdjustments,
   createUserPriceAdjustment,
   updateUserPriceAdjustment,
-  deleteUserPriceAdjustment
+  deleteUserPriceAdjustment,
+  listAdminUserApiKeys
 } from '@/api/user'
 import { formatDate, formatUtcDate } from '@/utils'
 import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
@@ -619,6 +682,14 @@ export default {
         { title: '图片积分', dataIndex: 'image_credit_balance', key: 'imageCreditBalance', width: 130, scopedSlots: { customRender: 'imageCreditBalance' } },
         { title: '最后登录', dataIndex: 'last_login', key: 'lastLogin', width: 170, sorter: true, scopedSlots: { customRender: 'lastLogin' } },
         { title: '操作', key: 'action', width: 250, align: 'center', fixed: 'right', scopedSlots: { customRender: 'action' } }
+      ],
+      apiKeyColumns: [
+        { title: '名称', dataIndex: 'name', key: 'name', width: 150, ellipsis: true },
+        { title: '分组', key: 'apiKeyGroup', width: 190, scopedSlots: { customRender: 'apiKeyGroup' } },
+        { title: 'Key 前缀', dataIndex: 'key_prefix', key: 'key_prefix', width: 150, ellipsis: true },
+        { title: '用量统计', key: 'apiKeyUsage', width: 180, scopedSlots: { customRender: 'apiKeyUsage' } },
+        { title: '状态', dataIndex: 'status', key: 'apiKeyStatus', width: 90, scopedSlots: { customRender: 'apiKeyStatus' } },
+        { title: '最近使用', dataIndex: 'last_used_at', key: 'apiKeyLastUsed', width: 160, scopedSlots: { customRender: 'apiKeyLastUsed' } }
       ],
       priceSeriesOptions: [
         { value: 'all', label: '全部系列' },
@@ -700,7 +771,13 @@ export default {
         priority: 100,
         enabled: true,
         description: ''
-      }
+      },
+      apiKeyDrawerVisible: false,
+      apiKeyLoading: false,
+      apiKeyError: false,
+      apiKeyRequestId: 0,
+      selectedApiKeyUser: null,
+      userApiKeys: []
     }
   },
   computed: {
@@ -719,6 +796,10 @@ export default {
     priceAdjustmentDrawerTitle() {
       if (!this.selectedPriceUser) return '用户专属倍率'
       return `用户专属倍率 - ${this.selectedPriceUser.username || `#${this.selectedPriceUser.id}`}`
+    },
+    apiKeyDrawerTitle() {
+      if (!this.selectedApiKeyUser) return '用户 API Key 用量'
+      return `API Key 用量 - ${this.selectedApiKeyUser.username || `#${this.selectedApiKeyUser.id}`}`
     }
   },
   mounted() {
@@ -985,6 +1066,33 @@ export default {
       this.resetPriceRuleForm()
       await this.fetchUserPriceAdjustments()
     },
+    async openUserApiKeys(record) {
+      const requestId = ++this.apiKeyRequestId
+      this.apiKeyError = false
+      this.selectedApiKeyUser = record
+      this.userApiKeys = []
+      this.apiKeyDrawerVisible = true
+      this.apiKeyLoading = true
+      try {
+        const res = await listAdminUserApiKeys(record.id)
+        if (requestId !== this.apiKeyRequestId) return
+        const data = res.data || []
+        this.userApiKeys = Array.isArray(data) ? data : (data.list || [])
+      } catch (err) {
+        if (requestId !== this.apiKeyRequestId) return
+        this.apiKeyError = true
+        console.error('Failed to fetch user API keys:', err)
+        this.$message.error(err.message || '获取用户 API Key 失败')
+      } finally {
+        if (requestId === this.apiKeyRequestId) this.apiKeyLoading = false
+      }
+    },
+    formatApiKeyNumber(value) {
+      return Number(value || 0).toLocaleString('zh-CN')
+    },
+    formatApiKeyCost(value) {
+      return Number(value || 0).toFixed(4)
+    },
     async fetchUserPriceAdjustments() {
       if (!this.selectedPriceUser) return
       this.priceAdjustmentLoading = true
@@ -1090,6 +1198,18 @@ export default {
 </script>
 
 <style lang="less" scoped>
+.api-key-user-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.api-key-user-name { font-weight: 600; }
+.api-key-user-email, .api-key-group-series { color: #8c8c8c; font-size: 12px; }
+.api-key-usage-line { white-space: nowrap; line-height: 1.8; }
+.api-key-cost { color: #fa8c16; }
+.api-key-table { margin-top: 12px; }
+
 .user-manage-page {
   .stat-row {
     margin-bottom: 20px;

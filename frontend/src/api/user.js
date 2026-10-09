@@ -169,6 +169,20 @@ export function revealApiKey(id) {
   })
 }
 
+export function resetApiKeyUsage(id) {
+  return request({
+    url: `/api/user/api-keys/${id}/usage/reset`,
+    method: 'put'
+  })
+}
+
+export function listAdminUserApiKeys(userId) {
+  return request({
+    url: `/api/admin/users/${userId}/api-keys`,
+    method: 'get'
+  })
+}
+
 // ==================== User Stats ====================
 
 export function getModelUsageStats(params) {

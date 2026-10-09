@@ -17,6 +17,7 @@ from app.schemas.user import (
 from app.schemas.model import UserPriceAdjustmentRuleCreate, UserPriceAdjustmentRuleUpdate
 from app.schemas.common import ResponseModel
 from app.services.price_adjustment_service import PriceAdjustmentService
+from app.services.api_key_service import ApiKeyService
 
 router = APIRouter(prefix="/api/admin/users", tags=["管理-用户管理"])
 
@@ -60,6 +61,16 @@ def list_user_price_adjustment_rules(
         enabled=enabled,
     )
     return ResponseModel(data={"list": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/{user_id}/api-keys", response_model=ResponseModel)
+def list_user_api_keys(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(require_admin),
+):
+    keys = ApiKeyService.list_api_keys_for_admin(db, user_id)
+    return ResponseModel(data=keys)
 
 
 @router.get("/{user_id}/price-adjustments/effective", response_model=ResponseModel)

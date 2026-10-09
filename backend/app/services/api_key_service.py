@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.user import UserApiKey
+from app.models.user import SysUser, UserApiKey
 from app.models.model import ModelGroup
 from app.core.model_series import MODEL_SERIES_LABELS
 from app.core.security import generate_api_key
@@ -123,8 +124,25 @@ class ApiKeyService:
             **cls._group_payload(db, api_key),
         }
 
-    @staticmethod
-    def list_api_keys(db: Session, user_id: int) -> list[dict]:
+    @classmethod
+    def _serialize_api_key(cls, db: Session, api_key: UserApiKey) -> dict:
+        """Serialize the public API key metadata and current usage snapshot."""
+        return {
+            "id": api_key.id,
+            "name": api_key.name,
+            "key_prefix": api_key.key_prefix,
+            "status": api_key.status,
+            "total_requests": int(api_key.total_requests or 0),
+            "total_tokens": int(api_key.total_tokens or 0),
+            "total_cost": float(api_key.total_cost or 0),
+            "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None,
+            "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+            "created_at": api_key.created_at.isoformat() if api_key.created_at else None,
+            **cls._group_payload(db, api_key),
+        }
+
+    @classmethod
+    def list_api_keys(cls, db: Session, user_id: int) -> list[dict]:
         """
         List all API keys for a user.
 
@@ -137,22 +155,39 @@ class ApiKeyService:
             .all()
         )
 
-        result = []
-        for k in keys:
-            result.append({
-                "id": k.id,
-                "name": k.name,
-                "key_prefix": k.key_prefix,
-                "status": k.status,
-                "total_requests": k.total_requests,
-                "total_tokens": k.total_tokens,
-                "total_cost": float(k.total_cost) if k.total_cost else 0.0,
-                "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-                "expires_at": k.expires_at.isoformat() if k.expires_at else None,
-                "created_at": k.created_at.isoformat() if k.created_at else None,
-                **ApiKeyService._group_payload(db, k),
-            })
-        return result
+        return [cls._serialize_api_key(db, key) for key in keys]
+
+    @classmethod
+    def list_api_keys_for_admin(cls, db: Session, user_id: int) -> list[dict]:
+        """List a user's API keys for an administrator, without revealing secrets."""
+        if not db.query(SysUser.id).filter(SysUser.id == user_id).first():
+            raise ServiceException(404, "用户不存在", "USER_NOT_FOUND")
+        keys = (
+            db.query(UserApiKey)
+            .filter(UserApiKey.user_id == user_id)
+            .order_by(UserApiKey.created_at.desc(), UserApiKey.id.desc())
+            .all()
+        )
+        return [cls._serialize_api_key(db, key) for key in keys]
+
+    @classmethod
+    def reset_usage(cls, db: Session, user_id: int, key_id: int) -> dict:
+        """Reset one of the current user's usage counters."""
+        api_key = (
+            db.query(UserApiKey)
+            .filter(UserApiKey.id == key_id, UserApiKey.user_id == user_id)
+            .with_for_update()
+            .first()
+        )
+        if not api_key:
+            raise ServiceException(404, "API key not found", "KEY_NOT_FOUND")
+
+        api_key.total_requests = 0
+        api_key.total_tokens = 0
+        api_key.total_cost = Decimal("0")
+        db.commit()
+        db.refresh(api_key)
+        return cls._serialize_api_key(db, api_key)
 
     @classmethod
     def update_group_binding(

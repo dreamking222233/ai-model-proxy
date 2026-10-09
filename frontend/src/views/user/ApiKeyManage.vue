@@ -59,7 +59,7 @@
             :pagination="false"
             rowKey="id"
             size="middle"
-            :scroll="{ x: 1490 }"
+            :scroll="{ x: 1530 }"
             class="premium-table"
           >
             <!-- Name Column -->
@@ -156,6 +156,19 @@
             <!-- Action Column -->
             <template slot="action" slot-scope="text, record">
               <div class="row-actions">
+                <a-popconfirm
+                  title="确定重置请求数、Token 和美元消耗？历史账单和余额不受影响。"
+                  :disabled="!!resettingKeys[record.id]"
+                  ok-text="确定"
+                  cancel-text="取消"
+                  @confirm="handleResetUsage(record)"
+                >
+                  <a-tooltip title="重置用量统计">
+                    <a-button type="link" class="action-btn reset-btn" :loading="!!resettingKeys[record.id]" aria-label="重置用量统计">
+                      <a-icon type="reload" />
+                    </a-button>
+                  </a-tooltip>
+                </a-popconfirm>
                 <a-tooltip :title="record.status === 'active' ? '禁用密钥' : '启用密钥'">
                   <a-button
                     type="link"
@@ -422,7 +435,7 @@
 </template>
 
 <script>
-import { listApiKeys, createApiKey, updateApiKeyGroupBinding, getApiKeyGroupOptions, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, getSiteConfig } from '@/api/user'
+import { listApiKeys, createApiKey, updateApiKeyGroupBinding, getApiKeyGroupOptions, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, resetApiKeyUsage, getSiteConfig } from '@/api/user'
 import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
 import { formatUtcDate } from '@/utils'
 
@@ -432,6 +445,7 @@ export default {
     return {
       loading: false,
       apiKeys: [],
+      resettingKeys: {},
       createModalVisible: false,
       createLoading: false,
       createForm: {
@@ -472,7 +486,7 @@ export default {
         { title: '用量统计', key: 'usage_stats', width: 320, scopedSlots: { customRender: 'usage_stats' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '最近活跃', dataIndex: 'last_used_at', key: 'last_used_at', width: 180, scopedSlots: { customRender: 'last_used_at' } },
-        { title: '安全操作', key: 'action', width: 140, fixed: 'right', align: 'center', scopedSlots: { customRender: 'action' } }
+        { title: '安全操作', key: 'action', width: 180, fixed: 'right', align: 'center', scopedSlots: { customRender: 'action' } }
       ]
     }
   },
@@ -687,6 +701,19 @@ export default {
         this.fetchApiKeys()
       } finally {
         this.bindingLoading = false
+      }
+    },
+    async handleResetUsage(record) {
+      if (this.resettingKeys[record.id]) return
+      this.$set(this.resettingKeys, record.id, true)
+      try {
+        await resetApiKeyUsage(record.id)
+        this.$message.success('API Key 用量统计已重置')
+        await this.fetchApiKeys()
+      } catch (e) {
+        // error handled by the request interceptor
+      } finally {
+        this.$delete(this.resettingKeys, record.id)
       }
     },
     getSeriesLabel(value) {

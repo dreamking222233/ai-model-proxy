@@ -12292,6 +12292,7 @@ class ProxyService:
                 fresh_api_key_record = (
                     write_db.query(UserApiKey)
                     .filter(UserApiKey.id == api_key_id)
+                    .with_for_update()
                     .first()
                 )
 
@@ -14432,6 +14433,7 @@ class ProxyService:
                 fresh_api_key_record = (
                     write_db.query(UserApiKey)
                     .filter(UserApiKey.id == api_key_id)
+                    .with_for_update()
                     .first()
                 )
                 if fresh_api_key_record:
@@ -18670,6 +18672,7 @@ class ProxyService:
                 fresh_api_key_record = (
                     write_db.query(UserApiKey)
                     .filter(UserApiKey.id == api_key_id)
+                    .with_for_update()
                     .first()
                 )
                 if fresh_api_key_record:

@@ -93,6 +93,16 @@ def enable_api_key(
     return ResponseModel(message="API Key enabled")
 
 
+@router.put("/{key_id}/usage/reset", response_model=ResponseModel)
+def reset_api_key_usage(
+    key_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    result = ApiKeyService.reset_usage(db, current_user.id, key_id)
+    return ResponseModel(data=result, message="API Key 用量统计已重置")
+
+
 @router.put("/{key_id}/group", response_model=ResponseModel)
 def update_group_binding(
     key_id: int,

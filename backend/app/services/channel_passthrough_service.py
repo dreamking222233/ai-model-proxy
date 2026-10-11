@@ -22,6 +22,7 @@ from fastapi import Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.exceptions import ServiceException
 from app.database import release_session_connection
 from app.models.channel import Channel
@@ -87,6 +88,11 @@ class UsageObserver:
         self.summary: dict[str, Any] = {}
         self._openai_usage: dict[str, Any] = {}
         self._anthropic_usage: dict[str, Any] = {}
+        self._audit_usage = protocol == "anthropic" and getattr(channel, "id", None) in (
+            settings.ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS
+        )
+        self.usage_audit: list[dict[str, Any]] = []
+        self.usage_event_count = 0
 
     def feed_json(self, payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -110,6 +116,37 @@ class UsageObserver:
                 # must survive output-only deltas, including nested cache usage.
                 ProxyService._merge_anthropic_usage_snapshot(self._anthropic_usage, usage)
                 self.summary = AnthropicPromptCacheService.extract_usage_summary(self._anthropic_usage)
+                if self._audit_usage:
+                    self.usage_event_count += 1
+                    # Keep the first and final usage fragments, never business
+                    # content or arbitrary upstream metadata. Bound stream memory.
+                    tokens = {}
+                    for key in (
+                        "input_tokens", "output_tokens", "prompt_tokens", "cached_tokens",
+                        "prompt_cache_hit_tokens", "prompt_cache_miss_tokens",
+                        "cache_read_input_tokens", "cache_creation_input_tokens",
+                        "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens",
+                    ):
+                        count = ProxyService._first_usage_token_count(usage.get(key))
+                        if count is not None:
+                            tokens[key] = count
+                    for container, keys in (
+                        ("cache_creation", ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")),
+                        ("input_tokens_details", ("cached_tokens", "cache_write_tokens", "cache_creation_tokens")),
+                        ("prompt_tokens_details", ("cached_tokens", "cache_write_tokens", "cache_creation_tokens")),
+                    ):
+                        detail = usage.get(container)
+                        if isinstance(detail, dict):
+                            for key in keys:
+                                count = ProxyService._first_usage_token_count(detail.get(key))
+                                if count is not None:
+                                    tokens[f"{container}.{key}"] = count
+                    audit_event = event_type if event_type in {"message_start", "message_delta", "message"} else "other"
+                    snapshot = {"event": audit_event, "usage": tokens, "normalized": dict(self.summary)}
+                    if len(self.usage_audit) < 4:
+                        self.usage_audit.append(snapshot)
+                    else:
+                        self.usage_audit[-1] = snapshot
                 self.usage_seen = True
             if event_type in {"message_stop"} or payload.get("stop_reason"):
                 self.completed = True
@@ -483,6 +520,14 @@ class ChannelPassthroughService:
         cache_info = ChannelPassthroughService._cache_info(observer, protocol)
         input_tokens = int(observer.summary.get("input_tokens", 0) or 0)
         output_tokens = int(observer.summary.get("output_tokens", 0) or 0)
+        if observer.usage_audit:
+            logger.info(
+                "Anthropic usage audit request_id=%s user_id=%s channel_id=%s usage_events=%s "
+                "completed=%s failed=%s trace=%s",
+                request_id, user.id, channel.id, observer.usage_event_count,
+                observer.completed, observer.failed,
+                json.dumps(observer.usage_audit, ensure_ascii=False),
+            )
         response_time_ms = max(0, int((time.time() - started_at) * 1000))
         if should_charge:
             ProxyService._finalize_successful_text_request(

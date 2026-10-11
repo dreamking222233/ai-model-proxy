@@ -707,11 +707,14 @@ export default {
       if (this.resettingKeys[record.id]) return
       this.$set(this.resettingKeys, record.id, true)
       try {
-        await resetApiKeyUsage(record.id)
+        const res = await resetApiKeyUsage(record.id)
+        const index = this.apiKeys.findIndex(key => key.id === record.id)
+        if (index !== -1) {
+          this.$set(this.apiKeys, index, { ...this.apiKeys[index], ...res.data })
+        }
         this.$message.success('API Key 用量统计已重置')
-        await this.fetchApiKeys()
       } catch (e) {
-        // error handled by the request interceptor
+        this.$message.error(e.message || '重置用量统计失败')
       } finally {
         this.$delete(this.resettingKeys, record.id)
       }

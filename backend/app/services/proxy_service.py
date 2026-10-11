@@ -177,8 +177,12 @@ class _SecurityRiskMarkerStreamBuffer:
 # Default timeout for upstream text requests (seconds).
 # A single Codex/Responses turn can run about 5 minutes; cap at 600s.
 _UPSTREAM_TIMEOUT = 600.0
-# Streaming read timeout. Same 600s cap as non-stream text requests.
-_UPSTREAM_STREAM_READ_TIMEOUT = 600.0
+# Streaming read timeout: max silence between upstream bytes.
+# sub2api sends SSE keepalive about every 10s after it has upstream headers,
+# so a healthy 30s generation never sits this long without a byte.
+# 180s only cuts the old failure mode where a stuck attempt added a full 600s
+# before the next retry. It does not shorten a request that is already flowing.
+_UPSTREAM_STREAM_READ_TIMEOUT = 180.0
 # Longer timeout for image generation requests (seconds)
 _IMAGE_UPSTREAM_TIMEOUT = 600.0
 # Longer timeout for async video task creation and content proxying (seconds)
@@ -227,6 +231,25 @@ class ResponsesTurnError(Exception):
 
 class ProxyService:
     """Stateless proxy that forwards LLM requests through managed channels."""
+
+    _shared_upstream_client_instance = None
+
+    @staticmethod
+    def _shared_upstream_client() -> httpx.AsyncClient:
+        """Reuse one client so localhost hops to sub2api keep their connections."""
+        client = ProxyService._shared_upstream_client_instance
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(
+                timeout=None,
+                limits=httpx.Limits(
+                    max_connections=400,
+                    max_keepalive_connections=100,
+                    keepalive_expiry=60.0,
+                ),
+                follow_redirects=False,
+            )
+            ProxyService._shared_upstream_client_instance = client
+        return client
 
     _LEGACY_CLAUDE_TOOL_CONTEXT_GUARD_TOKENS = 20000
     _LEGACY_CLAUDE_TOOL_CONTEXT_HARD_GUARD_TOKENS = 60000
@@ -3607,6 +3630,10 @@ class ProxyService:
                 "unsupported content",
                 "unsupported file",
                 "unsupported media",
+                "access forbidden",
+                "permission denied",
+                "insufficient permissions",
+                "not authorized",
             )
         )
 
@@ -3836,8 +3863,10 @@ class ProxyService:
             attempt += 1
             reached_retry_boundary = False
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream("POST", url, json=payload, headers=headers) as response:
+                client = ProxyService._shared_upstream_client()
+                async with client.stream(
+                    "POST", url, json=payload, headers=headers, timeout=timeout,
+                ) as response:
                         if response.status_code != 200:
                             body = await response.aread()
                             if (
@@ -3876,9 +3905,14 @@ class ProxyService:
                         return
             except Exception as exc:
                 last_exception = exc
+                # A silent timeout already cost the caller the full read budget.
+                # One retry is enough; repeating it up to max_retry_count stacks minutes
+                # onto a request the upstream may finish in tens of seconds.
+                timeout_retry_exhausted = isinstance(exc, httpx.TimeoutException) and attempt >= 2
                 if (
                     not reached_retry_boundary
                     and attempt < max_attempts
+                    and not timeout_retry_exhausted
                     and ProxyService._should_retry_upstream_exception(exc)
                 ):
                     retry_delay = 0.6 * attempt
@@ -7520,7 +7554,13 @@ class ProxyService:
                         and ProxyService._should_retry_upstream_response(upstream_status, str(exc))
                     )
                 )
-                if emitted_visible_payload or attempt >= max_attempts or not should_retry_error:
+                timeout_retry_exhausted = isinstance(exc, httpx.TimeoutException) and attempt >= 2
+                if (
+                    emitted_visible_payload
+                    or attempt >= max_attempts
+                    or timeout_retry_exhausted
+                    or not should_retry_error
+                ):
                     raise
                 retry_delay = 0.6 * attempt
                 logger.warning(
@@ -7599,15 +7639,28 @@ class ProxyService:
 
     @staticmethod
     def _rewrite_response_model(payload: dict, requested_model: str) -> dict:
-        """Rewrite upstream model fields back to the client-requested model alias."""
-        rewritten = copy.deepcopy(payload)
-        if not requested_model:
+        """Rewrite upstream model fields back to the client-requested model alias.
+
+        Only the dicts that actually change are copied. Deep-copying every SSE
+        event, including response.completed, blocked the event loop and kept
+        sub2api from being read until the whole payload was duplicated.
+        """
+        if not requested_model or not isinstance(payload, dict):
+            return payload
+        response = payload.get("response")
+        if isinstance(response, dict):
+            if response.get("model") == requested_model:
+                return payload
+            rewritten = dict(payload)
+            rewritten_response = dict(response)
+            rewritten_response["model"] = requested_model
+            rewritten["response"] = rewritten_response
             return rewritten
-        if isinstance(rewritten.get("response"), dict):
-            rewritten["response"]["model"] = requested_model
-        elif rewritten.get("object") == "response":
+        if payload.get("object") == "response" and payload.get("model") not in (None, "", requested_model):
+            rewritten = dict(payload)
             rewritten["model"] = requested_model
-        return rewritten
+            return rewritten
+        return payload
 
     @staticmethod
     def _build_responses_error_payload(

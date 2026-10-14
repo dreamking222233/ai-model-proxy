@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     # Server
     SERVER_PORT: int = 8085
     STREAM_HEARTBEAT_INTERVAL_SECONDS: int = 20
+    ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS: List[int] = []
 
     # CORS
     CORS_ORIGINS: List[str] = [

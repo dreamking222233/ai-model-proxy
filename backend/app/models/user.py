@@ -1,7 +1,7 @@
 """ORM models for sys_user and user_api_key tables."""
 
 from sqlalchemy import (
-    Column, BigInteger, String, DateTime, SmallInteger, DECIMAL, func, Index,
+    Column, BigInteger, String, DateTime, Date, SmallInteger, DECIMAL, func, Index,
 )
 
 from app.database import Base
@@ -56,6 +56,9 @@ class UserApiKey(Base):
     total_requests = Column(BigInteger, nullable=False, default=0)
     total_tokens = Column(BigInteger, nullable=False, default=0)
     total_cost = Column(DECIMAL(20, 6), nullable=False, default=0, comment="Total cost in USD")
+    daily_limit_usd = Column(DECIMAL(20, 6), nullable=True, comment="Daily USD limit; NULL means unlimited")
+    daily_used_usd = Column(DECIMAL(20, 6), nullable=False, default=0)
+    daily_usage_date = Column(Date, nullable=True, comment="Beijing settlement date")
     group_mode = Column(String(16), nullable=True, default="unified", comment="unified/special")
     group_model_series = Column(String(32), nullable=True, comment="Special key model series")
     group_id = Column(BigInteger, nullable=True, index=True, comment="Special key routing group")

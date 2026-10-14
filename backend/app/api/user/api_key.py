@@ -5,7 +5,7 @@ from app.core.dependencies import get_current_user
 from app.models.user import SysUser
 from app.services.api_key_service import ApiKeyService
 from app.schemas.common import ResponseModel
-from app.schemas.user import ApiKeyCreateRequest, ApiKeyGroupBindingUpdate
+from app.schemas.user import ApiKeyCreateRequest, ApiKeyGroupBindingUpdate, ApiKeyDailyLimitUpdate
 
 router = APIRouter(prefix="/api/user/api-keys", tags=["用户-API Key"])
 
@@ -32,6 +32,7 @@ def create_api_key(
         data.group_mode,
         data.group_model_series,
         data.group_id,
+        data.daily_limit_usd,
     )
     return ResponseModel(data=result)
 
@@ -101,6 +102,27 @@ def reset_api_key_usage(
 ):
     result = ApiKeyService.reset_usage(db, current_user.id, key_id)
     return ResponseModel(data=result, message="API Key 用量统计已重置")
+
+
+@router.put("/{key_id}/daily-limit", response_model=ResponseModel)
+def update_daily_limit(
+    key_id: int,
+    data: ApiKeyDailyLimitUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    result = ApiKeyService.set_daily_limit(db, current_user.id, key_id, data.daily_limit_usd)
+    return ResponseModel(data=result, message="每日限额已更新")
+
+
+@router.put("/{key_id}/daily-usage/reset", response_model=ResponseModel)
+def reset_daily_usage(
+    key_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(get_current_user),
+):
+    result = ApiKeyService.reset_daily_usage(db, current_user.id, key_id)
+    return ResponseModel(data=result, message="今日限额用量已重置")
 
 
 @router.put("/{key_id}/group", response_model=ResponseModel)

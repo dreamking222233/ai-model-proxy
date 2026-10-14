@@ -1,8 +1,8 @@
 """API key management service."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,78 @@ from app.services.model_group_service import ModelGroupService
 
 class ApiKeyService:
     """CRUD operations for user API keys."""
+
+    DAILY_LIMIT_ERROR = "API_KEY_DAILY_LIMIT_EXCEEDED"
+    USD_PRECISION = Decimal("0.000001")
+
+    @staticmethod
+    def get_beijing_date():
+        return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).date()
+
+    @classmethod
+    def daily_usage_payload(cls, api_key: UserApiKey) -> dict:
+        today = cls.get_beijing_date()
+        used = Decimal(str(api_key.daily_used_usd or 0)) if api_key.daily_usage_date == today else Decimal(0)
+        limit = api_key.daily_limit_usd
+        return {
+            "daily_limit_usd": float(limit) if limit is not None else None,
+            "daily_used_usd": float(used),
+            "daily_usage_date": today.isoformat(),
+            "daily_limit_exceeded": limit is not None and used >= limit,
+        }
+
+    @classmethod
+    def assert_daily_limit(cls, api_key: UserApiKey) -> None:
+        today = cls.get_beijing_date()
+        used = Decimal(str(api_key.daily_used_usd or 0)) if api_key.daily_usage_date == today else Decimal(0)
+        if api_key.daily_limit_usd is not None and used >= api_key.daily_limit_usd:
+            raise ServiceException(429, "当日请求已超出设置最大额度", cls.DAILY_LIMIT_ERROR)
+
+    @classmethod
+    def assert_current_daily_limit(cls, key_id: int) -> None:
+        # A fresh transaction is essential for long-lived websocket connections.
+        from app.database import session_scope
+        with session_scope() as db:
+            api_key = db.query(UserApiKey).filter(UserApiKey.id == key_id).first()
+            if api_key is None:
+                raise ServiceException(401, "API key not found", "KEY_NOT_FOUND")
+            cls.assert_daily_limit(api_key)
+
+    @classmethod
+    def record_daily_cost(cls, api_key: UserApiKey, cost: Decimal) -> None:
+        """Called within the ledger transaction, after acquiring the Key row lock."""
+        today = cls.get_beijing_date()
+        if api_key.daily_usage_date != today:
+            api_key.daily_usage_date = today
+            api_key.daily_used_usd = Decimal(0)
+        amount = Decimal(str(cost)).quantize(cls.USD_PRECISION, rounding=ROUND_HALF_UP)
+        api_key.daily_used_usd = Decimal(str(api_key.daily_used_usd or 0)) + amount
+
+    @classmethod
+    def _locked_owned_key(cls, db: Session, user_id: int, key_id: int) -> UserApiKey:
+        api_key = db.query(UserApiKey).filter(
+            UserApiKey.id == key_id, UserApiKey.user_id == user_id,
+        ).populate_existing().with_for_update().first()
+        if api_key is None:
+            raise ServiceException(404, "API key not found", "KEY_NOT_FOUND")
+        return api_key
+
+    @classmethod
+    def set_daily_limit(cls, db: Session, user_id: int, key_id: int, limit: Decimal | None) -> dict:
+        api_key = cls._locked_owned_key(db, user_id, key_id)
+        api_key.daily_limit_usd = limit
+        db.commit()
+        db.refresh(api_key)
+        return cls._serialize_api_key(db, api_key)
+
+    @classmethod
+    def reset_daily_usage(cls, db: Session, user_id: int, key_id: int) -> dict:
+        api_key = cls._locked_owned_key(db, user_id, key_id)
+        api_key.daily_usage_date = cls.get_beijing_date()
+        api_key.daily_used_usd = Decimal(0)
+        db.commit()
+        db.refresh(api_key)
+        return cls._serialize_api_key(db, api_key)
 
     @staticmethod
     def _normalize_binding(
@@ -80,6 +152,7 @@ class ApiKeyService:
         group_mode: str = "unified",
         group_model_series: str | None = None,
         group_id: int | None = None,
+        daily_limit_usd: Decimal | None = None,
     ) -> dict:
         """
         Generate and persist a new API key.
@@ -107,6 +180,7 @@ class ApiKeyService:
             key_hash=key_hash,
             key_full=full_key,
             status="active",
+            daily_limit_usd=daily_limit_usd,
             group_mode=mode,
             group_model_series=series,
             group_id=normalized_group_id,
@@ -121,6 +195,7 @@ class ApiKeyService:
             "key": full_key,  # shown only once
             "key_prefix": api_key.key_prefix,
             "created_at": api_key.created_at,
+            **cls.daily_usage_payload(api_key),
             **cls._group_payload(db, api_key),
         }
 
@@ -135,6 +210,7 @@ class ApiKeyService:
             "total_requests": int(api_key.total_requests or 0),
             "total_tokens": int(api_key.total_tokens or 0),
             "total_cost": float(api_key.total_cost or 0),
+            **cls.daily_usage_payload(api_key),
             "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None,
             "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
             "created_at": api_key.created_at.isoformat() if api_key.created_at else None,

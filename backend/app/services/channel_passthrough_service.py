@@ -31,6 +31,7 @@ from app.models.user import SysUser, UserApiKey
 from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.billing_concurrency_service import BillingConcurrencyService
 from app.services.model_service import ModelService
+from app.services.api_key_service import ApiKeyService
 
 logger = logging.getLogger(__name__)
 
@@ -478,7 +479,7 @@ class ChannelPassthroughService:
         billing_context = ProxyService._build_frozen_text_billing_context(
             ProxyService._build_text_billing_context(protocol, request_data, group_context), quota
         )
-        # Estimate logical_input_tokens for fallback when upstream returns 0
+        # Estimate input only as a fallback when upstream reports no input usage.
         if protocol == "anthropic":
             logical_input_tokens = ProxyService.estimate_anthropic_input_tokens(request_data)
         elif protocol == "responses":
@@ -530,16 +531,17 @@ class ChannelPassthroughService:
         input_tokens = int(observer.summary.get("input_tokens", 0) or 0)
         output_tokens = int(observer.summary.get("output_tokens", 0) or 0)
 
-        # Fallback: 当上游返回 input_tokens=0 但请求实际有内容时，使用 logical_input_tokens
-        if input_tokens == 0 and output_tokens > 0:
-            logical_input_tokens = int(billing_context.get("logical_input_tokens", 0) or 0)
-            if logical_input_tokens > 0:
+        # 普通输入为零可能是全量缓存；实际逻辑输入包含读/写缓存，不能重复补计。
+        reported_input_tokens = int(observer.summary.get("logical_input_tokens", 0) or 0)
+        if input_tokens == 0 and reported_input_tokens == 0 and output_tokens > 0:
+            estimated_input_tokens = int(billing_context.get("logical_input_tokens", 0) or 0)
+            if estimated_input_tokens > 0:
                 logger.info(
-                    "Passthrough upstream returned input_tokens=0, using logical_input_tokens=%d as fallback "
+                    "Passthrough upstream reported no input usage, using estimated_input_tokens=%d as fallback "
                     "request_id=%s channel=%s protocol=%s",
-                    logical_input_tokens, request_id, channel.name, protocol
+                    estimated_input_tokens, request_id, channel.name, protocol
                 )
-                input_tokens = logical_input_tokens
+                input_tokens = estimated_input_tokens
 
         if observer.usage_audit:
             logger.info(
@@ -1094,6 +1096,9 @@ class ChannelPassthroughService:
         last_model_name = requested_model
 
         def build_turn(payload: dict, model_name: str, model: UnifiedModel) -> dict[str, Any]:
+            key_id = ProxyService._safe_object_id(api_key_record)
+            if key_id:
+                ApiKeyService.assert_current_daily_limit(key_id)
             is_prewarm = payload.get("generate") is False
             request_id = str(uuid.uuid4())
             admission = None
@@ -1121,11 +1126,23 @@ class ChannelPassthroughService:
             }
 
         first_type = str(first_payload.get("type") or "")
-        turn = (
-            build_turn(first_payload, requested_model, candidate.unified_model)
-            if first_type in {"response.create", "response.append"}
-            else None
-        )
+        async def reject_daily_limit(exc: ServiceException) -> None:
+            await websocket.send_text(json.dumps(ProxyService._build_responses_error_payload(
+                exc.detail, status_code=429, error_type="rate_limit_error", error_code=exc.error_code,
+            ), ensure_ascii=False))
+            await websocket.close(code=1008)
+
+        try:
+            turn = (
+                build_turn(first_payload, requested_model, candidate.unified_model)
+                if first_type in {"response.create", "response.append"}
+                else None
+            )
+        except ServiceException as exc:
+            if exc.error_code != ApiKeyService.DAILY_LIMIT_ERROR:
+                raise
+            await reject_daily_limit(exc)
+            return
         user = ChannelPassthroughService._snapshot_orm_columns(user)
         api_key_record = ChannelPassthroughService._snapshot_orm_columns(api_key_record)
         finalized_response_ids: set[str] = set()
@@ -1176,6 +1193,16 @@ class ChannelPassthroughService:
                 )
             finally:
                 BillingConcurrencyService.release(current_turn.get("lease"))
+
+        sender = receiver = None
+
+        async def stop_forwarding() -> None:
+            tasks = [task for task in (sender, receiver) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         try:
             upstream = await connect_upstream()
@@ -1282,12 +1309,18 @@ class ChannelPassthroughService:
             finalize_turn(turn, exc)
         except Exception as exc:
             finalize_turn(turn, exc)
+            if isinstance(exc, ServiceException) and exc.error_code == ApiKeyService.DAILY_LIMIT_ERROR:
+                await stop_forwarding()
+                if client_connected:
+                    await reject_daily_limit(exc)
+                return
             if committed:
                 if client_connected:
                     await websocket.close(code=1011, reason="上游 WebSocket 会话异常")
                 return
             raise
         finally:
+            await stop_forwarding()
             if turn and not turn.get("finalized"):
                 finalize_turn(
                     turn,

@@ -244,7 +244,7 @@ async def verify_api_key(
     Checks "anthropic-api-key", "Authorization: Bearer sk-xxx", and "X-API-Key: sk-xxx" headers.
     Returns the owning SysUser and the UserApiKey record.
     """
-    return verify_api_key_from_headers(
+    user, api_key = verify_api_key_from_headers(
         db,
         authorization=request.headers.get("Authorization"),
         x_api_key=request.headers.get("X-API-Key"),
@@ -254,3 +254,7 @@ async def verify_api_key(
         origin=request.headers.get("Origin"),
         referer=request.headers.get("Referer"),
     )
+    if request.method == "POST" and not request.url.path.rstrip("/").endswith("/messages/count_tokens"):
+        from app.services.api_key_service import ApiKeyService
+        ApiKeyService.assert_daily_limit(api_key)
+    return user, api_key

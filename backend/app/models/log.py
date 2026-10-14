@@ -395,6 +395,7 @@ class VideoTaskBillingSnapshot(Base):
     video_id = Column(String(128), nullable=False, unique=True, index=True)
     request_id = Column(String(36), nullable=True, index=True)
     user_id = Column(BigInteger, nullable=False, index=True)
+    user_api_key_id = Column(BigInteger, nullable=True, comment="Creating API key; NULL for historical tasks")
     channel_id = Column(BigInteger, nullable=False, index=True)
     group_id_snapshot = Column(BigInteger, nullable=True, index=True)
     group_name_snapshot = Column(String(128), nullable=True)

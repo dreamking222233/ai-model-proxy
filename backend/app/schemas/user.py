@@ -13,6 +13,11 @@ class ApiKeyCreateRequest(BaseModel):
     group_mode: Literal["unified", "special"] = "unified"
     group_model_series: Optional[str] = Field(None, max_length=32)
     group_id: Optional[int] = Field(None, gt=0)
+    daily_limit_usd: Optional[Decimal] = Field(None, gt=0, le=1000000000, decimal_places=6)
+
+
+class ApiKeyDailyLimitUpdate(BaseModel):
+    daily_limit_usd: Optional[Decimal] = Field(..., gt=0, le=1000000000, decimal_places=6)
 
 
 class ApiKeyGroupBindingUpdate(BaseModel):

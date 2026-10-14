@@ -318,3 +318,11 @@ export function getPerMinuteStats(params) {
     params
   })
 }
+
+export function updateApiKeyDailyLimit(id, data) {
+  return request({ url: `/api/user/api-keys/${id}/daily-limit`, method: 'put', data })
+}
+
+export function resetApiKeyDailyUsage(id) {
+  return request({ url: `/api/user/api-keys/${id}/daily-usage/reset`, method: 'put' })
+}

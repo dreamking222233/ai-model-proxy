@@ -10,12 +10,15 @@
             <p class="page-desc">管理您的访问密钥，监控实时用量，并确保调用安全。</p>
           </div>
           <div class="header-right">
+            <a-button @click="fetchApiKeys" :loading="loading"><a-icon type="reload" /> 刷新用量</a-button>
             <a-button id="tour-create-api-key" type="primary" class="create-btn" @click="showCreateModal">
               <a-icon type="plus" /> 创建 API 密钥
             </a-button>
           </div>
         </div>
       </section>
+
+      <a-alert type="info" show-icon class="daily-limit-note" message="每日限额按北京时间 00:00–24:00 计算" description="每个 Key 综合累计余额、套餐及赠送额度的美元消费值，达到上限后停止新请求。在途请求仍会结算，可能使最终用量超出上限。独立图片/视频积分不折算美元；刷新可查看最新用量。" />
 
       <!-- Stats Grid -->
       <div class="stats-grid">
@@ -59,7 +62,7 @@
             :pagination="false"
             rowKey="id"
             size="middle"
-            :scroll="{ x: 1530 }"
+            :scroll="{ x: 1810 }"
             class="premium-table"
           >
             <!-- Name Column -->
@@ -136,6 +139,20 @@
                 <div class="usage-item" title="消费金额">
                   <a-icon type="dollar" class="u-icon orange" />
                   <span class="u-val text-orange">${{ (record.total_cost || 0).toFixed(4) }}</span>
+                </div>
+              </div>
+            </template>
+
+            <template slot="daily_usage" slot-scope="text, record">
+              <div class="daily-usage-cell">
+                <span>今日 ${{ formatDailyUsd(record.daily_used_usd) }} / {{ record.daily_limit_usd == null ? '不限额' : '$' + formatDailyUsd(record.daily_limit_usd) }}</span>
+                <small>{{ record.daily_usage_date }} · 北京时间</small>
+                <a-tag v-if="record.daily_limit_exceeded" color="red">已达每日上限</a-tag>
+                <div>
+                  <a-button type="link" size="small" @click="showDailyLimitModal(record)">设置限额</a-button>
+                  <a-popconfirm title="确定清零此 Key 的今日用量？每日上限保留，历史账单和余额不受影响。" ok-text="重置" cancel-text="取消" :disabled="!!dailyResettingKeys[record.id]" @confirm="handleResetDailyUsage(record)">
+                    <a-button type="link" size="small" :loading="!!dailyResettingKeys[record.id]">重置今日用量</a-button>
+                  </a-popconfirm>
                 </div>
               </div>
             </template>
@@ -232,6 +249,9 @@
               class="premium-input"
               @pressEnter="handleCreate"
             />
+          </a-form-item>
+          <a-form-item label="每日最大额度（美元）" extra="留空为不限额，支持最多六位小数。">
+            <a-input-number v-model="createForm.daily_limit_usd" :min="0.000001" :max="1000000000" :precision="6" placeholder="不限额" style="width: 100%" />
           </a-form-item>
           <a-form-item label="路由模式">
             <a-radio-group v-model="createForm.group_mode" class="group-mode-options">
@@ -431,11 +451,17 @@
         </div>
       </div>
     </a-modal>
+    <a-modal title="设置每日最大额度" :visible="dailyModalVisible" :confirm-loading="dailyLimitLoading" @ok="handleSaveDailyLimit" @cancel="dailyModalVisible = false">
+      <p>{{ dailyKey && dailyKey.name }} · 修改上限保留今日已使用额度。</p>
+      <a-form-item label="每日最大额度（美元）" extra="留空为不限额，按北京时间每天零点重新累计。">
+        <a-input-number v-model="dailyLimitValue" :min="0.000001" :max="1000000000" :precision="6" placeholder="不限额" style="width: 100%" />
+      </a-form-item>
+    </a-modal>
   </div>
 </template>
 
 <script>
-import { listApiKeys, createApiKey, updateApiKeyGroupBinding, getApiKeyGroupOptions, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, resetApiKeyUsage, getSiteConfig } from '@/api/user'
+import { listApiKeys, createApiKey, updateApiKeyGroupBinding, getApiKeyGroupOptions, deleteApiKey, disableApiKey, enableApiKey, revealApiKey, resetApiKeyUsage, updateApiKeyDailyLimit, resetApiKeyDailyUsage, getSiteConfig } from '@/api/user'
 import { MODEL_SERIES_OPTIONS, getModelSeriesLabel } from '@/constants/modelSeries'
 import { formatUtcDate } from '@/utils'
 
@@ -446,10 +472,16 @@ export default {
       loading: false,
       apiKeys: [],
       resettingKeys: {},
+      dailyResettingKeys: {},
+      dailyModalVisible: false,
+      dailyLimitLoading: false,
+      dailyKey: null,
+      dailyLimitValue: null,
       createModalVisible: false,
       createLoading: false,
       createForm: {
         name: '',
+        daily_limit_usd: null,
         group_mode: 'unified',
         group_model_series: undefined,
         group_id: undefined
@@ -484,6 +516,7 @@ export default {
         { title: '路由分组', key: 'group', width: 190, scopedSlots: { customRender: 'group' } },
         { title: '密钥令牌 (Revealed/Prefix)', dataIndex: 'key_prefix', key: 'key_prefix', width: 320, scopedSlots: { customRender: 'key_prefix' } },
         { title: '用量统计', key: 'usage_stats', width: 320, scopedSlots: { customRender: 'usage_stats' } },
+        { title: '每日限额 / 用量', key: 'daily_usage', width: 280, scopedSlots: { customRender: 'daily_usage' } },
         { title: '状态', dataIndex: 'status', key: 'status', width: 120, align: 'center', scopedSlots: { customRender: 'status' } },
         { title: '最近活跃', dataIndex: 'last_used_at', key: 'last_used_at', width: 180, scopedSlots: { customRender: 'last_used_at' } },
         { title: '安全操作', key: 'action', width: 180, fixed: 'right', align: 'center', scopedSlots: { customRender: 'action' } }
@@ -603,6 +636,7 @@ export default {
     },
     showCreateModal() {
       this.createForm.name = ''
+      this.createForm.daily_limit_usd = null
       this.createForm.group_mode = 'unified'
       this.createForm.group_model_series = undefined
       this.createForm.group_id = undefined
@@ -626,6 +660,7 @@ export default {
         }
         const res = await createApiKey({
           name: this.createForm.name.trim(),
+          daily_limit_usd: this.createForm.daily_limit_usd == null ? null : this.createForm.daily_limit_usd,
           group_mode: this.createForm.group_mode,
           group_model_series: this.createForm.group_mode === 'special' ? this.createForm.group_model_series : null,
           group_id: this.createForm.group_mode === 'special' ? this.createForm.group_id : null
@@ -701,6 +736,44 @@ export default {
         this.fetchApiKeys()
       } finally {
         this.bindingLoading = false
+      }
+    },
+    formatDailyUsd(value) {
+      return Number(value || 0).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+    },
+    mergeKeyMetadata(id, data) {
+      const index = this.apiKeys.findIndex(key => key.id === id)
+      if (index !== -1) this.$set(this.apiKeys, index, { ...this.apiKeys[index], ...data })
+    },
+    showDailyLimitModal(record) {
+      this.dailyKey = record
+      this.dailyLimitValue = record.daily_limit_usd
+      this.dailyModalVisible = true
+    },
+    async handleSaveDailyLimit() {
+      this.dailyLimitLoading = true
+      try {
+        const res = await updateApiKeyDailyLimit(this.dailyKey.id, { daily_limit_usd: this.dailyLimitValue == null ? null : this.dailyLimitValue })
+        this.mergeKeyMetadata(this.dailyKey.id, res.data)
+        this.dailyModalVisible = false
+        this.$message.success('每日限额已更新')
+      } catch (e) {
+        this.$message.error(e.message || '更新每日限额失败')
+      } finally {
+        this.dailyLimitLoading = false
+      }
+    },
+    async handleResetDailyUsage(record) {
+      if (this.dailyResettingKeys[record.id]) return
+      this.$set(this.dailyResettingKeys, record.id, true)
+      try {
+        const res = await resetApiKeyDailyUsage(record.id)
+        this.mergeKeyMetadata(record.id, res.data)
+        this.$message.success('今日限额用量已重置')
+      } catch (e) {
+        this.$message.error(e.message || '重置今日用量失败')
+      } finally {
+        this.$delete(this.dailyResettingKeys, record.id)
       }
     },
     async handleResetUsage(record) {
@@ -933,6 +1006,10 @@ export default {
 
 <style lang="less" scoped>
 .api-key-manage {
+  .daily-limit-note { margin-bottom: 24px; }
+  .daily-usage-cell { display: flex; flex-direction: column; gap: 6px; }
+  .daily-usage-cell small { color: #8592a3; }
+
   position: relative;
   min-height: 100vh;
   padding: 40px 20px;

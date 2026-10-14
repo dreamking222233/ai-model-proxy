@@ -1,0 +1,1 @@
+定点复核通过。超限分支在发送拒绝事件前已 await stop_forwarding()，finally 也执行取消和回收，原建议已解决。按你说明的父协程调用关系，sender/receiver 不会等待自身；指定代码中未发现死锁路径。

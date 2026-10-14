@@ -23,6 +23,7 @@ import uuid
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager, suppress
 from typing import Any, Callable, Optional
+from types import SimpleNamespace
 
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -47,6 +48,7 @@ from app.models.log import (
     VideoTaskBillingSnapshot,
 )
 from app.services.channel_service import ChannelService
+from app.services.api_key_service import ApiKeyService
 from app.services import grok_imagine_adapter
 from app.services.google_vertex_image_service import GoogleVertexImageService
 from app.services.model_service import ModelService
@@ -6324,15 +6326,23 @@ class ProxyService:
                         last_response_output,
                     )
                 )
+                key_id = ProxyService._safe_object_id(api_key_record)
+                if key_id:
+                    ApiKeyService.assert_current_daily_limit(key_id)
             except ServiceException as exc:
+                is_daily_limit = exc.error_code == ApiKeyService.DAILY_LIMIT_ERROR
                 await websocket.send_text(json.dumps(
                     ProxyService._build_responses_error_payload(
                         exc.detail,
                         status_code=exc.status_code,
-                        error_type="invalid_request_error",
+                        error_type="rate_limit_error" if is_daily_limit else "invalid_request_error",
+                        error_code=exc.error_code if is_daily_limit else None,
                     ),
                     ensure_ascii=False,
                 ))
+                if is_daily_limit:
+                    await websocket.close(code=1008)
+                    return True
                 continue
 
             if is_prewarm:
@@ -7667,6 +7677,7 @@ class ProxyService:
         message: str,
         status_code: int = 500,
         error_type: str = "server_error",
+        error_code: str | None = None,
     ) -> dict:
         """Build a websocket/SSE compatible Responses error event."""
         return {
@@ -7675,6 +7686,7 @@ class ProxyService:
             "error": {
                 "type": error_type,
                 "message": message,
+                **({"code": error_code} if error_code else {}),
             },
         }
 
@@ -12861,6 +12873,7 @@ class ProxyService:
                 fresh_api_key_record.total_requests += 1
                 fresh_api_key_record.total_tokens += total_tokens
                 fresh_api_key_record.total_cost += Decimal(str(total_cost))
+                ApiKeyService.record_daily_cost(fresh_api_key_record, Decimal(str(total_cost)))
                 fresh_api_key_record.last_used_at = datetime.utcnow()
 
     @staticmethod
@@ -13284,6 +13297,7 @@ class ProxyService:
         channel_id: int,
         requested_model: str,
         actual_model: str,
+        user_api_key_id: Optional[int] = None,
         request_id: Optional[str] = None,
         billing_type: Optional[str] = None,
         charged_credits: Optional[Decimal] = None,
@@ -13304,6 +13318,7 @@ class ProxyService:
         ProxyService._prune_video_task_routes()
         route_payload = {
             "user_id": int(user_id),
+            "user_api_key_id": user_api_key_id,
             "channel_id": int(channel_id),
             "requested_model": requested_model,
             "actual_model": actual_model,
@@ -13336,6 +13351,7 @@ class ProxyService:
                     write_db.add(snapshot)
                 snapshot.request_id = request_id
                 snapshot.user_id = int(user_id)
+                snapshot.user_api_key_id = user_api_key_id
                 snapshot.channel_id = int(channel_id)
                 # Media billing deliberately keeps the legacy multiplier. Use
                 # the already-written request snapshot when available.
@@ -13396,6 +13412,7 @@ class ProxyService:
             return None
         route_payload = {
             "user_id": int(snapshot.user_id),
+            "user_api_key_id": snapshot.user_api_key_id,
             "channel_id": int(snapshot.channel_id),
             "requested_model": snapshot.requested_model or "",
             "actual_model": snapshot.actual_model or "",
@@ -14677,6 +14694,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             video_id,
             user_id=ProxyService._safe_object_id(user),
+            user_api_key_id=ProxyService._safe_object_id(api_key_record),
             channel_id=ProxyService._safe_object_id(channel),
             requested_model=requested_model,
             actual_model=upstream_model_name,
@@ -14845,6 +14863,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             video_id,
             user_id=ProxyService._safe_object_id(user),
+            user_api_key_id=ProxyService._safe_object_id(api_key_record),
             channel_id=ProxyService._safe_object_id(channel),
             requested_model=requested_model,
             actual_model=upstream_model_name,
@@ -15072,6 +15091,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             video_id,
             user_id=ProxyService._safe_object_id(user),
+            user_api_key_id=ProxyService._safe_object_id(api_key_record),
             channel_id=ProxyService._safe_object_id(channel),
             requested_model=requested_model,
             actual_model=upstream_model_name,
@@ -15284,6 +15304,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             video_id,
             user_id=ProxyService._safe_object_id(user),
+            user_api_key_id=ProxyService._safe_object_id(api_key_record),
             channel_id=ProxyService._safe_object_id(channel),
             requested_model=requested_model,
             actual_model=upstream_model_name,
@@ -15466,6 +15487,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             str(response_body.get("id")),
             user_id=ProxyService._safe_object_id(user),
+            user_api_key_id=ProxyService._safe_object_id(api_key_record),
             channel_id=ProxyService._safe_object_id(channel),
             requested_model=requested_model,
             actual_model=upstream_model_name,
@@ -16813,6 +16835,7 @@ class ProxyService:
         ProxyService._store_video_task_route(
             str(video_id),
             user_id=user_id,
+            user_api_key_id=request_log.user_api_key_id,
             channel_id=channel.id,
             requested_model=request_log.requested_model or "",
             actual_model=request_log.actual_model or "",
@@ -16874,6 +16897,11 @@ class ProxyService:
         if not route or route_info is None:
             return False
         channel, requested_model, actual_model = route
+        creator_key_id = route_info.get("user_api_key_id")
+        if creator_key_id:
+            # Retain attribution even when the creator Key was deleted; the
+            # ledger tolerates a missing Key while completing user accounting.
+            api_key_record = SimpleNamespace(id=int(creator_key_id))
 
         billing_type = str(route_info.get("billing_type") or "image_credit")
         charged_credits = Decimal(str(route_info.get("charged_credits") or "0")).quantize(Decimal("0.001"))

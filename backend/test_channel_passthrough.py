@@ -361,6 +361,65 @@ class ChannelPassthroughUnitTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observer.summary["logical_input_tokens"], 135)
         self.assertEqual(observer.summary["output_tokens"], 5)
 
+    def test_kiro_final_cache_classification_keeps_authoritative_zero(self):
+        # Captured from account 436: the initial count is provisional; all
+        # final input belongs to cache creation. Retaining 885 double charges.
+        observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({"type": "message_start", "message": {"usage": {
+            "input_tokens": 885, "output_tokens": 1,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        }}})
+        observer.feed_json({"type": "message_delta", "usage": {
+            "input_tokens": 0, "output_tokens": 1,
+            "cache_creation_input_tokens": 5913, "cache_read_input_tokens": 0,
+        }})
+        observer.feed_json({"type": "message_stop"})
+        self.assertEqual(observer.summary["input_tokens"], 0)
+        self.assertEqual(observer.summary["logical_input_tokens"], 5913)
+        self.assertEqual(observer.summary["cache_creation_input_tokens"], 5913)
+        with patch("app.services.proxy_service.ProxyService._finalize_successful_text_request") as finalize:
+            ChannelPassthroughService._finalize(
+                SimpleNamespace(), SimpleNamespace(id=3228), SimpleNamespace(id=1), self.model,
+                self.channel, observer, "captured-kiro", "claude-sonnet-5", "127.0.0.1",
+                0.0, True, "anthropic", {},
+            )
+        self.assertEqual(finalize.call_args.args[6:8], (0, 1))
+        self.assertEqual(finalize.call_args.kwargs["cache_info"]["upstream_cache_creation_input_tokens"], 5913)
+
+    def test_usage_audit_is_bounded_and_contains_only_token_fields(self):
+        with patch("app.services.channel_passthrough_service.settings.ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS", [7]):
+            observer = UsageObserver("anthropic", self.channel)
+        for i in range(8):
+            observer.feed_json({"type": "message_delta", "usage": {
+                "input_tokens": i, "output_tokens": 1,
+                "request_body": "SECRET", "api_key": "SECRET",
+                "cache_creation": {"ephemeral_5m_input_tokens": 30, "secret": "SECRET"},
+            }})
+        self.assertEqual(observer.usage_event_count, 8)
+        self.assertEqual(len(observer.usage_audit), 4)
+        self.assertEqual(observer.usage_audit[0]["usage"]["input_tokens"], 0)
+        self.assertEqual(observer.usage_audit[-1]["usage"]["input_tokens"], 7)
+        self.assertNotIn("SECRET", json.dumps(observer.usage_audit))
+        self.assertEqual(observer.usage_audit[-1]["usage"]["cache_creation.ephemeral_5m_input_tokens"], 30)
+        with (
+            self.assertLogs("app.services.channel_passthrough_service", level="INFO") as logs,
+            patch("app.services.proxy_service.ProxyService._finalize_successful_text_request"),
+        ):
+            ChannelPassthroughService._finalize(
+                SimpleNamespace(), SimpleNamespace(id=3228), SimpleNamespace(id=1), self.model,
+                self.channel, observer, "audit-request", "claude-sonnet-5", "127.0.0.1",
+                0.0, True, "anthropic", {},
+            )
+        self.assertIn("request_id=audit-request user_id=3228 channel_id=7 usage_events=8", logs.output[0])
+        self.assertNotIn("SECRET", logs.output[0])
+
+    def test_usage_audit_is_disabled_for_unselected_channels(self):
+        with patch("app.services.channel_passthrough_service.settings.ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS", [74]):
+            observer = UsageObserver("anthropic", self.channel)
+        observer.feed_json({"type": "message_delta", "usage": {"input_tokens": 20, "output_tokens": 1}})
+        self.assertEqual(observer.summary["input_tokens"], 20)
+        self.assertEqual(observer.usage_audit, [])
+
     def test_unterminated_sse_event_is_observed_on_finish(self):
         observer = UsageObserver("responses", self.channel)
         observer.feed_sse(

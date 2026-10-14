@@ -260,7 +260,7 @@ def ledger():
                 request_id, "gpt-test", summary["input_tokens"], summary["output_tokens"], CHANNEL, "127.0.0.1", 10)
         method = ProxyService._finalize_successful_text_request if finalize else ProxyService._deduct_balance_and_log_once
         method(*args, is_stream=True, request_type="responses", cache_info=cache_info(summary), billing_context=context)
-    state.factory, state.book, state.model = factory, book, model
+    state.factory, state.book, state.model, state.context = factory, book, model, context
     with (patch("app.services.proxy_service.session_scope", scope),
           patch("app.services.proxy_service.get_system_config", side_effect=lambda db, key, default=None: state.token_multiplier if key == "token_multiplier" else default),
           patch.object(ProxyService, "_record_success")):
@@ -397,6 +397,38 @@ def test_anthropic_independent_buckets_are_counted_once_at_accounting(ledger):
         assert row.upstream_cache_creation_5m_input_tokens == 188000
         assert row.upstream_cache_creation_1h_input_tokens == 190
         assert row.raw_total_tokens == row.total_tokens == 226276
+
+
+@pytest.mark.parametrize("initial,final,read,created,expected_cost", (
+    (885, 0, 0, 5913, "0.147925"),
+    (891, 20, 0, 5951, "0.149275"),
+    (888, 2956, 2955, 0, "0.065130"),
+))
+def test_kiro_captured_final_usage_bills_each_bucket_once(ledger, initial, final, read, created, expected_cost):
+    observer = UsageObserver("anthropic", CHANNEL)
+    observer.feed_json({"type": "message_start", "message": {"usage": {
+        "input_tokens": initial, "output_tokens": 1,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    }}})
+    observer.feed_json({"type": "message_delta", "usage": {
+        "input_tokens": final, "output_tokens": 1,
+        "cache_read_input_tokens": read, "cache_creation_input_tokens": created,
+    }})
+    ledger.model.input_price_per_million = Decimal("2")
+    ledger.model.output_price_per_million = Decimal("10")
+    ledger.model.cache_read_price_per_million = Decimal("0.2")
+    ledger.model.cache_creation_price_per_million = Decimal("2.5")
+    ledger.context["group_multiplier_snapshot"] = 8
+    ledger.context["adjustment_price_multiplier_snapshot"] = 1.25
+    ledger.book(observer.summary)
+    with ledger.factory() as db:
+        row, cost = db.query(RequestLog).one(), db.query(ConsumptionRecord).one()
+        assert row.input_tokens == cost.input_tokens == final
+        assert row.upstream_cache_creation_input_tokens == cost.upstream_cache_creation_input_tokens == created
+        assert row.upstream_cache_read_input_tokens == cost.upstream_cache_read_input_tokens == read
+        assert row.total_tokens == cost.total_tokens == final + read + created + 1
+        assert cost.total_cost == Decimal(expected_cost)
+        assert db.query(UserBalance).one().balance == Decimal("1000") - Decimal(expected_cost)
 
 
 @pytest.mark.parametrize("payload,expected", ((None, False), ({}, False), ("explicit-null", False),

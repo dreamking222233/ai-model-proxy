@@ -13198,7 +13198,10 @@ class ProxyService:
         try:
             if not decision_id:
                 decision_id = CacheSimulationService.prepare(
-                    request_id=request_id, user=user, api_key_record=api_key_record, model=unified_model,
+                    # Streaming releases the request session; expired ORM attributes
+                    # must be read through their stable identity before preparation.
+                    request_id=request_id, user=user, api_key_id=ProxyService._safe_object_id(api_key_record),
+                    model=unified_model,
                     channel=channel, requested_model=requested_model, input_tokens=input_tokens,
                     output_tokens=output_tokens, cache_info=cache_info, billing_context=billing_context,
                     params={"client_ip": client_ip, "response_time_ms": response_time_ms,

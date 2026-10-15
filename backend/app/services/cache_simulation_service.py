@@ -234,7 +234,7 @@ class CacheSimulationService:
                    Decimal("0")) * factor / Decimal(1000000)
 
     @classmethod
-    def prepare(cls, *, request_id: str, user, api_key_record, model, channel,
+    def prepare(cls, *, request_id: str, user, api_key_id: int | None, model, channel,
                 requested_model: str, input_tokens: int, output_tokens: int,
                 cache_info: dict | None, billing_context: dict, params: dict,
                 snapshot_builder) -> str | None:
@@ -248,7 +248,7 @@ class CacheSimulationService:
 
         def validate_existing(decision):
             snapshot = json.loads(decision.snapshot_json)
-            if (decision.user_id != user.id or decision.user_api_key_id != getattr(api_key_record, "id", None)
+            if (decision.user_id != user.id or decision.user_api_key_id != api_key_id
                     or decision.unified_model_id != model.id or decision.group_id != binding["group_id"]
                     or decision.requested_model != requested_model
                     or decision.protocol != binding["identity"]["protocol"]
@@ -277,7 +277,7 @@ class CacheSimulationService:
                                 "channel": {"id": channel.id, "name": channel.name, "protocol_type": channel.protocol_type},
                                 "candidate": candidate, "evidence": cls.usage_evidence(cache_info)}
                     decision = CacheSimulationDecision(request_id=request_id, decision_id=str(uuid.uuid4()),
-                        user_id=user.id, user_api_key_id=getattr(api_key_record, "id", None),
+                        user_id=user.id, user_api_key_id=api_key_id,
                         group_id=binding["group_id"], unified_model_id=model.id,
                         username_snapshot=user.username, group_name_snapshot=binding["group_name"],
                         requested_model=requested_model, protocol=binding["identity"]["protocol"],

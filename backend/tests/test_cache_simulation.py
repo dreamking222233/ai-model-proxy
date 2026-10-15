@@ -25,7 +25,7 @@ from sqlalchemy.orm import sessionmaker
 from pymysql.constants import CLIENT
 
 from app.config import settings
-from app.database import Base
+from app.database import Base, release_session_connection
 from app.core.exceptions import ServiceException
 from app.models.cache_simulation import CacheSimulationDecision, CacheSimulationRule
 from app.models.log import ConsumptionRecord, RequestCacheSummary, RequestLog, SystemConfig, UserBalance
@@ -398,6 +398,68 @@ def test_three_turn_trigger_recovery_and_conservation(simulation):
         assert record.billable_cache_read_input_tokens == usage["billed"]["read"]
         assert record.cache_simulation_applied == 1 and record.output_tokens == 500
         assert float(record.total_cost) == pytest.approx(simulated["effective_cost"], abs=1e-6)
+
+
+@pytest.mark.parametrize("release_after", ["commit", "rollback", "expire"])
+def test_detached_expired_api_key_settles_simulation_once(simulation, release_after):
+    """Request sessions release expired ORM objects before streaming finishes."""
+    request_factory = sessionmaker(bind=simulation.factory.kw["bind"])
+    results = []
+    for turn in (1, 2, 3):
+        request_db = request_factory()
+        api_key = request_db.get(UserApiKey, 1)
+        if release_after == "expire":
+            request_db.expire(api_key)
+        else:
+            getattr(request_db, release_after)()
+        release_session_connection(request_db)
+        assert inspect(api_key).detached and "id" in inspect(api_key).expired_attributes
+
+        buckets = TokenBuckets(28000 + turn * 1000, 500, 1000)
+        context = simulation.binding(turn)
+        request_id = str(uuid.uuid4())
+        cache_info = {
+            "upstream_input_tokens": buckets.input,
+            "upstream_cache_read_input_tokens": buckets.read,
+            "upstream_cache_creation_input_tokens": buckets.creation,
+            "_cache_simulation_usage": {
+                "valid": True, "input_present": True, "output_present": True, "source": "upstream",
+            },
+        }
+
+        def finalize():
+            return ProxyService._finalize_successful_text_request(
+                None, SimpleNamespace(id=1, username="cache-test", status=1), api_key,
+                simulation.model, request_id, "claude-test", buckets.input, buckets.output,
+                CHANNEL, "127.0.0.1", 10, is_stream=True,
+                cache_info=cache_info, billing_context=context,
+            )
+
+        result = finalize()
+        assert result.success, "expired API key must not fail simulation accounting"
+        replay = finalize()
+        assert replay.success and replay.receipt == result.receipt
+        with simulation.factory() as db:
+            decision = db.query(CacheSimulationDecision).filter_by(request_id=request_id).one()
+            results.append(Service.record_dto(decision, detail=True))
+            assert decision.user_api_key_id == 1
+            record = db.query(ConsumptionRecord).filter_by(request_id=request_id).one()
+            log = db.query(RequestLog).filter_by(request_id=request_id).one()
+            assert log.status == "success" and log.failure_stage is None
+            assert record.cache_simulation_decision_id == decision.decision_id
+            assert record.total_tokens == buckets.total
+            assert record.output_tokens == buckets.output
+            assert record.billable_cache_creation_input_tokens == buckets.creation
+
+    assert [row["outcome"] for row in results] == ["observing", "observing", "simulated"]
+    assert len({row["session_digest"] for row in results}) == 1
+    assert results[-1]["effective_hit_ratio"] >= .8
+    with simulation.factory() as db:
+        assert db.query(ConsumptionRecord).count() == 3
+        assert db.query(RequestLog).count() == 3
+        assert db.get(UserApiKey, 1).total_requests == 3
+        charged = sum((record.total_cost for record in db.query(ConsumptionRecord)), Decimal(0))
+        assert db.query(UserBalance).one().total_consumed == charged
 
 
 def test_repeated_request_reuses_receipt_without_charge(simulation):

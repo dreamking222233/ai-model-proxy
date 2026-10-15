@@ -48,6 +48,12 @@ from app.models.log import (
     VideoTaskBillingSnapshot,
 )
 from app.services.channel_service import ChannelService
+from app.services.cache_simulation_allocator import CacheSimulationAllocator, TokenBuckets
+from app.services.cache_simulation_identity_service import CacheSimulationIdentityService
+from app.services.cache_simulation_service import AccountingResult, CacheSimulationService
+from app.services.cache_simulation_state_service import canonical_json
+from app.services.cache_simulation_usage import usage_provenance
+from app.models.cache_simulation import CacheSimulationDecision
 from app.services.api_key_service import ApiKeyService
 from app.services import grok_imagine_adapter
 from app.services.google_vertex_image_service import GoogleVertexImageService
@@ -1701,6 +1707,8 @@ class ProxyService:
         protocol: str,
         request_data: Optional[dict[str, Any]] = None,
         group_context: Optional[dict[str, Any]] = None,
+        *,
+        cache_simulation_identity: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         normalized_protocol = str(protocol or "").strip().lower()
         service_tier = None
@@ -1717,6 +1725,8 @@ class ProxyService:
             "fast_price_multiplier": fast_price_multiplier,
             "fast_mode_enabled": fast_price_multiplier > ProxyService._FAST_PRICE_MULTIPLIER_DEFAULT,
         }
+        if cache_simulation_identity is not None:
+            context["cache_simulation_identity"] = cache_simulation_identity
         if group_context:
             for key in (
                 "group_id",
@@ -2404,6 +2414,13 @@ class ProxyService:
         if not isinstance(usage, dict):
             return
 
+        fragment = usage_provenance(usage, anthropic=True)
+        prior = target.get("_simulation_provenance") or {}
+        target["_simulation_provenance"] = {
+            "input_present": bool(fragment["input_present"] or prior.get("input_present")),
+            "output_present": bool(fragment["output_present"] or prior.get("output_present")),
+            "valid": fragment["valid"] and prior.get("valid", True), "source": "upstream",
+        }
         usage = AnthropicPromptCacheService.normalize_usage_aliases(usage)
 
         for key in (
@@ -2415,7 +2432,7 @@ class ProxyService:
             "cache_creation_1h_input_tokens",
         ):
             if usage.get(key) is not None:
-                target[key] = int(usage.get(key) or 0)
+                target[key] = ProxyService._first_usage_token_count(usage.get(key)) or 0
 
         cache_creation = usage.get("cache_creation")
         if isinstance(cache_creation, dict):
@@ -2501,7 +2518,13 @@ class ProxyService:
             status = "WRITE"
         else:
             status = "BYPASS"
+        evidence = usage_provenance(usage)
+        evidence["valid"] &= reported_read == cache_read and reported_creation == cache_creation
+        reported_total = ProxyService._first_usage_token_count(usage.get("total_tokens"))
+        if reported_total is not None and reported_total != input_tokens + output_tokens:
+            evidence["valid"] = False
         return {
+            "_cache_simulation_usage": evidence,
             # An empty/missing usage object also normalizes to zeros, but is
             # not evidence that the upstream reported a valid all-zero usage.
             "usage_received": usage_received,
@@ -2710,6 +2733,9 @@ class ProxyService:
             source=usage_source,
         )
         if has_usage:
+            billing_context = dict(billing_context or {})
+            if stream_error is not None:
+                billing_context["simulation_success"] = False
             ProxyService._finalize_successful_text_request(
                 db,
                 user,
@@ -2790,6 +2816,7 @@ class ProxyService:
             "usage": copy.deepcopy(usage_summary),
         }
         merged["details"] = details
+        merged["_cache_simulation_usage"] = copy.deepcopy(usage_summary.get("_cache_simulation_usage") or {})
         merged["logical_input_tokens"] = int(usage_summary.get("logical_input_tokens", 0) or 0)
         merged["upstream_input_tokens"] = int(usage_summary.get("input_tokens", 0) or 0)
         merged["upstream_cache_read_input_tokens"] = int(
@@ -6031,7 +6058,9 @@ class ProxyService:
         requested_model = str(client_request.get("model", "") or "")
         is_stream = bool(client_request.get("stream", True))
         client_request["stream"] = is_stream
-        request_billing_context = ProxyService._build_text_billing_context("responses", client_request)
+        simulation_identity = CacheSimulationIdentityService.capture("responses", client_request, request_headers)
+        request_billing_context = ProxyService._build_text_billing_context(
+            "responses", client_request, cache_simulation_identity=simulation_identity)
 
         if ProxyService._is_responses_image_request(db, client_request):
             return await ProxyService._handle_responses_image_request(
@@ -6134,6 +6163,7 @@ class ProxyService:
                 request_billing_context,
                 quota_precheck,
             )
+            request_billing_context = CacheSimulationService.bind_context(db, user, unified_model, request_billing_context)
         except Exception as exc:
             ProxyService._log_pre_request_failure(
                 db,
@@ -6353,6 +6383,9 @@ class ProxyService:
                 session_committed = True
                 continue
 
+            simulation_identity = CacheSimulationIdentityService.capture(
+                "responses", normalized_request, request_headers,
+                parent_id=incoming_request.get("previous_response_id"))
             requested_model = str(state_request.get("model", "") or "")
             try:
                 unified_model = ProxyService._resolve_requested_model_or_raise(db, requested_model)
@@ -6415,9 +6448,11 @@ class ProxyService:
                     if not channels:
                         raise ServiceException(503, "当前候选渠道不可用", "NO_CHANNEL")
                 billing_context = ProxyService._build_frozen_text_billing_context(
-                    ProxyService._build_text_billing_context("responses", normalized_request),
+                    ProxyService._build_text_billing_context("responses", normalized_request,
+                        cache_simulation_identity=simulation_identity),
                     quota_precheck,
                 )
+                billing_context = CacheSimulationService.bind_context(db, user, unified_model, billing_context)
             except ServiceException as exc:
                 release_session_connection(db)
                 await websocket.send_text(json.dumps(
@@ -6431,10 +6466,7 @@ class ProxyService:
                 return True
             release_session_connection(db)
 
-            request_billing_context = ProxyService._build_frozen_text_billing_context(
-                ProxyService._build_text_billing_context("responses", normalized_request),
-                quota_precheck,
-            )
+            request_billing_context = billing_context
 
             turn_completed = False
             last_error: Exception | None = None
@@ -6462,11 +6494,7 @@ class ProxyService:
                     upstream_model_name,
                     channel_request,
                 )
-                billing_context = ProxyService._build_frozen_text_billing_context(
-                    ProxyService._build_text_billing_context("responses", channel_request),
-                    quota_precheck,
-                )
-                request_billing_context = billing_context
+                billing_context = RequestReasoningService.with_snapshot(request_billing_context, channel_request)
                 ProxyService._log_responses_request_json(
                     "websocket_prepared",
                     request_id,
@@ -6504,6 +6532,8 @@ class ProxyService:
                         usage_summary,
                         source="responses_input_tokens_details",
                     )
+                    billing_context["simulation_success"] = True
+                    billing_context["simulation_response_id"] = usage_summary.get("_response_id")
                     ProxyService._finalize_successful_text_request(
                         db,
                         user,
@@ -7121,6 +7151,8 @@ class ProxyService:
         billing_context: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         """Forward a streaming Responses request to upstream ``/responses``."""
+        billing_context = dict(billing_context or {})
+        billing_context["simulation_success"] = False
         release_session_connection(db)
         start_time = time.time()
         model_name = request_data.get("model", requested_model)
@@ -7165,7 +7197,9 @@ class ProxyService:
                             payload_type,
                         )
                     if payload_type == "response.completed":
+                        billing_context["simulation_response_id"] = (payload.get("response") or {}).get("id")
                         payload = ProxyService._clean_responses_completed_payload(unified_model, payload)
+                        billing_context["simulation_success"] = True
                         completed = True
                         usage = ProxyService._extract_responses_usage_dict(payload)
                         usage_summary = ProxyService._extract_responses_prompt_cache_summary(
@@ -7243,6 +7277,7 @@ class ProxyService:
                     else:
                         raise Exception("stream closed before response.completed")
             except Exception as exc:
+                billing_context["simulation_success"] = False
                 stream_error = exc
                 logger.error("Responses API stream error on channel %s: %s", channel.name, exc)
                 raise
@@ -7279,6 +7314,7 @@ class ProxyService:
                     yield sse_line
 
             except Exception as exc:
+                billing_context["simulation_success"] = False
                 stream_error = exc
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
                 error_message = (
@@ -7408,6 +7444,7 @@ class ProxyService:
                         usage,
                         channel,
                     )
+                    usage_summary["_response_id"] = (payload.get("response") or {}).get("id")
                     input_tokens = int(usage_summary.get("input_tokens", 0) or 0)
                     output_tokens = int(usage_summary.get("output_tokens", 0) or 0)
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False))
@@ -7882,6 +7919,7 @@ class ProxyService:
                     "cache_read_input_tokens": usage_summary.get("cache_read_input_tokens", 0),
                     "cache_creation_input_tokens": usage_summary.get("cache_creation_input_tokens", 0),
                     "prompt_cache_status": usage_summary.get("prompt_cache_status", "BYPASS"),
+                    "_cache_simulation_usage": usage_summary.get("_cache_simulation_usage", {}),
                 }
             }
 
@@ -7904,6 +7942,8 @@ class ProxyService:
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
         response_usage = cache_response.get("usage", {})
+        billing_context["simulation_success"] = response_body.get("status") == "completed"
+        billing_context["simulation_response_id"] = response_body.get("id")
         cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
             cache_info,
             {
@@ -7915,6 +7955,7 @@ class ProxyService:
                 "cache_creation_5m_input_tokens": 0,
                 "cache_creation_1h_input_tokens": 0,
                 "prompt_cache_status": response_usage.get("prompt_cache_status", "BYPASS"),
+                "_cache_simulation_usage": response_usage.get("_cache_simulation_usage", {}),
             },
             source="responses_input_tokens_details",
         )
@@ -7988,7 +8029,9 @@ class ProxyService:
         request_data = ProxyService._normalize_request_reasoning_levels(request_data)
         requested_model = request_data.get("model", "")
         is_stream = request_data.get("stream", False)
-        request_billing_context = ProxyService._build_text_billing_context("openai", request_data)
+        simulation_identity = CacheSimulationIdentityService.capture("openai", request_data, request_headers)
+        request_billing_context = ProxyService._build_text_billing_context(
+            "openai", request_data, cache_simulation_identity=simulation_identity)
 
         video_unified_model: UnifiedModel | None = None
         security_snapshot = None
@@ -8038,9 +8081,11 @@ class ProxyService:
                     billing_context=group_context,
                 )
                 request_billing_context = ProxyService._build_frozen_text_billing_context(
-                    ProxyService._build_text_billing_context("openai", request_data, group_context),
+                    ProxyService._build_text_billing_context("openai", request_data, group_context,
+                        cache_simulation_identity=simulation_identity),
                     quota_precheck,
                 )
+                request_billing_context = CacheSimulationService.bind_context(db, user, unified_model, request_billing_context)
 
                 # 1. Check user entitlement before request
                 admission_decision = ProxyService._assert_text_request_allowed(
@@ -8296,7 +8341,9 @@ class ProxyService:
             request_headers=request_headers,
         )
         conversation_shadow_info = None
-        request_billing_context = ProxyService._build_text_billing_context("anthropic", request_data)
+        simulation_identity = CacheSimulationIdentityService.capture("anthropic", request_data, request_headers)
+        request_billing_context = ProxyService._build_text_billing_context(
+            "anthropic", request_data, cache_simulation_identity=simulation_identity)
 
         try:
             # 2. Resolve model
@@ -8341,9 +8388,11 @@ class ProxyService:
                 billing_context=group_context,
             )
             request_billing_context = ProxyService._build_frozen_text_billing_context(
-                ProxyService._build_text_billing_context("anthropic", request_data, group_context),
+                ProxyService._build_text_billing_context("anthropic", request_data, group_context,
+                        cache_simulation_identity=simulation_identity),
                 quota_precheck,
             )
+            request_billing_context = CacheSimulationService.bind_context(db, user, unified_model, request_billing_context)
 
             # 1. Check user entitlement before request
             admission_decision = ProxyService._assert_text_request_allowed(
@@ -8667,6 +8716,8 @@ class ProxyService:
         the client. After the stream ends (``data: [DONE]``), extracts token
         usage from the final chunk (if present), deducts balance, and logs.
         """
+        billing_context = dict(billing_context or {})
+        billing_context["simulation_success"] = False
         release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -8791,6 +8842,8 @@ class ProxyService:
                                 or ""
                             )
                             finish_reason = choices[0].get("finish_reason")
+                            if finish_reason is not None:
+                                billing_context["simulation_success"] = True
                             if content or reasoning_content or finish_reason:
                                 # 优先收集 reasoning_content，然后是 content
                                 if reasoning_content:
@@ -8854,6 +8907,7 @@ class ProxyService:
                     yield sse_line
 
             except Exception as e:
+                billing_context["simulation_success"] = False
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
                 error_message = (
@@ -8934,6 +8988,7 @@ class ProxyService:
         Sends the request, extracts token usage, deducts balance, logs,
         and returns the full response.
         """
+        billing_context = dict(billing_context or {})
         release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -8983,6 +9038,7 @@ class ProxyService:
                 ProxyService._parse_openai_non_stream_upstream_body(
                     resp.text,
                     content_type,
+                    billing_context=billing_context,
                 )
             )
             if (
@@ -9014,6 +9070,7 @@ class ProxyService:
                     "cache_read_input_tokens": usage_summary.get("cache_read_input_tokens", 0),
                     "cache_creation_input_tokens": usage_summary.get("cache_creation_input_tokens", 0),
                     "prompt_cache_status": usage_summary.get("prompt_cache_status", "BYPASS"),
+                    "_cache_simulation_usage": usage_summary.get("_cache_simulation_usage", {}),
                 }
             }
 
@@ -9047,6 +9104,7 @@ class ProxyService:
                 "cache_creation_5m_input_tokens": 0,
                 "cache_creation_1h_input_tokens": 0,
                 "prompt_cache_status": response_usage.get("prompt_cache_status", "BYPASS"),
+                "_cache_simulation_usage": response_usage.get("_cache_simulation_usage", {}),
             },
             source="openai_prompt_tokens_details",
         )
@@ -9103,6 +9161,8 @@ class ProxyService:
         The client still receives OpenAI chat-completions SSE chunks, while the
         upstream request is sent to Claude Messages API.
         """
+        billing_context = dict(billing_context or {})
+        billing_context["simulation_success"] = False
         release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -9139,6 +9199,7 @@ class ProxyService:
             stop_reason = None
             role_sent = False
             content_block_meta: dict[int, dict] = {}
+            usage_state: dict[str, Any] = {}
 
             timeout = ProxyService._build_upstream_stream_timeout()
             async for line in ProxyService._stream_lines_with_retries(
@@ -9170,6 +9231,7 @@ class ProxyService:
                     message_id = str(message.get("id") or chunk_id)
                     upstream_model = str(message.get("model") or upstream_model)
                     usage = message.get("usage") or {}
+                    ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
                     input_tokens = int(usage.get("input_tokens", 0) or 0)
                     collected_usage["prompt_tokens"] = input_tokens
 
@@ -9288,6 +9350,7 @@ class ProxyService:
                 if chunk_type == "message_delta":
                     delta = chunk.get("delta") or {}
                     usage = chunk.get("usage") or {}
+                    ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
                     stop_reason = delta.get("stop_reason", stop_reason)
                     if usage.get("output_tokens") is not None:
                         output_tokens = int(usage.get("output_tokens") or 0)
@@ -9298,6 +9361,7 @@ class ProxyService:
                     continue
 
                 if chunk_type == "message_stop":
+                    billing_context["simulation_success"] = True
                     flushed_text = security_text_buffer.flush()
                     if flushed_text:
                         text_chunk = ProxyService._build_openai_stream_chunk(
@@ -9335,7 +9399,9 @@ class ProxyService:
                     yield "data: [DONE]\n\n"
                     break
 
-            billing_callback(input_tokens, output_tokens, False)
+            usage_summary = AnthropicPromptCacheService.extract_usage_summary(usage_state)
+            collected_usage["_upstream_cache_usage"] = usage_summary
+            billing_callback(usage_summary["input_tokens"], usage_summary["output_tokens"], False)
 
         async def event_generator():
             stream_error = None
@@ -9364,6 +9430,7 @@ class ProxyService:
                     yield sse_line
 
             except Exception as e:
+                billing_context["simulation_success"] = False
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
                 error_message = (
@@ -9425,7 +9492,10 @@ class ProxyService:
                             response_time_ms,
                             is_stream=True,
                             actual_model=request_data.get("model"),
-                            cache_info=cache_state.get("cache_info"),
+                            cache_info=ProxyService._merge_upstream_cache_usage_into_cache_info(
+                                cache_state.get("cache_info"),
+                                (cache_state.get("collected_usage") or {}).get("_upstream_cache_usage"),
+                                source="anthropic_bridge_usage"),
                             billing_context=billing_context,
                         )
                 except Exception as accounting_err:
@@ -9497,6 +9567,7 @@ class ProxyService:
                 ProxyService._parse_anthropic_non_stream_upstream_body(
                     resp.text,
                     content_type,
+                    billing_context=billing_context,
                 )
             )
             anthropic_response = ProxyService._rewrite_anthropic_payload_model(
@@ -9511,12 +9582,14 @@ class ProxyService:
                 openai_response,
                 requested_model,
             )
+            usage_summary = AnthropicPromptCacheService.extract_usage_summary(anthropic_response.get("usage") or {})
             return {
                 "response": openai_response,
                 "model": request_data.get("model"),
                 "usage": {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
+                    "prompt_tokens": usage_summary["input_tokens"],
+                    "completion_tokens": usage_summary["output_tokens"],
+                    "_upstream_cache_usage": usage_summary,
                 },
             }
 
@@ -9535,6 +9608,8 @@ class ProxyService:
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
+        cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+            cache_info, cache_response.get("usage", {}).get("_upstream_cache_usage"), source="bridge_upstream_usage")
 
         billing_input_tokens, billing_output_tokens = CacheMiddleware.get_billing_tokens(
             cache_info=cache_info,
@@ -9592,6 +9667,8 @@ class ProxyService:
         billing_context: Optional[dict[str, Any]] = None,
     ) -> StreamingResponse:
         """Stream an Anthropic client request through an OpenAI Responses upstream."""
+        billing_context = dict(billing_context or {})
+        billing_context["simulation_success"] = False
         release_session_connection(db)
         start_time = time.time()
         responses_request = ProxyService._convert_anthropic_request_to_responses(
@@ -10208,6 +10285,7 @@ class ProxyService:
                             continue
 
                     if payload_type == "response.completed":
+                        billing_context["simulation_response_id"] = (payload.get("response") or {}).get("id")
                         final_response = payload.get("response") or {}
                         for sse_line in ensure_message_start(final_response):
                             yield sse_line
@@ -10326,6 +10404,7 @@ class ProxyService:
                             {"type": "message_stop"},
                             detail="final",
                         )
+                        billing_context["simulation_success"] = True
                         completed = True
                         break
 
@@ -10371,6 +10450,7 @@ class ProxyService:
                         cache_state["first_stream_output_time"] = time.time()
                     yield sse_line
             except Exception as exc:
+                billing_context["simulation_success"] = False
                 stream_error = exc
                 mapped_request_error = ProxyService._map_upstream_request_error(exc)
                 error_message = (
@@ -10621,12 +10701,15 @@ class ProxyService:
             anthropic_response = ProxyService._convert_responses_response_to_anthropic(
                 response_body
             )
+            usage_summary = ProxyService._extract_responses_prompt_cache_summary(response_body.get("usage") or {}, channel)
+            billing_context["simulation_success"] = response_body.get("status") == "completed"
             return {
                 "response": anthropic_response,
                 "model": request_data.get("model"),
                 "usage": {
-                    "prompt_tokens": input_tokens,
-                    "completion_tokens": output_tokens,
+                    "prompt_tokens": usage_summary["input_tokens"],
+                    "completion_tokens": usage_summary["output_tokens"],
+                    "_upstream_cache_usage": usage_summary,
                 },
             }
 
@@ -10645,6 +10728,8 @@ class ProxyService:
         response_body = cache_response.get("response", cache_response)
         actual_input_tokens = cache_response.get("usage", {}).get("prompt_tokens", 0)
         actual_output_tokens = cache_response.get("usage", {}).get("completion_tokens", 0)
+        cache_info = ProxyService._merge_upstream_cache_usage_into_cache_info(
+            cache_info, cache_response.get("usage", {}).get("_upstream_cache_usage"), source="bridge_upstream_usage")
         merged_cache_info = ProxyService._merge_conversation_shadow_into_cache_info(
             cache_info,
             conversation_shadow_info,
@@ -10729,6 +10814,8 @@ class ProxyService:
         Usage info comes from ``message_start`` (input_tokens) and
         ``message_delta`` (output_tokens).
         """
+        billing_context = dict(billing_context or {})
+        billing_context["simulation_success"] = False
         release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -11126,6 +11213,7 @@ class ProxyService:
                                         elif chunk_type == "message_stop":
                                             collector.add_chunk("", "end_turn")
                                             stream_debug_extra["completed"] = True
+                                            billing_context["simulation_success"] = True
                                             message_completed = True
                                             security_flushed_text = security_text_buffer.flush()
                                             if security_flushed_text:
@@ -11224,6 +11312,7 @@ class ProxyService:
                     yield sse_line
 
             except Exception as e:
+                billing_context["simulation_success"] = False
                 stream_error = e
                 mapped_request_error = ProxyService._map_upstream_request_error(e)
                 error_message = (
@@ -11352,6 +11441,7 @@ class ProxyService:
         Anthropic response contains ``usage.input_tokens`` and
         ``usage.output_tokens`` at the top level.
         """
+        billing_context = dict(billing_context or {})
         release_session_connection(db)
         start_time = time.time()
         base_url = channel.base_url.rstrip("/")
@@ -11467,6 +11557,7 @@ class ProxyService:
                             ProxyService._parse_anthropic_non_stream_upstream_body(
                                 resp.text,
                                 content_type,
+                                billing_context=billing_context,
                             )
                         )
                         response_body = ProxyService._rewrite_anthropic_payload_model(
@@ -11643,9 +11734,27 @@ class ProxyService:
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
+    def _capture_non_stream_simulation_usage(
+        billing_context: Optional[dict[str, Any]],
+        usage: Any,
+        *,
+        anthropic: bool,
+        completed: bool,
+    ) -> None:
+        """Keep real completion and unpadded usage evidence outside the client response."""
+        if billing_context is None:
+            return
+        summary = (AnthropicPromptCacheService.extract_usage_summary(usage) if anthropic
+                   else ProxyService._extract_openai_prompt_cache_summary(usage))
+        billing_context["simulation_success"] = completed
+        billing_context["simulation_usage_provenance"] = dict(summary["_cache_simulation_usage"])
+
+    @staticmethod
     def _parse_openai_non_stream_upstream_body(
         raw_text: str,
         content_type: str = "",
+        *,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> tuple[dict, int, int]:
         """Parse a non-stream OpenAI body, even if mislabelled as event-stream.
 
@@ -11654,6 +11763,13 @@ class ProxyService:
         whenever the body starts with ``{`` / ``[``.
         """
         payload = ProxyService._parse_json_object_payload(raw_text)
+        if payload is not None:
+            ProxyService._capture_non_stream_simulation_usage(
+                billing_context, payload.get("usage"), anthropic=False,
+                completed=not payload.get("error") and any(
+                    isinstance(choice, dict) and bool(choice.get("finish_reason"))
+                    for choice in (payload.get("choices") or [])),
+            )
         if isinstance(payload, dict) and (
             payload.get("object") == "chat.completion"
             or payload.get("choices") is not None
@@ -11670,7 +11786,7 @@ class ProxyService:
             or stripped.startswith("data:")
             or stripped.startswith("event:")
         ):
-            return ProxyService._parse_sse_to_non_stream_openai(raw_text or "")
+            return ProxyService._parse_sse_to_non_stream_openai(raw_text or "", billing_context=billing_context)
 
         if payload is not None:
             prompt_tokens, completion_tokens = ProxyService._extract_openai_usage_token_counts(
@@ -11685,9 +11801,17 @@ class ProxyService:
     def _parse_anthropic_non_stream_upstream_body(
         raw_text: str,
         content_type: str = "",
+        *,
+        billing_context: Optional[dict[str, Any]] = None,
     ) -> tuple[dict, int, int]:
         """Parse a non-stream Anthropic body, even if mislabelled as event-stream."""
         payload = ProxyService._parse_json_object_payload(raw_text)
+        if payload is not None:
+            ProxyService._capture_non_stream_simulation_usage(
+                billing_context, payload.get("usage"), anthropic=True,
+                completed=payload.get("type") == "message" and bool(payload.get("stop_reason"))
+                and not payload.get("error"),
+            )
         if isinstance(payload, dict) and (
             payload.get("type") == "message"
             or isinstance(payload.get("content"), list)
@@ -11706,7 +11830,7 @@ class ProxyService:
             or stripped.startswith("data:")
             or stripped.startswith("event:")
         ):
-            return ProxyService._parse_sse_to_non_stream_anthropic(raw_text or "")
+            return ProxyService._parse_sse_to_non_stream_anthropic(raw_text or "", billing_context=billing_context)
 
         if payload is not None:
             usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -11720,7 +11844,11 @@ class ProxyService:
         return {}, 0, 0
 
     @staticmethod
-    def _parse_sse_to_non_stream_openai(raw_text: str) -> tuple[dict, int, int]:
+    def _parse_sse_to_non_stream_openai(
+        raw_text: str,
+        *,
+        billing_context: Optional[dict[str, Any]] = None,
+    ) -> tuple[dict, int, int]:
         """
         Parse an SSE text body (from an upstream that always streams) into
         a non-streaming OpenAI chat completion response.
@@ -11739,6 +11867,8 @@ class ProxyService:
         last_id = None
         last_model = None
         finish_reason = None
+        stream_completed = False
+        stream_failed = False
 
         for line in (raw_text or "").split("\n"):
             line = line.strip()
@@ -11746,9 +11876,15 @@ class ProxyService:
                 continue
             data_str = line[5:].lstrip()
             if data_str.strip() == "[DONE]":
+                stream_completed = True
                 break
             try:
                 chunk = json.loads(data_str)
+                if not isinstance(chunk, dict):
+                    stream_failed = True
+                    continue
+                if chunk.get("error") or chunk.get("type") in {"error", "response.failed", "response.incomplete"}:
+                    stream_failed = True
                 last_id = chunk.get("id", last_id)
                 last_model = chunk.get("model", last_model)
 
@@ -11768,18 +11904,30 @@ class ProxyService:
                     fr = choice.get("finish_reason")
                     if fr:
                         finish_reason = fr
+                        stream_completed = True
 
                 # Extract usage
                 usage = chunk.get("usage")
-                if usage:
-                    parsed_in, parsed_out = ProxyService._extract_openai_usage_token_counts(usage)
-                    if parsed_in:
-                        input_tokens = parsed_in
-                    if parsed_out:
-                        output_tokens = parsed_out
+                if isinstance(usage, dict):
+                    fragment = usage_provenance(usage)
+                    prior = usage_state.get("_simulation_provenance") or {}
                     usage_state.update(usage)
+                    usage_state["_simulation_provenance"] = {
+                        "input_present": bool(fragment["input_present"] or prior.get("input_present")),
+                        "output_present": bool(fragment["output_present"] or prior.get("output_present")),
+                        "valid": fragment["valid"] and prior.get("valid", True), "source": "upstream",
+                    }
+                    summary = ProxyService._extract_openai_prompt_cache_summary(usage_state)
+                    if usage_state["_simulation_provenance"]["input_present"]:
+                        # Subset/total checks need inclusive input. Once a complete
+                        # snapshot proves invalid, later corrections cannot erase it.
+                        usage_state["_simulation_provenance"]["valid"] &= summary["_cache_simulation_usage"]["valid"]
+                    input_tokens = summary["logical_input_tokens"]
+                    output_tokens = summary["output_tokens"]
+                elif usage is not None:
+                    stream_failed = True
             except (json.JSONDecodeError, TypeError):
-                pass
+                stream_failed = True
 
         full_content = "".join(collected_content)
         full_reasoning_content = "".join(collected_reasoning_content)
@@ -11794,10 +11942,14 @@ class ProxyService:
             if isinstance(payload, dict) and (
                 payload.get("choices") is not None or payload.get("usage") is not None
             ):
-                prompt_tokens, completion_tokens = ProxyService._extract_openai_usage_token_counts(
-                    payload.get("usage")
+                return ProxyService._parse_openai_non_stream_upstream_body(
+                    raw_text, billing_context=billing_context,
                 )
-                return payload, prompt_tokens, completion_tokens
+
+        ProxyService._capture_non_stream_simulation_usage(
+            billing_context, usage_state, anthropic=False,
+            completed=stream_completed and not stream_failed,
+        )
 
         message_content = full_content or full_reasoning_content
 
@@ -11816,13 +11968,12 @@ class ProxyService:
                 }
             ],
             "usage": {
+                **{key: value for key, value in usage_state.items() if key != "_simulation_provenance"},
                 "prompt_tokens": input_tokens,
                 "completion_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens,
             },
         }
-        if isinstance(usage_state.get("prompt_tokens_details"), dict):
-            response_body["usage"]["prompt_tokens_details"] = usage_state["prompt_tokens_details"]
 
         if full_reasoning_content:
             response_body["choices"][0]["message"]["reasoning_content"] = full_reasoning_content
@@ -11830,7 +11981,11 @@ class ProxyService:
         return response_body, input_tokens, output_tokens
 
     @staticmethod
-    def _parse_sse_to_non_stream_anthropic(raw_text: str) -> tuple[dict, int, int]:
+    def _parse_sse_to_non_stream_anthropic(
+        raw_text: str,
+        *,
+        billing_context: Optional[dict[str, Any]] = None,
+    ) -> tuple[dict, int, int]:
         """
         Parse an SSE text body from an Anthropic-protocol upstream that always
         streams into a non-streaming Anthropic message response.
@@ -11848,6 +12003,8 @@ class ProxyService:
         msg_model = None
         stop_reason = None
         content_blocks: dict[int, dict] = {}
+        stream_completed = False
+        stream_failed = False
 
         for line in (raw_text or "").split("\n"):
             line = line.strip()
@@ -11856,15 +12013,22 @@ class ProxyService:
             data_str = line[5:].lstrip()
             try:
                 chunk = json.loads(data_str)
+                if not isinstance(chunk, dict):
+                    stream_failed = True
+                    continue
                 chunk_type = chunk.get("type", "")
+                if chunk_type == "error" or chunk.get("error"):
+                    stream_failed = True
 
                 if chunk_type == "message_start":
                     msg = chunk.get("message", {})
+                    if not isinstance(msg, dict):
+                        stream_failed = True
+                        continue
                     msg_id = msg.get("id")
                     msg_model = msg.get("model")
                     usage = msg.get("usage", {})
                     ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
-                    input_tokens = usage.get("input_tokens", 0)
 
                 elif chunk_type == "content_block_start":
                     block_index = int(chunk.get("index", 0) or 0)
@@ -11900,15 +12064,23 @@ class ProxyService:
                     stop_reason = delta.get("stop_reason", stop_reason)
                     usage = chunk.get("usage", {})
                     ProxyService._merge_anthropic_usage_snapshot(usage_state, usage)
-                    output_tokens = usage.get("output_tokens", output_tokens)
-                    if "input_tokens" in usage and usage["input_tokens"]:
-                        input_tokens = usage["input_tokens"]
 
                 elif chunk_type == "message_stop":
+                    stream_completed = True
                     break
 
-            except (json.JSONDecodeError, TypeError):
-                pass
+                if chunk_type in {"message_start", "message_delta"}:
+                    if not isinstance(usage, dict):
+                        stream_failed = True
+                        continue
+                    # Raw aliases/invalid fields must survive normalization as evidence.
+                    evidence = AnthropicPromptCacheService.extract_usage_summary(usage)["_cache_simulation_usage"]
+                    usage_state["_simulation_provenance"]["valid"] &= evidence["valid"]
+                    input_tokens = int(usage_state.get("input_tokens", 0) or 0)
+                    output_tokens = int(usage_state.get("output_tokens", 0) or 0)
+
+            except (json.JSONDecodeError, TypeError, ValueError):
+                stream_failed = True
 
         if msg_id is None and not content_blocks and input_tokens == 0 and output_tokens == 0:
             payload = ProxyService._parse_json_object_payload(raw_text)
@@ -11917,12 +12089,14 @@ class ProxyService:
                 or isinstance(payload.get("content"), list)
                 or isinstance(payload.get("usage"), dict)
             ):
-                usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-                return (
-                    payload,
-                    int(usage.get("input_tokens") or 0),
-                    int(usage.get("output_tokens") or 0),
+                return ProxyService._parse_anthropic_non_stream_upstream_body(
+                    raw_text, billing_context=billing_context,
                 )
+
+        ProxyService._capture_non_stream_simulation_usage(
+            billing_context, usage_state, anthropic=True,
+            completed=stream_completed and not stream_failed,
+        )
 
         ordered_blocks: list[dict] = []
         for block_index in sorted(content_blocks.keys()):
@@ -12282,6 +12456,49 @@ class ProxyService:
     # ===================================================================
 
     @staticmethod
+    def _text_accounting_prices(db: Session, user_id: int, model, raw: TokenBuckets,
+                                context: dict | None = None) -> dict:
+        """Freeze all rate inputs before reserving conversation state."""
+        context = context or {}
+        token_multiplier = get_system_config(db, "token_multiplier", 1.0)
+        baseline = CacheSimulationAllocator.baseline(raw, token_multiplier)
+        global_multiplier = Decimal(str(get_system_config(db, "price_multiplier", 1.0)))
+        if (context.get("adjustment_price_multiplier_snapshot") is not None
+                and context.get("global_price_multiplier_snapshot") is not None):
+            global_multiplier = Decimal(str(context["global_price_multiplier_snapshot"]))
+            adjustment = Decimal(str(context["adjustment_price_multiplier_snapshot"])).quantize(Decimal("0.000001"))
+            source = context.get("price_adjustment_source_snapshot") or "default"
+            rule_id = context.get("price_adjustment_rule_id_snapshot")
+        else:
+            resolved = PriceAdjustmentService.resolve_adjustment(db, model, user_id=user_id)
+            adjustment, source, rule_id = resolved.multiplier, resolved.source, resolved.rule_id
+        price_multiplier = adjustment if source in {"user", "global"} else global_multiplier
+        group_multiplier = ProxyService._get_group_price_multiplier_decimal(context)
+        fast = ProxyService._get_fast_price_multiplier_decimal(context)
+        long_context = ProxyService._get_context_price_multiplier_decimal(raw.total, model)
+        billing_type = str(getattr(model, "billing_type", None) or "token").strip().lower()
+        if billing_type == "token":
+            price_multiplier = ProxyService._build_token_price_multiplier(price_multiplier, group_multiplier)
+        values = {
+            "baseline": baseline.to_dict(), "token_multiplier": token_multiplier,
+            "global_price_multiplier": global_multiplier, "adjustment_price_multiplier": adjustment,
+            "price_adjustment_source": source, "price_adjustment_rule_id": rule_id,
+            "price_multiplier": price_multiplier, "fast_price_multiplier": fast,
+            "context_price_multiplier": long_context, "context_tokens": raw.total,
+            "context_token_threshold": ProxyService._get_long_context_token_threshold(model),
+            "service_tier": ProxyService._normalize_service_tier(context.get("service_tier")),
+            "effective_price_multiplier": ProxyService._build_effective_price_multiplier(price_multiplier, fast, long_context),
+            "official_quota_multiplier": ProxyService._build_official_quota_multiplier(fast, long_context),
+            "input_price": Decimal(str(model.input_price_per_million or 0)),
+            "output_price": Decimal(str(model.output_price_per_million or 0)),
+            "read_price": ModelService.resolve_cache_read_price(model),
+            "creation_price": Decimal(str(getattr(model, "cache_creation_price_per_million", 0) or 0)),
+            "request_price": Decimal(str(getattr(model, "request_price", 0) or 0)),
+            "billing_type": billing_type,
+        }
+        return {key: str(value) if isinstance(value, Decimal) else value for key, value in values.items()}
+
+    @staticmethod
     def _deduct_balance_and_log(
         db: Session,
         user: SysUser,
@@ -12300,11 +12517,11 @@ class ProxyService:
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
         billing_context: Optional[dict[str, Any]] = None,
-    ) -> None:
+    ) -> AccountingResult:
         """Run local accounting with limited retries for transient DB lock conflicts."""
         for attempt in range(1, _ACCOUNTING_RETRY_ATTEMPTS + 1):
             try:
-                ProxyService._deduct_balance_and_log_once(
+                return ProxyService._deduct_balance_and_log_once(
                     db=db,
                     user=user,
                     api_key_record=api_key_record,
@@ -12323,7 +12540,6 @@ class ProxyService:
                     conversation_state_info=conversation_state_info,
                     billing_context=billing_context,
                 )
-                return
             except Exception as exc:
                 if (
                     not SubscriptionService.is_retryable_concurrency_error(exc)
@@ -12358,7 +12574,7 @@ class ProxyService:
         cache_info: Optional[dict[str, Any]] = None,
         conversation_state_info: Optional[dict[str, Any]] = None,
         billing_context: Optional[dict[str, Any]] = None,
-    ) -> None:
+    ) -> AccountingResult:
         """
         Calculate cost, deduct from user balance (for balance mode) or just record usage (for unlimited mode),
         write request log and consumption record, and update API key usage stats.
@@ -12383,6 +12599,25 @@ class ProxyService:
                     .first()
                 )
 
+            billing_context = billing_context or {}
+            decision_id = billing_context.get("cache_simulation_decision_id")
+            decision = None
+            existing_log = None
+            if decision_id:
+                decision = CacheSimulationService.lock_for_accounting(
+                    write_db, decision_id, request_id, user_id, api_key_id)
+                if decision.unified_model_id != unified_model.id:
+                    raise ServiceException(409, "模拟缓存模型凭据冲突", "CACHE_SIMULATION_ACCOUNTING_CONFLICT")
+                if decision.accounting_status == "settled":
+                    return AccountingResult(True, request_id, decision_id, json.loads(decision.receipt_json))
+                existing_log = write_db.query(RequestLog).filter(RequestLog.request_id == request_id).with_for_update().first()
+                existing_consumption = write_db.query(ConsumptionRecord.id).filter(ConsumptionRecord.request_id == request_id).first()
+                if existing_consumption or (existing_log and not (
+                        existing_log.status == "error" and existing_log.failure_stage == "accounting"
+                        and existing_log.cache_simulation_decision_id == decision_id
+                        and existing_log.user_id == user_id and existing_log.user_api_key_id == api_key_id)):
+                    raise ServiceException(409, "已有请求账务与模拟缓存凭据冲突", "CACHE_SIMULATION_ACCOUNTING_CONFLICT")
+
             usage_now = SubscriptionService.get_current_time()
             raw_input_tokens = int(input_tokens or 0)
             raw_output_tokens = int(output_tokens or 0)
@@ -12399,78 +12634,38 @@ class ProxyService:
                 raw_cache_read_input_tokens,
                 raw_cache_creation_input_tokens,
             )
-            context_tokens_snapshot = raw_total_tokens
-            context_token_threshold_snapshot = ProxyService._get_long_context_token_threshold(unified_model)
-            context_price_multiplier_decimal = ProxyService._get_context_price_multiplier_decimal(
-                context_tokens_snapshot,
-                unified_model,
-            )
-
-            token_multiplier = get_system_config(write_db, "token_multiplier", 1.0)
-            token_multiplier_decimal = Decimal(str(token_multiplier))
-            input_tokens = int(raw_input_tokens * token_multiplier)
-            output_tokens = int(raw_output_tokens * token_multiplier)
-            cache_read_input_tokens = int(raw_cache_read_input_tokens * token_multiplier)
-            cache_creation_input_tokens = int(raw_cache_creation_input_tokens * token_multiplier)
-            total_tokens = input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens
-
-            global_price_multiplier = Decimal(str(get_system_config(write_db, "price_multiplier", 1.0)))
-            billing_context = billing_context or {}
-            frozen_adjustment_multiplier = billing_context.get("adjustment_price_multiplier_snapshot")
-            frozen_global_multiplier = billing_context.get("global_price_multiplier_snapshot")
-            if frozen_adjustment_multiplier is not None and frozen_global_multiplier is not None:
-                global_price_multiplier = Decimal(str(frozen_global_multiplier))
-                adjustment_price_multiplier = Decimal(str(frozen_adjustment_multiplier)).quantize(Decimal("0.000001"))
-                price_adjustment_source = billing_context.get("price_adjustment_source_snapshot") or "default"
-                price_adjustment_rule_id = billing_context.get("price_adjustment_rule_id_snapshot")
+            raw_buckets = TokenBuckets(raw_input_tokens, raw_output_tokens,
+                                       raw_cache_read_input_tokens, raw_cache_creation_input_tokens)
+            if decision:
+                allocation = json.loads(decision.usage_json)
+                if allocation["raw"] != raw_buckets.to_dict():
+                    raise ServiceException(409, "模拟缓存用量凭据冲突", "CACHE_SIMULATION_ACCOUNTING_CONFLICT")
+                prices = json.loads(decision.snapshot_json)["prices"]
+                billed_buckets = TokenBuckets(**allocation["billed"])
+                quota_buckets = TokenBuckets(**allocation["effective"])
             else:
-                price_adjustment = PriceAdjustmentService.resolve_adjustment(
-                    write_db,
-                    unified_model,
-                    user_id=fresh_user.id,
-                )
-                adjustment_price_multiplier = price_adjustment.multiplier
-                price_adjustment_source = price_adjustment.source
-                price_adjustment_rule_id = price_adjustment.rule_id
-            price_multiplier_decimal = (
-                adjustment_price_multiplier
-                if price_adjustment_source in {"user", "global"}
-                else global_price_multiplier
-            )
-            group_multiplier_decimal = ProxyService._get_group_price_multiplier_decimal(
-                billing_context
-            )
-            service_tier = ProxyService._normalize_service_tier(billing_context.get("service_tier"))
-            fast_price_multiplier_decimal = ProxyService._get_fast_price_multiplier_decimal(
-                billing_context
-            )
-            effective_price_multiplier_decimal = ProxyService._build_effective_price_multiplier(
-                price_multiplier_decimal,
-                fast_price_multiplier_decimal,
-                context_price_multiplier_decimal,
-            )
-            official_quota_multiplier_decimal = ProxyService._build_official_quota_multiplier(
-                fast_price_multiplier_decimal,
-                context_price_multiplier_decimal,
-            )
-            input_price = Decimal(str(unified_model.input_price_per_million or 0))
-            output_price = Decimal(str(unified_model.output_price_per_million or 0))
-            # NULL means the model has no dedicated cache-read price; resolve
-            # it from the current input price. Explicit zero remains free.
-            cache_read_price = ModelService.resolve_cache_read_price(unified_model)
-            cache_creation_price = Decimal(str(getattr(unified_model, "cache_creation_price_per_million", 0) or 0))
-            request_price = Decimal(str(getattr(unified_model, "request_price", 0) or 0))
-            billing_type = str(getattr(unified_model, "billing_type", None) or "token").strip().lower()
-            if billing_type == "token":
-                price_multiplier_decimal = ProxyService._build_token_price_multiplier(
-                    price_multiplier_decimal,
-                    group_multiplier_decimal,
-                )
-                effective_price_multiplier_decimal = ProxyService._build_effective_price_multiplier(
-                    price_multiplier_decimal,
-                    fast_price_multiplier_decimal,
-                    context_price_multiplier_decimal,
-                )
+                prices = ProxyService._text_accounting_prices(write_db, fresh_user.id, unified_model, raw_buckets, billing_context)
+                billed_buckets = TokenBuckets(**prices["baseline"])
+                quota_buckets = raw_buckets
+            input_tokens, output_tokens = billed_buckets.input, billed_buckets.output
+            cache_read_input_tokens, cache_creation_input_tokens = billed_buckets.read, billed_buckets.creation
+            total_tokens = billed_buckets.total
+            context_tokens_snapshot = prices["context_tokens"]
+            context_token_threshold_snapshot = prices["context_token_threshold"]
+            token_multiplier_decimal = Decimal(str(prices["token_multiplier"]))
+            global_price_multiplier = Decimal(prices["global_price_multiplier"])
+            adjustment_price_multiplier = Decimal(prices["adjustment_price_multiplier"])
+            price_adjustment_source = prices["price_adjustment_source"]
+            price_adjustment_rule_id = prices["price_adjustment_rule_id"]
+            price_multiplier_decimal = Decimal(prices["price_multiplier"])
+            fast_price_multiplier_decimal = Decimal(prices["fast_price_multiplier"])
+            context_price_multiplier_decimal = Decimal(prices["context_price_multiplier"])
+            effective_price_multiplier_decimal = Decimal(prices["effective_price_multiplier"])
+            official_quota_multiplier_decimal = Decimal(prices["official_quota_multiplier"])
+            service_tier = prices["service_tier"]
+            input_price, output_price = Decimal(prices["input_price"]), Decimal(prices["output_price"])
+            cache_read_price, cache_creation_price = Decimal(prices["read_price"]), Decimal(prices["creation_price"])
+            request_price, billing_type = Decimal(prices["request_price"]), prices["billing_type"]
             if billing_type == "request":
                 input_cost_decimal = Decimal("0")
                 cache_read_cost_decimal = Decimal("0")
@@ -12504,12 +12699,7 @@ class ProxyService:
                     + cache_creation_cost_decimal
                     + output_cost_decimal
                 )
-                quota_cost_decimal = (
-                    (Decimal(str(raw_input_tokens)) / Decimal("1000000")) * input_price * official_quota_multiplier_decimal
-                    + (Decimal(str(raw_cache_read_input_tokens)) / Decimal("1000000")) * cache_read_price * official_quota_multiplier_decimal
-                    + (Decimal(str(raw_cache_creation_input_tokens)) / Decimal("1000000")) * cache_creation_price * official_quota_multiplier_decimal
-                    + (Decimal(str(raw_output_tokens)) / Decimal("1000000")) * output_price * official_quota_multiplier_decimal
-                )
+                quota_cost_decimal = CacheSimulationService.local_cost(quota_buckets, prices, quota=True)
             input_cost = float(input_cost_decimal)
             cache_read_cost = float(cache_read_cost_decimal)
             cache_creation_cost = float(cache_creation_cost_decimal)
@@ -12715,8 +12905,7 @@ class ProxyService:
             )
             logical_input_tokens = int(cache_log_fields.get("logical_input_tokens") or input_tokens)
             group_snapshot = ProxyService._get_group_billing_snapshot(billing_context)
-            write_db.add(
-                ConsumptionRecord(
+            consumption = ConsumptionRecord(
                     user_id=fresh_user.id,
                     agent_id=fresh_user.agent_id,
                     request_id=request_id,
@@ -12726,6 +12915,10 @@ class ProxyService:
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
                     billable_input_tokens=input_tokens,
+                    usage_accounting_version=1,
+                    billable_cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_simulation_decision_id=decision_id,
+                    cache_simulation_applied=int(bool(decision and decision.outcome == "simulated")),
                     raw_input_tokens=raw_input_tokens,
                     raw_output_tokens=raw_output_tokens,
                     raw_total_tokens=raw_total_tokens,
@@ -12772,10 +12965,9 @@ class ProxyService:
                     quota_used_after=quota_used_after,
                     quota_cycle_date=quota_cycle_date,
                 )
-            )
+            write_db.add(consumption)
 
-            write_db.add(
-                    RequestLog(
+            success_log = RequestLog(
                         request_id=request_id,
                         user_id=fresh_user.id,
                         agent_id=fresh_user.agent_id,
@@ -12798,6 +12990,10 @@ class ProxyService:
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
                     billable_input_tokens=input_tokens,
+                    usage_accounting_version=1,
+                    billable_cache_creation_input_tokens=cache_creation_input_tokens,
+                    cache_simulation_decision_id=decision_id,
+                    cache_simulation_applied=int(bool(decision and decision.outcome == "simulated")),
                     raw_input_tokens=raw_input_tokens,
                     raw_output_tokens=raw_output_tokens,
                     raw_total_tokens=raw_total_tokens,
@@ -12859,7 +13055,13 @@ class ProxyService:
                     token_multiplier_snapshot=token_multiplier_decimal,
                     service_tier=service_tier,
                 )
-            )
+            if existing_log:
+                for column in RequestLog.__table__.columns:
+                    if column.name not in {"id", "created_at"}:
+                        setattr(existing_log, column.name, getattr(success_log, column.name))
+                success_log = existing_log
+            else:
+                write_db.add(success_log)
 
             RequestCacheSummaryService.persist_request_cache_summary(
                 write_db,
@@ -12875,6 +13077,19 @@ class ProxyService:
                 fresh_api_key_record.total_cost += Decimal(str(total_cost))
                 ApiKeyService.record_daily_cost(fresh_api_key_record, Decimal(str(total_cost)))
                 fresh_api_key_record.last_used_at = datetime.utcnow()
+
+            write_db.flush()
+            receipt = {"request_log_id": success_log.id, "consumption_record_id": consumption.id,
+                       "total_tokens": total_tokens, "total_cost": str(total_cost),
+                       "quota_cost": str(quota_cost), "billing_mode": billing_mode,
+                       "balance_after": str(balance_after)}
+            if decision:
+                decision.accounting_status = "settled"
+                decision.settled_at = datetime.utcnow()
+                decision.receipt_json = canonical_json(receipt)
+                decision.next_retry_at = None
+                decision.last_error = None
+        return AccountingResult(True, request_id, decision_id, receipt)
 
     @staticmethod
     def _build_accounting_failure_error_message(exc: Exception) -> str:
@@ -12918,6 +13133,8 @@ class ProxyService:
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
+                        cache_simulation_decision_id=(billing_context or {}).get("cache_simulation_decision_id"),
+                        failure_stage=(billing_context or {}).get("failure_stage"),
                         user_id=user_id,
                         agent_id=getattr(user, "agent_id", None),
                         user_api_key_id=api_key_id,
@@ -12969,10 +13186,30 @@ class ProxyService:
         fallback_billing_type: Optional[str] = None,
         raise_on_failure: bool = False,
         billing_context: Optional[dict[str, Any]] = None,
-    ) -> None:
+    ) -> AccountingResult:
         ProxyService._record_success(db, channel)
+        billing_context = dict(billing_context or {})
+        provenance = billing_context.get("simulation_usage_provenance")
+        if isinstance(provenance, dict):
+            # Reconstructed non-stream usage pads missing fields with zero. Eligibility
+            # must instead use the evidence captured from the actual upstream body.
+            cache_info = {**(cache_info or {}), "_cache_simulation_usage": dict(provenance)}
+        decision_id = billing_context.get("cache_simulation_decision_id")
         try:
-            ProxyService._deduct_balance_and_log(
+            if not decision_id:
+                decision_id = CacheSimulationService.prepare(
+                    request_id=request_id, user=user, api_key_record=api_key_record, model=unified_model,
+                    channel=channel, requested_model=requested_model, input_tokens=input_tokens,
+                    output_tokens=output_tokens, cache_info=cache_info, billing_context=billing_context,
+                    params={"client_ip": client_ip, "response_time_ms": response_time_ms,
+                            "is_stream": is_stream, "request_type": request_type, "actual_model": actual_model,
+                            "simulation_success": billing_context.get("simulation_success", not is_stream),
+                            "response_id": billing_context.get("simulation_response_id")},
+                    snapshot_builder=lambda write_db, raw: ProxyService._text_accounting_prices(
+                        write_db, user.id, unified_model, raw, billing_context))
+            if decision_id:
+                billing_context["cache_simulation_decision_id"] = decision_id
+            return ProxyService._deduct_balance_and_log(
                 db,
                 user,
                 api_key_record,
@@ -12992,6 +13229,20 @@ class ProxyService:
                 billing_context=billing_context,
             )
         except Exception as exc:
+            # Preparation may have committed a draft before losing the response.
+            try:
+                request_conflict = isinstance(exc, ServiceException) and exc.error_code == "CACHE_SIMULATION_REQUEST_CONFLICT"
+                if billing_context.get("cache_simulation_binding") and not decision_id and not request_conflict:
+                    with session_scope() as recovery_db:
+                        row = recovery_db.query(CacheSimulationDecision.decision_id).filter(
+                            CacheSimulationDecision.request_id == request_id).first()
+                        decision_id = row[0] if row else None
+                if decision_id:
+                    billing_context["cache_simulation_decision_id"] = decision_id
+                    CacheSimulationService.mark_accounting_failure(decision_id, exc)
+            except Exception:
+                logger.exception("Could not persist accounting failure request_id=%s", request_id)
+            billing_context["failure_stage"] = "accounting"
             logger.error(
                 "Text billing / logging failed after upstream success request_id=%s channel=%s (%s): %s",
                 request_id,
@@ -13042,6 +13293,8 @@ class ProxyService:
                     "文本请求已成功完成，但本地计费或记账失败，系统已中断返回，请稍后重试",
                     "TEXT_BILLING_FAILED",
                 ) from exc
+
+            return AccountingResult(False, request_id, decision_id)
 
     @staticmethod
     def _log_failed_request(
@@ -13107,6 +13360,8 @@ class ProxyService:
                 write_db.add(
                     RequestLog(
                         request_id=request_id,
+                        cache_simulation_decision_id=(billing_context or {}).get("cache_simulation_decision_id"),
+                        failure_stage=(billing_context or {}).get("failure_stage"),
                         user_id=user_id,
                         agent_id=getattr(user, "agent_id", None),
                         user_api_key_id=api_key_id,

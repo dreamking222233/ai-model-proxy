@@ -101,6 +101,10 @@
             <a-icon type="file-text" />
             <span>请求日志</span>
           </a-menu-item>
+          <a-menu-item key="/admin/cache-simulation">
+            <a-icon type="thunderbolt" />
+            <span>模拟缓存</span>
+          </a-menu-item>
           <a-menu-item key="/admin/security-risks">
             <a-icon type="safety" />
             <span>安全风控</span>

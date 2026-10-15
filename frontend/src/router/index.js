@@ -111,6 +111,12 @@ const routes = [
         meta: { title: '请求日志' }
       },
       {
+        path: 'cache-simulation',
+        name: 'CacheSimulation',
+        component: () => import('@/views/admin/CacheSimulation.vue'),
+        meta: { title: '模拟缓存' }
+      },
+      {
         path: 'security-risks',
         name: 'SecurityRiskLog',
         component: () => import('@/views/admin/SecurityRiskLog.vue'),

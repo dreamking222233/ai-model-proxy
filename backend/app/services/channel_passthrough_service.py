@@ -32,6 +32,8 @@ from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheServ
 from app.services.billing_concurrency_service import BillingConcurrencyService
 from app.services.model_service import ModelService
 from app.services.api_key_service import ApiKeyService
+from app.services.cache_simulation_identity_service import CacheSimulationIdentityService
+from app.services.cache_simulation_service import CacheSimulationService
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ class UsageObserver:
         self.error_code: Optional[str] = None
         self.error_message: Optional[str] = None
         self.summary: dict[str, Any] = {}
+        self.response_id: Optional[str] = None
         self._openai_usage: dict[str, Any] = {}
         self._anthropic_usage: dict[str, Any] = {}
         self._audit_usage = protocol == "anthropic" and getattr(channel, "id", None) in (
@@ -157,6 +160,8 @@ class UsageObserver:
 
         if self.protocol == "responses":
             response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+            if response.get("id"):
+                self.response_id = str(response["id"])
             usage = response.get("usage") if isinstance(response, dict) else None
             if isinstance(usage, dict):
                 self._merge_openai_usage(usage)
@@ -235,7 +240,8 @@ class UsageObserver:
             return
         raw = b"\n".join(data_lines)
         if raw == b"[DONE]":
-            self.completed = True
+            if self.protocol == "openai":
+                self.completed = True
             return
         try:
             self.feed_json(json.loads(raw))
@@ -468,6 +474,8 @@ class ChannelPassthroughService:
         request_data: dict,
         requested_model: str,
         api_key_record: Optional[UserApiKey] = None,
+        request_headers: Optional[dict[str, str]] = None,
+        simulation_parent_id: Optional[str] = None,
     ):
         from app.services.proxy_service import ProxyService
         group_context = ProxyService._resolve_group_billing_context(db, api_key_record, model)
@@ -477,7 +485,9 @@ class ChannelPassthroughService:
             billing_context=group_context,
         )
         billing_context = ProxyService._build_frozen_text_billing_context(
-            ProxyService._build_text_billing_context(protocol, request_data, group_context), quota
+            ProxyService._build_text_billing_context(protocol, request_data, group_context,
+                cache_simulation_identity=CacheSimulationIdentityService.capture(
+                    protocol, request_data, request_headers, parent_id=simulation_parent_id)), quota
         )
         # Estimate input only as a fallback when upstream reports no input usage.
         if protocol == "anthropic":
@@ -491,6 +501,7 @@ class ChannelPassthroughService:
         admission = ProxyService._assert_text_request_allowed(
             db, user, quota_precheck=quota, unified_model=model, requested_model=requested_model
         )
+        billing_context = CacheSimulationService.bind_context(db, user, model, billing_context)
         return admission, billing_context
 
     @staticmethod
@@ -525,7 +536,10 @@ class ChannelPassthroughService:
     ) -> None:
         from app.services.proxy_service import ProxyService
         billing_type = str(getattr(model, "billing_type", "") or "token").lower()
-        protocol_success = observer.completed and not observer.failed
+        protocol_success = observer.completed and not observer.failed and stream_error is None
+        billing_context = dict(billing_context)
+        billing_context["simulation_success"] = protocol_success
+        billing_context["simulation_response_id"] = observer.response_id
         should_charge = observer.usage_seen or (billing_type in {"request", "free"} and protocol_success)
         cache_info = ChannelPassthroughService._cache_info(observer, protocol)
         input_tokens = int(observer.summary.get("input_tokens", 0) or 0)
@@ -533,7 +547,9 @@ class ChannelPassthroughService:
 
         # 普通输入为零可能是全量缓存；实际逻辑输入包含读/写缓存，不能重复补计。
         reported_input_tokens = int(observer.summary.get("logical_input_tokens", 0) or 0)
-        if input_tokens == 0 and reported_input_tokens == 0 and output_tokens > 0:
+        evidence = observer.summary.get("_cache_simulation_usage") or {}
+        if (not evidence.get("input_present") and input_tokens == 0
+                and reported_input_tokens == 0 and output_tokens > 0):
             estimated_input_tokens = int(billing_context.get("logical_input_tokens", 0) or 0)
             if estimated_input_tokens > 0:
                 logger.info(
@@ -542,6 +558,8 @@ class ChannelPassthroughService:
                     estimated_input_tokens, request_id, channel.name, protocol
                 )
                 input_tokens = estimated_input_tokens
+                cache_info = dict(cache_info or {})
+                cache_info["_cache_simulation_usage"] = {**evidence, "source": "estimated", "valid": False}
 
         if observer.usage_audit:
             logger.info(
@@ -601,7 +619,7 @@ class ChannelPassthroughService:
             raise ServiceException(500, "透传候选缺少计费模型", "PASSTHROUGH_MODEL_MISSING")
         admission, billing_context = ChannelPassthroughService._build_billing(
             db, user, candidate.unified_model, protocol, request_data, requested_model,
-            api_key_record,
+            api_key_record, request_headers={k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers},
         )
         user = ChannelPassthroughService._snapshot_orm_columns(user)
         api_key_record = ChannelPassthroughService._snapshot_orm_columns(api_key_record)
@@ -638,7 +656,8 @@ class ChannelPassthroughService:
                     observer.feed_json(json.loads(body))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
-                observer.completed = not observer.failed
+                if protocol != "responses":
+                    observer.completed = not observer.failed
                 ChannelPassthroughService._finalize(
                     db, user, api_key_record, candidate.unified_model, channel, observer,
                     request_id, requested_model, client_ip, started_at, False, protocol,
@@ -1094,6 +1113,7 @@ class ChannelPassthroughService:
 
         requested_model = ChannelPassthroughService._extract_websocket_model(first_payload)
         last_model_name = requested_model
+        last_completed_response_id: Optional[str] = None
 
         def build_turn(payload: dict, model_name: str, model: UnifiedModel) -> dict[str, Any]:
             key_id = ProxyService._safe_object_id(api_key_record)
@@ -1106,7 +1126,12 @@ class ChannelPassthroughService:
             lease = None
             if not is_prewarm:
                 admission, billing_context = ChannelPassthroughService._build_billing(
-                    db, user, model, "responses", payload, model_name, api_key_record
+                    db, user, model, "responses", payload, model_name, api_key_record,
+                    request_headers={k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers},
+                    # Native append frames are incremental; use the completed local parent
+                    # only for identity, preserving the original upstream frame verbatim.
+                    simulation_parent_id=(last_completed_response_id
+                        if payload.get("type") == "response.append" and "previous_response_id" not in payload else None),
                 )
                 lease = BillingConcurrencyService.acquire_if_needed(
                     admission, request_id,
@@ -1177,9 +1202,12 @@ class ChannelPassthroughService:
         release_session_connection(db)
 
         def finalize_turn(current_turn: Optional[dict[str, Any]], stream_error: Optional[BaseException] = None) -> None:
+            nonlocal last_completed_response_id
             if not current_turn or current_turn.get("finalized"):
                 return
             current_turn["finalized"] = True
+            # Failed, incomplete and prewarm turns cannot supply a billable lineage.
+            last_completed_response_id = None
             if current_turn.get("response_id"):
                 finalized_response_ids.add(str(current_turn["response_id"]))
             if not current_turn.get("billable"):
@@ -1191,6 +1219,9 @@ class ChannelPassthroughService:
                     current_turn["started_at"], True, "responses",
                     current_turn["billing_context"], stream_error,
                 )
+                observer = current_turn["observer"]
+                if observer.completed and not observer.failed and stream_error is None:
+                    last_completed_response_id = observer.response_id
             finally:
                 BillingConcurrencyService.release(current_turn.get("lease"))
 

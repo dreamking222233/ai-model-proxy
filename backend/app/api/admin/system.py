@@ -141,8 +141,9 @@ def update_config(
 ):
     config = db.query(SystemConfig).filter(SystemConfig.id == config_id).first()
     if not config:
-        from app.core.exceptions import ServiceException
         raise ServiceException(404, "Config not found")
+    if config.config_key.startswith("cache_simulation_"):
+        raise ServiceException(400, "模拟缓存配置请在模拟缓存页面修改", "CACHE_SIMULATION_DEDICATED_CONFIG")
     config_value = data.config_value
     health_check_interval = None
     if config.config_key == "health_check_interval":

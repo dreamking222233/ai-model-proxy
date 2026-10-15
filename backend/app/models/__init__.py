@@ -1,6 +1,7 @@
 """Import all ORM models so that SQLAlchemy metadata is fully populated."""
 
 from app.models.user import SysUser, UserApiKey
+from app.models.cache_simulation import CacheSimulationRule, CacheSimulationDecision
 from app.models.agent import (
     Agent,
     AgentBalance,
@@ -69,6 +70,7 @@ from app.models.subscription_bonus import (
 )
 
 __all__ = [
+    "CacheSimulationRule", "CacheSimulationDecision",
     "SysUser",
     "UserApiKey",
     "Agent",

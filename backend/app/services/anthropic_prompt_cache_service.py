@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.log import RequestLog
 from app.services.health_service import get_system_config
+from app.services.cache_simulation_usage import usage_provenance, valid_token
 
 logger = logging.getLogger(__name__)
 
@@ -316,8 +317,18 @@ class AnthropicPromptCacheService:
         attempt_meta: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Parse Anthropic usage into a stable prompt-cache summary."""
+        evidence = usage_provenance(usage if isinstance(usage, dict) else {}, anthropic=True)
         usage = AnthropicPromptCacheService.normalize_usage_aliases(usage)
-        cache_creation = usage.get("cache_creation") or {}
+        # Invalid values remain ineligible, while ordinary accounting receives bounded counts.
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+                    "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens"):
+            if usage.get(key) is not None and not valid_token(usage[key]):
+                usage[key] = 0
+        cache_creation = usage.get("cache_creation")
+        cache_creation = dict(cache_creation) if isinstance(cache_creation, dict) else {}
+        for key in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"):
+            if cache_creation.get(key) is not None and not valid_token(cache_creation[key]):
+                cache_creation[key] = 0
         # Explicit zero is authoritative; only absent/None fields use aliases.
         cache_creation_5m = int(
             cache_creation.get("ephemeral_5m_input_tokens")
@@ -339,6 +350,11 @@ class AnthropicPromptCacheService:
         output_tokens = int(usage.get("output_tokens") or 0)
         logical_input_tokens = input_tokens + cache_read + cache_creation_total
 
+        if cache_creation_5m + cache_creation_1h > cache_creation_total:
+            evidence["valid"] = False
+        inclusive = usage.get("prompt_tokens")
+        if valid_token(inclusive) and logical_input_tokens != int(inclusive):
+            evidence["valid"] = False
         attempted = bool((attempt_meta or {}).get("attempted"))
         if cache_read > 0 and cache_creation_total > 0:
             status = "MIXED"
@@ -352,6 +368,7 @@ class AnthropicPromptCacheService:
             status = "BYPASS"
 
         return {
+            "_cache_simulation_usage": evidence,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "logical_input_tokens": logical_input_tokens,
@@ -395,6 +412,7 @@ class AnthropicPromptCacheService:
         }
         details["anthropic_prompt_cache"] = prompt_cache_details
         merged["details"] = details
+        merged["_cache_simulation_usage"] = copy.deepcopy(usage_summary.get("_cache_simulation_usage") or {})
         merged["logical_input_tokens"] = int(usage_summary.get("logical_input_tokens", 0) or 0)
         merged["upstream_input_tokens"] = int(usage_summary.get("input_tokens", 0) or 0)
         merged["upstream_cache_read_input_tokens"] = int(

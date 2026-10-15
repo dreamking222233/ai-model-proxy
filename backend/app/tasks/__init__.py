@@ -3,6 +3,7 @@ from app.database import SessionLocal, get_pool_status_snapshot
 from app.services.health_service import HealthService
 from app.services.subscription_service import SubscriptionService
 from app.services.security_detection_service import SecurityDetectionService
+from app.tasks.cache_simulation_recovery import cache_simulation_recovery_job
 import logging
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,15 @@ def start_scheduler(interval_seconds: int = 300):
         id='security_snapshot_cleanup',
         replace_existing=True,
         max_instances=1,
+    )
+    scheduler.add_job(
+        cache_simulation_recovery_job,
+        'interval',
+        seconds=60,
+        id='cache_simulation_recovery',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.start()
     logger.info(f"Schedulers started (health interval: {interval_seconds}s)")

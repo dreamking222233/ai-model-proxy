@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.exceptions import ServiceException
+from app.services.cache_simulation_usage import accounted_bucket
 from app.core.model_series import MODEL_SERIES_VALUES
 from app.models.log import (
     ConsumptionRecord,
@@ -1398,15 +1399,19 @@ class SubscriptionService:
             "input_tokens": record.input_tokens,
             "output_tokens": record.output_tokens,
             "total_tokens": record.total_tokens,
-            "billable_input_tokens": record.billable_input_tokens or record.input_tokens or 0,
+            "billable_input_tokens": accounted_bucket(record, "billable_input_tokens", "input_tokens"),
             "raw_input_tokens": record.raw_input_tokens or 0,
             "raw_output_tokens": record.raw_output_tokens or 0,
             "raw_total_tokens": record.raw_total_tokens or 0,
             "logical_input_tokens": record.logical_input_tokens or 0,
             "upstream_input_tokens": record.upstream_input_tokens or 0,
             "upstream_cache_read_input_tokens": record.upstream_cache_read_input_tokens or 0,
-            "billable_cache_read_input_tokens": record.billable_cache_read_input_tokens or record.upstream_cache_read_input_tokens or 0,
+            "billable_cache_read_input_tokens": accounted_bucket(record, "billable_cache_read_input_tokens", "upstream_cache_read_input_tokens"),
             "upstream_cache_creation_input_tokens": record.upstream_cache_creation_input_tokens or 0,
+            "billable_cache_creation_input_tokens": accounted_bucket(record, "billable_cache_creation_input_tokens", "upstream_cache_creation_input_tokens"),
+            "usage_accounting_version": record.usage_accounting_version or 0,
+            "cache_simulation_applied": bool(record.cache_simulation_applied),
+            "cache_simulation_decision_id": record.cache_simulation_decision_id,
             "upstream_prompt_cache_status": record.upstream_prompt_cache_status or "BYPASS",
             "input_cost": float(record.input_cost),
             "cache_read_cost": float(record.cache_read_cost or 0),

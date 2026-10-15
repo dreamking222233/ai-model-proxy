@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
     REDIS_MAX_CONNECTIONS: int = 10
+    CACHE_SIMULATION_HMAC_KEY: str = ""
+    CACHE_SIMULATION_KEY_VERSION: int = 1
     CACHE_ENABLED: bool = True
 
     # JWT

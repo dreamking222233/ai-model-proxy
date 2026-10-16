@@ -191,10 +191,16 @@ class CacheSimulationService:
         if state and state.get("fingerprint") == identity.get("fingerprint"):
             return None, "skipped", "duplicate_context"
         prefix = bool(state and Identity.is_prefix(identity, state))
+        if state and not prefix and not identity.get("has_new_turn"):
+            # A session-only match cannot replace either an observing or an
+            # active history without proof of a new turn.
+            return None, "skipped", "non_continuation"
         lineage = binding.get("source") == "response_lineage"
         strong = binding.get("strong", False)
         compression = bool(state and strong and raw.context < state["previous_L"])
-        continuation = bool(state and identity.get("has_new_turn") and (
+        # Strict prefix growth is sufficient evidence of a new request. Keep
+        # the turn check for session-only matches and compaction without it.
+        continuation = bool(state and (prefix or identity.get("has_new_turn")) and (
             compression or (raw.context > state["previous_L"] and (prefix or strong or lineage))))
         good = raw.read * 1000 >= raw.total * 800
         if state and state.get("stage") == "active" and not good and not continuation:

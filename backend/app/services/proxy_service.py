@@ -2406,6 +2406,58 @@ class ProxyService:
         return cache_info if isinstance(cache_info, dict) else None
 
     @staticmethod
+    def _record_anthropic_usage_audit(
+        audit: Optional[dict[str, Any]],
+        event: str,
+        usage: Any,
+        merged_usage: dict[str, Any],
+        stop_reason: Any = None,
+    ) -> None:
+        """Keep bounded token-only evidence, including authoritative zeroes."""
+        if audit is None or not isinstance(usage, dict):
+            return
+        token_keys = (
+            "input_tokens", "output_tokens", "prompt_tokens", "completion_tokens",
+            "cached_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens",
+            "cache_read_input_tokens", "cache_creation_input_tokens",
+            "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens",
+        )
+
+        def token_fields(source):
+            tokens = {}
+            for key in token_keys:
+                count = ProxyService._first_usage_token_count(source.get(key))
+                if count is not None:
+                    tokens[key] = count
+            for container, keys in (
+                ("cache_creation", ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")),
+                ("input_tokens_details", ("cached_tokens", "cache_write_tokens", "cache_creation_tokens")),
+                ("prompt_tokens_details", ("cached_tokens", "cache_write_tokens", "cache_creation_tokens")),
+            ):
+                detail = source.get(container)
+                if isinstance(detail, dict):
+                    for key in keys:
+                        count = ProxyService._first_usage_token_count(detail.get(key))
+                        if count is not None:
+                            tokens[f"{container}.{key}"] = count
+            return tokens
+
+        safe_stop_reason = stop_reason if isinstance(stop_reason, str) and stop_reason in {
+            "end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn",
+            "refusal", "model_context_window_exceeded", "compaction",
+        } else ("other" if stop_reason is not None else None)
+        snapshot = {
+            "event": event if event in {"message_start", "message_delta"} else "other",
+            "usage": token_fields(usage), "merged": token_fields(merged_usage),
+            "stop_reason": safe_stop_reason,
+        }
+        audit["usage_events"] += 1
+        if len(audit["fragments"]) < 4:
+            audit["fragments"].append(snapshot)
+        else:
+            audit["fragments"][-1] = snapshot
+
+    @staticmethod
     def _merge_anthropic_usage_snapshot(
         target: dict[str, Any],
         usage: Optional[dict[str, Any]],
@@ -10838,6 +10890,8 @@ class ProxyService:
             "completed": False,
             "stop_reason": None,
         }
+        usage_audit = ({"usage_events": 0, "fragments": []}
+                       if channel.id in settings.ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS else None)
 
         billing_input_tokens = 0
         billing_output_tokens = 0
@@ -11108,6 +11162,10 @@ class ProxyService:
                                                 usage_state,
                                                 usage,
                                             )
+                                            ProxyService._record_anthropic_usage_audit(
+                                                usage_audit, "message_start", usage, usage_state,
+                                                msg.get("stop_reason"),
+                                            )
                                             input_tokens = int(usage.get("input_tokens", 0) or 0)
                                             msg_content = msg.get("content")
                                             if isinstance(msg_content, list):
@@ -11172,6 +11230,10 @@ class ProxyService:
                                             ProxyService._merge_anthropic_usage_snapshot(
                                                 usage_state,
                                                 usage,
+                                            )
+                                            ProxyService._record_anthropic_usage_audit(
+                                                usage_audit, "message_delta", usage, usage_state,
+                                                (chunk.get("delta") or {}).get("stop_reason"),
                                             )
                                             output_tokens = int(
                                                 usage.get("output_tokens", output_tokens) or output_tokens
@@ -11405,6 +11467,13 @@ class ProxyService:
                     event_counts=stream_event_counts,
                     extra=stream_debug_extra,
                 )
+                if usage_audit and usage_audit["usage_events"]:
+                    logger.info(
+                        "Anthropic usage audit request_id=%s user_id=%s channel_id=%s "
+                        "path=managed_stream completed=%s trace=%s",
+                        request_id, ProxyService._safe_object_id(user), channel.id, stream_debug_extra["completed"],
+                        json.dumps(usage_audit, ensure_ascii=False),
+                    )
                 ProxyService._scan_stream_security_output(
                     db,
                     request_id,

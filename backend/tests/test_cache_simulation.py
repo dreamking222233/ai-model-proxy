@@ -595,6 +595,72 @@ def test_unique_full_prefix_and_ambiguous_candidates(simulation):
     assert simulation.binding(4, session_id=None)["cache_simulation_binding"]["expected_revision"] == 0
 
 
+@pytest.mark.parametrize("session_id", [None, "prefill-session"])
+@pytest.mark.parametrize("protocol", ["anthropic", "openai", "responses"])
+def test_full_prefix_with_assistant_prefill_simulates_third(simulation, session_id, protocol):
+    rows = [simulation.run(n, context_override=simulation.binding(
+        n, session_id=session_id, protocol=protocol))[1] for n in (1, 2)]
+    data = {"input" if protocol == "responses" else "messages": [
+        *messages(3), {"role": "assistant", "content": "answer-2"}]}
+    if session_id:
+        data["session_id"] = session_id
+    identity = Identity.capture(protocol, data)
+    assert identity["complete"] and not identity["has_new_turn"]
+    with simulation.factory() as db:
+        context = Service.bind_context(db, db.get(SysUser, 1), simulation.model,
+            {**simulation.context, "group_id_snapshot": 11, "simulation_success": True,
+             "cache_simulation_identity": identity})
+    rows.append(simulation.run(3, context_override=context,
+                              buckets=TokenBuckets(206229, 87, 0, 250))[1])
+    assert [row["outcome"] for row in rows] == ["observing", "observing", "simulated"]
+    assert len({row["session_digest"] for row in rows}) == 1
+    usage = rows[-1]["usage"]
+    assert usage["raw"] == {"input": 206229, "output": 87, "read": 0, "creation": 250}
+    assert sum(usage["raw"].values()) == sum(usage["effective"].values())
+    assert usage["effective"]["output"] == 87 and usage["effective"]["creation"] == 250
+    assert usage["effective"]["read"] * 5 >= sum(usage["raw"].values()) * 4
+    assert simulation.run(4, context_override=simulation.binding(
+        4, session_id=session_id, protocol=protocol),
+        buckets=TokenBuckets(212000, 500, 0, 250))[1]["outcome"] == "simulated"
+    with simulation.factory() as db:
+        assert db.query(ConsumptionRecord).count() == 4
+
+
+@pytest.mark.parametrize("stage", ["observing", "active"])
+@pytest.mark.parametrize("buckets", [TokenBuckets(32000, 500, 1000), TokenBuckets(1000, 500, 34000)])
+def test_prefill_still_requires_unique_prefix_and_preserves_session_guards(simulation, stage, buckets):
+    simulation.run(1); simulation.run(2)
+    if stage == "active":
+        simulation.run(3)
+    digest = simulation.binding(4)["cache_simulation_binding"]["digest"]
+    before = simulation.state.load(digest).state
+    assert before["stage"] == stage
+
+    def bind(data):
+        with simulation.factory() as db:
+            return Service.bind_context(db, db.get(SysUser, 1), simulation.model,
+                {**simulation.context, "group_id_snapshot": 11, "simulation_success": True,
+                 "cache_simulation_identity": Identity.capture("anthropic", data)})
+
+    # Same session with changed history is insufficient when no new turn exists.
+    nonprefix = copy.deepcopy(simulation.binding(4))
+    nonprefix["cache_simulation_binding"]["identity"].update(
+        has_new_turn=False, hashes=["different"], fingerprint="prefill")
+    row = simulation.run(4, context_override=nonprefix, buckets=buckets)[1]
+    assert row["reason"] == "non_continuation" and row["usage"]["raw"] == row["usage"]["effective"]
+    assert simulation.state.load(digest).state == before
+    assert simulation.run(4)[1]["outcome"] == "simulated"
+
+    data = {"messages": [*messages(4), {"role": "assistant", "content": "prefill"}]}
+    # Two possible full-prefix candidates cannot borrow either window.
+    other = simulation.run(1, context_override=simulation.binding(1, session_id="other"))[1]
+    ambiguous = bind(data)["cache_simulation_binding"]
+    assert ambiguous["expected_revision"] == 0
+    assert ambiguous["digest"] not in {digest, other["session_digest"]}
+    conflict = bind({**data, "session_id": "a", "conversation_id": "b"})
+    assert conflict["cache_simulation_binding"]["entry_status"] == "ambiguous_identity"
+
+
 def test_claude_identity_conflicts_and_agent_isolation(simulation):
     session = str(uuid.uuid4())
     data = {"messages": messages(1), "metadata": {"user_id": f"user_ab12_account_test_session_{session}"}}

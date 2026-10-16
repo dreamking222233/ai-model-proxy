@@ -7,10 +7,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.config import settings
 from app.models.cache_simulation import CacheSimulationDecision
 from app.models.channel import Channel
 from app.models.log import ConsumptionRecord
 from app.services.cache_simulation_service import CacheSimulationService as Service
+from app.services.anthropic_prompt_cache_service import AnthropicPromptCacheService
 from app.services.channel_passthrough_service import ChannelPassthroughService as Native, PassthroughCandidate
 from app.services.proxy_service import ProxyService
 from test_cache_simulation import isolated_redis, ledger, simulation  # reusable isolated fixtures
@@ -235,6 +237,80 @@ def test_managed_responses_stream_finalizer_simulates_once(simulation):
                 assert '"cached_tokens": 1000' in wire
     asyncio.run(run())
     assert [row["outcome"] for row in record_rows(simulation)] == ["observing", "observing", "simulated"]
+
+
+@pytest.mark.parametrize("audit_enabled", [False, True])
+def test_managed_anthropic_audit_preserves_zero_input_one_output(
+        simulation, monkeypatch, caplog, audit_enabled):
+    channel = Channel(id=70, name="managed-anthropic", base_url="https://upstream.test", api_key="test-only",
+                      auth_header_type="authorization", protocol_type="anthropic")
+    monkeypatch.setattr(settings, "ANTHROPIC_USAGE_AUDIT_CHANNEL_IDS", [70] if audit_enabled else [])
+    caplog.set_level("INFO", logger="app.services.proxy_service")
+    events = [
+        {"type": "message_start", "message": {"id": "test-message", "role": "assistant", "content": [],
+            "usage": {"input_tokens": 60000, "output_tokens": 0, "cache_read_input_tokens": 5000}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " "}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {
+            "input_tokens": 0, "output_tokens": 1, "cache_read_input_tokens": 50865,
+            "cache_creation_input_tokens": 0, "private_metadata": "SECRET"}},
+        {"type": "message_stop"},
+    ]
+    wire = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+    data = {"model": "claude-test", "max_tokens": 128000, "stream": True,
+            "messages": [{"role": "user", "content": "test"}]}
+
+    def handler(request):
+        assert json.loads(request.content)["max_tokens"] == 128000
+        return httpx.Response(200, stream=Chunks(wire), headers={"content-type": "text/event-stream"})
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with (patch("app.services.proxy_service.httpx.AsyncClient", return_value=client),
+              patch.object(AnthropicPromptCacheService, "build_request_variants", return_value=[
+                  {"request_data": data, "header_overrides": {}, "meta": {"attempted": False}}]),
+              patch.object(ProxyService, "_scan_stream_security_output")):
+            response = await ProxyService._stream_anthropic_request(
+                SimpleNamespace(close=lambda: None), SimpleNamespace(id=1, username="cache-test"),
+                SimpleNamespace(id=1), channel, simulation.model, data, "managed-audit", "claude-test",
+                "127.0.0.1", billing_context=simulation.binding(1))
+            result = "".join([chunk async for chunk in response.body_iterator])
+            assert '"input_tokens": 0' in result and '"output_tokens": 1' in result
+
+    asyncio.run(run())
+    rows = record_rows(simulation)
+    assert len(rows) == 1 and rows[0]["accounting_status"] == "settled"
+    assert rows[0]["outcome"] == "upstream_good"
+    assert rows[0]["usage"]["raw"] == rows[0]["usage"]["effective"] == {
+        "input": 0, "output": 1, "read": 50865, "creation": 0}
+    audits = [r.getMessage() for r in caplog.records if "Anthropic usage audit" in r.getMessage()]
+    assert len(audits) == int(audit_enabled)
+    if audits:
+        trace = json.loads(audits[0].split("trace=", 1)[1])
+        assert trace["usage_events"] == 2
+        assert trace["fragments"][0]["usage"]["input_tokens"] == 60000
+        assert trace["fragments"][-1]["merged"]["input_tokens"] == 0
+        assert trace["fragments"][-1]["merged"]["output_tokens"] == 1
+        assert trace["fragments"][-1]["stop_reason"] == "max_tokens"
+        assert "SECRET" not in audits[0] and "private_metadata" not in audits[0]
+    with simulation.factory() as db:
+        assert db.query(ConsumptionRecord).count() == 1
+
+
+def test_managed_anthropic_usage_audit_is_bounded_and_filters_untrusted_fields():
+    audit = {"usage_events": 0, "fragments": []}
+    for n in range(8):
+        usage = {"input_tokens": n, "output_tokens": 0, "content": "SECRET",
+                 "cache_creation": {"ephemeral_5m_input_tokens": 30, "private": "SECRET"}}
+        ProxyService._record_anthropic_usage_audit(audit, "SECRET", usage, usage, {"private": "SECRET"})
+    assert audit["usage_events"] == 8 and len(audit["fragments"]) == 4
+    assert audit["fragments"][0]["usage"]["input_tokens"] == 0
+    assert audit["fragments"][-1]["usage"]["input_tokens"] == 7
+    assert audit["fragments"][-1]["usage"]["cache_creation.ephemeral_5m_input_tokens"] == 30
+    assert audit["fragments"][-1]["usage"]["output_tokens"] == 0
+    assert audit["fragments"][-1]["event"] == audit["fragments"][-1]["stop_reason"] == "other"
+    assert "SECRET" not in json.dumps(audit) and "private" not in json.dumps(audit)
 
 
 def test_anthropic_responses_bridge_bills_once_with_original_client_usage(simulation):

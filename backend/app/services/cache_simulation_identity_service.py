@@ -89,7 +89,9 @@ class CacheSimulationIdentityService:
     def is_prefix(identity: dict, state: dict) -> bool:
         old = state.get("hashes") or []
         new = identity.get("hashes") or []
-        return bool(old and identity.get("complete") and identity.get("has_new_turn")
+        # A complete, strictly longer prefix proves added context even when a
+        # client ends the request with an assistant prefill or a typed item.
+        return bool(old and identity.get("complete")
                     and identity.get("context_hash") == state.get("context_hash")
                     and len(new) > len(old) and new[:len(old)] == old)
 
@@ -102,7 +104,7 @@ class CacheSimulationIdentityService:
                                               if k not in {"session", "agent", "parent_id"}},
                   "source": identity.get("source", "content_prefix"), "strong": False,
                   "expected_revision": 0, "expected_window_id": None, "entry_status": "ok"}
-        if not identity.get("complete") or not identity.get("has_new_turn"):
+        if not identity.get("complete"):
             return {**result, "entry_status": "incomplete_context"}
         if identity.get("ambiguous"):
             return {**result, "entry_status": "ambiguous_identity"}

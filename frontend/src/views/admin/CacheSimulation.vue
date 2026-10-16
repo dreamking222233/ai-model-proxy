@@ -1,7 +1,7 @@
 <template>
   <div class="cache-simulation-page">
     <div class="page-header">
-      <div><h2>模拟缓存</h2><span class="muted">查看指定用户与模型分组的缓存优化和结算结果</span></div>
+      <div><h2>模拟缓存</h2><span class="muted">查看指定用户与模型分组的缓存优化和结算结果，时间均为北京时间</span></div>
       <a-button icon="reload" :loading="loading" @click="refresh">刷新</a-button>
     </div>
 
@@ -51,7 +51,7 @@
           <a-select-option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</a-select-option>
         </a-select>
         <a-input v-model="filters.model" placeholder="模型名称（精确）" class="model-input" allow-clear @pressEnter="filterRecords" />
-        <a-range-picker v-model="dateRange" show-time :placeholder="['开始时间', '结束时间']" />
+        <a-range-picker v-model="dateRange" :default-picker-value="beijingPickerDefaults" show-time :placeholder="['开始时间（北京）', '结束时间（北京）']" />
         <a-button type="primary" icon="search" @click="filterRecords">搜索</a-button>
         <a-button @click="resetFilters">重置</a-button>
       </div>
@@ -104,6 +104,7 @@
 
 <script>
 import moment from 'moment'
+import { formatBeijingTime } from '@/utils'
 import { listUsers } from '@/api/user'
 import { getCacheSimulationConfig, saveCacheSimulationConfig, listCacheSimulationRules, createCacheSimulationRule, updateCacheSimulationRule, listCacheSimulationRecords, getCacheSimulationRecord, getCacheSimulationGroups } from '@/api/cacheSimulation'
 
@@ -125,6 +126,7 @@ export default {
       users: [], groups: [], userSearching: false, userSearchTimer: null, userSearchSequence: 0,
       configSequence: 0, ruleSequence: 0, recordSequence: 0, detailSequence: 0,
       newRule: { user_id: undefined, group_id: undefined }, rules: [], records: [], filters: defaultFilters(), dateRange: [],
+      beijingPickerDefaults: [moment().utcOffset(8), moment().utcOffset(8)],
       rulePagination: { current: 1, pageSize: 10, total: 0 },
       recordPagination: { current: 1, pageSize: 20, total: 0, showSizeChanger: true, showTotal: total => `共 ${total} 条` },
       detailVisible: false, detailLoading: false, detail: null,
@@ -246,8 +248,9 @@ export default {
         const res = await listCacheSimulationRecords({
           page: this.recordPagination.current, page_size: this.recordPagination.pageSize,
           ...this.filters, user_id: userId ? Number(userId) : undefined, model: this.filters.model.trim() || undefined,
-          start: this.dateRange[0] ? this.dateRange[0].toISOString() : undefined,
-          end: this.dateRange[1] ? this.dateRange[1].toISOString() : undefined
+          // Treat the selected wall clock as Beijing time in every browser.
+          start: this.dateRange[0] ? this.dateRange[0].clone().utcOffset(8, true).format('YYYY-MM-DDTHH:mm:ssZ') : undefined,
+          end: this.dateRange[1] ? this.dateRange[1].clone().utcOffset(8, true).format('YYYY-MM-DDTHH:mm:ssZ') : undefined
         })
         if (sequence === this.recordSequence) { this.records = res.data.items; this.recordPagination.total = res.data.total }
       } catch { /* Shared request interceptor displays errors. */ } finally {
@@ -273,7 +276,7 @@ export default {
     percent(value) { return `${(Number(value || 0) * 100).toFixed(2)}%` },
     number(value) { return Number(value || 0).toLocaleString() },
     money(value) { return `$${Number(value || 0).toFixed(6)}` },
-    formatTime(value) { return value ? moment(value).format('YYYY-MM-DD HH:mm:ss') : '—' }
+    formatTime(value) { return value ? formatBeijingTime(value) || '—' : '—' }
   }
 }
 </script>

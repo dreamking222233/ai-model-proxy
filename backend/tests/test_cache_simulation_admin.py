@@ -46,7 +46,9 @@ def admin_api(monkeypatch):
                 rule_generation=1, config_version=1, enable_epoch=1, identity_source="session_id",
                 identity_confidence="strong", usage_source="upstream", decision_status="prepared",
                 accounting_status=status, outcome=outcome, total_tokens=10100, context_tokens=10000,
-                usage_json=usage, snapshot_json='{"prices":{},"cache_info":{}}', created_at=datetime(2026, 10, 15, 1, n)))
+                usage_json=usage, snapshot_json='{"prices":{},"cache_info":{}}',
+                created_at=datetime(2026, 10, 15, 0, n), settled_at=datetime(2026, 10, 14, 16, n),
+                window_started_at=datetime(2026, 10, 14, 16), window_expires_at=datetime(2026, 10, 14, 16, 5)))
     app = FastAPI()
     app.include_router(router); app.include_router(system_router)
     register_exception_handlers(app)
@@ -114,11 +116,35 @@ def test_audit_defaults_filters_detail_and_time_boundaries(admin_api):
             assert (await client.get(path, params={**all_records, "user_id": 1})).json()["data"]["total"] == 0
             assert (await client.get(path, params={**all_records, "group_id": 12})).json()["data"]["total"] == 0
             assert (await client.get(path, params={**all_records, "model": "other"})).json()["data"]["total"] == 0
-            result = await client.get(path, params={**all_records, "start": "2026-10-15T09:01:30+08:00", "end": "2026-10-15T09:03:00+08:00"})
+            result = await client.get(path, params={**all_records, "start": "2026-10-15T00:01:30+08:00", "end": "2026-10-15T00:03:00+08:00"})
             assert result.json()["data"]["total"] == 1 and result.json()["data"]["items"][0]["request_id"] == "request-2"
             assert (await client.get(path, params={"start": "2026-10-16", "end": "2026-10-15"})).status_code == 400
             assert (await client.get(path, params={"outcome": "invalid"})).status_code == 422
             detail = (await client.get(path + "/request-1")).json()["data"]
             assert set(detail["usage"]) == {"raw", "effective", "baseline", "billed"}
+            assert detail["created_at"] == "2026-10-15T00:01:00+08:00"
+            assert detail["settled_at"] == "2026-10-14T16:01:00Z"
+            assert detail["window_started_at"] == "2026-10-14T16:00:00Z"
+            assert detail["window_expires_at"] == "2026-10-14T16:05:00Z"
+            assert datetime.fromisoformat(detail["created_at"]) == datetime.fromisoformat(detail["settled_at"].replace("Z", "+00:00"))
             assert (await client.get(path + "/missing")).status_code == 404
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("start,end", [
+    ("2026-10-15T00:02:00+08:00", "2026-10-15T00:02:00+08:00"),
+    ("2026-10-14T16:01:30Z", "2026-10-14T16:03:00Z"),
+    ("2026-10-14T09:01:30-07:00", "2026-10-14T09:03:00-07:00"),
+    ("2026-10-15T00:01:30", "2026-10-15T00:03:00"),
+])
+def test_record_filters_match_beijing_storage_across_timezones(admin_api, start, end):
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=admin_api), base_url="http://test",
+                                    headers={"Authorization": "Bearer admin"}) as client:
+            result = await client.get("/api/admin/cache-simulation/records", params={
+                "outcome": "all", "accounting_status": "all", "start": start, "end": end})
+            assert result.status_code == 200
+            data = result.json()["data"]
+            assert data["total"] == 1 and data["items"][0]["request_id"] == "request-2"
+            assert data["items"][0]["created_at"] == "2026-10-15T00:02:00+08:00"
     asyncio.run(run())

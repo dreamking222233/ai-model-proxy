@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -36,6 +36,7 @@ class AccountingResult:
 
 
 class CacheSimulationService:
+    BEIJING_TZ = timezone(timedelta(hours=8))
     CONFIG_KEY = "cache_simulation_config"
     DEFAULT_CONFIG = {"enabled": False, "ttl_seconds": 300, "version": 1, "enable_epoch": 1}
     MAX_RECOVERY_ATTEMPTS = 5
@@ -529,7 +530,12 @@ class CacheSimulationService:
                       effective_hit_ratio=usage["effective"]["read"] / total if total else 0)
         for key in ("created_at", "settled_at", "window_started_at", "window_expires_at"):
             value = getattr(decision, key)
-            result[key] = value.isoformat() + "Z" if value else None
+            # created_at comes from MySQL NOW() in +08:00; settlement/window
+            # timestamps are written by Python in UTC. Preserve both instants.
+            stored_tz = CacheSimulationService.BEIJING_TZ if key == "created_at" else timezone.utc
+            if value is not None:
+                value = value.replace(tzinfo=stored_tz) if value.tzinfo is None else value.astimezone(stored_tz)
+            result[key] = value.isoformat().replace("+00:00", "Z") if value else None
         for key in ("original_cost", "effective_cost", "fee_delta"):
             result[key] = float(getattr(decision, key) or 0)
         if detail:

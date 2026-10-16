@@ -1,5 +1,5 @@
 """Administrator configuration and audit records for local cache accounting."""
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -57,9 +57,10 @@ def list_records(
     start: Optional[datetime] = None, end: Optional[datetime] = None,
     db: Session = Depends(get_db), current_user: SysUser = Depends(require_admin),
 ):
-    # Stored timestamps are UTC without a timezone, matching existing request logs.
-    start = start.astimezone(timezone.utc).replace(tzinfo=None) if start and start.tzinfo else start
-    end = end.astimezone(timezone.utc).replace(tzinfo=None) if end and end.tzinfo else end
+    # created_at uses MySQL NOW() in Beijing time. Naive filters use that same
+    # wall clock; offset-aware filters must be converted before SQL comparison.
+    start = start.astimezone(CacheSimulationService.BEIJING_TZ).replace(tzinfo=None) if start and start.tzinfo else start
+    end = end.astimezone(CacheSimulationService.BEIJING_TZ).replace(tzinfo=None) if end and end.tzinfo else end
     if start and end and start > end:
         raise ServiceException(400, "开始时间不能晚于结束时间", "CACHE_SIMULATION_INVALID_RANGE")
     return ResponseModel(data=CacheSimulationService.list_records(

@@ -4,6 +4,8 @@ from app.models.user import SysUser, UserApiKey
 from app.models.cache_simulation import CacheSimulationRule, CacheSimulationDecision
 from app.models.agent import (
     Agent,
+    AgentOpenApiKey,
+    AgentOpenApiIdempotency,
     AgentBalance,
     AgentBalanceRecord,
     AgentImageBalance,
@@ -74,6 +76,8 @@ __all__ = [
     "SysUser",
     "UserApiKey",
     "Agent",
+    "AgentOpenApiKey",
+    "AgentOpenApiIdempotency",
     "AgentBalance",
     "AgentBalanceRecord",
     "AgentImageBalance",

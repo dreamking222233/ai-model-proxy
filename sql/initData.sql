@@ -47,6 +47,67 @@ CREATE TABLE `agent` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理站点表';
 
 -- ----------------------------
+-- Table structure for agent_open_api_key
+-- ----------------------------
+DROP TABLE IF EXISTS `agent_open_api_key`;
+CREATE TABLE `agent_open_api_key` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `agent_id` bigint unsigned NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `key_hash` varchar(64) NOT NULL,
+  `key_prefix` varchar(16) NOT NULL,
+  `scopes_json` text NOT NULL,
+  `status` varchar(16) NOT NULL DEFAULT 'active',
+  `created_by_user_id` bigint unsigned NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `last_used_at` datetime DEFAULT NULL,
+  `revoked_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_agent_open_api_key_hash` (`key_hash`),
+  KEY `ix_agent_open_api_key_agent_id` (`agent_id`),
+  KEY `ix_agent_open_api_key_key_prefix` (`key_prefix`),
+  KEY `ix_agent_open_api_key_status` (`status`),
+  KEY `ix_agent_open_api_key_created_by_user_id` (`created_by_user_id`),
+  KEY `ix_agent_open_api_key_expires_at` (`expires_at`),
+  KEY `ix_agent_open_api_key_agent_status_expiry` (`agent_id`, `status`, `expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理开放 API 凭据';
+
+-- ----------------------------
+-- Table structure for agent_open_api_idempotency
+-- ----------------------------
+DROP TABLE IF EXISTS `agent_open_api_idempotency`;
+CREATE TABLE `agent_open_api_idempotency` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `agent_id` bigint unsigned NOT NULL,
+  `key_id` bigint unsigned NOT NULL,
+  `user_id` bigint unsigned NOT NULL,
+  `idempotency_hash` varchar(64) NOT NULL,
+  `request_fingerprint` varchar(64) NOT NULL,
+  `request_json` text NOT NULL,
+  `user_recharge_rate_code` varchar(1) NOT NULL,
+  `user_recharge_rate` decimal(12,6) NOT NULL,
+  `agent_settlement_rate` decimal(12,6) NOT NULL,
+  `order_no` varchar(64) NOT NULL,
+  `status` varchar(24) NOT NULL DEFAULT 'reserved',
+  `lease_until` datetime NOT NULL,
+  `attempts` int NOT NULL DEFAULT 0,
+  `completed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_agent_open_api_idem_key_user_hash` (`key_id`, `user_id`, `idempotency_hash`),
+  UNIQUE KEY `uk_agent_open_api_idem_order_no` (`order_no`),
+  KEY `ix_agent_open_api_idempotency_agent_id` (`agent_id`),
+  KEY `ix_agent_open_api_idempotency_key_id` (`key_id`),
+  KEY `ix_agent_open_api_idempotency_user_id` (`user_id`),
+  KEY `ix_agent_open_api_idempotency_status` (`status`),
+  KEY `ix_agent_open_api_idem_status_lease` (`status`, `lease_until`),
+  KEY `ix_agent_open_api_idem_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理开放 API 充值幂等预约';
+
+-- ----------------------------
 -- Table structure for agent_balance
 -- ----------------------------
 DROP TABLE IF EXISTS `agent_balance`;
@@ -770,6 +831,7 @@ CREATE TABLE `payment_recharge_order` (
   `credited_usd` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '用户到账美元余额',
   `credited_image_credits` decimal(12,3) NOT NULL DEFAULT '0.000' COMMENT '到账图片积分',
   `user_recharge_rate` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '下单时实际用户充值比例快照',
+  `user_recharge_rate_code` varchar(1) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `agent_settlement_rate` decimal(12,6) NOT NULL DEFAULT '0.000000' COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
   `agent_income_cny` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '代理现金分润人民币',
   `subscription_plan_id` bigint unsigned DEFAULT NULL,

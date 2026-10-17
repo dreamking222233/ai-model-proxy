@@ -1,5 +1,7 @@
 """Custom exceptions and global exception handlers for FastAPI."""
 
+from typing import Mapping
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -8,10 +10,17 @@ from fastapi.responses import JSONResponse
 class ServiceException(Exception):
     """Business-logic exception that maps to an HTTP error response."""
 
-    def __init__(self, status_code: int = 400, detail: str = "服务异常", error_code: str = "SERVICE_ERROR"):
+    def __init__(
+        self,
+        status_code: int = 400,
+        detail: str = "服务异常",
+        error_code: str = "SERVICE_ERROR",
+        headers: Mapping[str, str] | None = None,
+    ):
         self.status_code = status_code
         self.detail = detail
         self.error_code = error_code
+        self.headers = dict(headers or {})
         super().__init__(detail)
 
 
@@ -80,6 +89,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "message": exc.detail,
                 "data": None,
             },
+            headers=exc.headers or None,
         )
 
     @app.exception_handler(RequestValidationError)

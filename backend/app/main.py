@@ -55,6 +55,8 @@ from app.api.agent.subscription import router as agent_subscription_router
 from app.api.agent.subscription_sale import router as agent_subscription_sale_router
 from app.api.agent.redemption import router as agent_redemption_router
 from app.api.agent.promotion import router as agent_promotion_router
+from app.api.agent.open_api import router as agent_open_api_key_router
+from app.api.agent.open_v1 import router as agent_open_api_v1_router
 from app.api.proxy.openai_proxy import router as openai_proxy_router
 from app.api.proxy.anthropic_proxy import router as anthropic_proxy_router
 from app.api.proxy.image_proxy import router as image_proxy_router
@@ -169,6 +171,8 @@ app.include_router(agent_subscription_router)
 app.include_router(agent_subscription_sale_router)
 app.include_router(agent_redemption_router)
 app.include_router(agent_promotion_router)
+app.include_router(agent_open_api_key_router)
+app.include_router(agent_open_api_v1_router)
 
 # Register routers - Proxy
 app.include_router(openai_proxy_router)

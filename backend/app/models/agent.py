@@ -2,6 +2,7 @@
 
 from sqlalchemy import (
     Column, BigInteger, String, Integer, Text, DateTime, Date, SmallInteger, DECIMAL, func, UniqueConstraint,
+    Index,
 )
 
 from app.database import Base
@@ -12,7 +13,7 @@ class Agent(Base):
 
     __tablename__ = "agent"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     agent_code = Column(String(64), nullable=False, unique=True, index=True)
     agent_name = Column(String(128), nullable=False)
     owner_user_id = Column(BigInteger, nullable=True, index=True)
@@ -32,6 +33,58 @@ class Agent(Base):
     custom_recharge_rate_enabled = Column(SmallInteger, nullable=False, default=0)
     custom_recharge_rate = Column(DECIMAL(12, 6), nullable=False, default=5)
     theme_config_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentOpenApiKey(Base):
+    """Hashed API credential owned by one agent tenant."""
+
+    __tablename__ = "agent_open_api_key"
+    __table_args__ = (
+        Index("ix_agent_open_api_key_agent_status_expiry", "agent_id", "status", "expires_at"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    key_hash = Column(String(64), nullable=False, unique=True)
+    key_prefix = Column(String(16), nullable=False, index=True)
+    scopes_json = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="active", index=True)
+    created_by_user_id = Column(BigInteger, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class AgentOpenApiIdempotency(Base):
+    """Durable reservation for one agent open-API recharge request."""
+
+    __tablename__ = "agent_open_api_idempotency"
+    __table_args__ = (
+        UniqueConstraint("key_id", "user_id", "idempotency_hash", name="uk_agent_open_api_idem_key_user_hash"),
+        Index("ix_agent_open_api_idem_status_lease", "status", "lease_until"),
+        Index("ix_agent_open_api_idem_created_at", "created_at"),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    agent_id = Column(BigInteger, nullable=False, index=True)
+    key_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    idempotency_hash = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    request_json = Column(Text, nullable=False)
+    user_recharge_rate_code = Column(String(1), nullable=False)
+    user_recharge_rate = Column(DECIMAL(12, 6), nullable=False)
+    agent_settlement_rate = Column(DECIMAL(12, 6), nullable=False)
+    order_no = Column(String(64), nullable=False, unique=True)
+    status = Column(String(24), nullable=False, default="reserved", index=True)
+    lease_until = Column(DateTime, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 

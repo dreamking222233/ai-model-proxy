@@ -534,6 +534,34 @@ class AgentService:
         return AgentService.get_site_context_from_request(db, host=host)
 
     @staticmethod
+    def get_open_api_site_context(
+        db: Session,
+        agent_id: int,
+        *,
+        require_register: bool = False,
+        require_recharge: bool = False,
+    ) -> AgentSiteContext:
+        """Build a tenant context from an already authenticated agent ID."""
+        agent = db.query(Agent).filter(Agent.id == int(agent_id)).first()
+        if agent is None or agent.status != "active":
+            raise ServiceException(403, "代理已停用或不存在", "AGENT_UNAVAILABLE")
+        if require_register and not bool(agent.allow_self_register):
+            raise ServiceException(403, "当前代理已关闭注册", "REGISTRATION_DISABLED")
+        if require_recharge and not bool(agent.online_recharge_enabled):
+            raise ServiceException(403, "当前代理未开启在线充值", "AGENT_ONLINE_RECHARGE_DISABLED")
+        frontend_host = AgentService.normalize_host(agent.frontend_domain)
+        if require_recharge and not frontend_host:
+            raise ServiceException(500, "代理未配置前台域名，无法创建支付回跳地址", "PAYMENT_RETURN_HOST_MISSING")
+        return AgentSiteContext(
+            host=frontend_host or "",
+            site_scope="agent",
+            is_api_host=False,
+            agent=agent,
+            request_host="",
+            resolved_from="agent_open_api_key",
+        )
+
+    @staticmethod
     def get_site_context_from_request(
         db: Session,
         host: Optional[str] = None,

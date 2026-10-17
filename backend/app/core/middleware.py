@@ -14,6 +14,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware that logs request method, path, response status, and duration."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        request.state.request_started_monotonic = time.monotonic()
         start_time = time.time()
 
         response = await call_next(request)

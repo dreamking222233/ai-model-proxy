@@ -105,8 +105,13 @@ frontend/.output/
 # Local-only documentation, test workspaces, and generated media
 /.codex/skills/ai-model-proxy-server-deploy/
 /ai-model-proxy-server-deploy/
-/docs/
-/md/
+/docs/*
+!/docs/agent-open-api.md
+/md/*
+!/md/plan-代理开放接口-20261017.md
+!/md/plan-review-代理开放接口-20261017.md
+!/md/impl-代理开放接口-20261018.md
+!/md/review-代理开放接口-20261018.md
 /backend/app/test/
 /backend/test_*.py
 /backend/app/test/output_*/

@@ -48,6 +48,7 @@ class PaymentService:
     CNY_SCALE = Decimal("0.01")
     USD_SCALE = Decimal("0.000001")
     ORDER_EXPIRE_MINUTES = 30
+    ALIPAY_HTTP_TIMEOUT_SECONDS = 8.0
     DEFAULT_CHANNEL = "alipay"
     PAYMENT_CHANNELS = {"alipay", "wechat"}
     RECHARGE_TYPES = {"balance", "image_credit", "subscription"}
@@ -58,6 +59,10 @@ class PaymentService:
     WECHAT_FAILED_STATES = {"PAYERROR"}
     PAYMENT_CHANNEL_TEXT = {"alipay": "支付宝", "wechat": "微信"}
     RECHARGE_TYPE_TEXT = {"balance": "余额", "image_credit": "图片积分", "subscription": "套餐"}
+    OPEN_API_RECHARGE_RATES = {
+        "a": Decimal("1"), "b": Decimal("2"), "c": Decimal("3"),
+        "d": Decimal("4"), "e": Decimal("5"), "f": Decimal("6"), "g": Decimal("7"),
+    }
 
     @staticmethod
     def _serialize_dt(dt: datetime | None, *, assume_utc: bool) -> str | None:
@@ -318,7 +323,7 @@ class PaymentService:
             raise ServiceException(403, "当前站点未开启套餐在线充值", "AGENT_SUBSCRIPTION_ONLINE_RECHARGE_DISABLED")
 
     @staticmethod
-    def _build_alipay_client():
+    def _build_alipay_client(timeout: float | None = None):
         try:
             from alipay.aop.api.AlipayClientConfig import AlipayClientConfig
             from alipay.aop.api.DefaultAlipayClient import DefaultAlipayClient
@@ -328,6 +333,10 @@ class PaymentService:
         config = AlipayClientConfig()
         config.server_url = settings.ALIPAY_SERVER_URL
         config.app_id = settings.ALIPAY_APP_ID
+        config.timeout = max(
+            1.0,
+            min(float(timeout or PaymentService.ALIPAY_HTTP_TIMEOUT_SECONDS), PaymentService.ALIPAY_HTTP_TIMEOUT_SECONDS),
+        )
         config.app_private_key = PaymentService._build_private_pem_key(
             settings.ALIPAY_APP_PRIVATE_KEY,
             missing_code="ALIPAY_PRIVATE_KEY_MISSING",
@@ -395,6 +404,7 @@ class PaymentService:
         agent_id: int | None,
         recharge_type: str = "balance",
         user_recharge_rate: Decimal | None = None,
+        agent_settlement_rate: Decimal | None = None,
     ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
         if normalized_type == "subscription":
@@ -422,7 +432,10 @@ class PaymentService:
             user_recharge_rate if user_recharge_rate is not None else settings.RECHARGE_USER_CNY_TO_USD_RATE,
             "RECHARGE_USER_RATE_INVALID",
         )
-        agent_rate = PaymentService._settings_decimal(settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE, "RECHARGE_AGENT_RATE_INVALID")
+        agent_rate = PaymentService._settings_decimal(
+            agent_settlement_rate if agent_settlement_rate is not None else settings.RECHARGE_AGENT_CNY_TO_USD_SETTLEMENT_RATE,
+            "RECHARGE_AGENT_RATE_INVALID",
+        )
         credited_usd = (amount_cny * user_rate).quantize(PaymentService.USD_SCALE, rounding=ROUND_HALF_UP)
         if not agent_id:
             return credited_usd, Decimal("0.000"), agent_rate, Decimal("0.00")
@@ -472,6 +485,12 @@ class PaymentService:
         subscription_plan_id: int | None = None,
         subscription_activation_mode: str | None = None,
         site_context: AgentSiteContext | None = None,
+        user_recharge_rate_override: Decimal | None = None,
+        user_recharge_rate_code: str | None = None,
+        agent_settlement_rate_override: Decimal | None = None,
+        trusted_rate_snapshot: bool = False,
+        reserved_order_no: str | None = None,
+        defer_external_request: bool = False,
     ) -> dict:
         channel = PaymentService._normalize_payment_channel(payment_channel)
         normalized_type = PaymentService._normalize_recharge_type(recharge_type)
@@ -501,16 +520,34 @@ class PaymentService:
             activation_mode = "append"
             amount_decimal = PaymentService._normalize_cny(amount_cny)
             user_recharge_rate = recharge_policy.user_rate_for(normalized_type)
+            settlement_rate = (
+                PaymentService._settings_decimal(agent_settlement_rate_override, "RECHARGE_AGENT_RATE_INVALID")
+                if agent_settlement_rate_override is not None
+                else recharge_policy.balance_agent_settlement_rate
+            )
+            if user_recharge_rate_override is not None:
+                code = str(user_recharge_rate_code or "").strip().lower()
+                if code not in PaymentService.OPEN_API_RECHARGE_RATES:
+                    raise ServiceException(400, "充值比例参数不合法", "RECHARGE_RATE_CODE_INVALID")
+                requested_rate = PaymentService._settings_decimal(user_recharge_rate_override, "RECHARGE_USER_RATE_INVALID")
+                if requested_rate != PaymentService.OPEN_API_RECHARGE_RATES[code]:
+                    raise ServiceException(400, "充值比例代码与比例数值不匹配", "RECHARGE_RATE_CODE_INVALID")
+                if code != "e" and not trusted_rate_snapshot and not recharge_policy.custom_recharge_rate_enabled:
+                    raise ServiceException(403, "当前代理未开启自定义充值比例", "AGENT_CUSTOM_RECHARGE_RATE_DISABLED")
+                if requested_rate > settlement_rate:
+                    raise ServiceException(400, "充值比例不能高于代理结算比例", "AGENT_CUSTOM_RECHARGE_RATE_EXCEEDS_SETTLEMENT")
+                user_recharge_rate = requested_rate
             credited_usd, credited_image_credits, agent_rate, agent_income_cny = PaymentService._calculate_amounts(
                 amount_decimal,
                 user.agent_id,
                 normalized_type,
                 user_recharge_rate=user_recharge_rate,
+                agent_settlement_rate=settlement_rate,
             )
             subscription_agent_cost_cny = Decimal("0.00")
             quota_snapshot = None
         order = PaymentRechargeOrder(
-            order_no=PaymentService._generate_order_no(channel),
+            order_no=str(reserved_order_no or PaymentService._generate_order_no(channel)),
             payment_channel=channel,
             recharge_type=normalized_type,
             user_id=user.id,
@@ -521,6 +558,7 @@ class PaymentService:
             credited_usd=credited_usd,
             credited_image_credits=credited_image_credits,
             user_recharge_rate=user_recharge_rate,
+            user_recharge_rate_code=user_recharge_rate_code,
             agent_settlement_rate=agent_rate,
             agent_income_cny=agent_income_cny,
             subscription_plan_id=subscription_plan.id if subscription_plan else None,
@@ -543,17 +581,43 @@ class PaymentService:
         db.add(order)
         db.flush()
 
+        if defer_external_request:
+            # Persist before the provider request so a process restart can
+            # resume from the immutable order snapshot and reserved order no.
+            db.commit()
+            db.refresh(order)
+            db.expunge(order)
+            db.close()
+
         response_payload = {"order": PaymentService.serialize_order(order)}
         if channel == "alipay":
             response_payload["pay_url"] = PaymentService.build_alipay_page_pay_url(order, order.return_url_snapshot)
         elif channel == "wechat":
-            wechat_payload = PaymentService.create_wechat_native_order(db, order)
+            wechat_payload = PaymentService.create_wechat_native_order(None if defer_external_request else db, order)
             response_payload.update(wechat_payload)
+            if defer_external_request:
+                # Keep the DB connection closed during the provider request,
+                # then save the credential in a new short transaction.
+                from app.database import SessionLocal
+                persist_db = SessionLocal()
+                try:
+                    current = (
+                        persist_db.query(PaymentRechargeOrder)
+                        .filter(PaymentRechargeOrder.order_no == order.order_no)
+                        .with_for_update()
+                        .first()
+                    )
+                    if current is not None and current.status == "pending":
+                        current.wechat_code_url = order.wechat_code_url
+                        persist_db.commit()
+                finally:
+                    persist_db.close()
         else:  # pragma: no cover - guarded by _normalize_payment_channel
             raise ServiceException(400, "不支持的支付渠道", "PAYMENT_CHANNEL_INVALID")
 
-        db.commit()
-        db.refresh(order)
+        if not defer_external_request:
+            db.commit()
+            db.refresh(order)
         response_payload["order"] = PaymentService.serialize_order(order)
         return response_payload
 
@@ -586,7 +650,11 @@ class PaymentService:
         model.subject = order.subject
         model.body = order.body
         model.product_code = "FAST_INSTANT_TRADE_PAY"
-        model.timeout_express = f"{PaymentService.ORDER_EXPIRE_MINUTES}m"
+        remaining_seconds = (order.expired_at - datetime.utcnow()).total_seconds() if order.expired_at else 0
+        if remaining_seconds <= 0:
+            raise ServiceException(409, "支付宝充值订单已过期，请重新发起充值", "RECHARGE_ORDER_EXPIRED")
+        remaining_minutes = max(1, int((remaining_seconds + 59) // 60))
+        model.timeout_express = f"{remaining_minutes}m"
         request = AlipayTradePagePayRequest(biz_model=model)
         PaymentService._apply_request_urls(request, PaymentService._get_alipay_notify_url(), return_url)
         response = client.page_execute(request, http_method="GET")
@@ -634,7 +702,14 @@ class PaymentService:
         return headers
 
     @staticmethod
-    def _wechat_request(method: str, path: str, payload: dict | None = None) -> dict:
+    def _wechat_request(
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        *,
+        timeout: float = 8.0,
+        allow_not_found: bool = False,
+    ) -> dict:
         PaymentService._validate_wechat_config()
         base_url = str(settings.WECHAT_PAY_SERVER_URL or "https://api.mch.weixin.qq.com").strip().rstrip("/")
         body = json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")) if payload is not None else ""
@@ -645,10 +720,12 @@ class PaymentService:
                 url=f"{base_url}{path}",
                 content=body.encode("utf-8") if body else None,
                 headers=headers,
-                timeout=20.0,
+                timeout=httpx.Timeout(timeout, connect=min(timeout, 3.0)),
             )
         except httpx.HTTPError as exc:
             raise ServiceException(500, "微信支付请求失败，请稍后重试", "WECHAT_PAY_REQUEST_FAILED") from exc
+        if allow_not_found and response.status_code == 404:
+            return {"trade_state": "NOT_FOUND"}
         if response.status_code >= 400:
             logger.error("WeChat pay request failed: status=%s body=%s", response.status_code, response.text)
             raise ServiceException(500, "微信支付请求失败", "WECHAT_PAY_REQUEST_FAILED")
@@ -667,6 +744,10 @@ class PaymentService:
             "description": order.subject,
             "out_trade_no": order.order_no,
             "notify_url": PaymentService._get_wechat_notify_url(),
+            "time_expire": (
+                datetime.now(timezone(timedelta(hours=8)))
+                + timedelta(minutes=PaymentService.ORDER_EXPIRE_MINUTES)
+            ).isoformat(timespec="seconds"),
             "amount": {
                 "total": PaymentService._format_wechat_amount(Decimal(str(order.amount_cny or 0))),
                 "currency": "CNY",
@@ -687,6 +768,11 @@ class PaymentService:
     def _serialize_query_response(response) -> dict:
         return {
             "trade_status": getattr(response, "trade_status", None),
+            "out_trade_no": getattr(response, "out_trade_no", None),
+            # The query response schema does not expose app_id. The SDK sends
+            # the configured app_id in the signed query request, so bind the
+            # verified response to that same configured merchant application.
+            "app_id": str(settings.ALIPAY_APP_ID or "").strip(),
             "alipay_trade_no": getattr(response, "trade_no", None),
             "buyer_logon_id": getattr(response, "buyer_logon_id", None),
             "buyer_user_id": getattr(response, "buyer_user_id", None),
@@ -694,7 +780,7 @@ class PaymentService:
         }
 
     @staticmethod
-    def query_alipay_order(order_no: str) -> dict:
+    def query_alipay_order(order_no: str, timeout: float = ALIPAY_HTTP_TIMEOUT_SECONDS) -> dict:
         PaymentService._validate_alipay_config()
         try:
             from alipay.aop.api.domain.AlipayTradeQueryModel import AlipayTradeQueryModel
@@ -703,7 +789,7 @@ class PaymentService:
         except ImportError as exc:
             raise ServiceException(500, "未安装支付宝 SDK，请先安装依赖", "ALIPAY_SDK_NOT_INSTALLED") from exc
 
-        client = PaymentService._build_alipay_client()
+        client = PaymentService._build_alipay_client(timeout)
         model = AlipayTradeQueryModel()
         model.out_trade_no = order_no
         request = AlipayTradeQueryRequest(biz_model=model)
@@ -720,9 +806,40 @@ class PaymentService:
         return PaymentService._serialize_query_response(response)
 
     @staticmethod
-    def query_wechat_order(order_no: str) -> dict:
+    def query_wechat_order(order_no: str, timeout: float = 8.0) -> dict:
         path = f"/v3/pay/transactions/out-trade-no/{order_no}?mchid={settings.WECHAT_PAY_MCH_ID}"
-        return PaymentService._wechat_request("GET", path)
+        return PaymentService._wechat_request("GET", path, timeout=timeout, allow_not_found=True)
+
+    @staticmethod
+    def close_wechat_order(order_no: str, timeout: float = 8.0) -> bool:
+        path = f"/v3/pay/transactions/out-trade-no/{order_no}/close"
+        PaymentService._wechat_request(
+            "POST", path,
+            {"mchid": str(settings.WECHAT_PAY_MCH_ID or "").strip()},
+            timeout=timeout,
+        )
+        return True
+
+    @staticmethod
+    def close_alipay_order(order_no: str, timeout: float = ALIPAY_HTTP_TIMEOUT_SECONDS) -> bool:
+        PaymentService._validate_alipay_config()
+        try:
+            from alipay.aop.api.domain.AlipayTradeCloseModel import AlipayTradeCloseModel
+            from alipay.aop.api.request.AlipayTradeCloseRequest import AlipayTradeCloseRequest
+            from alipay.aop.api.response.AlipayTradeCloseResponse import AlipayTradeCloseResponse
+        except ImportError as exc:
+            raise ServiceException(500, "未安装支付宝 SDK，请先安装依赖", "ALIPAY_SDK_NOT_INSTALLED") from exc
+        client = PaymentService._build_alipay_client(timeout)
+        model = AlipayTradeCloseModel()
+        model.out_trade_no = order_no
+        response_content = client.execute(AlipayTradeCloseRequest(biz_model=model))
+        response = AlipayTradeCloseResponse()
+        response.parse_response_content(response_content or "")
+        if response.is_success():
+            return True
+        if str(getattr(response, "sub_code", None) or "") == "ACQ.TRADE_NOT_EXIST":
+            return True
+        raise ServiceException(503, "支付宝关单结果暂不可确认", "ALIPAY_CLOSE_UNCERTAIN")
 
     @staticmethod
     def _load_order_for_user(db: Session, order_no: str, user_id: int) -> PaymentRechargeOrder:
@@ -1148,17 +1265,24 @@ class PaymentService:
         channel = PaymentService._normalize_payment_channel(locked.payment_channel)
         local_amount = PaymentService._normalize_cny(locked.amount_cny)
         if channel == "alipay":
-            app_id = str(payload.get("app_id") or settings.ALIPAY_APP_ID or "").strip()
-            if app_id and app_id != str(settings.ALIPAY_APP_ID or "").strip():
+            # Notifications must carry their signed app_id. Query responses
+            # are normalized by query_alipay_order(), which binds them to the
+            # app_id used in the signed server-to-server request.
+            app_id = str(payload.get("app_id") or "").strip()
+            if not app_id or app_id != str(settings.ALIPAY_APP_ID or "").strip():
                 raise ServiceException(400, "支付宝应用编号不匹配", "ALIPAY_APP_ID_MISMATCH")
             trade_status = str(payload.get("trade_status") or "").strip()
             if trade_status not in PaymentService.ALIPAY_ACCEPTED_TRADE_STATUSES:
                 raise ServiceException(400, "支付宝交易状态不支持入账", "ALIPAY_TRADE_STATUS_INVALID")
             total_amount = payload.get("total_amount")
-            if total_amount is not None:
-                remote_amount = PaymentService._normalize_cny(total_amount) if source == "notify" else PaymentService._try_normalize_cny(total_amount)
-                if remote_amount is not None and remote_amount > Decimal("0") and remote_amount != local_amount:
-                    raise ServiceException(400, "支付宝回调金额与本地订单不一致", "ALIPAY_AMOUNT_MISMATCH")
+            if total_amount is None or str(total_amount).strip() == "":
+                raise ServiceException(400, "支付宝支付金额缺失", "ALIPAY_AMOUNT_MISSING")
+            remote_amount = PaymentService._try_normalize_cny(total_amount)
+            if remote_amount is None or remote_amount <= Decimal("0") or remote_amount != local_amount:
+                raise ServiceException(400, "支付宝回调金额与本地订单不一致", "ALIPAY_AMOUNT_MISMATCH")
+            remote_order_no = str(payload.get("out_trade_no") or "").strip()
+            if not remote_order_no or remote_order_no != locked.order_no:
+                raise ServiceException(400, "支付宝订单号不匹配", "ALIPAY_ORDER_NO_MISMATCH")
             alipay_trade_no = str(payload.get("alipay_trade_no") or payload.get("trade_no") or "").strip() or None
             if alipay_trade_no:
                 exists = (
@@ -1179,10 +1303,10 @@ class PaymentService:
             }
 
         app_id = str(payload.get("appid") or "").strip()
-        if app_id and app_id != str(settings.WECHAT_PAY_APP_ID or "").strip():
+        if not app_id or app_id != str(settings.WECHAT_PAY_APP_ID or "").strip():
             raise ServiceException(400, "微信支付应用编号不匹配", "WECHAT_PAY_APP_ID_MISMATCH")
         mch_id = str(payload.get("mchid") or "").strip()
-        if mch_id and mch_id != str(settings.WECHAT_PAY_MCH_ID or "").strip():
+        if not mch_id or mch_id != str(settings.WECHAT_PAY_MCH_ID or "").strip():
             raise ServiceException(400, "微信支付商户号不匹配", "WECHAT_PAY_MCH_ID_MISMATCH")
         trade_state = str(payload.get("trade_state") or payload.get("trade_state_desc") or "SUCCESS").strip().upper()
         if trade_state not in PaymentService.WECHAT_SUCCESS_STATES:
@@ -1190,6 +1314,9 @@ class PaymentService:
         amount_data = payload.get("amount")
         if not isinstance(amount_data, dict) or not amount_data:
             raise ServiceException(400, "微信支付回调金额格式无效", "WECHAT_PAY_AMOUNT_MISMATCH")
+        remote_order_no = str(payload.get("out_trade_no") or "").strip()
+        if not remote_order_no or remote_order_no != locked.order_no:
+            raise ServiceException(400, "微信支付订单号不匹配", "WECHAT_PAY_ORDER_NO_MISMATCH")
         # WeChat discounts reduce payer_total, while total remains the merchant order amount.
         total_amount = amount_data.get("total")
         if total_amount is None:
@@ -1294,7 +1421,7 @@ class PaymentService:
         locked = PaymentService._get_order_for_update(db, order_no)
         if locked.status == "paid":
             return PaymentService.serialize_order(locked)
-        if locked.status != "pending":
+        if locked.status not in {"pending", "closed"}:
             raise ServiceException(400, "订单状态不允许再次入账", "RECHARGE_ORDER_STATUS_INVALID")
         validated = PaymentService._validate_paid_payload(db, locked, payload, source)
         settlement = PaymentService._claim_recharge_settlement(db, locked)
@@ -1369,6 +1496,7 @@ class PaymentService:
                 "app_id": params.get("app_id"),
                 "trade_status": trade_status,
                 "total_amount": params.get("total_amount"),
+                "out_trade_no": order_no,
                 "alipay_trade_no": params.get("trade_no"),
                 "buyer_logon_id": params.get("buyer_logon_id"),
                 "buyer_user_id": params.get("buyer_user_id"),
@@ -1440,6 +1568,7 @@ class PaymentService:
             "credited_usd": float(order.credited_usd or 0),
             "credited_image_credits": float(order.credited_image_credits or 0),
             "user_recharge_rate": float(getattr(order, "user_recharge_rate", 0) or 0),
+            "user_recharge_rate_code": getattr(order, "user_recharge_rate_code", None),
             "agent_income_cny": float(order.agent_income_cny or 0),
             "subscription_plan_id": order.subscription_plan_id,
             "subscription_id": order.subscription_id,

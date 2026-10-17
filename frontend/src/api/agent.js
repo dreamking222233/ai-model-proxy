@@ -305,6 +305,38 @@ export function createAgentRedemptionCode(data) {
   })
 }
 
+export function listAgentOpenApiKeys() {
+  return request({
+    url: '/api/agent/open-api/keys',
+    method: 'get',
+    headers: { 'Cache-Control': 'no-store' }
+  })
+}
+
+export function createAgentOpenApiKey(data) {
+  return request({
+    url: '/api/agent/open-api/keys',
+    method: 'post',
+    data,
+    headers: { 'Cache-Control': 'no-store' }
+  })
+}
+
+export function updateAgentOpenApiKeyScopes(id, data) {
+  return request({
+    url: `/api/agent/open-api/keys/${id}/scopes`,
+    method: 'put',
+    data
+  })
+}
+
+export function revokeAgentOpenApiKey(id) {
+  return request({
+    url: `/api/agent/open-api/keys/${id}`,
+    method: 'delete'
+  })
+}
+
 export function deleteAgentRedemptionCode(id) {
   return request({
     url: `/api/agent/redemption/${id}`,

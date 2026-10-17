@@ -50,6 +50,7 @@ class AuthService:
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
         referer: Optional[str] = None,
+        trusted_agent_id: Optional[int] = None,
     ) -> dict:
         """
         Register a new user.
@@ -60,22 +61,27 @@ class AuthService:
         Raises:
             ServiceException: if username or email is already taken.
         """
-        if not AgentService.is_self_register_allowed(
-            db,
-            host=request_host,
-            x_site_host=x_site_host,
-            origin=origin,
-            referer=referer,
-        ):
-            raise ServiceException(403, "当前站点已关闭注册", "REGISTRATION_DISABLED")
+        if trusted_agent_id is not None:
+            site_context = AgentService.get_open_api_site_context(
+                db, int(trusted_agent_id), require_register=True,
+            )
+        else:
+            if not AgentService.is_self_register_allowed(
+                db,
+                host=request_host,
+                x_site_host=x_site_host,
+                origin=origin,
+                referer=referer,
+            ):
+                raise ServiceException(403, "当前站点已关闭注册", "REGISTRATION_DISABLED")
 
-        site_context = AgentService.get_site_context_from_request(
-            db,
-            host=request_host,
-            x_site_host=x_site_host,
-            origin=origin,
-            referer=referer,
-        )
+            site_context = AgentService.get_site_context_from_request(
+                db,
+                host=request_host,
+                x_site_host=x_site_host,
+                origin=origin,
+                referer=referer,
+            )
 
         # Check unique username
         if db.query(SysUser).filter(SysUser.username == username).first():
@@ -85,7 +91,12 @@ class AuthService:
         if db.query(SysUser).filter(SysUser.email == email).first():
             raise ServiceException(400, "邮箱已被注册", "DUPLICATE_EMAIL")
 
-        EmailVerificationService.verify_code(email, email_code or "", purpose="register")
+        EmailVerificationService.verify_code(
+            email,
+            email_code or "",
+            purpose="register",
+            agent_id=int(trusted_agent_id) if trusted_agent_id is not None else None,
+        )
 
         # Create user
         user = SysUser(
@@ -140,6 +151,7 @@ class AuthService:
         x_site_host: Optional[str] = None,
         origin: Optional[str] = None,
         referer: Optional[str] = None,
+        trusted_agent_id: Optional[int] = None,
     ) -> dict:
         """
         Authenticate a user by username and password.
@@ -160,14 +172,18 @@ class AuthService:
         if user.status != 1:
             raise ServiceException(403, "账号已被禁用", "ACCOUNT_DISABLED")
 
-        AgentService.assert_user_matches_site(
-            db,
-            user,
-            host=request_host,
-            x_site_host=x_site_host,
-            origin=origin,
-            referer=referer,
-        )
+        if trusted_agent_id is not None:
+            if user.role != "user" or int(user.agent_id or 0) != int(trusted_agent_id):
+                raise ServiceException(401, "用户名或密码错误", "AUTH_FAILED")
+        else:
+            AgentService.assert_user_matches_site(
+                db,
+                user,
+                host=request_host,
+                x_site_host=x_site_host,
+                origin=origin,
+                referer=referer,
+            )
 
         # Update login metadata
         is_first_login = user.last_login_at is None

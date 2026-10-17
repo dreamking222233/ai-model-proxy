@@ -350,6 +350,12 @@ const routes = [
         meta: { title: '充值记录' }
       },
       {
+        path: 'open-api',
+        name: 'AgentOpenApiManage',
+        component: () => import('@/views/agent/OpenApiManage.vue'),
+        meta: { title: '开放接口' }
+      },
+      {
         path: 'promotions',
         name: 'AgentPromotionManage',
         component: () => import('@/views/agent/PromotionManage.vue'),

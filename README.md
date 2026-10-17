@@ -89,6 +89,7 @@ npm run serve
 - [docs/project-overview.html](docs/project-overview.html)：项目说明页
 - [docs/agent-subdomain-deployment.md](docs/agent-subdomain-deployment.md)：代理前台域名 + 共享 API 部署说明
 - [docs/agent-custom-domain-deployment.md](docs/agent-custom-domain-deployment.md)：代理自定义域名部署说明
+- [docs/agent-open-api.md](docs/agent-open-api.md)：代理开放接口接入文档
 - [docs/client-integration-guide.md](docs/client-integration-guide.md)：客户端接入说明
 
 ## 初始化脚本说明

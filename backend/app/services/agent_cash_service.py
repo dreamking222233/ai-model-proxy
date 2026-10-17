@@ -576,6 +576,36 @@ class AgentCashService:
         return items, total
 
     @staticmethod
+    def list_agent_open_api_recharge_orders(
+        db: Session,
+        *,
+        agent_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        user_id: int | None = None,
+        status: str | None = None,
+        payment_channel: str | None = None,
+        recharge_type: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[list[dict], int]:
+        """Open API read wrapper with a mandatory tenant predicate."""
+        if int(agent_id) <= 0:
+            raise ServiceException(403, "缺少代理上下文", "AGENT_SITE_REQUIRED")
+        return AgentCashService.list_recharge_orders(
+            db,
+            page=page,
+            page_size=page_size,
+            agent_id=int(agent_id),
+            user_id=user_id,
+            status=status,
+            payment_channel=payment_channel,
+            recharge_type=recharge_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    @staticmethod
     def list_withdrawals(
         db: Session,
         page: int = 1,

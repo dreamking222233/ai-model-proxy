@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from dataclasses import dataclass
 
 import hashlib
 from datetime import datetime
@@ -10,12 +11,13 @@ from fastapi import Depends, Header, Request
 from jose import JWTError
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.user import SysUser, UserApiKey
 from app.core.security import verify_token
 from app.core.exceptions import ServiceException
 from app.services.agent_service import AgentService, AgentSiteContext
 from app.services.auth_token_revocation_service import AuthTokenRevocationService
+from app.services.agent_open_api_key_service import AgentOpenApiPrincipal, AgentOpenApiKeyService
 
 
 def get_request_site_kwargs(request: Request) -> dict:
@@ -133,6 +135,82 @@ def assert_user_in_agent_scope(user: SysUser, agent_id: Optional[int]) -> None:
         raise ServiceException(status_code=403, detail="缺少代理上下文", error_code="AGENT_SITE_REQUIRED")
     if int(user.agent_id or 0) != int(agent_id):
         raise ServiceException(status_code=403, detail="目标用户不在当前代理范围内", error_code="AGENT_SCOPE_VIOLATION")
+
+
+@dataclass(frozen=True)
+class OpenApiUserPrincipal:
+    """JWT identity fields safe to retain after the verification session closes."""
+
+    user_id: int
+    agent_id: int | None
+    role: str
+    username: str
+    token_version: int
+
+
+def get_agent_open_api_principal(
+    x_agent_api_key: str | None = Header(None, alias="X-Agent-API-Key"),
+) -> AgentOpenApiPrincipal:
+    db = SessionLocal()
+    try:
+        return AgentOpenApiKeyService.authenticate(db, x_agent_api_key)
+    finally:
+        db.close()
+
+
+def get_open_api_user(
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> OpenApiUserPrincipal:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise ServiceException(401, "缺少授权信息或授权头格式错误", "UNAUTHORIZED")
+    token = authorization[7:]
+    if token.startswith("sk-"):
+        raise ServiceException(401, "当前接口需要登录 JWT", "UNAUTHORIZED")
+    try:
+        payload = verify_token(token)
+    except JWTError as exc:
+        raise ServiceException(401, "登录凭证无效或已过期", "UNAUTHORIZED") from exc
+    user_id = payload.get("sub")
+    if user_id is None or not payload.get("iat") or not payload.get("jti"):
+        raise ServiceException(401, "登录凭证已失效，请重新登录", "TOKEN_REVOKED")
+    if AuthTokenRevocationService.is_revoked(payload.get("jti")):
+        raise ServiceException(401, "登录凭证已失效，请重新登录", "TOKEN_REVOKED")
+    try:
+        normalized_user_id = int(user_id)
+        token_version = int(payload.get("tv"))
+    except (TypeError, ValueError) as exc:
+        raise ServiceException(401, "登录凭证内容无效", "UNAUTHORIZED") from exc
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(SysUser.id, SysUser.agent_id, SysUser.role, SysUser.username, SysUser.token_version, SysUser.status)
+            .filter(SysUser.id == normalized_user_id)
+            .first()
+        )
+        if row is None:
+            raise ServiceException(401, "用户不存在", "UNAUTHORIZED")
+        if token_version != int(row.token_version or 0):
+            raise ServiceException(401, "登录凭证已失效，请重新登录", "TOKEN_REVOKED")
+        if row.status != 1:
+            raise ServiceException(403, "账号已被禁用", "FORBIDDEN")
+        return OpenApiUserPrincipal(
+            user_id=int(row.id),
+            agent_id=int(row.agent_id) if row.agent_id is not None else None,
+            role=str(row.role or ""),
+            username=str(row.username or ""),
+            token_version=token_version,
+        )
+    finally:
+        db.close()
+
+
+def require_open_api_user_for_agent(
+    user: OpenApiUserPrincipal,
+    principal: AgentOpenApiPrincipal,
+) -> OpenApiUserPrincipal:
+    if user.role != "user" or user.agent_id is None or int(user.agent_id) != int(principal.agent_id):
+        raise ServiceException(403, "用户与 API Key 所属代理不匹配", "AGENT_SITE_MISMATCH")
+    return user
 
 
 def _extract_api_key_value(

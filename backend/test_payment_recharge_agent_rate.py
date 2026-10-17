@@ -670,6 +670,8 @@ class PaymentRechargeCallbackIntegrationTest(unittest.TestCase):
                 self.db,
                 order_no,
                 {
+                    "app_id": settings.ALIPAY_APP_ID,
+                    "out_trade_no": order_no,
                     "trade_status": "TRADE_SUCCESS",
                     "total_amount": "100.00",
                     "alipay_trade_no": trade_no,

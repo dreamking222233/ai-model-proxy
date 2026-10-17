@@ -2,6 +2,9 @@ const { defineConfig } = require('@vue/cli-service')
 module.exports = defineConfig({
   transpileDependencies: true,
   productionSourceMap: false,
+  chainWebpack: config => {
+    config.module.rule('markdown').test(/\.md$/).type('asset/source')
+  },
   devServer: {
     host: '0.0.0.0',
     port: 8081,

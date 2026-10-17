@@ -64,6 +64,10 @@
             <a-icon type="wallet" />
             <span>充值记录</span>
           </a-menu-item>
+          <a-menu-item key="/agent/open-api">
+            <a-icon type="api" />
+            <span>开放接口</span>
+          </a-menu-item>
           <a-menu-item key="/agent/promotions">
             <a-icon type="share-alt" />
             <span>推广记录</span>

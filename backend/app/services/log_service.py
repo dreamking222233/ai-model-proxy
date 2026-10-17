@@ -428,9 +428,12 @@ class LogService:
         end_date: Optional[str] = None,
         agent_only: bool = False,
         platform_only: bool = False,
+        request_id: Optional[str] = None,
     ):
         if user_id is not None:
             query = query.filter(RequestLog.user_id == user_id)
+        if request_id is not None:
+            query = query.filter(RequestLog.request_id == str(request_id))
         if agent_id is not None:
             query = query.filter(RequestLog.agent_id == agent_id)
         elif agent_only:
@@ -468,6 +471,7 @@ class LogService:
         agent_only: bool = False,
         platform_only: bool = False,
         include_internal_fields: bool = False,
+        request_id: Optional[str] = None,
     ) -> tuple[list[dict], int]:
         """
         List request logs with pagination and optional filters.
@@ -488,6 +492,7 @@ class LogService:
             end_date=end_date,
             agent_only=agent_only,
             platform_only=platform_only,
+            request_id=request_id,
         )
 
         total = base_query.order_by(None).count()
@@ -505,10 +510,10 @@ class LogService:
 
         user_map = {}
         if user_ids:
-            user_map = {
-                row.id: row.username
-                for row in db.query(SysUser.id, SysUser.username).filter(SysUser.id.in_(user_ids)).all()
-            }
+            user_query = db.query(SysUser.id, SysUser.username).filter(SysUser.id.in_(user_ids))
+            if agent_id is not None:
+                user_query = user_query.filter(SysUser.agent_id == agent_id, SysUser.role == "user")
+            user_map = {row.id: row.username for row in user_query.all()}
 
         consumption_map = {}
         if request_ids:
@@ -534,6 +539,8 @@ class LogService:
                     ConsumptionRecord.id,
                 )
                 .filter(ConsumptionRecord.request_id.in_(request_ids))
+                .filter(ConsumptionRecord.agent_id == agent_id if agent_id is not None else True)
+                .filter(ConsumptionRecord.user_id.in_(user_ids) if agent_id is not None else True)
                 .order_by(ConsumptionRecord.created_at.desc(), ConsumptionRecord.id.desc())
                 .all()
             )
@@ -542,11 +549,15 @@ class LogService:
                     consumption_map[row.request_id] = row
 
         cache_summary_map = {}
-        if request_ids:
-            cache_summary_rows = (
+        if request_ids and (agent_id is None or user_ids):
+            cache_summary_query = (
                 db.query(RequestCacheSummary.request_id, RequestCacheSummary.details_json)
                 .filter(RequestCacheSummary.request_id.in_(request_ids))
-                .all()
+            )
+            if agent_id is not None:
+                cache_summary_query = cache_summary_query.filter(RequestCacheSummary.user_id.in_(user_ids))
+            cache_summary_rows = (
+                cache_summary_query.all()
             )
             cache_summary_map = {row.request_id: row.details_json for row in cache_summary_rows}
 
@@ -708,6 +719,20 @@ class LogService:
                 )
             result.append(item)
         return result, total
+
+    @staticmethod
+    def get_agent_request_detail(db: Session, request_id: str, agent_id: int) -> dict | None:
+        items, total = LogService.list_request_logs(
+            db,
+            page=1,
+            page_size=1,
+            agent_id=int(agent_id),
+            agent_only=True,
+            request_id=str(request_id),
+        )
+        if not total or not items:
+            return None
+        return LogService.build_agent_visible_request_log_items(items)[0]
 
     @staticmethod
     def get_admin_user_usage_summary(

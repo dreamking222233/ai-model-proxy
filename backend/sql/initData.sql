@@ -99,6 +99,65 @@ CREATE TABLE `agent` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理站点表';
 
 -- ============================================================
+-- 2.1 agent_open_api_key - 代理开放 API 凭据
+-- ============================================================
+CREATE TABLE `agent_open_api_key` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `agent_id` BIGINT UNSIGNED NOT NULL,
+    `name` VARCHAR(128) NOT NULL,
+    `key_hash` VARCHAR(64) NOT NULL,
+    `key_prefix` VARCHAR(16) NOT NULL,
+    `scopes_json` TEXT NOT NULL,
+    `status` VARCHAR(16) NOT NULL DEFAULT 'active',
+    `created_by_user_id` BIGINT UNSIGNED NOT NULL,
+    `expires_at` DATETIME NOT NULL,
+    `last_used_at` DATETIME DEFAULT NULL,
+    `revoked_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_agent_open_api_key_hash` (`key_hash`),
+    KEY `ix_agent_open_api_key_agent_id` (`agent_id`),
+    KEY `ix_agent_open_api_key_key_prefix` (`key_prefix`),
+    KEY `ix_agent_open_api_key_status` (`status`),
+    KEY `ix_agent_open_api_key_created_by_user_id` (`created_by_user_id`),
+    KEY `ix_agent_open_api_key_expires_at` (`expires_at`),
+    KEY `ix_agent_open_api_key_agent_status_expiry` (`agent_id`, `status`, `expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理开放 API 凭据';
+
+-- ============================================================
+-- 2.2 agent_open_api_idempotency - 代理开放 API 充值幂等预约
+-- ============================================================
+CREATE TABLE `agent_open_api_idempotency` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `agent_id` BIGINT UNSIGNED NOT NULL,
+    `key_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `idempotency_hash` VARCHAR(64) NOT NULL,
+    `request_fingerprint` VARCHAR(64) NOT NULL,
+    `request_json` TEXT NOT NULL,
+    `user_recharge_rate_code` VARCHAR(1) NOT NULL,
+    `user_recharge_rate` DECIMAL(12, 6) NOT NULL,
+    `agent_settlement_rate` DECIMAL(12, 6) NOT NULL,
+    `order_no` VARCHAR(64) NOT NULL,
+    `status` VARCHAR(24) NOT NULL DEFAULT 'reserved' COMMENT 'reserved/provisioning/ready/retryable_failed',
+    `lease_until` DATETIME NOT NULL,
+    `attempts` INT NOT NULL DEFAULT 0,
+    `completed_at` DATETIME DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_agent_open_api_idem_key_user_hash` (`key_id`, `user_id`, `idempotency_hash`),
+    UNIQUE KEY `uk_agent_open_api_idem_order_no` (`order_no`),
+    KEY `ix_agent_open_api_idempotency_agent_id` (`agent_id`),
+    KEY `ix_agent_open_api_idempotency_key_id` (`key_id`),
+    KEY `ix_agent_open_api_idempotency_user_id` (`user_id`),
+    KEY `ix_agent_open_api_idempotency_status` (`status`),
+    KEY `ix_agent_open_api_idem_status_lease` (`status`, `lease_until`),
+    KEY `ix_agent_open_api_idem_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代理开放 API 充值幂等预约';
+
+-- ============================================================
 -- 3. user_api_key - 用户 API Key 表
 -- ============================================================
 CREATE TABLE `user_api_key` (
@@ -1019,6 +1078,7 @@ CREATE TABLE `payment_recharge_order` (
     `credited_usd` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '用户到账美元余额',
     `credited_image_credits` DECIMAL(12, 3) NOT NULL DEFAULT 0 COMMENT '到账图片积分',
     `user_recharge_rate` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '下单时实际用户充值比例快照',
+    `user_recharge_rate_code` VARCHAR(1) DEFAULT NULL,
     `agent_settlement_rate` DECIMAL(12, 6) NOT NULL DEFAULT 0 COMMENT '代理内部结算比例，单位：1 RMB 对应多少 USD',
     `agent_income_cny` DECIMAL(12, 2) NOT NULL DEFAULT 0 COMMENT '代理现金分润人民币',
     `subscription_plan_id` BIGINT UNSIGNED DEFAULT NULL,

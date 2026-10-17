@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Optional, List
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, condecimal, model_validator
 
 
 class ApiKeyCreateRequest(BaseModel):
@@ -13,17 +13,33 @@ class ApiKeyCreateRequest(BaseModel):
     group_mode: Literal["unified", "special"] = "unified"
     group_model_series: Optional[str] = Field(None, max_length=32)
     group_id: Optional[int] = Field(None, gt=0)
-    daily_limit_usd: Optional[Decimal] = Field(None, gt=0, le=1000000000, decimal_places=6)
+    daily_limit_usd: Optional[condecimal(gt=0, le=1000000000, decimal_places=6)] = None
+
+    @model_validator(mode="after")
+    def validate_group_binding(self):
+        if self.group_mode == "unified" and (self.group_model_series is not None or self.group_id is not None):
+            raise ValueError("unified 模式不能指定模型系列或分组")
+        if self.group_mode == "special" and (not self.group_model_series or self.group_id is None):
+            raise ValueError("special 模式必须同时指定模型系列和分组")
+        return self
 
 
 class ApiKeyDailyLimitUpdate(BaseModel):
-    daily_limit_usd: Optional[Decimal] = Field(..., gt=0, le=1000000000, decimal_places=6)
+    daily_limit_usd: Optional[condecimal(gt=0, le=1000000000, decimal_places=6)] = Field(...)
 
 
 class ApiKeyGroupBindingUpdate(BaseModel):
     group_mode: Literal["unified", "special"] = "unified"
     group_model_series: Optional[str] = Field(None, max_length=32)
     group_id: Optional[int] = Field(None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_group_binding(self):
+        if self.group_mode == "unified" and (self.group_model_series is not None or self.group_id is not None):
+            raise ValueError("unified 模式不能指定模型系列或分组")
+        if self.group_mode == "special" and (not self.group_model_series or self.group_id is None):
+            raise ValueError("special 模式必须同时指定模型系列和分组")
+        return self
 
 
 # ---------------------------------------------------------------------------
